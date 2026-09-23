@@ -29,5 +29,6 @@ export const mountEditor: MountEditor = async (root, options) => {
     controller.destroy();
     container.remove();
   });
+  void controller.startRecovery();
   return handle;
 };

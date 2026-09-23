@@ -13,7 +13,9 @@ import type { IconName } from './icons';
 import type { CanvasView } from './canvas/CanvasView';
 import type { ClipboardHooks } from '../core/clipboard';
 import { ProjectWorkspace, type ProjectTab } from '../core/workspace';
-import { buildManifest, readArchive, writeArchive, ProjectError } from '../io/project';
+import { buildManifest, readArchive, ProjectError } from '../io/project';
+import { encodeArchive } from '../workers/archiveClient';
+import { isQuotaError, RecoveryStore } from '../platform/recovery';
 import { browserDecode, decodeImageFile, fileBaseName, ImageImportError } from '../io/imageImport';
 import { DEFAULT_JPEG, jpegBlob, pngBlob, type JpegOptions } from '../io/export';
 import type { GpuCompositor } from '../render/gpuCompositor';
@@ -226,22 +228,94 @@ export class EditorController {
     return buildManifest(document, session.projectName ?? this.workspace.current.title, session.activeLayerId);
   }
 
-  archive(session: EditorSession = this.session): Blob {
+  async archive(session: EditorSession = this.session): Promise<Blob> {
     const document = session.document;
     if (!document) throw new ProjectError('no-document', 'There is no canvas to save.');
     session.commitTransform();
-    return writeArchive(document, session.projectName ?? this.workspace.current.title, session.activeLayerId).blob;
+    const final = session.document ?? document;
+    return encodeArchive(final, session.projectName ?? this.workspace.current.title, session.activeLayerId);
+  }
+
+  // MARK: Recovery copies (IndexedDB)
+
+  private recovery: RecoveryStore | null = null;
+  private recoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private recoveryPaused = new Set<string>();
+  private recoveryWatchers = new Map<string, () => void>();
+
+  /** Offers archives left by an earlier page load, then keeps copies of modified tabs. */
+  async startRecovery(): Promise<void> {
+    if (!RecoveryStore.available()) return;
+    this.recovery = new RecoveryStore();
+    try {
+      const previous = await this.recovery.previous();
+      if (previous.length) {
+        const answer = await this.confirm(this.t(previous.length === 1 ? 'Recover an unsaved project?' : 'Recover unsaved projects?'),
+          previous.map((r) => `${r.name} · ${new Date(r.savedAt).toLocaleString(this.locale)}`).join('\n'),
+          [{ label: this.t('Recover'), value: 'recover', role: 'default' }, { label: this.t('Discard'), value: 'discard', role: 'destructive' },
+            { label: this.t('Later'), value: 'later', role: 'cancel' }]);
+        if (answer === 'recover') {
+          for (const record of previous) {
+            try { await this.openArchive(record.archive, record.name); await this.recovery.remove(record.id); } catch (error) { this.reportError('recovery-failed', error); }
+          }
+          for (const tab of this.workspace.tabs) tab.session.history.markUnsaved();
+        } else if (answer === 'discard') {
+          for (const record of previous) await this.recovery.remove(record.id);
+        }
+      }
+    } catch (error) {
+      this.host.reportError({ code: 'recovery-unavailable', message: (error as Error).message });
+      this.recovery = null;
+      return;
+    }
+    this.watchTabsForRecovery();
+    this.workspaceRecoveryOff = this.workspace.subscribe(() => this.watchTabsForRecovery());
+  }
+  private workspaceRecoveryOff: (() => void) | null = null;
+
+  private watchTabsForRecovery(): void {
+    const ids = new Set(this.workspace.tabs.map((t) => t.id));
+    for (const [id, off] of this.recoveryWatchers) {
+      if (!ids.has(id)) { off(); this.recoveryWatchers.delete(id); void this.recovery?.remove(id); }
+    }
+    for (const tab of this.workspace.tabs) {
+      if (this.recoveryWatchers.has(tab.id)) continue;
+      this.recoveryWatchers.set(tab.id, tab.session.subscribe((kind) => { if (kind === 'document') this.scheduleRecoveryCopy(tab); }));
+    }
+  }
+
+  private scheduleRecoveryCopy(tab: ProjectTab): void {
+    clearTimeout(this.recoveryTimers.get(tab.id));
+    this.recoveryTimers.set(tab.id, setTimeout(() => void this.writeRecoveryCopy(tab), 2500));
+  }
+
+  private async writeRecoveryCopy(tab: ProjectTab): Promise<void> {
+    const store = this.recovery, session = tab.session;
+    if (!store || this.recoveryPaused.has(tab.id)) return;
+    if (session.isProjectBusy || session.transformEdit || session.history.isInTransaction) { this.scheduleRecoveryCopy(tab); return; }
+    if (!session.document || !session.isModified) { await store.remove(tab.id).catch(() => undefined); return; }
+    try {
+      const archive = await encodeArchive(session.document, session.projectName ?? tab.title, session.activeLayerId);
+      await store.put({ id: tab.id, name: session.projectName ?? tab.title, savedAt: Date.now(), size: archive.size, archive });
+    } catch (error) {
+      if (isQuotaError(error)) {
+        this.recoveryPaused.add(tab.id);
+        this.reportError('storage-quota', new Error(this.t('Browser storage is full. Automatic recovery copies of this project are paused; save the project to keep your work.')));
+      } else this.host.reportError({ code: 'recovery-write-failed', message: (error as Error).message });
+    }
   }
 
   async save(): Promise<void> {
     const session = this.session;
     if (!session.document || !this.workspace.canSwitch) return;
     try {
-      const blob = this.archive(session);
+      const blob = await this.archive(session);
       const name = `${session.projectName ?? this.workspace.current.title}.compositor.zip`;
       await this.host.saveFile(blob, name);
       session.projectName ??= this.workspace.current.title;
       session.history.markSaved();
+      this.recoveryPaused.delete(this.workspace.current.id);
+      void this.recovery?.remove(this.workspace.current.id);
       session.notify('ui');
     } catch (error) { this.reportError('save-failed', error); }
   }
@@ -324,10 +398,7 @@ export class EditorController {
           throw error;
         }
       },
-      saveProject: async () => {
-        const blob = this.archive();
-        return blob;
-      },
+      saveProject: async () => this.archive(),
       exportImage: async ({ format, quality }) => this.exportBlob(format, quality === undefined ? {} : { quality }),
       getManifest: () => this.manifest(),
       undo: async () => this.session.undo(),
@@ -336,7 +407,13 @@ export class EditorController {
     };
   }
 
-  destroy(): void { this.workspace.destroy(); }
+  destroy(): void {
+    for (const timer of this.recoveryTimers.values()) clearTimeout(timer);
+    for (const off of this.recoveryWatchers.values()) off();
+    this.workspaceRecoveryOff?.();
+    this.recovery?.close();
+    this.workspace.destroy();
+  }
 }
 
 /** PixelFilter.trimmed semantics for merge results: tight alpha bounds, or null when empty. */
