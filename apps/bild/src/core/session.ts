@@ -89,6 +89,8 @@ export interface SessionServices {
   distort?(raster: Raster, transform: LayerTransform, corners: readonly Point[]): Promise<{ raster: Raster; transform: LayerTransform }>;
   /** Asks what to do when deleted layers feed live masks; resolves 'bake', 'unlink' or 'cancel'. */
   confirmLiveMaskDeletion?(count: number): Promise<'bake' | 'unlink' | 'cancel'>;
+  /** Translates generated names ('Layer', 'Folder', adjustment kinds, 'copy', 'Untitled') into the UI language. */
+  label?(text: string): string;
 }
 
 /** Open edits outside the session (adjustment and filter panels) that make the document read-only meanwhile. */
@@ -267,7 +269,7 @@ export class EditorSession {
     this.commitTransform();
     this.beginEdit('New Canvas');
     const document: CanvasDocument = { id: uuid(), width, height, resolution: 72, layers: [], selection: null };
-    const layer = emptyLayer ? newLayer({ id: uuid(), name: 'Layer 1', transform: makeTransform({ x: 0, y: 0 }, { width, height }) }) : null;
+    const layer = emptyLayer ? newLayer({ id: uuid(), name: `${this.label('Layer')} 1`, transform: makeTransform({ x: 0, y: 0 }, { width, height }) }) : null;
     this.document = layer ? { ...document, layers: [layer] } : document;
     this.setActiveLayer(layer?.id ?? null);
     this.renamingLayerId = null;
@@ -342,7 +344,7 @@ export class EditorSession {
     if (!this.canEditLayers || !document) return;
     const active = this.activeLayer;
     const layer = newLayer({
-      id: uuid(), name: uniqueName(document.layers, 'Layer'),
+      id: uuid(), name: uniqueName(document.layers, this.label('Layer')),
       transform: makeTransform({ x: 0, y: 0 }, { width: document.width, height: document.height }),
       parentId: active?.isGroup ? this.activeLayerId : active?.parentId ?? null,
     });
@@ -368,7 +370,7 @@ export class EditorSession {
     if (!this.canEditLayers || !document || document.layers.length >= MAX_LAYERS) return;
     const active = this.activeLayer;
     const group = newLayer({
-      id: uuid(), name: uniqueName(document.layers, 'Folder'), isGroup: true,
+      id: uuid(), name: uniqueName(document.layers, this.label('Folder')), isGroup: true,
       transform: makeTransform({ x: 0, y: 0 }, { width: document.width, height: document.height }),
       parentId: active?.isGroup ? this.activeLayerId : active?.parentId ?? null,
     });
@@ -403,7 +405,7 @@ export class EditorSession {
       parent = ancestors(ordered[0]!).find((candidate) => ordered.every((id) => ancestors(id).includes(candidate))) ?? null;
     }
     const group = newLayer({
-      id: uuid(), name: uniqueName(document.layers, 'Folder'), isGroup: true, parentId: parent,
+      id: uuid(), name: uniqueName(document.layers, this.label('Folder')), isGroup: true, parentId: parent,
       transform: makeTransform({ x: 0, y: 0 }, { width: document.width, height: document.height }),
     });
     const branches = ordered.map((id) => {
@@ -582,7 +584,7 @@ export class EditorSession {
     const document = this.document;
     if (!this.canEditLayers || !layer || layer.isGroup || !document) return;
     const index = document.layers.findIndex((l) => l.id === layer.id);
-    const copy: Layer = { ...layer, id: uuid(), name: `${layer.name} copy` };
+    const copy: Layer = { ...layer, id: uuid(), name: `${layer.name} ${this.label('copy')}` };
     this.edit('Duplicate Layer', () => {
       const layers = document.layers.slice();
       layers.splice(index + 1, 0, copy);
@@ -1273,7 +1275,7 @@ export class EditorSession {
     const active = this.activeLayer;
     const adjustment: LayerAdjustment = defaultAdjustment(kind, this.foregroundColor, this.backgroundColor);
     const layer = newLayer({
-      id: uuid(), name: kind, adjustment,
+      id: uuid(), name: this.label(kind), adjustment,
       transform: makeTransform({ x: 0, y: 0 }, { width: document.width, height: document.height }),
       parentId: active?.isGroup ? this.activeLayerId : active?.parentId ?? null,
     });
@@ -1395,7 +1397,9 @@ export class EditorSession {
     });
     return layer.id;
   }
-  nextLayerName(): string { return uniqueName(this.document?.layers ?? [], 'Layer'); }
+  nextLayerName(): string { return uniqueName(this.document?.layers ?? [], this.label('Layer')); }
+  /** A generated name in the UI language. */
+  label(text: string): string { return this.services?.label?.(text) ?? text; }
 
   /** Direct document replacement inside an open transaction (tools that build whole documents). */
   replaceDocument(document: CanvasDocument): void { this.document = document; }

@@ -151,7 +151,7 @@ test.describe('desktop workflows', () => {
       await w.__handle.openProject(saved.blob);
       return { name: saved.name, type: saved.type, before, after: JSON.parse(JSON.stringify(w.__handle.getManifest())) };
     });
-    expect(result.name).toMatch(/\.compositor\.zip$/);
+    expect(result.name).toMatch(/\.fwimg$/);
     expect(result.after).toEqual(result.before);
   });
 });
@@ -173,7 +173,7 @@ test.describe('phone layout', () => {
     await expect(page.getByTestId('layers-sheet')).toContainText('Ebenen');
     await page.getByTestId('addBlankLayer').tap();
     await expect(page.getByTestId('layerCount')).toHaveText('2');
-    const more = page.getByRole('button', { name: /Mehr: Layer 2/ });
+    const more = page.getByRole('button', { name: /Mehr: Ebene 2/ });
     expect(((await more.boundingBox())!).width).toBeGreaterThanOrEqual(44);
     await more.tap();
     await page.getByRole('menuitem', { name: 'Ebene duplizieren' }).tap();

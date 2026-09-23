@@ -46,12 +46,11 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
       items: [
         { label: t('New Canvas…'), shortcut: 'mod+alt+n', aliases: ['mod+n'], enabled: canStart, run: () => { controller.workspace.newCanvas(); }, testId: 'menu-new-canvas' },
         { label: t('Open Project…'), shortcut: 'mod+o', enabled: canStart, run: () => void controller.chooseAndOpen() },
-        { label: t('Open Compositor Package Folder…'), enabled: canStart, run: () => void controller.chooseCompFolder() },
+        { label: t('Open Mac Project Folder (.comp)…'), enabled: canStart, run: () => void controller.chooseCompFolder() },
         { label: t('Import Images…'), enabled: !session.isImporting && !session.isProjectBusy, run: () => void controller.chooseAndImport(), testId: 'menu-import' },
         'separator',
         { label: t('Save'), shortcut: 'mod+s', enabled: !!document && canStart, run: () => void controller.save(), testId: 'menu-save' },
         { label: t('Save As…'), shortcut: 'mod+shift+s', enabled: !!document && canStart, run: () => void controller.save(true) },
-        { label: t('Save a Copy for Compositor for Mac…'), enabled: !!document && canStart, run: () => void controller.saveCompCopy(), testId: 'menu-save-comp' },
         'separator',
         { label: t('Export PNG…'), shortcut: 'mod+shift+e', enabled: !!document && canStart, run: () => void controller.exportTo('png'), testId: 'menu-export-png' },
         { label: t('Export JPEG…'), shortcut: 'mod+alt+shift+s', enabled: !!document && canStart, run: () => controller.showDialog({ kind: 'jpeg' }) },
@@ -164,6 +163,12 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
           run: () => { session.showsTransformControls = !session.showsTransformControls; session.notify('document'); } },
       ],
     },
+    {
+      title: t('Help'),
+      items: [
+        { label: t('About Fernwork Image Editor'), enabled: true, run: () => controller.showAbout(), testId: 'menu-about' },
+      ],
+    },
   ];
 }
 
@@ -203,12 +208,18 @@ export function shortcutOf(event: KeyboardEvent): string {
 }
 
 /** Human-readable shortcut, with macOS symbols on Apple platforms. */
+let labelLocale: 'de' | 'en' = 'en';
+/** Key names as the keyboard labels them in the UI language (German keyboards: Strg, Umschalt, Rücktaste). */
+export function setShortcutLocale(locale: 'de' | 'en'): void { labelLocale = locale; }
+
 export function shortcutLabel(shortcut: string): string {
   const parts = shortcut.split('+');
   const key = parts.pop()!;
   const names: Record<string, string> = isMac
     ? { mod: '⌘', alt: '⌥', shift: '⇧', backspace: '⌫' }
-    : { mod: 'Ctrl+', alt: 'Alt+', shift: 'Shift+', backspace: 'Backspace' };
+    : labelLocale === 'de'
+      ? { mod: 'Strg+', alt: 'Alt+', shift: 'Umschalt+', backspace: 'Rücktaste' }
+      : { mod: 'Ctrl+', alt: 'Alt+', shift: 'Shift+', backspace: 'Backspace' };
   const order = isMac ? ['alt', 'shift', 'mod'] : ['mod', 'alt', 'shift'];
   const mods = order.filter((m) => parts.includes(m)).map((m) => names[m]).join('');
   return mods + (names[key] ?? key.toUpperCase());

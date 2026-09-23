@@ -71,7 +71,7 @@ function TransformInspector({ controller, session }: { controller: EditorControl
   return (
     <>
       <span className={styles.headerTitle}>{session.transformTargetsMask ? t('Transform Mask') : t('Transform')}</span>
-      <label className={styles.check} title="Select layers by clicking the canvas. When off, hold Command to select a layer.">
+      <label className={styles.check} title={t('Select layers by clicking the canvas. When off, hold ⌘ to select a layer.')}>
         <input type="checkbox" checked={session.transformAutoSelect} onChange={(e) => { session.transformAutoSelect = e.target.checked; session.notify('ui'); }} />
         {t('Auto Select')}
       </label>
@@ -97,7 +97,7 @@ function TransformInspector({ controller, session }: { controller: EditorControl
       <button type="button" className={styles.pill} disabled={disabled} onClick={() => change((v) => ({ ...v, flipY: !v.flipY }))}>{t('Flip V')}</button>
       <button type="button" className={`${styles.pill} ${canvas?.distortArmed || session.transformEdit?.corners ? styles.pillOn : ''}`}
         disabled={!session.canTransform && !session.transformEdit}
-        title="Drag a handle to distort (⌘-drag a handle does the same)"
+        title={t('Drag a handle to distort (⌘-drag a handle does the same)')}
         onClick={() => {
           if (!canvas) return;
           canvas.distortArmed = !canvas.distortArmed;
@@ -138,7 +138,7 @@ export function ContextBar({ controller }: { controller: EditorController }) {
   else if (session.tool === 'hand' || session.tool === 'zoom') content = <NavigationHeader controller={controller} session={session} />;
   else if (session.tool === 'idle') content = <span className={styles.headerTitle}>{t('Select a tool')}</span>;
   else content = <span className={styles.headerTitle}>{t('Not yet available in the browser port')}</span>;
-  return <div className={styles.header} role="toolbar" aria-label="Tool options" data-testid="context-bar">{content}</div>;
+  return <div className={styles.header} role="toolbar" aria-label={controller.t('Tool options')} data-testid="context-bar">{content}</div>;
 }
 
 export function statusHint(session: EditorSession, t: (s: string) => string): string {

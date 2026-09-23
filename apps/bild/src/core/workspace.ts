@@ -30,7 +30,7 @@ export class ProjectWorkspace {
 
   constructor(services: SessionServices | null = null) {
     this.services = services;
-    const first = new ProjectTab('Untitled', services);
+    const first = new ProjectTab(services?.label?.('Untitled') ?? 'Untitled', services);
     this.tabs = [first];
     this.selectedId = first.id;
     this.watch(first);
@@ -59,7 +59,7 @@ export class ProjectWorkspace {
 
   addTab(reuseEmpty = true): ProjectTab {
     if (reuseEmpty && this.tabs.length === 1 && this.current.session.document === null) return this.current;
-    const tab = new ProjectTab(`Untitled ${this.nextNumber++}`, this.services);
+    const tab = new ProjectTab(`${this.services?.label?.('Untitled') ?? 'Untitled'} ${this.nextNumber++}`, this.services);
     this.watch(tab);
     this.tabs = [...this.tabs, tab];
     this.selectedId = tab.id;
@@ -102,7 +102,7 @@ export class ProjectWorkspace {
     this.detach.delete(id);
     this.tabs = this.tabs.filter((t) => t.id !== id);
     if (!this.tabs.length) {
-      const tab = new ProjectTab(`Untitled ${this.nextNumber++}`, this.services);
+      const tab = new ProjectTab(`${this.services?.label?.('Untitled') ?? 'Untitled'} ${this.nextNumber++}`, this.services);
       this.watch(tab);
       this.tabs = [tab];
       this.selectedId = tab.id;

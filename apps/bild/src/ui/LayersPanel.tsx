@@ -36,7 +36,7 @@ function Appearance({ controller, session }: { controller: EditorController; ses
     <div className={styles.appearance}>
       <div className={styles.appearanceRow}>
         <span>{t('Blend')}</span>
-        <button type="button" className={styles.select} style={{ flex: 1, textAlign: 'left' }} disabled={!enabled} aria-haspopup="menu" aria-label="Blend mode"
+        <button type="button" className={styles.select} style={{ flex: 1, textAlign: 'left' }} disabled={!enabled} aria-haspopup="menu" aria-label={t('Blend mode')}
           data-testid="blend-mode" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setPopup({ x: r.left, y: r.bottom + 4 }); }}>
           {t(blendLabel(mode))}
         </button>
@@ -50,7 +50,7 @@ function Appearance({ controller, session }: { controller: EditorController; ses
           onKeyDown={(event) => event.stopPropagation()}
           onChange={(event) => session.setLayerOpacity(Number(event.target.value) / 100)} />
         <label className={styles.field}>
-          <input value={percent} disabled={!enabled} style={{ width: 44 }} aria-label="Opacity percent" data-testid="opacity-field"
+          <input value={percent} disabled={!enabled} style={{ width: 44 }} aria-label={t('Opacity percent')} data-testid="opacity-field"
             onFocus={() => setFocused(true)}
             onBlur={() => { setFocused(false); const v = Number(percent); if (Number.isFinite(v)) session.setLayerOpacity(Math.min(100, Math.max(0, v)) / 100); }}
             onChange={(event) => setPercent(event.target.value)}
@@ -162,7 +162,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
         setRenaming(true);
       }}
       onContextMenu={(event) => { event.preventDefault(); onContext(layer.id, event.clientX, event.clientY); }}>
-      <button type="button" className={styles.eye} disabled={!enabled} aria-label={`${layer.visible ? 'Hide' : 'Show'} ${layer.name}`}
+      <button type="button" className={styles.eye} disabled={!enabled} aria-label={`${t(layer.visible ? 'Hide' : 'Show')} ${layer.name}`}
         data-testid="layer-eye" data-eye={layer.id}
         onPointerDown={(event) => {
           event.stopPropagation();
@@ -181,13 +181,13 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
       </button>
       <span style={{ width: indent, flex: 'none' }} />
       <button type="button" className={styles.disclosure} style={{ visibility: layer.isGroup ? 'visible' : 'hidden' }} disabled={!enabled}
-        aria-label="Expand or collapse folder" onClick={() => session.toggleGroupExpansion(layer.id)}>
+        aria-label={t('Expand or collapse folder')} onClick={() => session.toggleGroupExpansion(layer.id)}>
         <Icon name={session.collapsedGroupIds.has(layer.id) ? 'chevronRight' : 'chevronDown'} size={12} />
       </button>
       <div className={styles.thumbSlot}>
         {framed ? (
           <button type="button" data-thumb className={`${styles.thumb} ${active && !session.isMaskSelected ? styles.thumbTarget : ''}`}
-            style={fittedSize(canvasSize, 36)} aria-label={`Select image: ${layer.name}`} title="Select image pixels"
+            style={fittedSize(canvasSize, 36)} aria-label={`${t('Select image')}: ${layer.name}`} title={t('Select image pixels')}
             onClick={(event) => {
               if ((isMac ? event.metaKey : event.ctrlKey) && controller.features.loadLayerSelectionAt) { controller.loadSelection?.(layer.id, false, event); return; }
               session.selectLayerTarget(layer.id, false);
@@ -226,7 +226,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
       ) : null}
       <div className={styles.layerText}>
         {renaming ? (
-          <input className={styles.renameInput} defaultValue={layer.name} autoFocus aria-label="Layer name"
+          <input className={styles.renameInput} defaultValue={layer.name} autoFocus aria-label={t('Layer name')}
             onFocus={(event) => event.currentTarget.select()}
             onKeyDown={(event) => {
               event.stopPropagation();
@@ -386,7 +386,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
   return (
     <aside className={styles.layers} style={inSheet ? undefined : { width: panelWidth }} aria-label={t('Layers')} data-testid="layers-panel">
       {!inSheet ? (
-        <div className={styles.resizeEdge} title="Drag to resize the panel"
+        <div className={styles.resizeEdge} title={t('Drag to resize the panel')}
           onPointerDown={(event) => {
             const start = event.clientX, startWidth = panelWidth;
             (event.target as HTMLElement).setPointerCapture(event.pointerId);

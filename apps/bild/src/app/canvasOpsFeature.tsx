@@ -182,7 +182,7 @@ function CropBar({ controller, session }: { controller: EditorController; sessio
   return (
     <>
       <span className={styles.headerTitle}>{t('Crop')}</span>
-      <select className={styles.select} value={session.cropRatioChoice} aria-label="Ratio" disabled={session.isProjectBusy || !session.document}
+      <select className={styles.select} value={session.cropRatioChoice} aria-label={t('Ratio')} disabled={session.isProjectBusy || !session.document}
         onChange={(event) => {
           session.cropRatioChoice = event.target.value;
           const document = session.document;
@@ -235,7 +235,7 @@ function CanvasSizeDialog({ controller, close }: { controller: EditorController;
       event.preventDefault();
       if (!valid) return;
       close();
-      void applyDocumentOp(controller, session, 'Canvas Size', (doc) => ({ op: 'canvasSize', document: doc, width: w, height: h, anchor, options: { fill: fill() } }));
+      void applyDocumentOp(controller, session, 'Canvas Size', (doc) => ({ op: 'canvasSize', document: doc, width: w, height: h, anchor, options: { fill: fill(), extensionName: session.label('Canvas Extension') } }));
     }}>
       <h2 className={styles.dialogTitle}>{t('Canvas Size…').replace('…', '')}</h2>
       <span>{`Current: ${document.width} × ${document.height} pixels`}</span>

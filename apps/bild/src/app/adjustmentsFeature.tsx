@@ -303,7 +303,7 @@ const CHANNEL_COLORS = ['#9a9a9a', '#e05050', '#4cc060', '#4a86e8'];
 
 // MARK: Levels (LevelsSheet.swift)
 
-function Histogram({ bins, color, label }: { bins: ArrayLike<number> | null; color: string; label: string }) {
+function Histogram({ bins, color, label, hint }: { bins: ArrayLike<number> | null; color: string; label: string; hint: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current;
@@ -322,7 +322,7 @@ function Histogram({ bins, color, label }: { bins: ArrayLike<number> | null; col
     }
   }, [bins, color]);
   return <canvas ref={ref} className={styles.histogram} role="img" aria-label={label}
-    title="Linear histogram with automatic vertical scaling. Tall spikes may extend beyond the graph; all tones from 0 to 255 remain included." />;
+    title={hint} />;
 }
 
 function LevelsHandles({ positions, names, colors, onDrag }: {
@@ -367,7 +367,8 @@ function LevelsControls({ controller, session, edit }: { controller: EditorContr
       <Segmented label={t('Channel')} options={LEVELS_CHANNELS} value={settings.channel} labelOf={t}
         onChange={(channel) => changeLevels(session, { ...settings, channel })} />
       <div className={styles.histogramBox}>
-        <Histogram bins={edit.histogram?.[index] ?? null} color={CHANNEL_COLORS[index]!} label={`${t(settings.channel)} histogram`} />
+        <Histogram bins={edit.histogram?.[index] ?? null} color={CHANNEL_COLORS[index]!} label={`${t('Histogram')} ${t(settings.channel)}`}
+          hint={t('Linear histogram with automatic vertical scaling. Tall spikes may extend beyond the graph; all tones from 0 to 255 remain included.')} />
         {!edit.histogram ? <span className={styles.histogramLoading}>{t('Loading histogram…')}</span> : null}
         <LevelsHandles positions={[current.black, gammaPosition, current.white]} names={[t('Input black'), t('Gamma'), t('Input white')]}
           colors={['#000', '#888', '#fff']}

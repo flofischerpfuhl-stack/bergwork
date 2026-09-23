@@ -8,7 +8,7 @@ import { MAX_SIDE, type CanvasDocument } from '../core/document';
 import { Raster, alphaBounds, cropRaster } from '../core/raster';
 import type { EditorSession, SessionServices, Tool } from '../core/session';
 import type { ReactNode } from 'react';
-import type { FeatureRegistry } from './menus';
+import { setShortcutLocale, type FeatureRegistry } from './menus';
 import type { IconName } from './icons';
 import type { CanvasView } from './canvas/CanvasView';
 import type { Modifiers, ToolHandler } from './canvas/tools';
@@ -29,6 +29,7 @@ import type { FileTargetHost, SaveTarget } from '../platform/browserHost';
 import type { ImageDecoderHost } from '../platform/imageDecoder';
 import { translator, type Locale } from './i18n';
 import { createUiStore, type Dialog, type UiStore } from './store';
+import { describeError, isCancellation } from './errors';
 
 export interface ColorPickRequest {
   readonly title: string;
@@ -158,9 +159,11 @@ export class EditorController {
     this.locale = locale;
     this.theme = theme;
     this.t = translator(locale);
+    setShortcutLocale(locale);
     this.imports = new ImportQueue((bytes, remainingPixels) => this.decodeImage(bytes, remainingPixels));
     const services: SessionServices = {
       flatten: async (document) => this.flatten(document),
+      label: (text) => this.t(text),
       bakeLiveMask: async (document, targetId) => this.bakeLiveMask(document, targetId),
       confirmLiveMaskDeletion: async (count) => (await this.confirm(
         this.t(count === 1 ? 'This layer supplies a live mask' : 'These layers supply live masks'),
@@ -192,13 +195,24 @@ export class EditorController {
 
   showDialog(dialog: Dialog | null): void { this.ui.setState({ dialog, openMenu: null }); }
   alert(title: string, message: string): void { this.showDialog({ kind: 'alert', title, message }); }
+
+  /** Origin and licences (the MIT notice of the code base this editor grew from belongs here, not in menus or formats). */
+  showAbout(): void {
+    this.alert(this.t('Fernwork Image Editor'), [
+      this.t('Works offline. No account, no telemetry.'),
+      this.t('Parts of this editor are based on Compositor by Wonder Assembly LLC (MIT License).'),
+      this.t('Third-party components and their licences: Little CMS (MIT), libjpeg-turbo (IJG/BSD), ONNX Runtime Web (MIT), U²-Netp (Apache-2.0), BiRefNet (MIT, optional download), PixiJS, React, zustand, immer, idb, fflate (MIT/ISC). The optional HEIC decoder (LGPL-3.0) is only loaded when the host enables it.'),
+    ].join('\n\n'));
+  }
   confirm(title: string, message: string, buttons: Extract<Dialog, { kind: 'confirm' }>['buttons']): Promise<string> {
     return new Promise((resolve) => this.showDialog({ kind: 'confirm', title, message, buttons, resolve: (value) => { this.showDialog(null); resolve(value); } }));
   }
   reportError(code: string, error: unknown, title = this.t('Something went wrong')): void {
-    const message = error instanceof Error ? error.message : String(error);
-    this.host.reportError({ code, message });
-    this.alert(title, message);
+    // Closing a save or open dialog is not an error.
+    if (isCancellation(error)) return;
+    this.host.reportError({ code, message: error instanceof Error ? error.message : String(error) });
+    const { message, details } = describeError(error, this.t, code);
+    this.alert(title, details ? `${message}\n\n${this.t('Technical details')}: ${details}` : message);
   }
 
   // MARK: Rendering services
@@ -359,13 +373,16 @@ export class EditorController {
     try {
       session.commitTransform();
       const name = session.projectName ?? this.workspace.current.title;
+      const host = this.host as FileTargetHost;
+      const target = host.chooseSaveTarget ? await host.chooseSaveTarget(`${name}.comp.zip`, 'project') : null;
+      if (host.chooseSaveTarget && !target) return;
       const bytes = await writeCompZip(session.document ?? document, { name, activeLayerId: session.activeLayerId });
       const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/zip' });
-      const host = this.host as FileTargetHost;
-      if (host.saveFileAs) await host.saveFileAs(blob, `${name}.comp.zip`, 'project');
+      if (target && host.saveFileTo) await host.saveFileTo(target, blob);
       else await this.host.saveFile(blob, `${name}.comp.zip`);
     } catch (error) { this.reportError('save-failed', error); }
   }
+
 
   async chooseAndOpen(): Promise<void> {
     if (!this.workspace.canSwitch) return;
@@ -461,22 +478,29 @@ export class EditorController {
     }
   }
 
-  /** Save overwrites the place the project was last saved to; Save As (or the first save) asks where (ProjectController.save). */
+  /**
+   * Save overwrites the place the project was last saved to; Save As (or the first save) asks where (ProjectController.save).
+   * The destination is chosen before the archive is encoded: a browser shows its save dialog only while the click or key
+   * press that asked for it still counts, and encoding a large document takes longer than that.
+   */
   async save(saveAs = false): Promise<void> {
     const session = this.session;
     if (!session.document || !this.workspace.canSwitch) return;
     try {
-      const blob = await this.archive(session);
-      const name = `${session.projectName ?? this.workspace.current.title}.compositor.zip`;
+      const name = `${session.projectName ?? this.workspace.current.title}.fwimg`;
       const host = this.host as FileTargetHost;
-      const target = saveTargets.get(session);
-      if (target && !saveAs && host.saveFileTo) await host.saveFileTo(target, blob);
-      else if (host.saveFileAs) {
-        const chosen = await host.saveFileAs(blob, name, 'project');
-        // Cancelled: nothing was written, so the project stays unsaved.
+      let target = saveAs ? undefined : saveTargets.get(session);
+      if (!target && host.chooseSaveTarget) {
+        const chosen = await host.chooseSaveTarget(name, 'project');
+        // Cancelled: nothing is written, so the project stays unsaved.
         if (!chosen) return;
-        saveTargets.set(session, chosen);
-        session.projectName = chosen.name.replace(/(\.compositor)?\.zip$/i, '');
+        target = chosen;
+      }
+      const blob = await this.archive(session);
+      if (target && host.saveFileTo) {
+        await host.saveFileTo(target, blob);
+        saveTargets.set(session, target);
+        session.projectName = target.name.replace(/(\.fwimg|\.compositor\.zip|\.zip)$/i, '');
       } else await this.host.saveFile(blob, name);
       session.projectName ??= this.workspace.current.title;
       session.history.markSaved();
@@ -499,15 +523,21 @@ export class EditorController {
     return jpegBlob(pixels, document.width, document.height, document.resolution, { ...this.jpegOptions, ...options });
   }
 
+  /** Export: choose the file first (see save), then read the pixels back and encode. */
   async exportTo(format: 'png' | 'jpeg'): Promise<void> {
     const session = this.session;
     if (!session.document) return;
     try {
-      const blob = await this.exportBlob(format);
-      if (format === 'jpeg') storeQuality(this.jpegOptions.quality);
       const name = `${session.projectName ?? this.workspace.current.title}.${format === 'png' ? 'png' : 'jpg'}`;
       const host = this.host as FileTargetHost;
-      if (host.saveFileAs) await host.saveFileAs(blob, name, format);
+      let target: SaveTarget | null = null;
+      if (host.chooseSaveTarget) {
+        target = await host.chooseSaveTarget(name, format);
+        if (!target) return;
+      }
+      const blob = await this.exportBlob(format);
+      if (format === 'jpeg') storeQuality(this.jpegOptions.quality);
+      if (target && host.saveFileTo) await host.saveFileTo(target, blob);
       else await this.host.saveFile(blob, name);
     } catch (error) { this.reportError('export-failed', error); }
   }

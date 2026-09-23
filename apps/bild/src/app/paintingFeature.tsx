@@ -391,7 +391,7 @@ function BrushBar({ controller, session }: { controller: EditorController; sessi
   const clone = getCloneSettings(session);
   const title = tool === 'spotHealing' ? t('Spot Healing') : tool === 'cloneStamp' ? t('Clone Stamp') : smear ? t('Smear') : brush.mode === 'erase' ? t('Eraser') : t('Brush');
   const seg = <T extends string>(values: readonly T[], value: T, set: (v: T) => void, label: string) => (
-    <div className={styles.segmented} role="radiogroup" aria-label={label}>
+    <div className={styles.segmented} role="radiogroup" aria-label={t(label)}>
       {values.map((v) => <button key={v} type="button" role="radio" aria-checked={v === value} className={`${styles.segment} ${v === value ? styles.segmentOn : ''}`} onClick={() => set(v)}>{t(v)}</button>)}
     </div>
   );
@@ -404,7 +404,7 @@ function BrushBar({ controller, session }: { controller: EditorController; sessi
       {controller.spotHealingControls && tool === 'spotHealing' ? controller.spotHealingControls(session) : null}
       {tool === 'cloneStamp' ? (
         <>
-          <label className={styles.check} title="Keep the source moving with the brush between strokes; off starts every stroke at the source point">
+          <label className={styles.check} title={t('Keep the source moving with the brush between strokes; off starts every stroke at the source point')}>
             <input type="checkbox" checked={clone.aligned} onChange={(e) => setCloneSettings(session, { ...clone, aligned: e.target.checked })} />{t('Aligned')}
           </label>
           {seg(['This Layer', 'All Layers'] as const, clone.sampleAllLayers ? 'All Layers' : 'This Layer', (v) => setCloneSettings(session, { ...clone, sampleAllLayers: v === 'All Layers' }), 'Sample')}
@@ -429,7 +429,7 @@ function BrushBar({ controller, session }: { controller: EditorController; sessi
       {tool === 'cloneStamp' && !cloneSamplePoint(session, { x: 0, y: 0 }) ? <span className={styles.secondary}>{t('Option-click to set the source')}</span> : null}
       {tool === 'cloneStamp' ? (
         <button type="button" className={`${styles.pill} ${controller.cloneSourceArmed ? styles.pillOn : ''}`}
-          title="Touch: tap to arm, then tap the canvas to set the source"
+          title={t('Touch: tap to arm, then tap the canvas to set the source')}
           onClick={() => { controller.cloneSourceArmed = !controller.cloneSourceArmed; session.notify('ui'); }}>{t('Set Source')}</button>
       ) : null}
       {session.isMaskSelected ? <span className={styles.secondary}>{t('Mask')}</span> : null}
@@ -453,13 +453,13 @@ function GradientBar({ controller, session }: { controller: EditorController; se
   return (
     <>
       <span className={styles.headerTitle}>{t('Gradient')}</span>
-      <div className={styles.segmented} role="radiogroup" aria-label="Shape">
+      <div className={styles.segmented} role="radiogroup" aria-label={t('Shape')}>
         {(['Linear', 'Radial'] as GradientShape[]).map((v) => <button key={v} type="button" role="radio" aria-checked={settings.shape === v}
           className={`${styles.segment} ${settings.shape === v ? styles.segmentOn : ''}`} onClick={() => set({ shape: v })}>{t(v)}</button>)}
       </div>
       <span aria-hidden style={{ width: 56, height: 18, borderRadius: 3, border: '1px solid rgba(0,0,0,.5)', flex: 'none',
         background: `linear-gradient(to right, ${css(colors[0]!)}, ${colors[1] ? css(colors[1]) : css(colors[0]!, 0)}), repeating-conic-gradient(#999 0 25%, #fff 0 50%) 0 0/8px 8px` }} />
-      <select className={styles.select} value={settings.style} aria-label="Colors" onChange={(e) => set({ style: e.target.value as GradientStyle })}>
+      <select className={styles.select} value={settings.style} aria-label={t('Colors')} onChange={(e) => set({ style: e.target.value as GradientStyle })}>
         {(['Foreground to Background', 'Foreground to Transparent'] as GradientStyle[]).map((v) => <option key={v} value={v}>{t(v)}</option>)}
       </select>
       <label className={styles.check}><input type="checkbox" checked={settings.reversed} onChange={(e) => set({ reversed: e.target.checked })} />{t('Reverse')}</label>
@@ -483,7 +483,7 @@ function ShapeBar({ controller, session }: { controller: EditorController; sessi
   return (
     <>
       <span className={styles.headerTitle}>{t('Shape')}</span>
-      <div className={styles.segmented} role="radiogroup" aria-label="Shape">
+      <div className={styles.segmented} role="radiogroup" aria-label={t('Shape')}>
         {(['Rectangle', 'Ellipse'] as ShapeKind[]).map((v) => <button key={v} type="button" role="radio" aria-checked={state.shapeKind === v}
           className={`${styles.segment} ${state.shapeKind === v ? styles.segmentOn : ''}`}
           onClick={() => { cancelShape(session); state.shapeKind = v; session.notify('ui'); }}>{t(v)}</button>)}
@@ -693,7 +693,7 @@ export function installPainting(controller: EditorController): void {
   controller.statusHints.brush = (s) => `${getBrushSettings(s).mode === 'erase' ? t('Drag to erase') : t('Drag to paint')} · ${t('[ ] size · Shift-[ ] hardness · 1–0 opacity · Escape cancel · Space to pan')}`;
   controller.statusHints.blur = (s) => `${paintState(s).smearMode === 'blur' ? t('Drag to soften') : paintState(s).smearMode === 'smudge' ? t('Drag to smudge') : t('Drag to push pixels')} · ${t('[ ] size · Shift-[ ] hardness · 1–0 strength · Space to pan')}`;
   controller.statusHints.cloneStamp = () => t('Option-click to set the source · Drag to clone · [ ] size · Shift-[ ] hardness · 1–0 opacity · Space to pan');
-  controller.statusHints.shape = (s) => `${t('Drag to draw a shape on a new layer')} · Shift ${paintState(s).shapeKind === 'Rectangle' ? t('square') : t('circle')} · ${t('Option from center · Shift-U switches · Escape cancel · Space to pan')}`;
+  controller.statusHints.shape = (s) => `${t('Drag to draw a shape on a new layer')} · ${t('Shift')} ${paintState(s).shapeKind === 'Rectangle' ? t('square') : t('circle')} · ${t('Option from center · Shift-U switches · Escape cancel · Space to pan')}`;
   controller.statusHints.gradient = () => t('Drag to draw · Drag ends to adjust · Shift 45° · 1–0 opacity · Enter apply · Escape cancel');
   controller.statusHints.eyedropper = () => t('Click or drag to sample the canvas colour');
 

@@ -455,7 +455,7 @@ export function beginSelectionTransform(session: EditorSession): boolean {
   const lifted = liftFloatingSelection(before, source); if (!lifted) return false;
   session.beginEdit('Transform Selection');
   const cleared = before.layers.map((layer) => layer.id === source.id ? clearLayerSelection(layer, before.selection!) : layer);
-  const floating = newLayer({ id: uuid(), name: 'Floating Selection', raster: lifted.raster, parentId: source.parentId,
+  const floating = newLayer({ id: uuid(), name: session.label('Floating Selection'), raster: lifted.raster, parentId: source.parentId,
     opacity: source.opacity, blendMode: source.blendMode,
     transform: { ...source.transform, origin: lifted.origin, size: { width: lifted.raster.width, height: lifted.raster.height },
       rotation: 0, flipX: false, flipY: false } });

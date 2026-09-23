@@ -18,11 +18,11 @@ export async function mountForTest(page: Page, options: { locale?: 'de' | 'en'; 
     const { mountEditor } = await load('/src/index.ts');
     const { createBrowserHost } = await load('/src/platform/browserHost.ts');
     // The real save picker would block a headless run: file targets are either absent or recorded fakes.
-    const { saveFileAs: _as, saveFileTo: _to, ...base } = createBrowserHost();
+    const { chooseSaveTarget: _choose, saveFileTo: _to, ...base } = createBrowserHost();
     const targets = fileTargets ? {
-      async saveFileAs(blob: Blob, name: string, kind: string) {
+      async chooseSaveTarget(name: string, kind: string) {
         const answer = (w.__pickerAnswer as string | null | undefined) ?? name;
-        (w.__targetWrites as unknown[]).push({ op: 'as', name, kind, size: blob.size, answer });
+        (w.__targetWrites as unknown[]).push({ op: 'as', name, kind, answer });
         return answer === 'cancel' ? null : { name: answer };
       },
       async saveFileTo(target: { name: string }, blob: Blob) { (w.__targetWrites as unknown[]).push({ op: 'to', name: target.name, size: blob.size }); },

@@ -130,10 +130,10 @@ function WandControls({ controller, session }: { controller: EditorController; s
   const sizes: [WandSampleSize, string][] = [['point', 'Point Sample'], ['threeByThree', '3 by 3 Average'], ['fiveByFive', '5 by 5 Average']];
   return (
     <>
-      <span title="How far each color channel (0–255) can differ from the clicked color and still be selected" style={{ display: 'contents' }}>
+      <span title={t('How far each color channel (0–255) can differ from the clicked color and still be selected')} style={{ display: 'contents' }}>
         <NumberField label={t('Tolerance')} width={44} value={settings.tolerance} onChange={(v) => setWand(session, { tolerance: Math.min(255, Math.max(0, Math.round(v))) })} />
       </span>
-      <select className={styles.select} value={settings.sampleSize} aria-label="Sample Size" title="Match the clicked pixel, or the average of the pixels around it"
+      <select className={styles.select} value={settings.sampleSize} aria-label={t('Sample Size')} title={t('Match the clicked pixel, or the average of the pixels around it')}
         onChange={(e) => setWand(session, { sampleSize: e.target.value as WandSampleSize })}>
         {sizes.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
       </select>
@@ -144,7 +144,7 @@ function WandControls({ controller, session }: { controller: EditorController; s
             onClick={() => setWand(session, { sampleAllLayers: all })}>{t(all ? 'All Layers' : 'This Layer')}</button>
         ))}
       </div>
-      <label className={styles.check} title="Select only similar pixels connected to the one you click; off selects them everywhere">
+      <label className={styles.check} title={t('Select only similar pixels connected to the one you click; off selects them everywhere')}>
         <input type="checkbox" checked={settings.contiguous} onChange={(e) => setWand(session, { contiguous: e.target.checked })} />{t('Contiguous')}
       </label>
     </>
@@ -158,7 +158,7 @@ function SpotHealingControls({ controller, session }: { controller: EditorContro
   const t = controller.t;
   const mode = getSpotHealingMode(session);
   return (
-    <div className={styles.segmented} role="radiogroup" aria-label="Type" data-testid="spotHealingType">
+    <div className={styles.segmented} role="radiogroup" aria-label={t('Type')} data-testid="spotHealingType">
       {SPOT_HEALING_MODES.map((m) => (
         <button key={m} type="button" role="radio" aria-checked={mode === m} className={`${styles.segment} ${mode === m ? styles.segmentOn : ''}`}
           onClick={() => setSpotHealingMode(session, m)}>{t(MODE_LABELS[m])}</button>

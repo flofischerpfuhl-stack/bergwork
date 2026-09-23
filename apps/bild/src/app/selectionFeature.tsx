@@ -271,7 +271,7 @@ function SelectionBar({ controller, session }: { controller: EditorController; s
   const selection = session.selection;
   const disabled = session.isProjectBusy || !session.document;
   const segmented = <T extends string>(values: readonly T[], value: T, set: (v: T) => void, label: string) => (
-    <div className={styles.segmented} role="radiogroup" aria-label={label}>
+    <div className={styles.segmented} role="radiogroup" aria-label={t(label)}>
       {values.map((v) => (
         <button key={v} type="button" role="radio" aria-checked={value === v} disabled={disabled}
           className={`${styles.segment} ${value === v ? styles.segmentOn : ''}`} onClick={() => set(v)}>{t(v)}</button>

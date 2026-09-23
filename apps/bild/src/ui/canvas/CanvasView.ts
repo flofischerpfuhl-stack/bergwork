@@ -68,7 +68,7 @@ export class CanvasView implements CanvasHost {
       canvas.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;display:block';
       this.element.append(canvas);
     }
-    this.glCanvas.setAttribute('aria-label', 'Canvas');
+    this.glCanvas.setAttribute('aria-label', controller.t('Canvas'));
     this.glCanvas.setAttribute('role', 'img');
     this.glCanvas.dataset.testid = 'editor-canvas';
     this.overlay.style.pointerEvents = 'none';
@@ -97,7 +97,7 @@ export class CanvasView implements CanvasHost {
         // switch that element to 2D, so replace only the drawing surface and preserve its attributes.
         const replacement = document.createElement('canvas');
         replacement.style.cssText = this.glCanvas.style.cssText;
-        replacement.setAttribute('aria-label', 'Canvas'); replacement.setAttribute('role', 'img');
+        replacement.setAttribute('aria-label', this.controller.t('Canvas')); replacement.setAttribute('role', 'img');
         replacement.dataset.testid = 'editor-canvas';
         this.glCanvas.replaceWith(replacement); this.glCanvas = replacement;
         this.software = await SoftwareCompositor.create(replacement, 1, 1);

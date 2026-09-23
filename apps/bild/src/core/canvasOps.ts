@@ -50,7 +50,11 @@ function translated(layer: Layer, dx: number, dy: number): Layer {
 }
 
 export interface CanvasExtensionColor { readonly red: number; readonly green: number; readonly blue: number }
-export interface CanvasResizeOptions { readonly fill?: CanvasExtensionColor | null; readonly contentOffset?: Point }
+export interface CanvasResizeOptions {
+  readonly fill?: CanvasExtensionColor | null; readonly contentOffset?: Point;
+  /** Name of the filled extension layer, in the UI language. */
+  readonly extensionName?: string;
+}
 export interface CropOptions { readonly fill?: CanvasExtensionColor | null }
 export type CanvasAnchor = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
@@ -97,7 +101,7 @@ export function resizeCanvas(doc: CanvasDocument, width: number, height: number,
     const used = doc.layers.reduce((sum, layer) => sum + (layer.raster ? layer.raster.width * layer.raster.height : 0), 0);
     if (width * height > MAX_PIXELS - used || layers.length >= MAX_LAYERS) throw new CanvasOperationError('tooLarge');
     const raster = extensionRaster(width, height, doc.width, doc.height, offset, options.fill);
-    const extension = newLayer({ id: uuid(), name: 'Canvas Extension', raster,
+    const extension = newLayer({ id: uuid(), name: options.extensionName ?? 'Canvas Extension', raster,
       transform: makeTransform({ x: 0, y: 0 }, { width, height }) });
     layers = [extension, ...layers];
   }
@@ -420,7 +424,7 @@ export function applyCrop(session: EditorSession, rect: Rect, options: CropOptio
 }
 export function applyCanvasSize(session: EditorSession, width: number, height: number, anchor = 4,
   options: CanvasResizeOptions = {}): boolean {
-  return applyDocument(session, 'Canvas Size', (doc) => resizeCanvas(doc, width, height, anchor, options));
+  return applyDocument(session, 'Canvas Size', (doc) => resizeCanvas(doc, width, height, anchor, { extensionName: session.label('Canvas Extension'), ...options }));
 }
 export function applyImageSize(session: EditorSession, width: number, height: number, resolution: number,
   resample: ImageResample = 'High quality'): boolean {

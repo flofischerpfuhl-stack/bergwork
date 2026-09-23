@@ -89,7 +89,7 @@ export function TopBar({ controller, compact }: { controller: EditorController; 
         <button type="button" className={styles.iconButton} aria-label={t('Menu')} aria-haspopup="menu" data-testid="compact-menu"
           onClick={(event) => open('__all', event.currentTarget)}><Icon name="menu" /></button>
       ) : (
-        <nav className={styles.menuBar} aria-label="Menu bar">
+        <nav className={styles.menuBar} aria-label={t('Menu bar')}>
           {menus.map((menu) => (
             <button key={menu.title} type="button" className={`${styles.menuTitle} ${openMenu === menu.title ? styles.menuTitleOpen : ''}`}
               aria-haspopup="menu" aria-expanded={openMenu === menu.title} data-testid={`menu-${menu.title}`}

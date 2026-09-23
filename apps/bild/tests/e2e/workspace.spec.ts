@@ -90,22 +90,24 @@ test('Save asks where once and then overwrites; Save As asks again; a cancelled 
   await page.getByTestId('menu-new-layer').click();
   await page.evaluate(() => { (window as any).__pickerAnswer = 'cancel'; });
   await editor.press(`${mod}+s`);
-  await expect.poll(writes).toEqual(['as:Untitled.compositor.zip']);
+  await expect.poll(writes).toEqual(['as:Untitled.fwimg']);
   expect(await modified()).toBe(true);
-  await page.evaluate(() => { (window as any).__pickerAnswer = 'Poster.compositor.zip'; });
+  // The destination is chosen first, the archive is written afterwards (B1: a browser only allows its save dialog
+  // while the key press still counts).
+  await page.evaluate(() => { (window as any).__pickerAnswer = 'Poster.fwimg'; });
   await editor.press(`${mod}+s`);
-  await expect.poll(async () => (await writes()).length).toBe(2);
+  await expect.poll(writes).toEqual(['as:Untitled.fwimg', 'as:Untitled.fwimg', 'to:Poster.fwimg']);
   expect(await modified()).toBe(false);
   await expect(page.getByRole('tab', { selected: true })).toContainText('Poster');
   await page.getByTestId('menu-Layer').click();
   await page.getByTestId('menu-new-layer').click();
   await editor.press(`${mod}+s`);
-  await expect.poll(writes).toEqual(['as:Untitled.compositor.zip', 'as:Untitled.compositor.zip', 'to:Poster.compositor.zip']);
+  await expect.poll(async () => (await writes()).slice(3)).toEqual(['to:Poster.fwimg']);
   await editor.press(`${mod}+Shift+s`);
-  await expect.poll(async () => (await writes())[3]).toBe('as:Poster.compositor.zip');
+  await expect.poll(async () => (await writes()).slice(4)).toEqual(['as:Poster.fwimg', 'to:Poster.fwimg']);
 });
 
-test('a copy saved for Compositor for Mac (.comp, v7) reopens with the same layers, masks and adjustments', async ({ page }) => {
+test('a .comp package (v7) written by the engine reopens with the same layers, masks and adjustments', async ({ page }) => {
   await mountForTest(page);
   await page.getByTestId('widthInput').fill('40');
   await page.getByTestId('heightInput').fill('30');
@@ -116,8 +118,8 @@ test('a copy saved for Compositor for Mac (.comp, v7) reopens with the same laye
   await page.evaluate(() => (window as any).__editorForTests.session.addAdjustment('Exposure'));
   await page.getByTestId('adjustment-ok').click();
   const before = await manifest(page);
-  await page.getByTestId('menu-File').click();
-  await page.getByTestId('menu-save-comp').click();
+  // The menu entry is gone (own product, E2); writing .comp stays in code until the v2 format (A2).
+  await page.evaluate(() => (window as any).__editorForTests.saveCompCopy());
   await expect.poll(() => page.evaluate(() => (window as any).__saved.length)).toBe(1);
   const saved = await page.evaluate(() => ({ name: (window as any).__saved[0].name }));
   expect(saved.name).toBe('Untitled.comp.zip');

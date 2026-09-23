@@ -11,17 +11,21 @@ export type { HostDecodedImage, ImageDecoderHost } from './imageDecoder';
 /** A place a file was saved to, which Save can overwrite later without asking again. */
 export interface SaveTarget { readonly name: string }
 
+export type SaveKind = 'project' | 'png' | 'jpeg';
+
 /**
  * Optional host capabilities beyond the shared contract: choosing where to save (null when the user cancels) and
- * overwriting that place again (ProjectController.save / ProjectStore atomic replacement).
+ * writing to that place, now or again later (ProjectController.save / ProjectStore atomic replacement).
+ * Choosing comes first and on its own: a browser only shows its save dialog while it still counts the user's click
+ * or key press, so the (possibly slow) encoding must happen afterwards.
  */
 export interface FileTargetHost extends HostAdapter, ImageDecoderHost {
-  saveFileAs?(blob: Blob, suggestedName: string, kind: 'project' | 'png' | 'jpeg'): Promise<SaveTarget | null>;
+  chooseSaveTarget?(suggestedName: string, kind: SaveKind): Promise<SaveTarget | null>;
   saveFileTo?(target: SaveTarget, blob: Blob): Promise<void>;
 }
 
 const PICKER_TYPES = {
-  project: { description: 'Compositor project', accept: { 'application/zip': ['.zip'] } },
+  project: { description: 'Fernwork image project', accept: { 'application/zip': ['.fwimg', '.zip'] } },
   png: { description: 'PNG image', accept: { 'image/png': ['.png'] } },
   jpeg: { description: 'JPEG image', accept: { 'image/jpeg': ['.jpg', '.jpeg'] } },
 } as const;
@@ -51,15 +55,16 @@ function pick(accept: string, multiple: boolean): Promise<File[]> {
 }
 
 export function createBrowserHost(): FileTargetHost {
-  const picker = (globalThis as { showSaveFilePicker?: (options: unknown) => Promise<FileSystemFileHandle> }).showSaveFilePicker;
+  // Bound to window: called detached, the browser throws "Illegal invocation".
+  const pickerFunction = (globalThis as { showSaveFilePicker?: (options: unknown) => Promise<FileSystemFileHandle> }).showSaveFilePicker;
+  const picker = pickerFunction?.bind(globalThis);
   const targets = picker ? {
-    async saveFileAs(blob: Blob, suggestedName: string, kind: 'project' | 'png' | 'jpeg'): Promise<SaveTarget | null> {
+    async chooseSaveTarget(suggestedName: string, kind: SaveKind): Promise<SaveTarget | null> {
       let handle: FileSystemFileHandle;
       try { handle = await picker({ suggestedName, types: [PICKER_TYPES[kind]] }); } catch (error) {
         if ((error as DOMException).name === 'AbortError') return null;
         throw error;
       }
-      await writeHandle(handle, blob);
       return { name: handle.name, handle } as HandleTarget;
     },
     async saveFileTo(target: SaveTarget, blob: Blob): Promise<void> { await writeHandle((target as HandleTarget).handle, blob); },
@@ -67,7 +72,7 @@ export function createBrowserHost(): FileTargetHost {
   return {
     ...targets,
     async chooseImages() { return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,.heic,.heif,.tif,.tiff', true); },
-    async chooseProject() { return (await pick('.zip,.comp,application/zip', false))[0] ?? null; },
+    async chooseProject() { return (await pick('.fwimg,.zip,.comp,application/zip', false))[0] ?? null; },
     async saveFile(blob, suggestedName) {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');

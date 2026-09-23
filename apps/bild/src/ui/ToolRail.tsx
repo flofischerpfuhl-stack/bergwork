@@ -21,7 +21,7 @@ export function ToolRail({ controller }: { controller: EditorController }) {
     <div className={styles.rail} role="toolbar" aria-label={t('Tools')} aria-orientation="vertical">
       {TOOLS.map((tool) => {
         const available = controller.availableTools.has(tool);
-        const label = TOOL_LABELS[tool];
+        const label = controller.t(TOOL_LABELS[tool]);
         return (
           <button key={tool} type="button" className={`${styles.tool} ${session.tool === tool ? styles.toolOn : ''}`}
             aria-pressed={session.tool === tool} aria-label={label} title={available ? label : `${label} — ${pending}`}
