@@ -8,6 +8,8 @@ test.use({ viewport: { width: 900, height: 700 } });
 
 test('GPU brush coverage matches the exact CPU preview for paint, erase and masks at all tested zooms', async ({ page }) => {
   await mountForTest(page);
+  // The compositor is created asynchronously after mounting (slower in WebKit).
+  await page.waitForFunction(() => !!(window as any).__editorForTests?.canvasView?.gpu);
   const results = await page.evaluate(async () => {
     const load = <T,>(path: string): Promise<T> => import(/* @vite-ignore */ path) as Promise<T>;
     const brush = await load<typeof import('../../src/core/brush/index.ts')>('/src/core/brush/index.ts');

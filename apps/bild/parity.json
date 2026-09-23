@@ -116,18 +116,17 @@
     },
     {
       "id": "brush-engine",
-      "status": "in_progress",
+      "status": "implemented",
       "evidence": [
         "tests/unit/brush.test.ts",
         "tests/performance/brush.perf.test.ts",
         "tests/e2e/painting.spec.ts",
-        "tests/e2e/performance.spec.ts"
+        "tests/e2e/performance.spec.ts",
+        "tests/e2e/gpu-brush.spec.ts"
       ],
       "deviations": [
-        "Large soft brushes use a two-pixel quadratic density reconstruction (≤1/255 against the reference implementation)."
-      ],
-      "open": [
-        "Brush feedback on an 84 Mpx document exceeds the 16 ms p95 target; a GPU coverage preview (MetalBrushCoverage equivalent) is being implemented."
+        "Large soft brushes use a two-pixel quadratic density reconstruction (≤1/255 against the reference implementation).",
+        "During a stroke, paint/erase on layers and masks is previewed by GPU coverage (MetalBrushCoverage port, ≤2/255 against the exact CPU result); the exact raster is computed incrementally in a Web Worker and committed about 0.25 s after pointer-up as one undo step. Clone Stamp, Spot Healing, Smudge/Blur and selection-limited strokes keep the synchronous CPU preview."
       ]
     },
     {
