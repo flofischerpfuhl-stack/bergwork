@@ -85,6 +85,13 @@ const de: Record<string, string> = {
   'Save a copy?': 'Kopie sichern?', 'Don’t Save': 'Nicht sichern', 'Layer Properties': 'Ebeneneigenschaften', 'More': 'Mehr',
   'Save a Copy for Compositor for Mac…': 'Kopie für Compositor (Mac) sichern …',
   'Open Compositor Package Folder…': 'Compositor-Paketordner öffnen …',
+  'Model': 'Modell',
+  'Fast': 'Schnell',
+  'Best quality': 'Beste Qualität',
+  'Downloading the model…': 'Modell wird geladen …',
+  'Best quality downloads a larger model once': '„Beste Qualität“ lädt einmalig ein größeres Modell',
+  'and needs more time and memory; it handles hair, dark scenes and complex edges much better.': 'und braucht mehr Zeit und Speicher; Haare, dunkle Szenen und komplexe Kanten gelingen damit deutlich besser.',
+  'Resume download': 'Download fortsetzen',
   // Remove Background
   'Remove Background': 'Hintergrund entfernen',
   'Loading the subject model…': 'Motivmodell wird geladen …',

@@ -71,10 +71,12 @@
         "tests/e2e/gpu-compositor.spec.ts",
         "tests/e2e/gpu-vs-cpu.spec.ts",
         "tests/e2e/gpu-chunks.spec.ts",
-        "tests/e2e/performance.spec.ts"
+        "tests/e2e/performance.spec.ts",
+        "tests/e2e/software-render.spec.ts",
+        "tests/unit/software-renderer.test.ts"
       ],
       "deviations": [
-        "WebGL 2 is required; there is no software-rendering fallback (upstream: CoreGraphics fallback).",
+        "Without WebGL 2 a CPU/Canvas 2D renderer takes over (tests/e2e/software-render.spec.ts): same compositing semantics via the CPU compositor, view-resolution rendering with a mip cache; it is slower than the GPU path, and first views of large layers take longer while mips are built.",
         "Layer textures are sparse chunks with 64 px aprons instead of TiledLayerRenderer pieces; readback is full resolution beyond MAX_TEXTURE_SIZE."
       ]
     },
@@ -158,10 +160,11 @@
         "tests/unit/adjust.test.ts",
         "tests/unit/filter.test.ts",
         "tests/e2e/adjustments.spec.ts",
-        "tests/e2e/adjust-gpu.spec.ts"
+        "tests/e2e/adjust-gpu.spec.ts",
+        "tests/unit/filter-blur.test.ts"
       ],
       "deviations": [
-        "Core Image Gaussian and axis-aligned motion blur use three sliding box passes; oblique motion blur uses sampled Gaussian convolution.",
+        "Gaussian Blur is a normalized Gaussian (σ = radius, ±3σ, premultiplied sRGB), recursive Young–van Vliet for large radii (≤1/255 vs direct convolution); Motion Blur is a Gaussian-weighted directional line integral with bilinear sampling. Core Image's proprietary kernels and rounding cannot be reproduced bit-exactly.",
         "Blur previews keep the original layer grid; Apply uses the expanded bounds as upstream."
       ]
     },
@@ -170,11 +173,14 @@
       "status": "implemented",
       "evidence": [
         "tests/unit/subject.test.ts",
-        "tests/e2e/subject.spec.ts"
+        "tests/e2e/subject.spec.ts",
+        "tests/e2e/subject.spec.ts (model switch)"
       ],
       "deviations": [
-        "Apple Vision is replaced by the local U²-Netp model (Apache-2.0) on ONNX Runtime Web; it yields one fused salient map, not separate subject instances.",
-        "The browser test needs a reference photo outside the repository and is skipped when it is absent."
+        "Apple Vision is replaced by two local models on ONNX Runtime Web (WebGPU or WASM): U²-Netp (Apache-2.0, 4.6 MB, bundled, 'Fast') and BiRefNet_lite (MIT, 200 MB, downloaded once and cached, 'Best quality', host can self-host via subjectModelUrls).",
+        "Vision's separate subject instances are approximated by connected components of the mask; all foreground components are kept, as upstream keeps all foreground subjects.",
+        "Best quality on WASM (no WebGPU) is slow (≈36 s for a 1456×816 photo on the reference CPU) and needs ≈3 GB peak memory.",
+        "Browser tests with the real models need reference photos / the downloaded model outside the repository and are skipped when absent."
       ]
     },
     {
@@ -185,13 +191,15 @@
         "tests/unit/tiff.test.ts",
         "tests/unit/compPackage.test.ts",
         "tests/e2e/editor-workflows.spec.ts",
-        "tests/e2e/workspace.spec.ts"
+        "tests/e2e/workspace.spec.ts",
+        "tests/unit/icc.test.ts",
+        "tests/unit/heic.test.ts"
       ],
       "deviations": [
-        "HEIC is decoded only by browsers that support it; elsewhere a readable error asks for JPEG/PNG.",
+        "HEIC: decoded by the browser where supported (Safari); otherwise by an optional host codec (planned Tauri app: OS codecs, see docs/tauri-heic.md), or by the opt-in LGPL-3.0 libheif/libde265 WASM module (off by default; HEVC patents are the distributor's responsibility); else a readable error.",
+        "ICC profiles in PNG (iCCP, cHRM/gAMA, sRGB) and TIFF are converted to sRGB with Little CMS 2 (MIT, WASM); JPEG relies on the browser's colour-managed decoder (verified in Chromium); the libheif path applies NCLX but not arbitrary embedded ICC profiles.",
         "Default project format is the host contract's ZIP archive; the macOS .comp package (versions 1–7) is read (zipped or as a folder) and written as a copy.",
-        "Save overwrites a chosen file only where the File System Access API exists (Chromium); other browsers download.",
-        "No ICC colour conversion: documents are sRGB."
+        "Save overwrites a chosen file only where the File System Access API exists (Chromium); other browsers download."
       ]
     }
   ],

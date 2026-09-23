@@ -74,3 +74,29 @@ test('Filter > Remove Background previews a mask and applies it as one undo step
   await page.getByTestId('compositor-editor').press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
   await expect.poll(async () => (await manifest(page)).layers[1].mask ?? null).toBeNull();
 });
+
+test('the Remove Background panel switches to the best-quality model and reports a failed download', async ({ page }) => {
+  test.setTimeout(120_000);
+  const { importThroughMenu, mountForTest, solidPng } = await import('./helpers');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mountForTest(page);
+  await page.getByTestId('widthInput').fill('200');
+  await page.getByTestId('heightInput').fill('200');
+  await page.getByTestId('createCanvas').click();
+  await importThroughMenu(page, [{ name: 'square.png', mimeType: 'image/png', buffer: solidPng(120, 120, [200, 60, 40, 255]) }]);
+  // A host can self-host the large model; here it points at a missing file, so no real download happens.
+  await page.evaluate(() => { (window as any).__editorForTests.host.subjectModelUrls = { best: '/models/missing-best.onnx' }; });
+  await page.getByTestId('menu-Filter').click();
+  await page.getByRole('menuitem', { name: 'Remove Background…' }).click();
+  const panel = page.getByTestId('remove-background-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole('radio', { name: 'Fast' })).toHaveAttribute('aria-checked', 'true');
+  await panel.getByRole('radio', { name: 'Best quality' }).click();
+  await expect(panel.getByRole('radio', { name: 'Best quality' })).toHaveAttribute('aria-checked', 'true');
+  await expect(panel).toContainText('downloads a larger model once');
+  await expect(panel.locator('p').filter({ hasText: /./ }).last()).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__editorForTests.session.isProjectBusy), { timeout: 60_000 }).toBe(false);
+  await expect(panel.getByTestId('remove-background-ok')).toBeDisabled();
+  await page.getByTestId('remove-background-cancel').click();
+  await expect(panel).toHaveCount(0);
+});

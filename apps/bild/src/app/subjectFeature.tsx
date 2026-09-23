@@ -11,11 +11,21 @@ import { useSession } from '../ui/hooks';
 import type { EditorSession } from '../core/session';
 import { removeBackground, subjectCommands, subjectRemovalState, type SubjectRemovalPhase } from '../core/subject/commands';
 import type { BackgroundSettings } from '../core/subject/maskProcessing';
+import { SUBJECT_MODELS, type SubjectModel, type SubjectModelUrls } from '../core/subject/models';
 import { Check, FloatingPanel, Segmented, SliderRow } from './adjustmentsFeature';
 
 const MODEL_URL = `${import.meta.env.BASE_URL}models/u2netp.onnx`;
 
+/** Model locations: the bundled fast model, and the best-quality model a host may self-host (optional host field). */
+function modelUrls(controller: EditorController): Partial<SubjectModelUrls> {
+  const host = controller.host as { subjectModelUrls?: Partial<SubjectModelUrls> };
+  return { fast: MODEL_URL, ...host.subjectModelUrls };
+}
+
+const megabytes = (bytes: number) => `${Math.round(bytes / 1_048_576)} MB`;
+
 const PHASE_TEXT: Partial<Record<SubjectRemovalPhase, string>> = {
+  'downloading-model': 'Downloading the model…',
   'loading-model': 'Loading the subject model…', inferring: 'Finding the subject…', refining: 'Refining edges…', applying: 'Applying…',
 };
 
@@ -39,6 +49,21 @@ function RemoveBackgroundPanel({ controller }: { controller: EditorController })
     <FloatingPanel name="removeBackground" title={t('Remove Background')} onClose={close} closeLabel={t('Cancel')} testId="remove-background-panel">
       <fieldset className={styles.panelBody} disabled={state.phase === 'applying'}>
         <p className={styles.panelNote}>{t('Hide the background behind a layer mask, keeping the foreground subjects. The pixels stay, so the background can be painted back at any time.')}</p>
+        <div className={styles.panelRow}>
+          <span className={styles.panelLabel}>{t('Model')}</span>
+          <Segmented label={t('Model')} options={['fast', 'best'] as const} value={state.model}
+            labelOf={(m: SubjectModel) => t(m === 'fast' ? 'Fast' : 'Best quality')}
+            onChange={(model) => {
+              if (model === state.model || state.phase === 'applying') return;
+              if (pending.current) { clearTimeout(pending.current); pending.current = null; }
+              lastModel = model;
+              // Another model means a new inference on the same layer, keeping the refinement settings.
+              void removeBackground(session, { action: 'begin', model, modelUrls: modelUrls(controller), settings });
+            }} />
+        </div>
+        {state.model === 'best' ? (
+          <p className={styles.panelNote}>{t('Best quality downloads a larger model once')} ({megabytes(SUBJECT_MODELS.best.byteLength)}) {t('and needs more time and memory; it handles hair, dark scenes and complex edges much better.')}</p>
+        ) : null}
         <Segmented label={t('Quality')} options={['basic', 'advanced'] as const} value={settings.quality}
           labelOf={(q) => t(q === 'basic' ? 'Basic' : 'Advanced')} onChange={(quality) => change({ quality })} />
         {settings.quality === 'advanced' ? (
@@ -49,13 +74,21 @@ function RemoveBackgroundPanel({ controller }: { controller: EditorController })
           </>
         ) : null}
         {state.error ? <p className={styles.panelError}>{state.error}</p> : null}
+        {state.error && state.downloadResumable ? (
+          <button type="button" className={styles.pill} data-testid="remove-background-retry"
+            onClick={() => void removeBackground(session, { action: 'begin', model: state.model, modelUrls: modelUrls(controller), settings })}>
+            {t('Resume download')}
+          </button>
+        ) : null}
         {session.selection ? <p className={styles.panelNote}>{t('Limited to the selection')}</p> : null}
       </fieldset>
       <div className={styles.dialogButtons}>
         <button type="button" className={styles.pill} onClick={close} disabled={state.phase === 'applying'} data-testid="remove-background-cancel">{t('Cancel')}</button>
         {working ? (
           <span className={styles.panelNote} role="status">
-            {t(working)}{state.progress > 0 && state.progress < 1 ? ` ${Math.round(state.progress * 100)}%` : ''}
+            {t(working)}
+            {state.phase === 'downloading-model' && state.totalBytes ? ` ${megabytes(state.downloadedBytes)} / ${megabytes(state.totalBytes)}`
+              : state.progress > 0 && state.progress < 1 ? ` ${Math.round(state.progress * 100)}%` : ''}
           </span>
         ) : null}
         <button type="button" className={`${styles.pill} ${styles.pillPrimary}`} disabled={state.phase !== 'ready' || !!pending.current} data-testid="remove-background-ok"
@@ -64,6 +97,9 @@ function RemoveBackgroundPanel({ controller }: { controller: EditorController })
     </FloatingPanel>
   );
 }
+
+/** The model chosen last time the panel was used (per page load). */
+let lastModel: SubjectModel = 'fast';
 
 export function installSubject(controller: EditorController): void {
   const registries = new WeakMap<EditorSession, ReturnType<typeof subjectCommands>>();
@@ -75,7 +111,7 @@ export function installSubject(controller: EditorController): void {
   };
   controller.features.removeBackground = {
     enabled: () => command().enabled(),
-    run: () => { void removeBackground(controller.session, { modelUrl: MODEL_URL }); },
+    run: () => { void removeBackground(controller.session, { model: lastModel, modelUrls: modelUrls(controller) }); },
   };
   controller.panels.push(() => <RemoveBackgroundPanel controller={controller} />);
   controller.keyHandlers.push((event) => {

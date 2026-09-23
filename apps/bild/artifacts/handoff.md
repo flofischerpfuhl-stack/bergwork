@@ -61,17 +61,20 @@ In `artifacts/screenshots/`:
 
 ## Deviations (summary; full list in `parity.json`)
 
-- **WebGL 2 required:** there is no software-rendering fallback.
-- **HEIC:** decoded only where the browser supports it.
-- **Remove Background:** uses U²-Netp (Apache-2.0) via ONNX Runtime Web instead of Apple Vision. It produces one fused
-  subject map.
-- **Core Image blurs:** approximated with box passes.
-- **Colour:** sRGB only, no ICC conversion.
-- **Browser limits:**
-  - ⌘N/⌘W → ⌥⌘N/⌥⌘W.
-  - Page close offers only the browser's generic "leave page?" prompt.
-  - Save overwrites a chosen file only in Chromium (File System Access API).
-- **Projects:** the contract ZIP is the default format. The Mac `.comp` format (v1–7) opens and can be saved as a copy.
+Apple-only parts are replaced by the nearest available alternative:
+
+| Apple part | Replacement |
+|---|---|
+| GPU renderer | WebGL 2, with a CPU/Canvas 2D fallback when WebGL 2 is missing |
+| HEIC decoding | Browser codec; otherwise a host OS codec (Tauri); otherwise an opt-in LGPL WASM decoder |
+| ColorSync | Little CMS for PNG and TIFF; the browser's colour management for JPEG |
+| Vision (subject masks) | U²-Netp ("Fast") and BiRefNet_lite ("Best quality", 200 MB download) |
+| Core Image blurs | True Gaussian and Gaussian-weighted directional blur |
+
+Browser limits that remain:
+- ⌘N/⌘W → ⌥⌘N/⌥⌘W.
+- Page close offers only the browser's generic "leave page?" prompt.
+- Save overwrites a chosen file only in Chromium.
 
 ## Open points / suggestions for integration
 
@@ -79,7 +82,9 @@ In `artifacts/screenshots/`:
    `FileTargetHost`) with native dialogs in Tauri/Electron.
 2. **Memory.** A 4096² × 10 document uses about 0.8 GB of JS heap and about 0.85 GB of GPU textures. For mobile targets
    consider a lower document budget than upstream's 100 Mpx.
-3. **WebGL-2 fallback.** A software-rendering fallback was not built. Evaluate whether Fernwork targets need it.
+3. **Self-host the best-quality subject model.** It is 200 MB, and the default URL points at Hugging Face. On devices
+   without WebGPU it is slow (≈ 36 s) and memory-hungry (≈ 3 GB).
+5. **HEIC in the Tauri app.** Implement `decodeImage` with OS codecs (sketch in `docs/tauri-heic.md`).
 4. **Bundle size.** The main chunk is about 1 MB minified (≈ 310 KB gzip). The U²-Netp model (4.6 MB) and the ONNX
    runtime load only on first use of Remove Background.
 

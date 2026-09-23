@@ -52,27 +52,43 @@ Browsers for Playwright: `npx playwright install chromium firefox webkit`.
 
 ## Deviations from upstream
 
-- **Renderer:** WebGL 2 is required; there is no software-rendering fallback. Without WebGL 2 the canvas shows an
-  error message.
-- **HEIC:** decoded only where the browser can (Safari); elsewhere a readable error asks for JPEG/PNG. No
-  licence-compatible bundled HEVC decoder exists.
-- **Remove Background:** Apple Vision is replaced by the local U²-Netp model (Apache-2.0, ONNX Runtime Web, WebGPU or
-  WASM). It yields one fused salient-object map instead of separate subject instances.
-- **Core Image filters:** Gaussian and axis-aligned motion blur use three sliding box passes; oblique motion blur uses
-  sampled Gaussian convolution. Results are close to, not bit-identical with, Core Image.
-- **Colour management:** documents are sRGB; embedded ICC profiles are not converted.
+Where the macOS app relies on Apple frameworks, the port uses the closest available replacement:
+
+- **Renderer:** WebGL 2 normally. Without it, a CPU/Canvas 2D renderer takes over; it has the same compositing
+  semantics but is slower.
+- **HEIC:** decoded natively where the browser can (Safari). Otherwise a host may decode it (the planned Tauri app
+  through OS codecs, see `docs/tauri-heic.md`). A web host may also opt in to a separately loaded LGPL-3.0
+  libheif/libde265 WASM decoder (`heicDecoder: 'lgpl-wasm'`, off by default; HEVC patents are the distributor's
+  responsibility). If none of these is available, the user gets a readable error.
+- **Colour:** embedded ICC profiles in PNG and TIFF are converted to sRGB with Little CMS 2 (MIT). JPEG uses the
+  browser's colour-managed decoder.
+- **Remove Background:** Apple Vision is replaced by two local models on ONNX Runtime Web:
+  - "Fast": U²-Netp, bundled, 4.6 MB.
+  - "Best quality": BiRefNet_lite, MIT, 200 MB, downloaded once and cached. Hosts should self-host it through
+    `subjectModelUrls`.
+
+  Separate subjects are found as connected components of the mask.
+- **Blurs:** a true Gaussian (σ = radius) and a Gaussian-weighted directional motion blur, as Core Image uses them.
+  They are close to, but not bit-identical with, Apple's proprietary implementation.
 - **Keyboard:** browsers reserve ⌘N/⌘W, so New Canvas and Close Project are ⌥⌘N/⌥⌘W in a browser. ⌘N/⌘W also work
   where the host passes them on (desktop shells).
 - **Quitting:** a browser only allows its generic "leave page?" prompt for unsaved tabs. Per-tab Save/Don't Save is
   asked when a tab is closed. Recovery copies in IndexedDB cover crashes and reloads.
 - **Saving:** in Chromium, Save overwrites the chosen file through the File System Access API. Other browsers download
   a new file each time.
-- **Project format:** the default format is the host contract's ZIP archive. The macOS `.comp` package can be opened
-  (zipped, or as a folder) and a copy saved for the Mac app.
+- **Project format:** the default format is the host contract's ZIP archive. The macOS `.comp` package (versions 1–7)
+  can be opened (zipped, or as a folder) and a copy saved for the Mac app.
+
+Optional host fields beyond `contracts.ts`:
+- `saveFileAs` / `saveFileTo`: Save and Save As to a chosen file.
+- `decodeImage`: decoding with host (e.g. OS) codecs.
+- `heicDecoder`: turns on the LGPL HEIC decoder.
+- `subjectModelUrls`: where the subject models are loaded from.
 
 Open issues are tracked in the handoff report (`artifacts/handoff.md`).
 
 ## Licences
 
-Upstream Compositor: MIT, see `LICENSE.upstream`. Copied C kernels, the U²-Netp model and ONNX Runtime Web are listed
-in `THIRD_PARTY_NOTICES.md` and `MODEL_LICENSES.md`.
+Upstream Compositor: MIT, see `LICENSE.upstream`. The following are listed with their licences in
+`THIRD_PARTY_NOTICES.md` and `MODEL_LICENSES.md`: the copied C kernels, Little CMS (MIT), ONNX Runtime Web (MIT),
+U²-Netp (Apache-2.0), BiRefNet_lite (MIT), and the optional LGPL-3.0 HEIC decoder.
