@@ -7,3 +7,4 @@ export * from './stroke';
 export * from './clone';
 export * from './cursor';
 export * from './commands';
+export * from './gpuPreview';

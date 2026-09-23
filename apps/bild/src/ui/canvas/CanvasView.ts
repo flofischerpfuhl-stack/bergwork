@@ -10,6 +10,7 @@
 import type { CanvasDocument } from '../../core/document';
 import { rectUnion, type Point } from '../../core/geometry';
 import type { EditorSession } from '../../core/session';
+import { currentGpuBrushPreview } from '../../core/brush';
 import { GpuCompositor, type CompositeHooks, type ViewSpec } from '../../render/gpuCompositor';
 import type { CanvasHost, EditorController, SecondaryDrag } from '../controller';
 import { defaultTools, HandTool, overlayGeometry, type Modifiers, type ToolContext, type ToolHandler, type ToolRegistry } from './tools';
@@ -151,6 +152,7 @@ export class CanvasView implements CanvasHost {
       blendMode: (l) => session.displayedBlendMode(l),
       raster: (l) => session.displayedRaster(l),
       maskRaster: (l) => session.displayedMaskRaster(l),
+      brush: currentGpuBrushPreview(session),
     };
   }
 

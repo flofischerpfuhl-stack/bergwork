@@ -8,10 +8,12 @@ import {
   changeBrushSize as stepSize, type BrushMode, type BrushSettings,
 } from './settings';
 import { beginStroke, type CloneSample, type Stroke, type StrokeResult, type StrokeUpdate } from './stroke';
+import { RecordedBrushStroke, type GpuBrushPreview } from './gpuPreview';
 
 interface LastPoint { readonly point: Point; readonly layerId: string; readonly mask: boolean }
 interface ActiveStroke {
   readonly stroke: Stroke;
+  readonly gpu: GpuBrushPreview | null;
   readonly layerId: string;
   readonly sourceRaster: Raster | null;
   readonly sourceMaskRaster: Raster | null;
@@ -121,11 +123,16 @@ export function beginBrushStroke(session: EditorSession, point: Point, options: 
   const used = document!.layers.reduce((total, item) => item.id === layer!.id ? total
     : total + (mask ? item.mask?.raster.width ?? 0 : item.raster?.width ?? 0)
       * (mask ? item.mask?.raster.height ?? 0 : item.raster?.height ?? 0), 0);
-  const stroke = beginStroke({ layer: layer!, canvas: { width: document!.width, height: document!.height }, settings,
-    target: mask ? 'mask' : 'pixels', selection: document!.selection, clone, pixelLimit: Math.max(0, 100_000_000 - used) });
+  const strokeOptions = { layer: layer!, canvas: { width: document!.width, height: document!.height }, settings,
+    target: mask ? 'mask' as const : 'pixels' as const, selection: document!.selection, clone,
+    pixelLimit: Math.max(0, 100_000_000 - used) };
+  // MetalBrushCoverage.swift keeps ordinary Brush/Eraser geometry on the GPU during the gesture.
+  // Clone and selection-limited strokes need source/selection sampling and retain the CPU preview.
+  const recorded = session.tool === 'brush' && !document!.selection && !clone ? new RecordedBrushStroke(strokeOptions) : null;
+  const stroke = recorded ?? beginStroke(strokeOptions);
   const name = mask ? 'Paint Mask' : settings.mode === 'erase' ? 'Erase'
     : session.tool === 'cloneStamp' ? 'Clone Stamp' : 'Brush Stroke';
-  value.active = { stroke, layerId: layer!.id, sourceRaster: layer!.raster,
+  value.active = { stroke, gpu: recorded?.gpuPreview ?? null, layerId: layer!.id, sourceRaster: layer!.raster,
     sourceMaskRaster: layer!.mask?.raster ?? null, sourceTransform: layer!.transform, mask, name, changed: false };
   const start = options.shift && value.last && value.last.layerId === layer!.id && value.last.mask === mask ? value.last.point : null;
   const update = stroke.addPoints(start ? [start, point] : [point]);
@@ -153,6 +160,17 @@ export function currentBrushPreview(session: EditorSession): { layerId: string; 
   const active = state(session).active;
   if (!active) return null;
   return { layerId: active.layerId, mask: active.mask, raster: active.stroke.currentRaster(), transform: active.stroke.currentTransform() };
+}
+
+/** Geometry-only live preview used by the WebGL compositor. */
+export function currentGpuBrushPreview(session: EditorSession): GpuBrushPreview | null {
+  const active = state(session).active;
+  return active?.gpu ?? null;
+}
+
+/** CPU previews are registered only for brush modes that cannot use MetalBrushCoverage-equivalent rendering. */
+export function currentCpuBrushPreview(session: EditorSession): ReturnType<typeof currentBrushPreview> {
+  return state(session).active?.gpu ? null : currentBrushPreview(session);
 }
 
 export function isBrushStrokeActive(session: EditorSession): boolean { return state(session).active !== null; }

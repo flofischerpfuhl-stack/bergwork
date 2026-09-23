@@ -15,7 +15,7 @@ import { FloatingPanel } from './panels';
 import type { EditorSession, PaletteColor, Tool } from '../core/session';
 import type { Point } from '../core/geometry';
 import {
-  beginBrushStroke, cancelBrushStroke, changeBrushHardness, changeBrushSize, cloneSamplePoint, currentBrushPreview,
+  beginBrushStroke, cancelBrushStroke, changeBrushHardness, changeBrushSize, cloneSamplePoint, currentCpuBrushPreview,
   extendBrushStroke, finishBrushStroke, getBrushSettings, getCloneSettings, isBrushStrokeActive, setBrushSettings,
   setCloneSettings, setCloneSource, brushOutlineRadius, type BrushSettings,
 } from '../core/brush';
@@ -71,7 +71,7 @@ const previewInstalled = new WeakSet<EditorSession>();
 function ensurePreviewSources(session: EditorSession): void {
   if (previewInstalled.has(session)) return;
   previewInstalled.add(session);
-  session.previewSources.push((s) => currentBrushPreview(s) ?? currentRetouchPreview(s) ?? pendingGradientPreview(s));
+  session.previewSources.push((s) => currentCpuBrushPreview(s) ?? currentRetouchPreview(s) ?? pendingGradientPreview(s));
 }
 
 // MARK: Brush and Clone Stamp

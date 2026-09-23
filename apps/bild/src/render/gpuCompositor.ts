@@ -18,9 +18,11 @@ import {
 } from '../core/document';
 import { apply, concat, invert, pixelToDocument, type Affine, type LayerTransform, type Rect } from '../core/geometry';
 import { TILE, type Raster } from '../core/raster';
+import type { BrushSegment, GpuBrushPreview } from '../core/brush';
 import {
-  adjustFragment, BLEND_INDEX, COVERAGE_FRAGMENT, IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT,
-  STACK_FRAGMENT, UNPREMULTIPLY_FRAGMENT, VERTEX,
+  adjustFragment, BLEND_INDEX, BRUSH_COVERAGE_FRAGMENT, BRUSH_MASK_FRAGMENT, BRUSH_MAX_FRAGMENT, BRUSH_PAINT_FRAGMENT, COVERAGE_FRAGMENT,
+  IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT, STACK_FRAGMENT,
+  UNPREMULTIPLY_FRAGMENT, VERTEX,
 } from './shaders';
 
 export interface CompositeHooks {
@@ -30,6 +32,8 @@ export interface CompositeHooks {
   /** Pixels to draw instead of the stored raster (brush stroke in progress, previews). */
   raster(layer: Layer): Raster | null;
   maskRaster(layer: Layer): Raster | null;
+  /** Geometry-only ordinary Brush/Eraser preview; clone and selection strokes use `raster`. */
+  readonly brush?: GpuBrushPreview | null;
 }
 
 export const DEFAULT_HOOKS: CompositeHooks = {
@@ -84,10 +88,35 @@ interface TextureChunk {
   readonly bytes: number;
 }
 
+interface BrushChunk {
+  readonly col: number;
+  readonly row: number;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  permanent: RenderTexture;
+  alternate: RenderTexture;
+  readonly scratch: RenderTexture;
+  readonly tail: RenderTexture;
+  readonly painted: RenderTexture;
+  bounds: Rect | null;
+}
+
+interface BrushGpuState {
+  readonly preview: GpuBrushPreview;
+  readonly chunks: Map<string, BrushChunk>;
+  applied: number;
+  revision: number;
+  tailKeys: Set<string>;
+}
+
 // A 64 px margin leaves one neighbour texel at the deepest supported sharp halving (level 6).
 // TiledLayerRenderer.support grows its piece margin for the same reason.
 const CHUNK_APRON = 64;
 const TARGET_CHUNK_SIZE = 4096;
+const BRUSH_CHUNK_SIZE = TILE;
+const BRUSH_APRON = CHUNK_APRON;
 
 const IDENTITY9 = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 
@@ -110,6 +139,7 @@ export class GpuCompositor {
   private frame = 0;
   private readonly white: TextureSource;
   private lutSources = new Map<string, TextureSource>();
+  private brushState: BrushGpuState | null = null;
   /** The LUT bytes last uploaded per layer, so an unchanged adjustment is not re-uploaded every frame. */
   private lutUploaded = new Map<string, Uint8Array>();
   adjustmentPrograms: AdjustmentProgramProvider = adjustmentProgram;
@@ -160,6 +190,7 @@ export class GpuCompositor {
     for (const rt of this.pool) rt.destroy(true);
     for (const rt of this.inUse) rt.destroy(true);
     for (const lut of this.lutSources.values()) lut.destroy();
+    this.destroyBrushState();
     this.mesh.destroy();
     this.white.destroy();
     this.renderer.destroy();
@@ -205,6 +236,9 @@ export class GpuCompositor {
         uSampling: { value: 1, type: 'i32' },
         uMipLevel: { value: 0, type: 'i32' },
         uRestrictChunk: { value: 1, type: 'i32' },
+        uRestrictBounds: { value: 0, type: 'i32' },
+        uDrawOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uDrawSize: { value: new Float32Array(2), type: 'vec2<f32>' },
         uOpacity: { value: 1, type: 'f32' },
         uMode: { value: 0, type: 'i32' },
         uHasMask: { value: 0, type: 'i32' },
@@ -243,6 +277,39 @@ export class GpuCompositor {
         uMaskEdge: { value: new Float32Array(2), type: 'vec2<f32>' },
         uSnap: { value: 0, type: 'i32' },
       }, ['uPrevious', 'uSource']],
+      brushCoverage: [BRUSH_COVERAGE_FRAGMENT, {
+        uPixelToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+        uGridOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uCanvas: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uSegment: { value: new Float32Array(4), type: 'vec4<f32>' },
+        uPressure: { value: 1, type: 'f32' }, uRadius: { value: 1, type: 'f32' },
+        uHardness: { value: 1, type: 'f32' }, uAntialias: { value: 1, type: 'f32' },
+        uSpacing: { value: 1, type: 'f32' },
+      }, []],
+      brushPaint: [BRUSH_PAINT_FRAGMENT, {
+        uGridOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uGridSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uSourceRect: { value: new Float32Array(4), type: 'vec4<f32>' },
+        uSourceSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uBaseOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uBaseTextureSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uBaseApron: { value: 0, type: 'f32' }, uHasBase: { value: 0, type: 'i32' },
+        uMask: { value: 0, type: 'i32' }, uHard: { value: 0, type: 'i32' },
+        uErase: { value: 0, type: 'i32' }, uColor: { value: new Float32Array(3), type: 'vec3<f32>' },
+        uOpacity: { value: 1, type: 'f32' },
+      }, ['uBase', 'uPermanent', 'uTail']],
+      brushMax: [BRUSH_MAX_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uFirst', 'uSecond']],
+      brushMask: [BRUSH_MASK_FRAGMENT, {
+        uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+        uDocToMask: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+        uMaskSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uMaskEdge: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uChunkOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uChunkSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uTextureSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uApron: { value: BRUSH_APRON, type: 'f32' }, uSampling: { value: 1, type: 'i32' },
+        uMipLevel: { value: 0, type: 'i32' }, uSnap: { value: 0, type: 'i32' },
+      }, ['uBackdrop', 'uPainted']],
       opaque: [OPAQUE_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uSource']],
       stack: [STACK_FRAGMENT, {
         uHasClip: { value: 0, type: 'i32' },
@@ -450,6 +517,191 @@ export class GpuCompositor {
     }
   }
 
+  // MARK: Active brush coverage
+
+  private destroyBrushState(): void {
+    if (!this.brushState) return;
+    const sources = new Set<TextureSource>();
+    for (const chunk of this.brushState.chunks.values()) {
+      for (const target of [chunk.permanent, chunk.alternate, chunk.scratch, chunk.tail, chunk.painted]) {
+        sources.add(target.source);
+      }
+    }
+    for (const pass of this.passes.values()) {
+      const resources = pass.shader.resources as Record<string, unknown>;
+      for (const [key, resource] of Object.entries(resources)) if (sources.has(resource as TextureSource)) resources[key] = this.white;
+    }
+    for (const chunk of this.brushState.chunks.values()) {
+      chunk.permanent.destroy(true);
+      chunk.alternate.destroy(true);
+      chunk.scratch.destroy(true);
+      chunk.tail.destroy(true);
+      chunk.painted.destroy(true);
+    }
+    this.brushState = null;
+  }
+
+  private brushChunk(state: BrushGpuState, key: string): BrushChunk {
+    const existing = state.chunks.get(key);
+    if (existing) return existing;
+    const [col, row] = parseChunkKey(key);
+    const x = col * BRUSH_CHUNK_SIZE, y = row * BRUSH_CHUNK_SIZE;
+    const width = Math.min(BRUSH_CHUNK_SIZE, state.preview.width - x);
+    const height = Math.min(BRUSH_CHUNK_SIZE, state.preview.height - y);
+    const textureWidth = width + BRUSH_APRON * 2, textureHeight = height + BRUSH_APRON * 2;
+    const format = this.floatTargets ? 'rgba16float' : 'rgba8unorm';
+    const permanent = RenderTexture.create({ width: textureWidth, height: textureHeight, format, antialias: false, resolution: 1 });
+    const alternate = RenderTexture.create({ width: textureWidth, height: textureHeight, format, antialias: false, resolution: 1 });
+    const scratch = RenderTexture.create({ width: textureWidth, height: textureHeight, format, antialias: false, resolution: 1 });
+    const tail = RenderTexture.create({ width: textureWidth, height: textureHeight, format, antialias: false, resolution: 1 });
+    const painted = RenderTexture.create({ width: textureWidth, height: textureHeight,
+      format: this.floatTargets ? 'rgba16float' : 'rgba8unorm',
+      mipLevelCount: Math.floor(Math.log2(Math.max(textureWidth, textureHeight))) + 1,
+      autoGenerateMipmaps: false, antialias: false, resolution: 1 });
+    const chunk = { col, row, x, y, width, height, permanent, alternate, scratch, tail, painted, bounds: null };
+    state.chunks.set(key, chunk);
+    this.clear(permanent); this.clear(alternate); this.clear(scratch); this.clear(tail); this.clear(painted);
+    return chunk;
+  }
+
+  private brushKeys(preview: GpuBrushPreview, segment: BrushSegment): string[] {
+    const reach = preview.settings.diameter / 2 + 2;
+    const doc = {
+      x: Math.min(segment.x0, segment.x1) - reach, y: Math.min(segment.y0, segment.y1) - reach,
+      width: Math.abs(segment.x1 - segment.x0) + reach * 2,
+      height: Math.abs(segment.y1 - segment.y0) + reach * 2,
+    };
+    const pixels = affineBounds(invert(preview.mapping), doc);
+    const left = Math.max(0, Math.floor(pixels.x)), top = Math.max(0, Math.floor(pixels.y));
+    const right = Math.min(preview.width, Math.ceil(pixels.x + pixels.width));
+    const bottom = Math.min(preview.height, Math.ceil(pixels.y + pixels.height));
+    if (right <= left || bottom <= top) return [];
+    const result: string[] = [];
+    for (let row = Math.floor(top / BRUSH_CHUNK_SIZE); row <= Math.floor((bottom - 1) / BRUSH_CHUNK_SIZE); row++) {
+      for (let col = Math.floor(left / BRUSH_CHUNK_SIZE); col <= Math.floor((right - 1) / BRUSH_CHUNK_SIZE); col++) {
+        result.push(chunkKey(col, row));
+      }
+    }
+    return result;
+  }
+
+  private brushSegmentRect(preview: GpuBrushPreview, chunk: BrushChunk, segment: BrushSegment): Rect | null {
+    const reach = preview.settings.diameter / 2 + 2;
+    const pixels = affineBounds(invert(preview.mapping), {
+      x: Math.min(segment.x0, segment.x1) - reach, y: Math.min(segment.y0, segment.y1) - reach,
+      width: Math.abs(segment.x1 - segment.x0) + reach * 2,
+      height: Math.abs(segment.y1 - segment.y0) + reach * 2,
+    });
+    const originX = chunk.x - BRUSH_APRON, originY = chunk.y - BRUSH_APRON;
+    const x = Math.max(0, Math.floor(pixels.x - originX));
+    const y = Math.max(0, Math.floor(pixels.y - originY));
+    const right = Math.min(chunk.permanent.width, Math.ceil(pixels.x + pixels.width - originX));
+    const bottom = Math.min(chunk.permanent.height, Math.ceil(pixels.y + pixels.height - originY));
+    return right > x && bottom > y ? { x, y, width: right - x, height: bottom - y } : null;
+  }
+
+  private renderBrushSegment(target: RenderTexture, preview: GpuBrushPreview, chunk: BrushChunk,
+    segment: BrushSegment, accumulate = true): void {
+    const rect = this.brushSegmentRect(preview, chunk, segment);
+    if (!rect || segment.pressure <= 0) return;
+    const interior = intersect({ x: rect.x - BRUSH_APRON + chunk.x, y: rect.y - BRUSH_APRON + chunk.y,
+      width: rect.width, height: rect.height }, { x: chunk.x, y: chunk.y, width: chunk.width, height: chunk.height });
+    if (interior) chunk.bounds = unionRect(chunk.bounds, interior);
+    const m = preview.mapping;
+    this.mesh.state.blendMode = accumulate ? 'normal' : 'none';
+    this.run(this.pass('brushCoverage'), target, target.width, target.height, {}, {
+      uPixelToDoc: mat3(m), uGridOrigin: new Float32Array([chunk.x - BRUSH_APRON, chunk.y - BRUSH_APRON]),
+      uCanvas: new Float32Array([preview.canvas.width, preview.canvas.height]),
+      uSegment: new Float32Array([segment.x0, segment.y0, segment.x1, segment.y1]),
+      uPressure: segment.pressure, uRadius: preview.settings.diameter / 2, uHardness: preview.settings.hardness,
+      uAntialias: Math.max(0.001, Math.min(Math.hypot(m.a, m.b), Math.hypot(m.c, m.d))),
+      uSpacing: Math.max(0.25, preview.settings.diameter * 0.025),
+    }, rect);
+    this.mesh.state.blendMode = 'normal';
+    this.mesh.state.blend = false;
+  }
+
+  private accumulateHardSegment(preview: GpuBrushPreview, chunk: BrushChunk, segment: BrushSegment): void {
+    this.clear(chunk.scratch);
+    this.renderBrushSegment(chunk.scratch, preview, chunk, segment, false);
+    this.mesh.state.blend = false;
+    this.run(this.pass('brushMax'), chunk.alternate, chunk.alternate.width, chunk.alternate.height, {
+      uFirst: chunk.permanent.source, uSecond: chunk.scratch.source,
+    }, {});
+    [chunk.permanent, chunk.alternate] = [chunk.alternate, chunk.permanent];
+  }
+
+  private prepareBrush(preview: GpuBrushPreview): BrushGpuState {
+    if (this.brushState?.preview !== preview) {
+      this.destroyBrushState();
+      this.brushState = { preview, chunks: new Map(), applied: 0, revision: -1, tailKeys: new Set() };
+    }
+    const state = this.brushState;
+    if (state.revision === preview.revision) return state;
+    const changed = new Set<string>();
+    while (state.applied < preview.settled.length) {
+      const segment = preview.settled[state.applied++]!;
+      for (const key of this.brushKeys(preview, segment)) {
+        const chunk = this.brushChunk(state, key);
+        if (preview.settings.hardness >= 1) this.accumulateHardSegment(preview, chunk, segment);
+        else this.renderBrushSegment(chunk.permanent, preview, chunk, segment);
+        changed.add(key);
+      }
+    }
+    const nextTail = new Set<string>();
+    for (const segment of preview.tail) for (const key of this.brushKeys(preview, segment)) nextTail.add(key);
+    for (const key of new Set([...state.tailKeys, ...nextTail])) {
+      const chunk = this.brushChunk(state, key);
+      this.clear(chunk.tail);
+      changed.add(key);
+    }
+    for (const segment of preview.tail) for (const key of this.brushKeys(preview, segment)) {
+      this.renderBrushSegment(this.brushChunk(state, key).tail, preview, this.brushChunk(state, key), segment,
+        preview.settings.hardness < 1);
+    }
+    state.tailKeys = nextTail;
+    for (const key of changed) this.paintBrushChunk(preview, this.brushChunk(state, key));
+    state.revision = preview.revision;
+    return state;
+  }
+
+  private paintBrushChunk(preview: GpuBrushPreview, chunk: BrushChunk): void {
+    const source = preview.source;
+    let baseSource = this.transparentSource();
+    let baseOriginX = 0, baseOriginY = 0, baseApron = 0, baseWidth = 1, baseHeight = 1, hasBase = 0;
+    if (source) {
+      const slot = this.texture(`${preview.target === 'mask' ? 'mask' : 'px'}:${preview.layerId}`, source);
+      const centerX = chunk.x + chunk.width / 2, centerY = chunk.y + chunk.height / 2;
+      const sx = Math.min(source.width - 1, Math.max(0,
+        Math.floor((centerX - preview.sourceRect.x) * source.width / preview.sourceRect.width)));
+      const sy = Math.min(source.height - 1, Math.max(0,
+        Math.floor((centerY - preview.sourceRect.y) * source.height / preview.sourceRect.height)));
+      const base = slot.chunks.get(chunkKey(Math.floor(sx / this.chunkSize), Math.floor(sy / this.chunkSize)));
+      if (base) {
+        baseSource = base.source; baseOriginX = base.x; baseOriginY = base.y; baseApron = CHUNK_APRON;
+        baseWidth = base.width + CHUNK_APRON * 2; baseHeight = base.height + CHUNK_APRON * 2; hasBase = 1;
+      }
+    }
+    this.mesh.state.blend = false;
+    this.run(this.pass('brushPaint'), chunk.painted, chunk.painted.width, chunk.painted.height, {
+      uBase: baseSource, uPermanent: chunk.permanent.source, uTail: chunk.tail.source,
+    }, {
+      uGridOrigin: new Float32Array([chunk.x - BRUSH_APRON, chunk.y - BRUSH_APRON]),
+      uGridSize: new Float32Array([preview.width, preview.height]),
+      uSourceRect: new Float32Array([preview.sourceRect.x, preview.sourceRect.y,
+        preview.sourceRect.width, preview.sourceRect.height]),
+      uSourceSize: new Float32Array([source?.width ?? 1, source?.height ?? 1]),
+      uBaseOrigin: new Float32Array([baseOriginX, baseOriginY]),
+      uBaseTextureSize: new Float32Array([baseWidth, baseHeight]), uBaseApron: baseApron, uHasBase: hasBase,
+      uMask: preview.target === 'mask' ? 1 : 0, uHard: preview.settings.hardness >= 1 ? 1 : 0,
+      uErase: preview.settings.mode === 'erase' ? 1 : 0,
+      uColor: new Float32Array([preview.settings.red, preview.settings.green, preview.settings.blue]),
+      uOpacity: preview.settings.opacity,
+    });
+    this.renderer.texture.bindSource(chunk.painted.source, 0);
+    this.gl.generateMipmap(this.gl.TEXTURE_2D);
+  }
+
   // MARK: Compositing
 
   /**
@@ -463,7 +715,10 @@ export class GpuCompositor {
     let acc = this.acquire(width, height);
     this.clear(acc);
     const byId = new Map(document.layers.map((l) => [l.id, l]));
-    const ids = renderLayers(document.layers).filter((l) => hooks.raster(l) || l.adjustment).map((l) => l.id);
+    const activeBrush = hooks.brush ?? null;
+    if (!activeBrush) this.destroyBrushState();
+    const ids = renderLayers(document.layers).filter((l) => hooks.raster(l) || activeBrush?.layerId === l.id || l.adjustment)
+      .map((l) => l.id);
     const stacks = new Map<string, string[]>();
     const stacked = new Set<string>();
     ids.forEach((base, index) => {
@@ -552,7 +807,7 @@ export class GpuCompositor {
 
   releaseTarget(rt: RenderTexture): void { this.release(rt); }
 
-  private layerUniforms(raster: Raster, transform: LayerTransform, view: ViewSpec) {
+  private layerUniforms(raster: Pick<Raster, 'width' | 'height'>, transform: LayerTransform, view: ViewSpec) {
     const docToGrid = invert(pixelToDocument(transform, raster.width, raster.height));
     // Target px per grid px along each local axis, for edge AA and mip choice.
     const gx = Math.hypot(transform.size.width / raster.width, 0) * (view.snap ? 1 : view.scale);
@@ -588,45 +843,109 @@ export class GpuCompositor {
   private drawLayer(backdrop: RenderTexture, layer: Layer, view: ViewSpec, hooks: CompositeHooks, clip: RenderTexture | null,
     mode: BlendMode, replace = false): RenderTexture {
     const raster = hooks.raster(layer);
+    const brush = hooks.brush?.layerId === layer.id ? hooks.brush : null;
+    const brushState = brush ? this.prepareBrush(brush) : null;
+    const pixelBrush = brush?.target === 'pixels' ? brush : null;
     const out = this.acquire(view.width, view.height);
-    if (!raster) {
-      this.copy(backdrop, out, view);
-      return out;
-    }
-    const transform = hooks.transform(layer);
-    const slot = this.texture(`px:${layer.id}`, raster);
-    const u = this.layerUniforms(raster, transform, view);
-    if (!slot.chunks.size) { this.copy(backdrop, out, view); return out; }
-    const restricted = slot.chunks.size > 1;
-    if (restricted) this.copy(backdrop, out, view);
     let maskTarget: RenderTexture | null = null;
     const maskRaster = layer.mask?.enabled ? hooks.maskRaster(layer) : null;
     if (layer.mask && maskRaster) {
       const placement = hooks.maskPlacement(layer);
-      const maskPlace = placement ?? transform;
+      const maskPlace = placement ?? hooks.transform(layer);
       maskTarget = this.renderMask(null, maskRaster, `mask:${layer.id}`, maskPlace, view,
         placement ? maskBackground(maskRaster) : 0);
     }
-    const gridToDoc = pixelToDocument(transform, raster.width, raster.height);
-    for (const chunk of slot.chunks.values()) {
-      const rect = restricted
-        ? this.gridRect(chunk.x, chunk.y, chunk.width, chunk.height, gridToDoc, view)
-        : { x: 0, y: 0, width: view.width, height: view.height };
-      if (!rect) continue;
-      this.run(this.pass('layer'), out, view.width, view.height, {
-        uBackdrop: backdrop.source, uLayer: chunk.source, uMask: maskTarget?.source ?? this.white, uClip: clip?.source ?? this.white,
-      }, {
-        uTarget: new Float32Array([view.width, view.height]), uViewToDoc: mat3(view.viewToDoc),
-        uDocToLayer: u.uDocToLayer, uLayerSize: u.uLayerSize, uLayerEdge: u.uLayerEdge, uSampling: u.uSampling,
-        uChunkOrigin: new Float32Array([chunk.x, chunk.y]), uChunkSize: new Float32Array([chunk.width, chunk.height]),
-        uTextureSize: new Float32Array([chunk.width + CHUNK_APRON * 2, chunk.height + CHUNK_APRON * 2]), uApron: CHUNK_APRON,
-        uMipLevel: u.uMipLevel,
-        uRestrictChunk: restricted ? 1 : 0,
-        uOpacity: layer.opacity, uMode: BLEND_INDEX[mode] ?? 0, uHasMask: maskTarget ? 1 : 0,
-        uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0, uReplace: replace ? 1 : 0,
-      }, rect);
+    if (brush?.target === 'mask' && brushState && maskTarget) {
+      const paintedMask = this.overlayBrushMask(maskTarget, brush, brushState, view);
+      this.release(maskTarget);
+      maskTarget = paintedMask;
+    }
+
+    if (!raster) this.copy(backdrop, out, view);
+    else {
+      const transform = hooks.transform(layer);
+      const slot = this.texture(`px:${layer.id}`, raster);
+      const u = this.layerUniforms(raster, transform, view);
+      const restricted = slot.chunks.size > 1;
+      if (!slot.chunks.size || restricted) this.copy(backdrop, out, view);
+      const gridToDoc = pixelToDocument(transform, raster.width, raster.height);
+      for (const chunk of slot.chunks.values()) {
+        const rect = restricted
+          ? this.gridRect(chunk.x, chunk.y, chunk.width, chunk.height, gridToDoc, view)
+          : { x: 0, y: 0, width: view.width, height: view.height };
+        if (!rect) continue;
+        this.run(this.pass('layer'), out, view.width, view.height, {
+          uBackdrop: backdrop.source, uLayer: chunk.source, uMask: maskTarget?.source ?? this.white,
+          uClip: clip?.source ?? this.white,
+        }, {
+          uTarget: new Float32Array([view.width, view.height]), uViewToDoc: mat3(view.viewToDoc),
+          uDocToLayer: u.uDocToLayer, uLayerSize: u.uLayerSize, uLayerEdge: u.uLayerEdge, uSampling: u.uSampling,
+          uChunkOrigin: new Float32Array([chunk.x, chunk.y]), uChunkSize: new Float32Array([chunk.width, chunk.height]),
+          uTextureSize: new Float32Array([chunk.width + CHUNK_APRON * 2, chunk.height + CHUNK_APRON * 2]), uApron: CHUNK_APRON,
+          uMipLevel: u.uMipLevel, uRestrictChunk: restricted ? 1 : 0,
+          uRestrictBounds: 0,
+          uOpacity: layer.opacity, uMode: BLEND_INDEX[mode] ?? 0, uHasMask: maskTarget ? 1 : 0,
+          uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0, uReplace: replace ? 1 : 0,
+        }, rect);
+      }
+    }
+
+    if (pixelBrush && brushState) {
+      const u = this.layerUniforms({ width: pixelBrush.width, height: pixelBrush.height },
+        pixelBrush.transform, view);
+      const gridToDoc = pixelToDocument(pixelBrush.transform, pixelBrush.width, pixelBrush.height);
+      for (const chunk of brushState.chunks.values()) {
+        const bounds = expandedBrushBounds(chunk);
+        if (!bounds) continue;
+        const rect = this.gridRect(bounds.x, bounds.y, bounds.width, bounds.height, gridToDoc, view);
+        if (!rect) continue;
+        this.run(this.pass('layer'), out, view.width, view.height, {
+          uBackdrop: backdrop.source, uLayer: chunk.painted.source, uMask: maskTarget?.source ?? this.white,
+          uClip: clip?.source ?? this.white,
+        }, {
+          uTarget: new Float32Array([view.width, view.height]), uViewToDoc: mat3(view.viewToDoc),
+          uDocToLayer: u.uDocToLayer, uLayerSize: u.uLayerSize, uLayerEdge: u.uLayerEdge, uSampling: u.uSampling,
+          uChunkOrigin: new Float32Array([chunk.x, chunk.y]), uChunkSize: new Float32Array([chunk.width, chunk.height]),
+          uTextureSize: new Float32Array([chunk.painted.width, chunk.painted.height]), uApron: BRUSH_APRON,
+          uMipLevel: u.uMipLevel, uRestrictChunk: 1,
+          uRestrictBounds: 1, uDrawOrigin: new Float32Array([bounds.x, bounds.y]),
+          uDrawSize: new Float32Array([bounds.width, bounds.height]),
+          uOpacity: layer.opacity, uMode: BLEND_INDEX[mode] ?? 0, uHasMask: maskTarget ? 1 : 0,
+          uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0, uReplace: replace ? 1 : 0,
+        }, rect);
+      }
     }
     this.release(maskTarget);
+    return out;
+  }
+
+  private overlayBrushMask(base: RenderTexture, preview: GpuBrushPreview, state: BrushGpuState,
+    view: ViewSpec): RenderTexture {
+    const out = this.acquire(view.width, view.height);
+    this.run(this.pass('coverage'), out, view.width, view.height, { uPrevious: this.white, uSource: base.source }, {
+      uKind: 3, uHasPrevious: 0, uViewToDoc: mat3(view.viewToDoc), uDocToMask: mat3(invert(preview.mapping)),
+      uMaskSize: new Float32Array([preview.width, preview.height]), uMaskEdge: new Float32Array([1, 1]),
+      uSnap: view.snap ? 1 : 0,
+    });
+    const gx = preview.transform.size.width / preview.width * (view.snap ? 1 : view.scale);
+    const gy = preview.transform.size.height / preview.height * (view.snap ? 1 : view.scale);
+    const mipLevel = sharpMipLevel(gx);
+    const gridToDoc = pixelToDocument(preview.transform, preview.width, preview.height);
+    for (const chunk of state.chunks.values()) {
+      const bounds = expandedBrushBounds(chunk);
+      if (!bounds) continue;
+      const rect = this.gridRect(bounds.x, bounds.y, bounds.width, bounds.height, gridToDoc, view);
+      if (!rect) continue;
+      this.run(this.pass('brushMask'), out, view.width, view.height, {
+        uBackdrop: base.source, uPainted: chunk.painted.source,
+      }, {
+        uViewToDoc: mat3(view.viewToDoc), uDocToMask: mat3(invert(preview.mapping)),
+        uMaskSize: new Float32Array([preview.width, preview.height]), uMaskEdge: new Float32Array([gx, gy]),
+        uChunkOrigin: new Float32Array([chunk.x, chunk.y]), uChunkSize: new Float32Array([chunk.width, chunk.height]),
+        uTextureSize: new Float32Array([chunk.painted.width, chunk.painted.height]), uApron: BRUSH_APRON,
+        uSampling: mipLevel > 0 ? 2 : 1, uMipLevel: mipLevel, uSnap: view.snap ? 1 : 0,
+      }, rect);
+    }
     return out;
   }
 
@@ -908,6 +1227,34 @@ function mipBytes(width: number, height: number, channels: 1 | 4): number {
 function sharpMipLevel(targetPixelsPerGridPixel: number): number {
   return Number.isFinite(targetPixelsPerGridPixel) && targetPixelsPerGridPixel > 0 && targetPixelsPerGridPixel < 0.5
     ? Math.min(6, Math.floor(Math.log2(1 / targetPixelsPerGridPixel))) : 0;
+}
+
+function affineBounds(transform: Affine, rect: Rect): Rect {
+  const points = [
+    apply(transform, { x: rect.x, y: rect.y }), apply(transform, { x: rect.x + rect.width, y: rect.y }),
+    apply(transform, { x: rect.x, y: rect.y + rect.height }),
+    apply(transform, { x: rect.x + rect.width, y: rect.y + rect.height }),
+  ];
+  const xs = points.map((point) => point.x), ys = points.map((point) => point.y);
+  const x = Math.min(...xs), y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
+function intersect(a: Rect, b: Rect): Rect | null {
+  const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width), bottom = Math.min(a.y + a.height, b.y + b.height);
+  return right > x && bottom > y ? { x, y, width: right - x, height: bottom - y } : null;
+}
+
+function unionRect(a: Rect | null, b: Rect): Rect {
+  if (!a) return b;
+  const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+  return { x, y, width: Math.max(a.x + a.width, b.x + b.width) - x,
+    height: Math.max(a.y + a.height, b.y + b.height) - y };
+}
+
+function expandedBrushBounds(chunk: BrushChunk): Rect | null {
+  return chunk.bounds;
 }
 
 export { storedMaskTransform };
