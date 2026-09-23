@@ -1,17 +1,17 @@
 {
   "node": "v22.18.0",
-  "date": "2026-09-23T21:53:55.291Z",
+  "date": "2026-09-23T23:25:52.086Z",
   "medianMs": {
-    "raster.withRegion 64² on 4096²": 16.9,
-    "insert 200 layers with undo steps": 135.8,
-    "undo 200 steps": 133.5,
-    "ellipse 7000² selection": 1090,
-    "400-point lasso 7000²": 869,
-    "outline of 3000² ellipse": 147.4,
-    "expand 3000² ellipse by 20 px": 1250.8,
-    "PNG encode 2048² noise": 1155.5,
-    "PNG decode 2048² noise": 372.1,
-    "SHA-256 16 MB": 475.3,
-    "CPU composite 1024² × 5": 854.6
+    "raster.withRegion 64² on 4096²": 6.7,
+    "insert 200 layers with undo steps": 85.5,
+    "undo 200 steps": 92,
+    "ellipse 7000² selection": 1018.1,
+    "400-point lasso 7000²": 864.7,
+    "outline of 3000² ellipse": 160.5,
+    "expand 3000² ellipse by 20 px": 766.1,
+    "PNG encode 2048² noise": 869.9,
+    "PNG decode 2048² noise": 489.6,
+    "SHA-256 16 MB": 495.7,
+    "CPU composite 1024² × 5": 876.3
   }
 }
