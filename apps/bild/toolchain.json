@@ -1,0 +1,20 @@
+{
+  "emscripten": {
+    "version": "6.0.10",
+    "releaseCommit": "d6c521a7f05449857c76bd99e396895583cf2083",
+    "emsdkCommit": "a2b92777574c2feda07994cd4f1079a3dfc151f8",
+    "clangVersion": "24.0.0git",
+    "llvmCommit": "a06d9165905ce89b5ffef2bbb84c886d60a9b8bf",
+    "installDirectory": "/home/oem/.local/share/fernwork-compositor-lab/tooling/emsdk"
+  },
+  "source": {
+    "repository": "https://github.com/wonderassembly/compositor",
+    "commit": "a19db9011282399785dc18efcfded904627bdcc2"
+  },
+  "build": {
+    "script": "scripts/build-wasm.sh",
+    "optimization": "-O3",
+    "simd": "-msimd128",
+    "threads": false
+  }
+}
