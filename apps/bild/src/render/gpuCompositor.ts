@@ -196,6 +196,8 @@ export class GpuCompositor {
         uGrid: { value: 0, type: 'i32' },
         uPixelSize: { value: 1, type: 'f32' },
         uHasComposite: { value: 0, type: 'i32' },
+        uCompositeOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uCompositeSize: { value: new Float32Array(2), type: 'vec2<f32>' },
       }, ['uComposite']],
     };
     let spec = sources[name];
@@ -597,23 +599,34 @@ export class GpuCompositor {
 
   /** Draws the workspace, canvas rectangle, checkerboard and composite to the screen canvas. */
   present(composite: RenderTexture | null, width: number, height: number, canvasRect: { x: number; y: number; width: number; height: number },
-    pointScale: number, grid: boolean, pixelSize: number): void {
+    pointScale: number, grid: boolean, pixelSize: number, compositeOrigin: { x: number; y: number } = { x: 0, y: 0 }): void {
     this.resize(width, height);
     this.run(this.pass('present'), null, width, height, { uComposite: composite?.source ?? this.white }, {
       uCanvasRect: new Float32Array([canvasRect.x, canvasRect.y, canvasRect.width, canvasRect.height]),
       uPointScale: pointScale, uGrid: grid ? 1 : 0, uPixelSize: pixelSize, uHasComposite: composite ? 1 : 0,
+      uCompositeOrigin: new Float32Array([compositeOrigin.x, compositeOrigin.y]),
+      uCompositeSize: new Float32Array([composite?.width ?? 0, composite?.height ?? 0]),
     });
   }
 
   /** Straight-alpha RGBA8 pixels of a document region, composited exactly like the canvas. */
   readRegion(document: CanvasDocument, x: number, y: number, width: number, height: number, hooks: CompositeHooks = DEFAULT_HOOKS): Uint8Array {
+    return this.readView(document, width, height, { a: 1, b: 0, c: 0, d: 1, tx: x, ty: y }, 1, hooks);
+  }
+
+  /**
+   * Straight-alpha RGBA8 pixels of a `width` × `height` target whose pixels map to the document
+   * through `viewToDoc` (e.g. a layer's own pixel grid for LiveMaskBaker), rendered in tiles.
+   */
+  readView(document: CanvasDocument, width: number, height: number, viewToDoc: Affine, scale: number,
+    hooks: CompositeHooks = DEFAULT_HOOKS): Uint8Array {
     const out = new Uint8Array(width * height * 4);
     const step = Math.min(2048, this.maxTextureSize);
     for (let ty = 0; ty < height; ty += step) {
       for (let tx = 0; tx < width; tx += step) {
         const w = Math.min(step, width - tx), h = Math.min(step, height - ty);
-        const view: ViewSpec = { width: w, height: h, scale: 1, snap: false,
-          viewToDoc: { a: 1, b: 0, c: 0, d: 1, tx: x + tx, ty: y + ty } };
+        const view: ViewSpec = { width: w, height: h, scale, snap: false,
+          viewToDoc: concat({ a: 1, b: 0, c: 0, d: 1, tx, ty }, viewToDoc) };
         const rt = this.composite(document, view, hooks);
         const straight = RenderTexture.create({ width: w, height: h, format: 'rgba8unorm', antialias: false, resolution: 1 });
         this.run(this.pass('unpremultiply'), straight, w, h, { uSource: rt.source }, {});

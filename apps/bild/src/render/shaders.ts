@@ -300,6 +300,8 @@ uniform float uPointScale;  // device px per point
 uniform int uGrid;
 uniform float uPixelSize;   // device px per document px
 uniform int uHasComposite;
+uniform vec2 uCompositeOrigin;
+uniform vec2 uCompositeSize;
 void main() {
   vec3 workspace = vec3(0.105);
   vec2 p = vPos;
@@ -316,7 +318,9 @@ void main() {
   }
   vec2 cell = floor(rel / (10.0 * uPointScale));
   float checker = mod(cell.x + cell.y, 2.0) < 0.5 ? 0.35 : 0.30;
-  vec4 c = uHasComposite == 1 ? texelFetch(uComposite, ivec2(p), 0) : vec4(0.0);
+  vec2 cp = p - uCompositeOrigin;
+  vec4 c = uHasComposite == 1 && cp.x >= 0.0 && cp.y >= 0.0 && cp.x < uCompositeSize.x && cp.y < uCompositeSize.y
+    ? texelFetch(uComposite, ivec2(cp), 0) : vec4(0.0);
   vec3 color = c.rgb + vec3(checker) * (1.0 - c.a);
   if (uGrid == 1) {
     vec2 g = rel / uPixelSize;

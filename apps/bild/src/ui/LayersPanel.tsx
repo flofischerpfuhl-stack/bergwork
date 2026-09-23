@@ -1,0 +1,400 @@
+/**
+ * The Layers panel (UI/LayersPanel.swift, NativeLayerList.swift, LayerAppearanceControls.swift,
+ * BlendModePicker.swift): count, blend and opacity for the active layer, the layer tree top-first
+ * with folders, masks, clipping indentation, and the footer buttons.
+ */
+
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import styles from './editor.module.css';
+import type { EditorController } from './controller';
+import { useSession, useWorkspace } from './hooks';
+import { Icon, type IconName } from './icons';
+import { CanvasThumbnail, fittedSize } from './Thumbnail';
+import { MenuPopup } from './TopBar';
+import { ADJUSTMENT_KINDS, BLEND_MODES, blendLabel, descendantIds, maskTransform, type AdjustmentKind, type HierarchyEntry, type Layer } from '../core/document';
+import type { EditorSession } from '../core/session';
+import type { MenuEntry } from './menus';
+
+const ADJUSTMENT_ICONS: Record<AdjustmentKind, IconName> = {
+  'Hue/Saturation': 'adjustment', 'Levels': 'levels', 'Curves': 'curves', 'Exposure': 'exposure', 'Gradient Map': 'gradientMap', 'Grain': 'grain',
+};
+
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+function Appearance({ controller, session }: { controller: EditorController; session: EditorSession }) {
+  const t = controller.t;
+  const layer = session.activeLayer;
+  const enabled = session.canEditAppearance;
+  const [popup, setPopup] = useState<{ x: number; y: number } | null>(null);
+  const [percent, setPercent] = useState('100');
+  const [focused, setFocused] = useState(false);
+  const opacity = layer?.opacity ?? 1;
+  useEffect(() => { if (!focused) setPercent(String(Math.round(opacity * 100))); }, [opacity, focused]);
+  const mode = layer ? session.displayedBlendMode(layer) : 'normal';
+  const items: MenuEntry[] = BLEND_MODES.map((b) => ({ label: t(b.label), enabled: true, checked: b.mode === layer?.blendMode, run: () => session.setLayerBlendMode(b.mode) }));
+  return (
+    <div className={styles.appearance}>
+      <div className={styles.appearanceRow}>
+        <span>{t('Blend')}</span>
+        <button type="button" className={styles.select} style={{ flex: 1, textAlign: 'left' }} disabled={!enabled} aria-haspopup="menu" aria-label="Blend mode"
+          data-testid="blend-mode" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setPopup({ x: r.left, y: r.bottom + 4 }); }}>
+          {t(blendLabel(mode))}
+        </button>
+      </div>
+      <div className={styles.appearanceRow}>
+        <span>{t('Opacity')}</span>
+        <input className={styles.slider} type="range" min={0} max={100} step={1} value={Math.round(opacity * 100)} disabled={!enabled}
+          aria-label={t('Opacity')} data-testid="opacity-slider"
+          onPointerDown={() => session.beginOpacityEdit()}
+          onPointerUp={() => session.finishOpacityEdit()}
+          onKeyDown={(event) => event.stopPropagation()}
+          onChange={(event) => session.setLayerOpacity(Number(event.target.value) / 100)} />
+        <label className={styles.field}>
+          <input value={percent} disabled={!enabled} style={{ width: 44 }} aria-label="Opacity percent" data-testid="opacity-field"
+            onFocus={() => setFocused(true)}
+            onBlur={() => { setFocused(false); const v = Number(percent); if (Number.isFinite(v)) session.setLayerOpacity(Math.min(100, Math.max(0, v)) / 100); }}
+            onChange={(event) => setPercent(event.target.value)}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === 'Enter' || event.key === 'Escape') (event.target as HTMLInputElement).blur();
+              if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+                const next = Math.min(100, Math.max(0, Math.round(opacity * 100) + (event.shiftKey ? 10 : 1) * (event.key === 'ArrowUp' ? 1 : -1)));
+                session.setLayerOpacity(next / 100);
+                event.preventDefault();
+              }
+            }} />
+          <span>%</span>
+        </label>
+      </div>
+      {popup ? (
+        <BlendPopup controller={controller} session={session} anchor={popup} items={items} onClose={() => { setPopup(null); session.previewBlendMode(null); }} />
+      ) : null}
+    </div>
+  );
+}
+
+/** Blend menu with Photoshop-style live preview of the highlighted mode (BlendModePicker.Coordinator). */
+function BlendPopup({ controller, session, anchor, items, onClose }: {
+  controller: EditorController; session: EditorSession; anchor: { x: number; y: number }; items: MenuEntry[]; onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const buttons = [...element.querySelectorAll<HTMLButtonElement>('[role=menuitem]')];
+    const enter = (index: number) => () => session.previewBlendMode(BLEND_MODES[index]!.mode);
+    const handlers = buttons.map((b, i) => { const h = enter(i); b.addEventListener('pointerenter', h); b.addEventListener('focus', h); return [b, h] as const; });
+    return () => { for (const [b, h] of handlers) { b.removeEventListener('pointerenter', h); b.removeEventListener('focus', h); } };
+  });
+  return <div ref={ref}><MenuPopup controller={controller} anchor={anchor} items={items} onClose={onClose} /></div>;
+}
+
+interface DragState { ids: string[]; startY: number; moved: boolean; target: { index: number; into: boolean } | null; copy: boolean }
+
+function LayerRow({ controller, session, entry, rows, drag, onDragStart, onContext }: {
+  controller: EditorController; session: EditorSession; entry: HierarchyEntry; rows: HierarchyEntry[]; drag: DragState | null;
+  onDragStart: (event: ReactPointerEvent, id: string) => void; onContext: (id: string, x: number, y: number) => void;
+}) {
+  const t = controller.t;
+  const layer = entry.layer;
+  const document = session.document!;
+  const canvasSize = { width: document.width, height: document.height };
+  const selected = session.selectedLayerIds.has(layer.id);
+  const active = session.activeLayerId === layer.id && session.selectedLayerIds.size === 1;
+  const enabled = session.canEditLayers;
+  const framed = !layer.adjustment && !layer.isGroup;
+  const [renaming, setRenaming] = useState(false);
+  const renameRequested = controller.renamingLayerId === layer.id;
+  useEffect(() => { if (renameRequested) { setRenaming(true); controller.renamingLayerId = null; } }, [renameRequested, controller]);
+  const index = rows.findIndex((r) => r.layer.id === layer.id);
+  const dropAbove = drag?.moved && drag.target && !drag.target.into && drag.target.index === index;
+  const dropInto = drag?.moved && drag.target?.into && drag.target.index === index;
+  const source = layer.maskSourceId ? session.layer(layer.maskSourceId) : null;
+  const meta = source ? `${t('Clipped to')} ${source.name}` : layer.adjustment ? t('Adjustment · Double-click to edit') : layer.isGroup ? t('Folder')
+    : `${Math.round(layer.transform.size.width).toLocaleString()} × ${Math.round(layer.transform.size.height).toLocaleString()} px`;
+  const indent = Math.min(entry.depth, 8) * 24 + (layer.maskSourceId ? 24 : 0);
+
+  const onRowPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || renaming) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('button') && !target.closest('[data-thumb]')) return;
+    // Option-click on the bottom quarter of a row makes or releases a clipping mask.
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (event.altKey && !(isMac ? event.metaKey : event.ctrlKey) && event.clientY >= rect.bottom - rect.height / 4) {
+      session.toggleClippingMask(layer.id);
+      return;
+    }
+    const additive = isMac ? event.metaKey : event.ctrlKey;
+    if (event.shiftKey && session.activeLayerId) {
+      const from = rows.findIndex((r) => r.layer.id === session.activeLayerId);
+      const [a, b] = from < index ? [from, index] : [index, from];
+      session.selectLayers(rows.slice(a, b + 1).map((r) => r.layer.id), session.activeLayerId);
+    } else if (additive) {
+      const next = new Set(session.selectedLayerIds);
+      if (next.has(layer.id)) next.delete(layer.id); else next.add(layer.id);
+      session.selectLayers(next, next.has(layer.id) ? layer.id : [...next][0] ?? null);
+    } else if (!(selected && session.selectedLayerIds.size > 1)) {
+      if (session.isMaskSelected && session.activeLayerId === layer.id && !target.closest('[data-thumb]')) session.selectLayerTarget(layer.id, false);
+      else session.selectLayer(layer.id);
+    }
+    if (enabled && event.pointerType === 'mouse') onDragStart(event, layer.id);
+  };
+
+  return (
+    <div className={`${styles.layerRow} ${selected ? styles.layerRowSelected : ''} ${entry.visible ? '' : styles.layerRowDim} ${dropAbove ? styles.layerRowDropAbove : ''} ${dropInto ? styles.layerRowDropInto : ''}`}
+      role="treeitem" aria-selected={selected} aria-level={entry.depth + 1} aria-expanded={layer.isGroup ? !session.collapsedGroupIds.has(layer.id) : undefined}
+      data-layer-id={layer.id} data-testid="layer-row"
+      onPointerDown={onRowPointerDown}
+      onDoubleClick={(event) => {
+        if ((event.target as HTMLElement).closest('button:not([data-thumb])')) return;
+        if (!session.canEditLayers) return;
+        if (layer.adjustment && controller.features.editAdjustment) { session.selectLayer(layer.id); controller.features.editAdjustment.run(); return; }
+        session.selectLayer(layer.id);
+        setRenaming(true);
+      }}
+      onContextMenu={(event) => { event.preventDefault(); onContext(layer.id, event.clientX, event.clientY); }}>
+      <button type="button" className={styles.eye} disabled={!enabled} aria-label={`${layer.visible ? 'Hide' : 'Show'} ${layer.name}`}
+        data-testid="layer-eye" data-eye={layer.id}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          const visible = session.beginVisibilitySwipe(layer.id);
+          if (visible === null) return;
+          // Eye swipe: dragging over other eyes gives them the same state, one undo step.
+          const move = (e: PointerEvent) => {
+            const eye = (document_elementFromPoint(e.clientX, e.clientY)?.closest('[data-eye]') as HTMLElement | null)?.dataset.eye;
+            if (eye) session.setVisibilityInSwipe(eye, visible);
+          };
+          const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); session.endVisibilitySwipe(); };
+          window.addEventListener('pointermove', move);
+          window.addEventListener('pointerup', up);
+        }}>
+        <Icon name={layer.visible ? 'eye' : 'eyeSlash'} size={16} />
+      </button>
+      <span style={{ width: indent, flex: 'none' }} />
+      <button type="button" className={styles.disclosure} style={{ visibility: layer.isGroup ? 'visible' : 'hidden' }} disabled={!enabled}
+        aria-label="Expand or collapse folder" onClick={() => session.toggleGroupExpansion(layer.id)}>
+        <Icon name={session.collapsedGroupIds.has(layer.id) ? 'chevronRight' : 'chevronDown'} size={12} />
+      </button>
+      <div className={styles.thumbSlot}>
+        {framed ? (
+          <button type="button" data-thumb className={`${styles.thumb} ${active && !session.isMaskSelected ? styles.thumbTarget : ''}`}
+            style={fittedSize(canvasSize, 36)} aria-label={`Select image: ${layer.name}`} title="Select image pixels"
+            onClick={(event) => {
+              if ((isMac ? event.metaKey : event.ctrlKey) && controller.features.loadLayerSelectionAt) { controller.loadSelection?.(layer.id, false, event); return; }
+              session.selectLayerTarget(layer.id, false);
+            }}>
+            <CanvasThumbnail raster={session.displayedRaster(layer)} transform={session.displayedTransform(layer)} canvasSize={canvasSize} box={36} />
+          </button>
+        ) : (
+          <span className={`${styles.iconThumb} ${active && !session.isMaskSelected ? styles.thumbTarget : ''}`}>
+            <Icon name={layer.isGroup ? 'folder' : ADJUSTMENT_ICONS[layer.adjustment!.kind] ?? 'adjustment'} size={24} />
+          </span>
+        )}
+      </div>
+      {layer.mask ? (
+        <>
+          {framed ? (
+            <button type="button" className={styles.linkButton} disabled={!enabled} aria-label={layer.mask.linked ? `Unlink mask: ${layer.name}` : `Link mask: ${layer.name}`}
+              title={layer.mask.linked ? 'Unlink layer and mask to move or transform them separately' : 'Link layer and mask so they move together'}
+              onClick={() => session.toggleMaskLink(layer.id)}>
+              {layer.mask.linked ? <Icon name="link" size={11} /> : null}
+            </button>
+          ) : <span style={{ width: 5 }} />}
+          <div className={styles.maskSlot}>
+            <button type="button" data-thumb className={`${styles.thumb} ${active && session.isMaskSelected ? styles.thumbTarget : ''}`}
+              style={fittedSize(canvasSize, 30)} aria-label={`Select mask: ${layer.name}`} data-testid="mask-thumb"
+              title="Select layer mask; Shift-click to enable/disable"
+              onClick={(event) => {
+                if ((isMac ? event.metaKey : event.ctrlKey) && controller.loadSelection) { controller.loadSelection(layer.id, true, event); return; }
+                session.selectLayerTarget(layer.id, true);
+                if (event.shiftKey) session.toggleLayerMask();
+              }}>
+              <CanvasThumbnail raster={session.displayedMaskRaster(layer)} transform={maskTransform(layer)} canvasSize={canvasSize} box={30} mask />
+            </button>
+            {!layer.mask.enabled ? <span className={styles.maskDisabled}>╱</span> : null}
+          </div>
+        </>
+      ) : null}
+      <div className={styles.layerText}>
+        {renaming ? (
+          <input className={styles.renameInput} defaultValue={layer.name} autoFocus aria-label="Layer name"
+            onFocus={(event) => event.currentTarget.select()}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === 'Enter') { session.renameLayer(layer.id, event.currentTarget.value); setRenaming(false); }
+              if (event.key === 'Escape') setRenaming(false);
+            }}
+            onBlur={(event) => { session.renameLayer(layer.id, event.currentTarget.value); setRenaming(false); }} />
+        ) : (
+          <span className={styles.layerName}>{(layer.maskSourceId ? '↳ ' : '') + layer.name}</span>
+        )}
+        <span className={styles.layerMeta} title={source ? `Clipping mask based on ${source.name}. Option-click the bottom of its row to release.` : undefined}>{meta}</span>
+      </div>
+      <button type="button" className={styles.layerMore} aria-label={`${t('More')}: ${layer.name}`}
+        onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); onContext(layer.id, r.left, r.bottom); }}>
+        <Icon name="more" size={16} />
+      </button>
+    </div>
+  );
+}
+
+function document_elementFromPoint(x: number, y: number): Element | null { return globalThis.document.elementFromPoint(x, y); }
+
+export function LayersPanel({ controller, inSheet = false }: { controller: EditorController; inSheet?: boolean }) {
+  useWorkspace(controller);
+  const session = useSession(controller.session);
+  const t = controller.t;
+  const document = session.document;
+  const rows = session.layerRows;
+  const listRef = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState<DragState | null>(null);
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [adjustMenu, setAdjustMenu] = useState<{ x: number; y: number } | null>(null);
+  const width = controller.ui.getState().layersWidth;
+  const [panelWidth, setPanelWidth] = useState(width);
+
+  const startDrag = (event: ReactPointerEvent, id: string) => {
+    const ids = session.selectedLayerIds.has(id) ? rows.map((r) => r.layer.id).filter((x) => session.selectedLayerIds.has(x)) : [id];
+    const carried = new Set(ids.flatMap((x) => [...descendantIds(document!.layers, x)]));
+    const state: DragState = { ids: ids.filter((x) => !carried.has(x)), startY: event.clientY, moved: false, target: null, copy: event.altKey };
+    const list = listRef.current!;
+    const move = (e: PointerEvent) => {
+      if (!state.moved && Math.abs(e.clientY - state.startY) < 4) return;
+      state.moved = true;
+      state.copy = e.altKey;
+      const elements = [...list.querySelectorAll<HTMLElement>('[data-layer-id]')];
+      let target: DragState['target'] = { index: elements.length, into: false };
+      for (let i = 0; i < elements.length; i++) {
+        const r = elements[i]!.getBoundingClientRect();
+        if (e.clientY < r.top + r.height / 2) {
+          const row = rows[i]!;
+          const into = row.layer.isGroup && e.clientY > r.top + r.height * 0.25;
+          target = { index: i, into };
+          break;
+        }
+        if (rows[i]!.layer.isGroup && e.clientY < r.bottom - r.height * 0.25) { target = { index: i, into: true }; break; }
+      }
+      state.target = target;
+      setDrag({ ...state });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      setDrag(null);
+      if (!state.moved || !state.target) return;
+      const { index, into } = state.target;
+      let parent: string | null, above: string | null = null, atBottom = false;
+      if (into) parent = rows[index]!.layer.id;
+      else if (index >= rows.length) { parent = null; atBottom = true; }
+      else {
+        // Dropping above a row (list is top-first) places the layer above that row's layer.
+        const target = rows[index]!.layer;
+        parent = target.parentId;
+        above = target.id;
+      }
+      if (state.ids.includes(above ?? '') || (parent && state.ids.includes(parent))) return;
+      const order = into ? [...state.ids].reverse() : state.ids;
+      session.beginEdit(state.copy ? (state.ids.length > 1 ? 'Duplicate Layers' : 'Duplicate Layer') : (state.ids.length > 1 ? 'Move Layers' : 'Move Layer'));
+      let placed = false;
+      for (const id of order) {
+        placed = (state.copy ? session.duplicateLayer(id, parent, above, atBottom) : session.placeLayer(id, parent, above, atBottom)) || placed;
+      }
+      if (placed && !state.copy) session.selectLayers(state.ids, state.ids[0] ?? null);
+      session.endEdit();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  const menuItems = (id: string): MenuEntry[] => {
+    const layer = session.layer(id);
+    if (!layer) return [];
+    const select = () => session.selectLayerTarget(id, false);
+    return [
+      { label: t('Rename…'), enabled: session.canEditLayers, run: () => { session.selectLayer(id); controller.renamingLayerId = id; session.notify('ui'); } },
+      { label: t('Hide/Show Layer'), enabled: session.canEditLayers, run: () => session.toggleLayerVisibility(id) },
+      'separator',
+      { label: t('Add White Mask'), enabled: session.canEditLayers && !layer.mask, run: () => { select(); controller.addMask(true); } },
+      { label: t('Add Black Mask'), enabled: session.canEditLayers && !layer.mask, run: () => { select(); controller.addMask(false); } },
+      { label: t('Enable/Disable Mask'), enabled: session.canEditLayers && !!layer.mask, run: () => { select(); session.toggleLayerMask(); } },
+      { label: t('Delete Mask'), enabled: session.canEditLayers && !!layer.mask, run: () => { select(); session.deleteLayerMask(); } },
+      'separator',
+      { label: layer.maskSourceId ? t('Release Clipping Mask') : t('Create Clipping Mask'), enabled: session.canToggleClippingMask(id), run: () => session.toggleClippingMask(id) },
+      { label: t('Move Layer Up'), enabled: session.canEditLayers, run: () => { session.selectLayer(id); session.moveActiveLayer(1); } },
+      { label: t('Move Layer Down'), enabled: session.canEditLayers, run: () => { session.selectLayer(id); session.moveActiveLayer(-1); } },
+      { label: t('Duplicate Layer'), enabled: session.canEditLayers && !layer.isGroup, run: () => { session.selectLayer(id); session.duplicateActiveLayer(); } },
+      { label: t('Move Out of Folder'), enabled: session.canEditLayers && !!layer.parentId, run: () => { session.selectLayer(id); session.moveActiveLayerOutOfGroup(); } },
+      'separator',
+      { label: t('Delete Layer / Folder'), enabled: session.canEditLayers, run: () => {
+        if (session.selectedLayerIds.size > 1 && session.selectedLayerIds.has(id)) void session.deleteSelectedLayers();
+        else void session.deleteLayer(id);
+      } },
+    ];
+  };
+
+  const deleteLabel = session.isMaskSelected ? t('Delete layer mask') : session.selectedLayerIds.size > 1 ? t('Delete selected layers') : t('Delete selected layer');
+  const adjustmentsAvailable = !!controller.features.adjustmentLayers;
+  return (
+    <aside className={styles.layers} style={inSheet ? undefined : { width: panelWidth }} aria-label={t('Layers')} data-testid="layers-panel">
+      {!inSheet ? (
+        <div className={styles.resizeEdge} title="Drag to resize the panel"
+          onPointerDown={(event) => {
+            const start = event.clientX, startWidth = panelWidth;
+            (event.target as HTMLElement).setPointerCapture(event.pointerId);
+            const move = (e: PointerEvent) => setPanelWidth(Math.min(352, Math.max(202, Math.round(startWidth - (e.clientX - start)))));
+            const up = (e: PointerEvent) => {
+              window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+              const next = Math.min(352, Math.max(202, Math.round(startWidth - (e.clientX - start))));
+              controller.ui.setState({ layersWidth: next });
+              try { localStorage.setItem('compositor.layersPanelWidth', String(next)); } catch { /* ignore */ }
+            };
+            window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+          }} />
+      ) : null}
+      <div className={styles.layersHeader}>
+        <span className={styles.layersTitle}>{t('Layers')}</span>
+        <span className={styles.layerCount} data-testid="layerCount">{document?.layers.length ?? 0}</span>
+      </div>
+      <Appearance controller={controller} session={session} />
+      {document && rows.length ? (
+        <div className={styles.layerList} ref={listRef} role="tree" aria-label={t('Layers')} aria-multiselectable data-testid="layers-list">
+          {rows.map((entry) => (
+            <LayerRow key={entry.layer.id} controller={controller} session={session} entry={entry} rows={rows} drag={drag}
+              onDragStart={startDrag} onContext={(id, x, y) => setMenu({ id, x, y })} />
+          ))}
+          {drag?.moved && drag.target?.index === rows.length ? <div style={{ height: 2, background: 'var(--cmp-accent)' }} /> : null}
+        </div>
+      ) : (
+        <div className={styles.emptyLayers}>
+          <Icon name="layers" size={25} />
+          <strong>{t('No layers yet')}</strong>
+          <span>{document ? t('Import an image or add a blank layer.') : t('Create a canvas or import an image.')}</span>
+        </div>
+      )}
+      <div className={styles.layersFooter}>
+        <button type="button" className={styles.footerButton} aria-label={t('New blank layer')} title={t('New blank layer')} disabled={!session.canEditLayers}
+          data-testid="addBlankLayer" onClick={() => session.addBlankLayer()}><Icon name="plusSquare" size={17} /></button>
+        <button type="button" className={styles.footerButton} aria-label={t('New folder')} title={t('Group Selected Layers')} disabled={!session.canEditLayers}
+          onClick={() => session.groupSelectedLayers()}><Icon name="folderPlus" size={17} /></button>
+        <button type="button" className={styles.footerButton} aria-label={t('Add layer mask')} title={t('Add layer mask')}
+          disabled={!session.canEditMask || !!session.activeLayer?.mask} data-testid="addMask" onClick={() => controller.addMask(true)}><Icon name="mask" size={17} /></button>
+        <button type="button" className={styles.footerButton} aria-label={t('New adjustment layer')}
+          title={adjustmentsAvailable ? t('New adjustment layer') : `${t('New adjustment layer')} — ${t('Not yet available in the browser port')}`}
+          disabled={!session.canEditLayers || !adjustmentsAvailable}
+          onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setAdjustMenu({ x: r.left, y: r.top - 8 - 6 * 26 }); }}>
+          <Icon name="adjustment" size={17} />
+        </button>
+        <span className={styles.spacer} />
+        <button type="button" className={styles.footerButton} aria-label={deleteLabel} title={deleteLabel} data-testid="deleteLayer"
+          disabled={!session.canEditLayers || !session.activeLayer} onClick={() => void session.deleteLayerOrMask()}><Icon name="trash" size={17} /></button>
+      </div>
+      {menu ? <MenuPopup controller={controller} anchor={menu} items={menuItems(menu.id)} onClose={() => setMenu(null)} /> : null}
+      {adjustMenu ? (
+        <MenuPopup controller={controller} anchor={adjustMenu} onClose={() => setAdjustMenu(null)}
+          items={ADJUSTMENT_KINDS.map((kind) => ({ label: t(kind), enabled: true, run: () => session.addAdjustment(kind) }))} />
+      ) : null}
+    </aside>
+  );
+}
+
+export type { Layer };

@@ -1,0 +1,68 @@
+/**
+ * UI strings. English text (upstream wording) is the key; German is the only translation.
+ */
+
+export type Locale = 'de' | 'en';
+
+const de: Record<string, string> = {
+  'Layers': 'Ebenen', 'Blend': 'Modus', 'Opacity': 'Deckkraft', 'No layers yet': 'Noch keine Ebenen',
+  'Create a canvas or import an image.': 'Erstelle eine Leinwand oder importiere ein Bild.',
+  'Import an image or add a blank layer.': 'Importiere ein Bild oder füge eine leere Ebene hinzu.',
+  'New blank layer': 'Neue leere Ebene', 'New folder': 'Neuer Ordner', 'Add layer mask': 'Ebenenmaske hinzufügen',
+  'New adjustment layer': 'Neue Einstellungsebene', 'Delete selected layer': 'Ausgewählte Ebene löschen',
+  'Delete selected layers': 'Ausgewählte Ebenen löschen', 'Delete layer mask': 'Ebenenmaske löschen',
+  'Folder': 'Ordner', 'Adjustment · Double-click to edit': 'Einstellung · Doppelklick zum Bearbeiten',
+  'Clipped to': 'Beschnitten auf', 'New canvas': 'Neue Leinwand', 'A blank space for your next composition.': 'Eine leere Fläche für deine nächste Komposition.',
+  'Width': 'Breite', 'Height': 'Höhe', 'Transparent canvas · sRGB': 'Transparente Leinwand · sRGB',
+  'Enter whole numbers from 1 to 30,000 pixels.': 'Ganze Zahlen von 1 bis 30.000 Pixel eingeben.',
+  'Open project': 'Projekt öffnen', 'Import image': 'Bild importieren', 'Create canvas': 'Leinwand erstellen',
+  'Fit': 'Einpassen', 'Zoom in': 'Vergrößern', 'Zoom out': 'Verkleinern', 'Ready when you are': 'Bereit, wenn du es bist',
+  'Working…': 'Wird bearbeitet …', 'Importing images…': 'Bilder werden importiert …',
+  'File': 'Ablage', 'Edit': 'Bearbeiten', 'Select': 'Auswahl', 'Image': 'Bild', 'Filter': 'Filter', 'Layer': 'Ebene', 'View': 'Ansicht',
+  'New Canvas…': 'Neue Leinwand …', 'Open Project…': 'Projekt öffnen …', 'Import Images…': 'Bilder importieren …',
+  'Save': 'Sichern', 'Save As…': 'Sichern unter …', 'Export PNG…': 'PNG exportieren …', 'Export JPEG…': 'JPEG exportieren …',
+  'Close Project': 'Projekt schließen', 'Undo': 'Widerrufen', 'Redo': 'Wiederholen', 'Cut': 'Ausschneiden', 'Copy': 'Kopieren',
+  'Copy Merged': 'Auf eine Ebene reduziert kopieren', 'Paste': 'Einsetzen', 'Fill with Foreground Color': 'Mit Vordergrundfarbe füllen',
+  'Fill with Background Color': 'Mit Hintergrundfarbe füllen', 'Clear Selection Pixels': 'Auswahlpixel löschen',
+  'Content-Aware Fill…': 'Inhaltsbasierte Füllung …', 'All': 'Alles', 'Deselect': 'Auswahl aufheben', 'Inverse': 'Auswahl umkehren',
+  "Layer's Pixels": 'Pixel der Ebene', "Mask's Black Areas": 'Schwarze Bereiche der Maske',
+  'Curves…': 'Gradationskurven …', 'Levels…': 'Tonwertkorrektur …', 'Hue/Saturation…': 'Farbton/Sättigung …',
+  'Exposure…': 'Belichtung …', 'Gradient Map…': 'Verlaufsumsetzung …', 'Grain…': 'Körnung …', 'Invert': 'Umkehren', 'Invert Mask': 'Maske umkehren',
+  'Canvas Size…': 'Arbeitsfläche …', 'Image Size…': 'Bildgröße …', 'Flip Canvas Horizontal': 'Leinwand horizontal spiegeln',
+  'Flip Canvas Vertical': 'Leinwand vertikal spiegeln', 'New Adjustment Layer': 'Neue Einstellungsebene', 'Edit Adjustment…': 'Einstellung bearbeiten …',
+  'Transform Layer': 'Ebene transformieren', 'Transform Selection': 'Auswahl transformieren', 'Duplicate Layer': 'Ebene duplizieren',
+  'Layer via Copy': 'Ebene durch Kopie', 'Create Clipping Mask': 'Schnittmaske erstellen', 'Release Clipping Mask': 'Schnittmaske zurückwandeln',
+  'Group Selected Layers': 'Ausgewählte Ebenen gruppieren', 'Move Out of Folder': 'Aus Ordner verschieben', 'New Blank Layer': 'Neue leere Ebene',
+  'Rename Layer…': 'Ebene umbenennen …', 'Show Layer': 'Ebene einblenden', 'Hide Layer': 'Ebene ausblenden',
+  'Move Layer Up': 'Ebene nach oben', 'Move Layer Down': 'Ebene nach unten', 'Merge Down': 'Auf darunterliegende reduzieren',
+  'Merge Layers': 'Ebenen zusammenfügen', 'Merge Group': 'Gruppe zusammenfügen', 'Flip Layer Horizontal': 'Ebene horizontal spiegeln',
+  'Flip Layer Vertical': 'Ebene vertikal spiegeln', 'Delete Layer': 'Ebene löschen', 'Delete Layers': 'Ebenen löschen', 'Delete Layer Mask': 'Ebenenmaske löschen',
+  'Fit Canvas': 'Leinwand einpassen', 'Actual Pixels': 'Tatsächliche Pixel', 'Zoom In': 'Vergrößern', 'Zoom Out': 'Verkleinern',
+  'Pixel Grid (800% and above)': 'Pixelraster (ab 800 %)', 'Show Transform Controls': 'Transformationsrahmen anzeigen',
+  'Transform': 'Transformieren', 'Transform Mask': 'Maske transformieren', 'Auto Select': 'Automatisch wählen', 'Show Controls': 'Rahmen zeigen',
+  'Scale': 'Skalierung', 'Sampling': 'Interpolation', 'Nearest': 'Pixelwiederholung', 'Smooth': 'Glatt', 'High quality': 'Hohe Qualität',
+  'Flip H': 'Spiegeln H', 'Flip V': 'Spiegeln V', 'Cancel': 'Abbrechen', 'Apply': 'Anwenden', 'Distort': 'Verzerren', 'Lock aspect ratio': 'Seitenverhältnis sperren',
+  'Pan': 'Verschieben', 'Zoom': 'Zoom', 'Select a tool': 'Werkzeug wählen', 'Eyedropper': 'Pipette', 'Sample Ring': 'Aufnahmering',
+  'Rename…': 'Umbenennen …', 'Hide/Show Layer': 'Ebene aus-/einblenden', 'Add White Mask': 'Weiße Maske hinzufügen', 'Add Black Mask': 'Schwarze Maske hinzufügen',
+  'Enable/Disable Mask': 'Maske aktivieren/deaktivieren', 'Delete Mask': 'Maske löschen', 'Delete Layer / Folder': 'Ebene/Ordner löschen',
+  'OK': 'OK', 'Export': 'Exportieren', 'Quality': 'Qualität', 'Background for transparency': 'Hintergrund für Transparenz',
+  'Not yet available in the browser port': 'Im Browser-Port noch nicht verfügbar',
+  'This layer supplies a live mask': 'Diese Ebene liefert eine Live-Maske', 'These layers supply live masks': 'Diese Ebenen liefern Live-Masken',
+  'Bake keeps the current masked appearance in the dependent layers’ pixels. Remove Links reveals their pixels. You can undo either choice.':
+    'Einbacken behält das maskierte Aussehen in den Pixeln der abhängigen Ebenen. Verknüpfungen entfernen legt ihre Pixel frei. Beides lässt sich widerrufen.',
+  'Bake and Delete': 'Einbacken und löschen', 'Remove Links and Delete': 'Verknüpfungen entfernen und löschen',
+  'Import couldn’t finish': 'Import konnte nicht abgeschlossen werden', 'Something went wrong': 'Etwas ist schiefgelaufen',
+  'Unsaved changes': 'Ungesicherte Änderungen', 'Close': 'Schließen', 'Project tabs': 'Projekt-Tabs', 'Menu': 'Menü', 'Tools': 'Werkzeuge',
+  'Foreground color': 'Vordergrundfarbe', 'Background color': 'Hintergrundfarbe', 'Swap colors': 'Farben tauschen', 'Default colors': 'Standardfarben',
+  'Drag to move · Handles to resize · Circle to rotate · 1–0 layer opacity · Space to pan': 'Ziehen verschiebt · Griffe skalieren · Kreis dreht · 1–0 Deckkraft · Leertaste verschiebt Ansicht',
+  'Drag to pan · Pinch to zoom': 'Ziehen verschiebt · Zwei Finger zoomen',
+  'Click to zoom in · Option-click to zoom out · Drag right or left to zoom smoothly · Space to pan': 'Klick vergrößert · Alt-Klick verkleinert · Nach rechts/links ziehen zoomt stufenlos · Leertaste verschiebt',
+  'No tool selected · Press a tool\'s key to pick one · Space to pan': 'Kein Werkzeug · Taste eines Werkzeugs drücken · Leertaste verschiebt',
+  'Unsaved changes will be lost.': 'Ungesicherte Änderungen gehen verloren.', 'Close without saving?': 'Ohne Sichern schließen?',
+  'Save a copy?': 'Kopie sichern?', 'Don’t Save': 'Nicht sichern', 'Layer Properties': 'Ebeneneigenschaften', 'More': 'Mehr',
+};
+
+export function translator(locale: Locale): (text: string) => string {
+  if (locale === 'en') return (text) => text;
+  return (text) => de[text] ?? text;
+}

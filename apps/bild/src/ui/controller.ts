@@ -1,0 +1,331 @@
+/**
+ * Glue between the host page, the project workspace, the renderer and the React views.
+ * Holds no document state of its own: documents live in the core sessions.
+ */
+
+import type { EditorHandle, HostAdapter, LayerId, ProjectManifestV1 } from '../../contracts';
+import { MAX_SIDE, type CanvasDocument } from '../core/document';
+import { Raster, alphaBounds, cropRaster } from '../core/raster';
+import type { EditorSession, SessionServices, Tool } from '../core/session';
+import type { ReactNode } from 'react';
+import type { FeatureRegistry } from './menus';
+import type { IconName } from './icons';
+import type { CanvasView } from './canvas/CanvasView';
+import { ProjectWorkspace, type ProjectTab } from '../core/workspace';
+import { buildManifest, readArchive, writeArchive, ProjectError } from '../io/project';
+import { browserDecode, decodeImageFile, fileBaseName, ImageImportError } from '../io/imageImport';
+import { DEFAULT_JPEG, jpegBlob, pngBlob, type JpegOptions } from '../io/export';
+import type { GpuCompositor } from '../render/gpuCompositor';
+import { translator, type Locale } from './i18n';
+import { createUiStore, type Dialog, type UiStore } from './store';
+
+export interface CanvasHost {
+  readonly gpu: GpuCompositor | null;
+  redraw(): void;
+  /** Straight-alpha pixels of a document region composited like the canvas. */
+  readRegion(document: CanvasDocument, x: number, y: number, width: number, height: number): Uint8Array;
+}
+
+export class EditorController {
+  readonly workspace: ProjectWorkspace;
+  readonly host: HostAdapter;
+  readonly t: (text: string) => string;
+  readonly locale: Locale;
+  readonly theme: 'dark' | 'light';
+  readonly ui: UiStore = createUiStore();
+  canvas: CanvasHost | null = null;
+  /** The mounted canvas view (tools, overlay painters, touch toggles). */
+  canvasView: CanvasView | null = null;
+  private canvasWaiters: (() => void)[] = [];
+  /** Commands provided by feature modules (selection, brushes, adjustments…), keyed by menu command. */
+  features: FeatureRegistry = {};
+  /** Tools with a working canvas handler; the rest are shown disabled. */
+  availableTools = new Set<Tool>(['move', 'hand', 'zoom', 'idle']);
+  contextBars: Partial<Record<Tool, (session: EditorSession) => ReactNode>> = {};
+  statusHints: Partial<Record<Tool, (session: EditorSession) => string>> = {};
+  toolIcon: ((tool: Tool) => IconName | null) | null = null;
+  openColorPicker: ((background: boolean) => void) | null = null;
+  /** Called once the canvas view exists, so modules can register tools and overlay painters. */
+  canvasSetups: ((view: CanvasView) => void)[] = [];
+  /** Extra dialogs by kind (Canvas Size, Image Size, adjustment panels…). */
+  dialogs: Record<string, (close: () => void) => ReactNode> = {};
+  /** Module key handlers; return true when the key was handled. */
+  keyHandlers: ((event: KeyboardEvent) => boolean)[] = [];
+  /** Number keys for tools with their own opacity (brushes, gradient); true when handled. */
+  opacityKey: ((digit: number) => boolean) | null = null;
+  clipboardImageSize: (() => Promise<{ width: number; height: number } | null>) | null = null;
+
+  /** Tool keys: some keys also switch a tool's mode (E erases, Shift-U switches shapes). */
+  selectToolByKey(tool: Tool, key: string, shift: boolean): void {
+    const special = this.toolKeyHandlers[key];
+    if (special) { special(shift); return; }
+    this.session.selectTool(tool);
+  }
+  toolKeyHandlers: Record<string, (shift: boolean) => void> = {};
+
+  /** A rename requested from a menu; the row picks it up and starts editing. */
+  renamingLayerId: string | null = null;
+  /** Provided by the selection module: mask from the selection, and Cmd-click thumbnail loading. */
+  maskFromSelection: ((revealing: boolean) => void) | null = null;
+  loadSelection: ((layerId: string, mask: boolean, event: { shiftKey: boolean; altKey: boolean }) => void) | null = null;
+
+  /** Add Mask (LayerMaskMenu): with a selection, the selection-shaped mask; otherwise a solid one. */
+  addMask(revealing: boolean): void {
+    if (this.session.selection && this.maskFromSelection) this.maskFromSelection(revealing);
+    else this.session.addLayerMask(revealing);
+  }
+  jpegOptions: JpegOptions = { ...DEFAULT_JPEG, quality: storedQuality() };
+
+  constructor(host: HostAdapter, locale: Locale, theme: 'dark' | 'light') {
+    this.host = host;
+    this.locale = locale;
+    this.theme = theme;
+    this.t = translator(locale);
+    const services: SessionServices = {
+      flatten: async (document) => this.flatten(document),
+      bakeLiveMask: async (document, targetId) => this.bakeLiveMask(document, targetId),
+      confirmLiveMaskDeletion: async (count) => (await this.confirm(
+        this.t(count === 1 ? 'This layer supplies a live mask' : 'These layers supply live masks'),
+        this.t('Bake keeps the current masked appearance in the dependent layers’ pixels. Remove Links reveals their pixels. You can undo either choice.'),
+        [{ label: this.t('Bake and Delete'), value: 'bake', role: 'default' }, { label: this.t('Cancel'), value: 'cancel', role: 'cancel' },
+          { label: this.t('Remove Links and Delete'), value: 'unlink' }])) as 'bake' | 'unlink' | 'cancel',
+    };
+    this.workspace = new ProjectWorkspace(services);
+  }
+
+  get session(): EditorSession { return this.workspace.current.session; }
+
+  attachCanvas(canvas: CanvasHost | null): void {
+    this.canvas = canvas;
+    if (canvas) { for (const waiter of this.canvasWaiters.splice(0)) waiter(); }
+  }
+  private async readyCanvas(): Promise<CanvasHost> {
+    if (this.canvas) return this.canvas;
+    await new Promise<void>((resolve) => this.canvasWaiters.push(resolve));
+    return this.canvas!;
+  }
+
+  // MARK: Dialogs
+
+  showDialog(dialog: Dialog | null): void { this.ui.setState({ dialog, openMenu: null }); }
+  alert(title: string, message: string): void { this.showDialog({ kind: 'alert', title, message }); }
+  confirm(title: string, message: string, buttons: Extract<Dialog, { kind: 'confirm' }>['buttons']): Promise<string> {
+    return new Promise((resolve) => this.showDialog({ kind: 'confirm', title, message, buttons, resolve: (value) => { this.showDialog(null); resolve(value); } }));
+  }
+  reportError(code: string, error: unknown, title = this.t('Something went wrong')): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.host.reportError({ code, message });
+    this.alert(title, message);
+  }
+
+  // MARK: Rendering services
+
+  private async flatten(document: CanvasDocument): Promise<Raster> {
+    const canvas = await this.readyCanvas();
+    const pixels = canvas.readRegion(document, 0, 0, document.width, document.height);
+    return Raster.fromPixels(document.width, document.height, 4, pixels);
+  }
+
+  /** LiveMaskBaker: the target's own pixels at its own grid with its live coverage baked into alpha. */
+  private async bakeLiveMask(document: CanvasDocument, targetId: string): Promise<Raster | null> {
+    const target = document.layers.find((l) => l.id === targetId);
+    if (!target?.raster || !target.maskSourceId) return null;
+    const canvas = await this.readyCanvas();
+    if (!canvas.gpu) throw new Error('Baking a live mask needs WebGL 2.');
+    const { bakeLiveMaskGpu } = await import('./bake');
+    return bakeLiveMaskGpu(canvas.gpu, document, targetId);
+  }
+
+  // MARK: Projects
+
+  newCanvasTab(width: number, height: number): void {
+    const tab = this.workspace.newCanvas() ?? this.workspace.current;
+    tab.session.createNewProject(width, height);
+  }
+
+  async importFiles(files: readonly File[], into: ProjectTab = this.workspace.current, point: { x: number; y: number } | null = null): Promise<string[]> {
+    const session = into.session;
+    const failures: string[] = [];
+    const ids: string[] = [];
+    if (!files.length) return ids;
+    session.commitTransform();
+    session.isImporting = true;
+    session.notify('ui');
+    try {
+      session.beginEdit('Import Images');
+      for (const file of files) {
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const raster = await decodeImageFile(bytes, session.remainingPixelBudget());
+          session.isImporting = false;
+          ids.push(session.insertRaster(raster, fileBaseName(file.name), session.document ? point : null));
+          session.isImporting = true;
+        } catch (error) {
+          failures.push(`${file.name}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    } finally {
+      session.isImporting = false;
+      session.endEdit();
+    }
+    if (failures.length) this.reportError('import-failed', new Error(failures.join('\n\n')), this.t('Import couldn’t finish'));
+    return ids;
+  }
+
+  async chooseAndImport(): Promise<void> {
+    try {
+      const files = await this.host.chooseImages();
+      if (files.length) await this.importFiles(files);
+    } catch (error) { this.reportError('import-failed', error, this.t('Import couldn’t finish')); }
+  }
+
+  async openArchive(blob: Blob, name?: string): Promise<void> {
+    const loaded = await readArchive(blob, (bytes, mime) => browserDecode(bytes, mime));
+    const tab = this.workspace.createTab(name ?? loaded.name);
+    tab.session.installProject(loaded.document, loaded.activeLayerId, name ?? loaded.name);
+    this.workspace.adopt(tab);
+  }
+
+  async chooseAndOpen(): Promise<void> {
+    if (!this.workspace.canSwitch) return;
+    try {
+      const blob = await this.host.chooseProject();
+      if (blob) await this.openArchive(blob, blob instanceof File ? fileBaseName(blob.name) : undefined);
+    } catch (error) { this.reportError(error instanceof ProjectError ? error.code : 'open-failed', error); }
+  }
+
+  manifest(session: EditorSession = this.session): ProjectManifestV1 {
+    const document = session.document;
+    if (!document) {
+      return { format: 'fernwork-compositor', version: 1, id: '', name: session.projectName ?? this.workspace.current.title, width: 0, height: 0,
+        colorSpace: 'srgb', layers: [], assets: [] };
+    }
+    return buildManifest(document, session.projectName ?? this.workspace.current.title, session.activeLayerId);
+  }
+
+  archive(session: EditorSession = this.session): Blob {
+    const document = session.document;
+    if (!document) throw new ProjectError('no-document', 'There is no canvas to save.');
+    session.commitTransform();
+    return writeArchive(document, session.projectName ?? this.workspace.current.title, session.activeLayerId).blob;
+  }
+
+  async save(): Promise<void> {
+    const session = this.session;
+    if (!session.document || !this.workspace.canSwitch) return;
+    try {
+      const blob = this.archive(session);
+      const name = `${session.projectName ?? this.workspace.current.title}.compositor.zip`;
+      await this.host.saveFile(blob, name);
+      session.projectName ??= this.workspace.current.title;
+      session.history.markSaved();
+      session.notify('ui');
+    } catch (error) { this.reportError('save-failed', error); }
+  }
+
+  async exportBlob(format: 'png' | 'jpeg', options: Partial<JpegOptions> = {}, session: EditorSession = this.session): Promise<Blob> {
+    const document = session.document;
+    if (!document) throw new ProjectError('no-document', 'There is no canvas to export.');
+    if (document.width * document.height > 100_000_000 || document.width > MAX_SIDE || document.height > MAX_SIDE) {
+      throw new ProjectError('too-large', 'Image export supports canvases up to 100 megapixels and 30,000 pixels per side.');
+    }
+    session.commitTransform();
+    const canvas = await this.readyCanvas();
+    const pixels = canvas.readRegion(document, 0, 0, document.width, document.height);
+    if (format === 'png') return pngBlob(pixels, document.width, document.height, document.resolution);
+    return jpegBlob(pixels, document.width, document.height, document.resolution, { ...this.jpegOptions, ...options });
+  }
+
+  async exportTo(format: 'png' | 'jpeg'): Promise<void> {
+    const session = this.session;
+    if (!session.document) return;
+    try {
+      const blob = await this.exportBlob(format);
+      if (format === 'jpeg') storeQuality(this.jpegOptions.quality);
+      await this.host.saveFile(blob, `${session.projectName ?? this.workspace.current.title}.${format === 'png' ? 'png' : 'jpg'}`);
+    } catch (error) { this.reportError('export-failed', error); }
+  }
+
+  async closeTab(id: string): Promise<void> {
+    const tab = this.workspace.tabs.find((t) => t.id === id);
+    if (!tab || !this.workspace.canSwitch) return;
+    if (tab.session.isModified && tab.session.document) {
+      const answer = await this.confirm(this.t('Close without saving?'), this.t('Unsaved changes will be lost.'),
+        [{ label: this.t('Save'), value: 'save', role: 'default' }, { label: this.t('Cancel'), value: 'cancel', role: 'cancel' },
+          { label: this.t('Don’t Save'), value: 'discard', role: 'destructive' }]);
+      if (answer === 'cancel') return;
+      if (answer === 'save') {
+        this.workspace.select(id);
+        await this.save();
+        if (tab.session.isModified) return;
+      }
+    }
+    this.workspace.removeTab(id);
+  }
+
+  async mergeLayers(): Promise<void> {
+    await this.session.mergeLayers((raster) => trimToAlpha(raster));
+  }
+
+  // MARK: Public handle (contracts.ts EditorHandle)
+
+  handle(destroy: () => void): EditorHandle {
+    return {
+      newProject: async ({ name, width, height }) => {
+        if (!(Number.isInteger(width) && Number.isInteger(height) && width >= 1 && height >= 1 && width <= MAX_SIDE && height <= MAX_SIDE)) {
+          throw new ProjectError('invalid-size', 'Enter whole numbers from 1 to 30,000 pixels.');
+        }
+        const tab = this.workspace.current.session.document ? this.workspace.newCanvas() ?? this.workspace.current : this.workspace.current;
+        const session = tab.session;
+        session.clearProject();
+        session.createDocument(width, height, false);
+        session.history.reset();
+        session.projectName = name;
+        session.notify('document');
+      },
+      importImage: async (file: Blob, name: string): Promise<LayerId> => {
+        const session = this.session;
+        session.commitTransform();
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let raster: Raster;
+        try { raster = await decodeImageFile(bytes, session.remainingPixelBudget()); } catch (error) {
+          const code = error instanceof ImageImportError ? error.code : 'unreadable';
+          this.host.reportError({ code: `import-${code}`, message: (error as Error).message });
+          throw error;
+        }
+        return session.insertRaster(raster, name);
+      },
+      openProject: async (archive: Blob) => {
+        try { await this.openArchive(archive); } catch (error) {
+          this.host.reportError({ code: error instanceof ProjectError ? error.code : 'open-failed', message: (error as Error).message });
+          throw error;
+        }
+      },
+      saveProject: async () => {
+        const blob = this.archive();
+        return blob;
+      },
+      exportImage: async ({ format, quality }) => this.exportBlob(format, quality === undefined ? {} : { quality }),
+      getManifest: () => this.manifest(),
+      undo: async () => this.session.undo(),
+      redo: async () => this.session.redo(),
+      destroy,
+    };
+  }
+
+  destroy(): void { this.workspace.destroy(); }
+}
+
+/** PixelFilter.trimmed semantics for merge results: tight alpha bounds, or null when empty. */
+export function trimToAlpha(raster: Raster): { raster: Raster; x: number; y: number } | null {
+  const bounds = alphaBounds(raster);
+  if (!bounds) return null;
+  if (bounds.x === 0 && bounds.y === 0 && bounds.width === raster.width && bounds.height === raster.height) return { raster, x: 0, y: 0 };
+  return { raster: cropRaster(raster, bounds.x, bounds.y, bounds.width, bounds.height), x: bounds.x, y: bounds.y };
+}
+
+function storedQuality(): number {
+  const value = Number(globalThis.localStorage?.getItem('compositor.jpegExportQuality'));
+  return Number.isFinite(value) && value >= 0 && value <= 1 && globalThis.localStorage?.getItem('compositor.jpegExportQuality') !== null ? value : DEFAULT_JPEG.quality;
+}
+function storeQuality(value: number): void { try { globalThis.localStorage?.setItem('compositor.jpegExportQuality', String(value)); } catch { /* private mode */ } }

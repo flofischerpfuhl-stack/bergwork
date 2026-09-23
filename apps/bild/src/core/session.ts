@@ -10,13 +10,13 @@
 import {
   ADJUSTMENT_KINDS, adoptClipping, descendantIds, documentsEqual, effectiveVisibleIds, hierarchyEntries,
   isValidStructure, layerPixelHeight, layerPixelWidth, maskTransform, MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
-  releaseDetachedClipping, uniqueName, usedPixels,
+  releaseDetachedClipping, renderLayers as renderLayersOf, uniqueName, usedPixels,
   type AdjustmentKind, type BlendMode, type CanvasDocument, type HierarchyEntry, type Layer, type LayerAdjustment,
   type LayerMask, BLEND_MODES,
 } from './document';
 import {
   boundingBox, center, corners as transformCorners, following, isValidTransform, makeTransform, mirrored, samePlacement,
-  transformsEqual, type LayerTransform, type Point, type Rect, type Size,
+  snapOffset, transformsEqual, type LayerTransform, type Point, type Rect, type Size,
 } from './geometry';
 import { DocumentHistory, type HistorySnapshot } from './history';
 import { uuid } from './ids';
@@ -114,6 +114,11 @@ export class EditorSession {
   projectName: string | null = null;
   pendingOpacityDigit: { digit: number; time: number } | null = null;
   services: SessionServices | null = null;
+  /** Pixels a tool is previewing in place of a layer's stored raster (brush strokes, moves, filters). */
+  rasterOverrides = new Map<string, Raster>();
+  maskOverrides = new Map<string, Raster>();
+  /** Tool previews with their own drawing (lasso drafts, gradient lines…) ask the canvas to redraw. */
+  overlayRevision = 0;
   /** Called after long-running edits so the canvas can redraw immediately. */
   private listeners = new Set<Listener>();
   private revisionValue = 0;
@@ -812,10 +817,43 @@ export class EditorSession {
     this.notify('document');
   }
 
+  /** Cmd-dragging a handle starts a distortion (Distort.swift beginDistort). */
+  beginDistort(): void {
+    const edit = this.transformEdit;
+    if (!edit || edit.corners || !isValidTransform(edit.draft)) return;
+    this.transformEdit = { ...edit, persistent: true, corners: transformCorners(edit.draft) };
+    this.notify('document');
+  }
+
+  /** Moves the distortion's corners; a twisted or collapsed shape is ignored. */
   previewCorners(corners: readonly Point[]): void {
-    if (!this.transformEdit || corners.length !== 4 || !corners.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))) return;
+    if (!this.transformEdit?.corners || !cornersUsable(corners)) return;
     this.transformEdit = { ...this.transformEdit, corners: corners.map((p) => ({ ...p })) };
     this.notify('document');
+  }
+
+  /** Canvas edges/centre and every other visible layer's box edges/centre (Crop.swift transformSnapTargets). */
+  transformSnapTargets(excluding: ReadonlySet<string>): { xs: number[]; ys: number[] } {
+    const document = this.document;
+    if (!document) return { xs: [], ys: [] };
+    const xs = [0, document.width / 2, document.width], ys = [0, document.height / 2, document.height];
+    for (const layer of renderLayersOf(document.layers)) {
+      if (!layer.raster || excluding.has(layer.id)) continue;
+      const box = boundingBox(this.displayedTransform(layer));
+      xs.push(Math.round(box.x), Math.round(box.x + box.width / 2), Math.round(box.x + box.width));
+      ys.push(Math.round(box.y), Math.round(box.y + box.height / 2), Math.round(box.y + box.height));
+    }
+    return { xs, ys };
+  }
+
+  /** `draft` nudged so its box lines up with a nearby edge or centre; tolerance in document pixels. */
+  snappedMove(draft: LayerTransform, moving: ReadonlySet<string>, tolerance: number): LayerTransform {
+    const box = boundingBox(draft);
+    const targets = this.transformSnapTargets(moving);
+    const snap = snapOffset(box, targets.xs, targets.ys, tolerance);
+    this.snapGuides = { xs: snap.x === null ? [] : [snap.x], ys: snap.y === null ? [] : [snap.y] };
+    if (!snap.dx && !snap.dy) return draft;
+    return { ...draft, origin: { x: draft.origin.x + snap.dx, y: draft.origin.y + snap.dy } };
   }
 
   get transformPixelSize(): Size | null {
@@ -838,6 +876,8 @@ export class EditorSession {
     return edit.layerId === layer.id ? edit.draft : null;
   }
   displayedTransform(layer: Layer): LayerTransform { return this.pendingTransform(layer) ?? layer.transform; }
+  displayedRaster(layer: Layer): Raster | null { return this.rasterOverrides.get(layer.id) ?? layer.raster; }
+  displayedMaskRaster(layer: Layer): Raster | null { return this.maskOverrides.get(layer.id) ?? layer.mask?.raster ?? null; }
 
   /** Where the transform handles sit for `layer`. */
   editedTransform(layer: Layer): LayerTransform {
@@ -1332,4 +1372,17 @@ export function bilinearQuadPoint(q: readonly Point[], u: number, v: number): Po
   const top = { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
   const bottom = { x: d.x + (c.x - d.x) * u, y: d.y + (c.y - d.y) * u };
   return { x: top.x + (bottom.x - top.x) * v, y: top.y + (bottom.y - top.y) * v };
+}
+
+/** DistortWarp.isUsable: four finite corners making a convex, non-degenerate shape. */
+export function cornersUsable(corners: readonly Point[]): boolean {
+  if (corners.length !== 4 || !corners.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && Math.abs(p.x) <= 1_000_000 && Math.abs(p.y) <= 1_000_000)) return false;
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = corners[i]!, b = corners[(i + 1) % 4]!, c = corners[(i + 2) % 4]!;
+    const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (Math.abs(cross) <= 0.01) return false;
+    if (sign === 0) sign = cross < 0 ? -1 : 1; else if ((cross < 0) !== (sign < 0)) return false;
+  }
+  return true;
 }

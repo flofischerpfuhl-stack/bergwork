@@ -1,1 +1,3 @@
-export {};
+/** Public entry: `mountEditor` mounts an editor into a host element; nothing mounts on import. */
+export { mountEditor } from './ui/mountEditor';
+export type { EditorHandle, HostAdapter, MountEditor, ProjectManifestV1, LayerRecord, AssetRecord, MaskRecord } from '../contracts';

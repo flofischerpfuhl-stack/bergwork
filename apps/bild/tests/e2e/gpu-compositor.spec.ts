@@ -7,10 +7,11 @@ import { expect, test } from '@playwright/test';
 test('GPU compositor reproduces upstream compositing semantics', async ({ page }) => {
   await page.goto('/?harness=gpu');
   const results = await page.evaluate(async () => {
-    const { GpuCompositor } = await import('/src/render/gpuCompositor.ts');
-    const { Raster } = await import('/src/core/raster.ts');
-    const { newLayer } = await import('/src/core/document.ts');
-    const { makeTransform } = await import('/src/core/geometry.ts');
+    const load = (path: string): Promise<any> => import(/* @vite-ignore */ path);
+    const { GpuCompositor } = await load('/src/render/gpuCompositor.ts');
+    const { Raster } = await load('/src/core/raster.ts');
+    const { newLayer } = await load('/src/core/document.ts');
+    const { makeTransform } = await load('/src/core/geometry.ts');
     const canvas = document.createElement('canvas');
     document.body.append(canvas);
     const gpu = await GpuCompositor.create(canvas, 4, 4);
@@ -20,7 +21,7 @@ test('GPU compositor reproduces upstream compositing semantics', async ({ page }
         transform: makeTransform({ x: 0, y: 0 }, { width, height }), ...extra });
     const doc = (width: number, height: number, layers: unknown[]) =>
       ({ id: 'd', width, height, resolution: 72, layers, selection: null }) as never;
-    const read = (d: never, w: number, h: number) => Array.from(gpu.readRegion(d, 0, 0, w, h));
+    const read = (d: never, w: number, h: number): number[] => Array.from(gpu.readRegion(d, 0, 0, w, h) as Uint8Array);
     const out: Record<string, number[]> = {};
     out.orientation = read(doc(2, 2, [layer([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255], 2, 2)]), 2, 2);
     out.translucent = read(doc(1, 1, [layer([200, 100, 50, 128], 1, 1)]), 1, 1);
