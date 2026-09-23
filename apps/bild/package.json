@@ -9,10 +9,12 @@
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "test:unit": "vitest run tests/unit",
+    "psd:fidelity": "vitest run --config tests/psd/vitest.config.ts",
     "test:e2e": "playwright test",
     "test:perf": "vitest run tests/performance"
   },
   "dependencies": {
+    "ag-psd": "31.0.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "pixi.js": "8.21.0",
