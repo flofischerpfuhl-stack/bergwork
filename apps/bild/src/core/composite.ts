@@ -1,7 +1,7 @@
 /** CPU reference for LiveMaskRenderer, LayerRenderer, FolderMaskClip, AdjustmentSurface and ImageExporter.render. */
 import { blendRgbInto, clamp01, compositePremultiplied } from './blend';
 import { ancestorIds, renderLayers, type BlendMode, type CanvasDocument, type Layer, type LayerAdjustment } from './document';
-import type { Affine, LayerTransform, Rect } from './geometry';
+import type { Affine, LayerSampling, LayerTransform, Rect } from './geometry';
 import { concat, invert, pixelToDocument, samePlacement } from './geometry';
 import { alphaBounds, Raster, TILE } from './raster';
 import {
@@ -16,6 +16,9 @@ export interface CompositeOptions {
   readonly transform?: (layer: Layer) => LayerTransform;
   readonly maskPlacement?: (layer: Layer) => LayerTransform | null;
   readonly blendMode?: (layer: Layer) => BlendMode;
+  readonly raster?: (layer: Layer) => Raster | null;
+  readonly maskRaster?: (layer: Layer) => Raster | null;
+  readonly sampler?: (raster: Raster, sampling: LayerSampling, drawnWidth: number) => RasterSampler;
   readonly adjust?: AdjustmentApplier;
 }
 
@@ -46,9 +49,12 @@ class BandRenderer {
   private readonly location = new Float64Array(3);
   private readonly liveSample = new Float32Array(4);
   private readonly blendScratch = new Float64Array(6);
+  private readonly documentToOutput: Affine | undefined;
   skippedAdjustment = false;
 
-  constructor(private readonly document: CanvasDocument, private readonly options: CompositeOptions) {
+  constructor(private readonly document: CanvasDocument, private readonly options: CompositeOptions,
+    private readonly outputToDocument?: Affine) {
+    this.documentToOutput = outputToDocument ? invert(outputToDocument) : undefined;
     this.byId = new Map(document.layers.map((layer) => [layer.id, layer]));
     const ids = renderLayers(document.layers);
     for (let index = 0; index < ids.length; index++) {
@@ -73,6 +79,11 @@ class BandRenderer {
     return result;
   }
   private blendMode(layer: Layer): BlendMode { return this.options.blendMode?.(layer) ?? layer.blendMode; }
+  private raster(layer: Layer): Raster | null { return this.options.raster?.(layer) ?? layer.raster; }
+  private maskRaster(layer: Layer): Raster | null { return this.options.maskRaster?.(layer) ?? layer.mask?.raster ?? null; }
+  private sampler(raster: Raster, sampling: LayerSampling, drawnWidth: number): RasterSampler {
+    return this.options.sampler?.(raster, sampling, drawnWidth) ?? prepareSampler(raster, sampling, drawnWidth);
+  }
   private maskPlacement(layer: Layer): LayerTransform | null {
     if (!this.maskPlacements.has(layer.id)) {
       this.maskPlacements.set(layer.id, this.options.maskPlacement?.(layer) ?? layer.mask?.placement ?? null);
@@ -91,16 +102,17 @@ class BandRenderer {
   }
 
   private rgbaSampler(layer: Layer, documentToOutput?: Affine): RasterSampler | null {
-    if (!layer.raster || layer.raster.channels !== 4) return null;
+    const raster = this.raster(layer);
+    if (!raster || raster.channels !== 4) return null;
     const suffix = documentToOutput
       ? `:${documentToOutput.a}:${documentToOutput.b}:${documentToOutput.c}:${documentToOutput.d}` : '';
     const key = layer.id + suffix;
     let sampler = this.rgbaSamplers.get(key);
     if (!sampler) {
       const transform = this.transform(layer);
-      const map = pixelToDocument(transform, layer.raster.width, layer.raster.height);
+      const map = pixelToDocument(transform, raster.width, raster.height);
       const device = documentToOutput ? concat(map, documentToOutput) : map;
-      sampler = prepareSampler(layer.raster, transform.sampling, Math.hypot(device.a, device.b) * layer.raster.width);
+      sampler = this.sampler(raster, transform.sampling, Math.hypot(device.a, device.b) * raster.width);
       this.rgbaSamplers.set(key, sampler);
     }
     return sampler;
@@ -116,36 +128,36 @@ class BandRenderer {
     const key = `${drawnWidth}:${transform.sampling}`;
     let sampler = variants.get(key);
     if (!sampler) {
-      sampler = prepareSampler(raster, 'High quality', drawnWidth);
+      sampler = this.sampler(raster, 'High quality', drawnWidth);
       variants.set(key, sampler);
     }
     return sampler;
   }
 
   private ownMask(layer: Layer, x: number, y: number, adjustment = false, documentToOutput?: Affine): number {
-    const mask = layer.mask;
-    if (!mask?.enabled || mask.raster.channels !== 1) return 1;
+    const mask = layer.mask, raster = this.maskRaster(layer);
+    if (!mask?.enabled || !raster || raster.channels !== 1) return 1;
     const layerTransform = this.transform(layer);
     // LiveMaskRenderer.adjust uses FolderMaskClip(mask, layer.transform), not LayerMask.clipImage.
     const candidate = adjustment ? layerTransform : this.maskPlacement(layer);
     const placement = candidate && !samePlacement(candidate, layerTransform) ? candidate : null;
     const transform = { ...(placement ?? layerTransform), sampling: 'High quality' as const };
     const prepared = this.preparedPlacement(`${adjustment ? 'adjustment-mask' : 'mask'}:${layer.id}`,
-      transform, mask.raster.width, mask.raster.height, documentToOutput);
+      transform, raster.width, raster.height, documentToOutput);
     mapPlacement(prepared, x, y, this.location);
-    const sampler = this.maskSampler(mask.raster, transform, documentToOutput);
+    const sampler = this.maskSampler(raster, transform, documentToOutput);
     const sampled = sampleMask(sampler, this.location[0]!, this.location[1]!);
     if (!placement && !adjustment) return sampled;
     if (adjustment) return sampled * this.location[2]!;
-    let background = this.backgrounds.get(mask.raster);
+    let background = this.backgrounds.get(raster);
     if (background === undefined) {
       // Upstream reads the <=96 px thumbnail; the browser core has only the full raster.
-      background = maskBackground(mask.raster); this.backgrounds.set(mask.raster, background);
+      background = maskBackground(raster); this.backgrounds.set(raster, background);
     }
     return background + (sampled - background) * this.location[2]!;
   }
 
-  private folderCoverage(layer: Layer, x: number, y: number): number {
+  private folderCoverage(layer: Layer, x: number, y: number, documentToOutput = this.documentToOutput): number {
     let folders = this.ancestors.get(layer.id);
     if (!folders) {
       folders = ancestorIds(this.document.layers, layer.id).map((id) => this.byId.get(id)).filter((v): v is Layer => !!v);
@@ -153,13 +165,13 @@ class BandRenderer {
     }
     let coverage = 1;
     for (const folder of folders) {
-      const mask = folder.mask;
-      if (!mask?.enabled || mask.raster.channels !== 1) continue;
+      const mask = folder.mask, raster = this.maskRaster(folder);
+      if (!mask?.enabled || !raster || raster.channels !== 1) continue;
       const transform = { ...this.transform(folder), sampling: 'High quality' as const };
-      const prepared = this.preparedPlacement(`folder:${folder.id}`, transform, mask.raster.width, mask.raster.height);
+      const prepared = this.preparedPlacement(`folder:${folder.id}`, transform, raster.width, raster.height, documentToOutput);
       mapPlacement(prepared, x, y, this.location);
       if (this.location[2]! <= 0) return 0;
-      coverage *= sampleMask(this.maskSampler(mask.raster, transform), this.location[0]!, this.location[1]!) * this.location[2]!;
+      coverage *= sampleMask(this.maskSampler(raster, transform, documentToOutput), this.location[0]!, this.location[1]!) * this.location[2]!;
       if (coverage <= 0) return 0;
     }
     return coverage;
@@ -176,8 +188,8 @@ class BandRenderer {
   /** Common export path: an aligned 1:1 raster samples texel centres at every interpolation quality. */
   private drawAlignedOneToOne(layer: Layer, target: Float32Array, width: number, height: number,
     originX: number, originY: number, mode: BlendMode): boolean {
-    const raster = layer.raster, transform = this.transform(layer);
-    if (!raster || raster.channels !== 4 || transform.rotation % 360 !== 0 || transform.flipX || transform.flipY
+    const raster = this.raster(layer), transform = this.transform(layer);
+    if (this.outputToDocument || !raster || raster.channels !== 4 || transform.rotation % 360 !== 0 || transform.flipX || transform.flipY
       || transform.size.width !== raster.width || transform.size.height !== raster.height
       || !Number.isInteger(transform.origin.x) || !Number.isInteger(transform.origin.y)) return false;
     const opacity = clamp01(layer.opacity);
@@ -211,8 +223,9 @@ class BandRenderer {
   private sourceAt(layer: Layer, x: number, y: number, sample: Float32Array, documentToOutput?: Affine): number {
     const sampler = this.rgbaSampler(layer, documentToOutput);
     if (!sampler) return 0;
-    const prepared = this.preparedPlacement(`source:${layer.id}`, this.transform(layer), layer.raster!.width,
-      layer.raster!.height, documentToOutput);
+    const raster = this.raster(layer)!;
+    const prepared = this.preparedPlacement(`source:${layer.id}`, this.transform(layer), raster.width,
+      raster.height, documentToOutput);
     mapPlacement(prepared, x, y, this.location);
     if (this.location[2]! <= 0) return 0;
     sampleRgba(sampler, this.location[0]!, this.location[1]!, sample);
@@ -240,18 +253,20 @@ class BandRenderer {
       && this.drawAlignedOneToOne(layer, target, width, height, originX, originY, mode)) return;
     const sample = new Float32Array(4);
     const visiting = new Set<string>();
+    const map = this.outputToDocument;
     for (let py = 0; py < height; py++) {
-      const y = originY + py + 0.5;
-      if (y < 0 || y >= this.document.height) continue;
       for (let px = 0; px < width; px++) {
-        const x = originX + px + 0.5;
+        const ox = originX + px + 0.5, oy = originY + py + 0.5;
+        const x = map ? map.a * ox + map.c * oy + map.tx : ox;
+        const y = map ? map.b * ox + map.d * oy + map.ty : oy;
         if (x < 0 || x >= this.document.width) continue;
-        const edge = this.sourceAt(layer, x, y, sample);
+        if (y < 0 || y >= this.document.height) continue;
+        const edge = this.sourceAt(layer, x, y, sample, this.documentToOutput);
         if (edge <= 0 || sample[3] === 0) continue;
-        let coverage = edge * clamp01(layer.opacity) * this.ownMask(layer, x, y);
+        let coverage = edge * clamp01(layer.opacity) * this.ownMask(layer, x, y, false, this.documentToOutput);
         if (includeLive && layer.maskSourceId) {
           visiting.clear();
-          coverage *= this.liveCoverage(layer.maskSourceId, x, y, visiting);
+          coverage *= this.liveCoverage(layer.maskSourceId, x, y, visiting, this.documentToOutput);
         }
         if (includeFolders) coverage *= this.folderCoverage(layer, x, y);
         if (coverage <= 0) continue;
@@ -283,7 +298,11 @@ class BandRenderer {
     const input = this.adjustmentInput(original);
     let straight: Float32Array;
     if (this.options.adjust) {
-      straight = this.options.adjust(layer.adjustment, input, width, height, originX, originY);
+      const point = this.outputToDocument
+        ? { x: this.outputToDocument.a * originX + this.outputToDocument.c * originY + this.outputToDocument.tx,
+          y: this.outputToDocument.b * originX + this.outputToDocument.d * originY + this.outputToDocument.ty }
+        : { x: originX, y: originY };
+      straight = this.options.adjust(layer.adjustment, input, width, height, point.x, point.y);
       if (straight.length !== input.length) throw new RangeError('AdjustmentApplier returned a buffer of the wrong size');
     } else {
       straight = input;
@@ -303,8 +322,10 @@ class BandRenderer {
     if (opacity < 1) this.adjustmentOpacity(original, adjusted, opacity);
     for (let py = 0; py < height; py++) for (let px = 0; px < width; px++) {
       const offset = (py * width + px) * 4;
-      const x = originX + px + 0.5, y = originY + py + 0.5;
-      let clip = this.ownMask(layer, x, y, true);
+      const ox = originX + px + 0.5, oy = originY + py + 0.5, map = this.outputToDocument;
+      const x = map ? map.a * ox + map.c * oy + map.tx : ox;
+      const y = map ? map.b * ox + map.d * oy + map.ty : oy;
+      let clip = this.ownMask(layer, x, y, true, this.documentToOutput);
       if (includeFolders) clip *= this.folderCoverage(layer, x, y);
       if (clip >= 1) {
         target[offset] = adjusted[offset]!; target[offset + 1] = adjusted[offset + 1]!;
@@ -386,7 +407,10 @@ class BandRenderer {
     const mode = this.blendMode(stack.base);
     for (let py = 0; py < height; py++) for (let px = 0; px < width; px++) {
       const offset = (py * width + px) * 4;
-      const folder = this.folderCoverage(stack.base, originX + px + 0.5, originY + py + 0.5);
+      const ox = originX + px + 0.5, oy = originY + py + 0.5, map = this.outputToDocument;
+      const x = map ? map.a * ox + map.c * oy + map.tx : ox;
+      const y = map ? map.b * ox + map.d * oy + map.ty : oy;
+      const folder = this.folderCoverage(stack.base, x, y);
       if (folder <= 0) continue;
       compositePremultiplied(target, offset, group[offset]! * folder, group[offset + 1]! * folder,
         group[offset + 2]! * folder, group[offset + 3]! * folder, mode, false, this.blendScratch);
@@ -432,6 +456,28 @@ export function compositeRegion(document: CanvasDocument, region: Rect, options:
     const height = Math.min(BAND_ROWS, region.height - row);
     const surface = renderer.render(region.width, height, region.x, region.y + row);
     straightBytes(surface, rgba, row * region.width * 4);
+  }
+  return { rgba, adjustmentsApplied: !renderer.skippedAdjustment };
+}
+
+/**
+ * Composites a target pixel grid whose pixel centres map through `viewToDocument`.
+ * This is the software equivalent of `GpuCompositor.composite` and keeps viewport work bounded
+ * to the visible target. LayerRenderer/DownsampleCache still choose source mip levels from the
+ * inverse mapping.
+ */
+export function compositeView(document: CanvasDocument, width: number, height: number,
+  viewToDocument: Affine, options: CompositeOptions = {}): CompositeResult {
+  if (![width, height].every(Number.isInteger) || width < 1 || height < 1 || width > 30_000 || height > 30_000
+    || width * height > 100_000_000 || !Object.values(viewToDocument).every(Number.isFinite)) {
+    throw new RangeError('Composite view must be finite, positive, at most 30,000 px per side and 100 megapixels');
+  }
+  const rgba = new Uint8Array(width * height * 4);
+  const renderer = new BandRenderer(document, options, viewToDocument);
+  for (let row = 0; row < height; row += BAND_ROWS) {
+    const bandHeight = Math.min(BAND_ROWS, height - row);
+    const surface = renderer.render(width, bandHeight, 0, row);
+    straightBytes(surface, rgba, row * width * 4);
   }
   return { rgba, adjustmentsApplied: !renderer.skippedAdjustment };
 }
