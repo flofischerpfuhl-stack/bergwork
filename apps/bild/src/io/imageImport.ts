@@ -5,8 +5,8 @@
  *
  * PNGs without colour-profile chunks go through the lossless decoder in png.ts (canvas decoding
  * premultiplies and loses precision in semi-transparent pixels). Everything else uses the browser's
- * colour-managed decoder. HEIC and TIFF decode only where the browser supports them (Safari);
- * elsewhere the import fails with a readable message instead of a fake result.
+ * colour-managed decoder. TIFF uses the dependency-free decoder in tiff.ts; HEIC uses the
+ * browser codec where available and otherwise follows the explicit policy in heic.ts.
  */
 
 import { Raster } from '../core/raster';
@@ -14,13 +14,15 @@ import { MAX_SIDE } from '../core/document';
 import { decodePng, pngDimensions } from './png';
 import { orientedSize, readJpegInfo } from './jpegMeta';
 import { sha256Hex } from './sha256';
+import { decodeTiff, TiffError, tiffDimensions } from './tiff';
+import { decodeHeic, HeicError, heicDimensions, isHeic } from './heic';
 
 export class ImageImportError extends Error {
   readonly code: 'unreadable' | 'unsupported' | 'too-large';
-  constructor(code: 'unreadable' | 'unsupported' | 'too-large') {
-    super(code === 'unreadable' ? 'The image could not be read. It may be damaged or unavailable.'
+  constructor(code: 'unreadable' | 'unsupported' | 'too-large', message?: string) {
+    super(message ?? (code === 'unreadable' ? 'The image could not be read. It may be damaged or unavailable.'
       : code === 'unsupported' ? 'Choose a JPEG, PNG, HEIC, or TIFF image.'
-        : 'This import exceeds the current 100-megapixel document budget or 30,000-pixel side limit.');
+        : 'This import exceeds the current 100-megapixel document budget or 30,000-pixel side limit.'));
     this.code = code;
     this.name = 'ImageImportError';
   }
@@ -33,10 +35,7 @@ export function sniffImage(bytes: Uint8Array): ImageKind | null {
   if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
   if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
   if (b.length >= 4 && ((b[0] === 0x49 && b[1] === 0x49 && b[2] === 0x2a && b[3] === 0) || (b[0] === 0x4d && b[1] === 0x4d && b[2] === 0 && b[3] === 0x2a))) return 'image/tiff';
-  if (b.length >= 12 && String.fromCharCode(...b.subarray(4, 8)) === 'ftyp') {
-    const brand = String.fromCharCode(...b.subarray(8, 12));
-    if (['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'mif1', 'msf1'].includes(brand)) return 'image/heic';
-  }
+  if (isHeic(b)) return 'image/heic';
   return null;
 }
 
@@ -73,7 +72,12 @@ export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number
   try {
     if (kind === 'image/png') ({ width, height } = pngDimensions(bytes));
     else if (kind === 'image/jpeg') ({ width, height } = orientedSize(readJpegInfo(bytes)));
-  } catch { throw new ImageImportError('unreadable'); }
+    else if (kind === 'image/tiff') ({ width, height } = tiffDimensions(bytes));
+    else ({ width, height } = heicDimensions(bytes));
+  } catch (error) {
+    if (error instanceof TiffError && error.code === 'dimensions') throw new ImageImportError('too-large');
+    throw new ImageImportError('unreadable');
+  }
   if (width && height && (width > MAX_SIDE || height > MAX_SIDE || width * height > remainingPixels)) throw new ImageImportError('too-large');
   let pixels: { width: number; height: number; data: Uint8Array };
   if (kind === 'image/png') {
@@ -86,6 +90,19 @@ export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number
       const rgba = new Uint8Array(png.width * png.height * 4);
       for (let i = 0; i < png.width * png.height; i++) { const v = png.data[i]!; rgba[i * 4] = v; rgba[i * 4 + 1] = v; rgba[i * 4 + 2] = v; rgba[i * 4 + 3] = 255; }
       pixels = { width: png.width, height: png.height, data: rgba };
+    }
+  } else if (kind === 'image/tiff') {
+    try { pixels = await decodeTiff(bytes); }
+    catch (error) {
+      if (error instanceof TiffError && error.code === 'dimensions') throw new ImageImportError('too-large');
+      if (error instanceof TiffError && error.code === 'unsupported') throw new ImageImportError('unsupported', error.message);
+      throw new ImageImportError('unreadable');
+    }
+  } else if (kind === 'image/heic') {
+    try { pixels = await decodeHeic(bytes); }
+    catch (error) {
+      if (error instanceof HeicError && error.code === 'unsupported') throw new ImageImportError('unsupported', error.message);
+      throw new ImageImportError('unreadable');
     }
   } else pixels = await browserDecode(bytes, kind);
   if (pixels.width > MAX_SIDE || pixels.height > MAX_SIDE || pixels.width * pixels.height > remainingPixels) throw new ImageImportError('too-large');
