@@ -29,7 +29,7 @@ shape.
 | Browser e2e, Chromium | 40 passed |
 | Browser e2e, Firefox + WebKit (`E2E_ALL_BROWSERS=1`) | 71 passed, 1 skipped: Firefox drops `clipboardData` on synthetic paste events, a test artefact |
 | Acceptance specs (research/compositor-port/acceptance) | 5 passed |
-| Official runner gates (sandboxed) | see `artifacts/runner-gates.json` |
+| Official runner gates (sandboxed: typecheck, build, unit, e2e, perf, acceptance) | all passed, contract unchanged; 4 e2e specs skipped (reference photos absent in the sandbox); see `artifacts/runner-gates.json` |
 
 The subject-removal and visual-tour specs use reference photos outside the repository and are skipped when they are
 missing. In the sandboxed gates they are therefore skipped.

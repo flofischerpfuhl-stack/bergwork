@@ -1,6 +1,6 @@
 {
   "project": "perf-gpu",
-  "date": "2026-09-23T19:18:49.876Z",
+  "date": "2026-09-23T19:24:12.110Z",
   "targets": {
     "panZoomP95Ms": 33,
     "brushFeedbackP95Ms": 16,
@@ -8,7 +8,7 @@
     "brushFinishMainThreadMs": 16,
     "brushCommitMs": 400
   },
-  "renderer": "ANGLE (Intel, Mesa Intel(R) HD Graphics 630 (KBL GT2), OpenGL 4.6)",
+  "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
   "viewport": {
     "width": 1440,
     "height": 900,
@@ -16,94 +16,94 @@
   },
   "floatTargets": true,
   "panMs": {
-    "p95": 4.299999997019768,
-    "median": 1.3999999985098839,
-    "max": 5.599999997764826
+    "p95": 1.199999999254942,
+    "median": 0.5999999977648258,
+    "max": 4.800000000745058
   },
   "zoomMs": {
-    "p95": 2.199999999254942,
-    "median": 1.0999999977648258,
-    "max": 4.099999997764826
+    "p95": 0.5999999977648258,
+    "median": 0.30000000074505806,
+    "max": 1.300000000745058
   },
   "panAt200PercentMs": {
-    "p95": 1.4000000022351742,
-    "median": 0.8000000007450581,
-    "max": 1.5999999977648258
+    "p95": 0.30000000074505806,
+    "median": 0.19999999925494194,
+    "max": 0.6000000014901161
   },
   "brushFeedbackMs": {
-    "p95": 7.300000000745058,
-    "median": 2.199999999254942,
-    "max": 21.300000000745058
+    "p95": 4.300000000745058,
+    "median": 1.699999999254942,
+    "max": 6.5
   },
   "brushFeedbackIrregularMs": {
-    "p95": 3.899999998509884,
-    "median": 1.699999999254942,
-    "max": 6.199999999254942
+    "p95": 2.399999998509884,
+    "median": 1.5,
+    "max": 4
   },
   "brushEngineMs": {
-    "p95": 0.5999999977648258,
+    "p95": 0.30000000074505806,
     "median": 0.10000000149011612
   },
   "brushRenderMs": {
-    "p95": 7,
-    "median": 2
+    "p95": 3.399999998509884,
+    "median": 1.5
   },
-  "brushFirstSampleMs": 21.300000000745058,
+  "brushFirstSampleMs": 6.5,
   "brushFinishMs": {
-    "even": 0.5,
-    "irregular": 0.19999999925494194
+    "even": 0.30000000074505806,
+    "irregular": 0.10000000149011612
   },
   "brushCommitMs": {
-    "even": 293.30000000074506,
-    "irregular": 248.69999999925494
+    "even": 495.6000000014901,
+    "irregular": 556.1999999992549
   },
   "brushWorkerReadyMs": {
-    "even": 232.69999999925494,
-    "irregular": 197.30000000074506
+    "even": 437.19999999925494,
+    "irregular": 491.6000000014901
   },
   "brushWorkerTiming": [
     {
-      "init": 0.5,
-      "settled": 132.39999999850988,
-      "finish": 49
-    },
-    {
-      "init": 1.199999999254942,
-      "settled": 122.49999999627471,
-      "finish": 62.79999999701977
-    },
-    {
-      "init": 0.5,
-      "settled": 145.79999999701977,
-      "finish": 39.30000000074506
-    },
-    {
-      "init": 0.5,
-      "settled": 112.69999999552965,
-      "finish": 81.5
-    },
-    {
       "init": 0.3999999985098839,
-      "settled": 120.69999999925494,
-      "finish": 86.89999999850988
-    },
-    {
-      "init": 0.5,
-      "settled": 193.1000000052154,
+      "settled": 82.69999999180436,
       "finish": 61.599999997764826
     },
     {
       "init": 0.3999999985098839,
-      "settled": 169.90000000223517,
-      "finish": 103
+      "settled": 97.6000000052154,
+      "finish": 80.5
     },
     {
-      "init": 0.4000000022351742,
-      "settled": 297.1000000014901,
-      "finish": 66.89999999850988
+      "init": 0.3999999985098839,
+      "settled": 92.39999999850988,
+      "finish": 96
+    },
+    {
+      "init": 0.3999999985098839,
+      "settled": 142,
+      "finish": 84.29999999701977
+    },
+    {
+      "init": 0.3999999985098839,
+      "settled": 102.19999998807907,
+      "finish": 120.19999999925494
+    },
+    {
+      "init": 0.3999999985098839,
+      "settled": 174.20000000298023,
+      "finish": 151.39999999850988
+    },
+    {
+      "init": 0.5,
+      "settled": 140.80000001192093,
+      "finish": 153.69999999925494
+    },
+    {
+      "init": 0.5,
+      "settled": 192.69999999552965,
+      "finish": 187.10000000149012
     }
   ],
-  "jsHeapUsedMB": 756,
+  "jsHeapUsedMB": 712,
   "estimatedGpuTextureMB": 853,
   "notes": "Pan/zoom scene built directly (167 Mpx exceeds the upstream 100 Mpx import budget); brush measured with 5 layers (84 Mpx)."
 }
