@@ -1,4 +1,5 @@
 import { unzlibSync, zlibSync } from 'fflate';
+import type { Chromaticities, IccColorModel } from '../wasm/lcms';
 
 const SIGNATURE = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 const MAX_SIDE = 30_000;
@@ -42,6 +43,21 @@ interface ParsedPng {
   transparency: Uint8Array | null;
   dpi: { x: number; y: number } | null;
   colorInfo: PngResult['colorInfo'];
+  iccProfile: Uint8Array | null;
+  chromaticities: Chromaticities | null;
+}
+
+export interface PngColorSamples {
+  width: number;
+  height: number;
+  model: Extract<IccColorModel, 'gray' | 'rgb'>;
+  bits: 8 | 16;
+  colors: Uint8Array | Uint16Array;
+  alpha: Uint8Array | Uint16Array | null;
+  iccProfile: Uint8Array | null;
+  gamma: number | null;
+  chromaticities: Chromaticities | null;
+  srgb: boolean;
 }
 
 /**
@@ -121,6 +137,38 @@ export function pngDimensions(bytes: Uint8Array): { width: number; height: numbe
   return { width, height };
 }
 
+/** Extracts ICC/cHRM/gAMA metadata and unquantized color samples for ImageImporter.swift's sRGB conversion. */
+export function decodePngColorSamples(bytes: Uint8Array): PngColorSamples {
+  const parsed = parsePng(bytes, true), h = parsed.header;
+  const samples = samplesPerPixel(h.colorType), expected = inflatedSize(h.width, h.height, h.bitDepth, samples, h.interlace);
+  let inflated: Uint8Array;
+  try { inflated = unzlibSync(concat(parsed.idat)); }
+  catch (cause) { throw new PngError('inflate', `Invalid PNG zlib stream: ${errorMessage(cause)}`); }
+  if (inflated.length !== expected) throw new PngError('data', `PNG image data has length ${inflated.length}, expected ${expected}`);
+
+  const model = h.colorType === 0 || h.colorType === 4 ? 'gray' : 'rgb';
+  const bits: 8 | 16 = h.bitDepth === 16 ? 16 : 8;
+  const colorChannels = model === 'gray' ? 1 : 3, count = h.width * h.height;
+  const colors = bits === 16 ? new Uint16Array(count * colorChannels) : new Uint8Array(count * colorChannels);
+  const hasAlpha = h.colorType === 4 || h.colorType === 6 || parsed.transparency !== null;
+  const alpha = hasAlpha ? (bits === 16 ? new Uint16Array(count) : new Uint8Array(count)) : null;
+  if (alpha) alpha.fill(bits === 16 ? 65535 : 255);
+  if (h.interlace === 0) {
+    decodeColorPass(inflated, 0, h.width, h.height, 0, 0, 1, 1, parsed, colors, alpha, model, bits);
+  } else {
+    let offset = 0;
+    for (let pass = 0; pass < 7; pass++) {
+      const x0 = ADAM7_X[pass]!, y0 = ADAM7_Y[pass]!, dx = ADAM7_DX[pass]!, dy = ADAM7_DY[pass]!;
+      const width = passSize(h.width, x0, dx), height = passSize(h.height, y0, dy);
+      if (width && height) offset = decodeColorPass(inflated, offset, width, height, x0, y0, dx, dy,
+        parsed, colors, alpha, model, bits);
+    }
+    if (offset !== inflated.length) throw new PngError('data', 'Unexpected trailing interlaced image data');
+  }
+  return { width: h.width, height: h.height, model, bits, colors, alpha, iccProfile: parsed.iccProfile,
+    gamma: parsed.colorInfo.gama, chromaticities: parsed.chromaticities, srgb: parsed.colorInfo.srgb };
+}
+
 /**
  * Encodes archive/export pixels and writes DPI as PNG pHYs, mirroring
  * ImageExporter.pngData (Compositor/IO/ImageExporter.swift).
@@ -183,6 +231,8 @@ function parsePng(bytes: Uint8Array, requireData: boolean): ParsedPng {
   let dpi: { x: number; y: number } | null = null;
   const idat: Uint8Array[] = [];
   const colorInfo = { srgb: false, iccp: false, gama: null as number | null, chrm: false };
+  let iccProfile: Uint8Array | null = null;
+  let chromaticities: Chromaticities | null = null;
   let ended = false;
   let seenIdat = false, idatEnded = false, seenPhys = false;
   while (offset < bytes.length) {
@@ -242,6 +292,7 @@ function parsePng(bytes: Uint8Array, requireData: boolean): ParsedPng {
           throw new PngError('metadata', 'Invalid or out-of-order PNG iCCP chunk');
         }
         colorInfo.iccp = true;
+        iccProfile = inflateIccProfile(bytes, start, end);
         break;
       case 'gAMA':
         if (colorInfo.gama !== null || seenIdat || palette || length !== 4 || readU32(bytes, start) === 0) {
@@ -252,6 +303,12 @@ function parsePng(bytes: Uint8Array, requireData: boolean): ParsedPng {
       case 'cHRM':
         if (colorInfo.chrm || seenIdat || palette || length !== 32) throw new PngError('metadata', 'Invalid or out-of-order PNG cHRM chunk');
         colorInfo.chrm = true;
+        chromaticities = {
+          white: [readU32(bytes, start) / 100_000, readU32(bytes, start + 4) / 100_000],
+          red: [readU32(bytes, start + 8) / 100_000, readU32(bytes, start + 12) / 100_000],
+          green: [readU32(bytes, start + 16) / 100_000, readU32(bytes, start + 20) / 100_000],
+          blue: [readU32(bytes, start + 24) / 100_000, readU32(bytes, start + 28) / 100_000],
+        };
         break;
       case 'IEND':
         if (length !== 0) throw new PngError('data', 'Invalid PNG IEND chunk');
@@ -287,7 +344,61 @@ function parsePng(bytes: Uint8Array, requireData: boolean): ParsedPng {
     throw new PngError('transparency', 'PNG color type cannot have tRNS');
   }
   if ((header.colorType === 0 || header.colorType === 4) && palette) throw new PngError('palette', 'PNG color type cannot have a palette');
-  return { header, idat, palette, transparency, dpi, colorInfo };
+  return { header, idat, palette, transparency, dpi, colorInfo, iccProfile, chromaticities };
+}
+
+function decodeColorPass(source: Uint8Array, offset: number, width: number, height: number,
+  x0: number, y0: number, dx: number, dy: number, png: ParsedPng,
+  colors: Uint8Array | Uint16Array, alpha: Uint8Array | Uint16Array | null,
+  model: 'gray' | 'rgb', bits: 8 | 16): number {
+  const h = png.header, sampleCount = samplesPerPixel(h.colorType);
+  const rowBytes = Math.ceil(width * sampleCount * h.bitDepth / 8), bpp = Math.max(1, Math.ceil(sampleCount * h.bitDepth / 8));
+  let previous = new Uint8Array(rowBytes), current = new Uint8Array(rowBytes);
+  for (let y = 0; y < height; y++) {
+    const filter = source[offset++];
+    if (filter === undefined || filter > 4 || offset + rowBytes > source.length) throw new PngError('data', 'Truncated or invalid PNG scanline');
+    for (let i = 0; i < rowBytes; i++) {
+      const raw = source[offset + i]!, left = i >= bpp ? current[i - bpp]! : 0;
+      const up = previous[i]!, upperLeft = i >= bpp ? previous[i - bpp]! : 0;
+      current[i] = raw + (filter === 0 ? 0 : filter === 1 ? left : filter === 2 ? up
+        : filter === 3 ? Math.floor((left + up) / 2) : paeth(left, up, upperLeft));
+    }
+    offset += rowBytes;
+    for (let x = 0; x < width; x++) {
+      const pixel = (y0 + y * dy) * h.width + x0 + x * dx;
+      writeColorPixel(current, x, pixel, png, colors, alpha, bits);
+    }
+    const swap = previous; previous = current; current = swap;
+  }
+  return offset;
+}
+
+function writeColorPixel(row: Uint8Array, x: number, pixel: number, png: ParsedPng,
+  colors: Uint8Array | Uint16Array, alpha: Uint8Array | Uint16Array | null,
+  bits: 8 | 16): void {
+  const h = png.header, scale = (value: number): number => bits === 16 ? value : toByte(value, h.bitDepth);
+  if (h.colorType === 0 || h.colorType === 4) {
+    const gray = sample(row, x, 0, h.colorType === 0 ? 1 : 2, h.bitDepth);
+    colors[pixel] = scale(gray);
+    if (alpha) alpha[pixel] = h.colorType === 4 ? scale(sample(row, x, 1, 2, h.bitDepth))
+      : png.transparency && gray === readU16(png.transparency, 0) ? 0 : bits === 16 ? 65535 : 255;
+    return;
+  }
+  const target = pixel * 3;
+  if (h.colorType === 3) {
+    const index = sample(row, x, 0, 1, h.bitDepth), palette = png.palette!;
+    if (index * 3 + 2 >= palette.length) throw new PngError('palette', `PNG palette index ${index} is out of range`);
+    colors[target] = palette[index * 3]!; colors[target + 1] = palette[index * 3 + 1]!; colors[target + 2] = palette[index * 3 + 2]!;
+    if (alpha) alpha[pixel] = png.transparency?.[index] ?? 255;
+    return;
+  }
+  const components = h.colorType === 2 ? 3 : 4;
+  const r = sample(row, x, 0, components, h.bitDepth), g = sample(row, x, 1, components, h.bitDepth);
+  const b = sample(row, x, 2, components, h.bitDepth);
+  colors[target] = scale(r); colors[target + 1] = scale(g); colors[target + 2] = scale(b);
+  if (alpha) alpha[pixel] = h.colorType === 6 ? scale(sample(row, x, 3, 4, h.bitDepth))
+    : png.transparency && r === readU16(png.transparency, 0) && g === readU16(png.transparency, 2)
+      && b === readU16(png.transparency, 4) ? 0 : bits === 16 ? 65535 : 255;
 }
 
 function decodePass(
@@ -542,6 +653,12 @@ function validIccp(data: Uint8Array, start: number, end: number): boolean {
   while (separator < end && separator - start < 80 && data[separator] !== 0) separator++;
   return separator > start && separator - start <= 79 && separator + 2 < end
     && data[separator] === 0 && data[separator + 1] === 0;
+}
+function inflateIccProfile(data: Uint8Array, start: number, end: number): Uint8Array {
+  let separator = start;
+  while (separator < end && data[separator] !== 0) separator++;
+  try { return unzlibSync(data.subarray(separator + 2, end)); }
+  catch (cause) { throw new PngError('metadata', `Invalid PNG iCCP profile: ${errorMessage(cause)}`); }
 }
 function concat(parts: readonly Uint8Array[]): Uint8Array {
   let length = 0;

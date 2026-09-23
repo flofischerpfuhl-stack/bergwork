@@ -3,19 +3,19 @@
  * remaining 100-megapixel budget checked before decoding; EXIF orientation applied; pixels
  * normalised to straight-alpha sRGB RGBA8.
  *
- * PNGs without colour-profile chunks go through the lossless decoder in png.ts (canvas decoding
- * premultiplies and loses precision in semi-transparent pixels). Everything else uses the browser's
- * colour-managed decoder. TIFF uses the dependency-free decoder in tiff.ts; HEIC uses the
- * browser codec where available and otherwise follows the explicit policy in heic.ts.
+ * PNG and TIFF profiles are converted explicitly through Little CMS so workers and browsers agree,
+ * including conversion before 16-bit quantization. JPEG/HEIC use the browser codec where available;
+ * HEIC otherwise follows the explicit policy in heic.ts.
  */
 
 import { Raster } from '../core/raster';
 import { MAX_SIDE } from '../core/document';
-import { decodePng, pngDimensions } from './png';
-import { orientedSize, readJpegInfo } from './jpegMeta';
+import { decodePng, decodePngColorSamples, pngDimensions } from './png';
+import { orientedSize, readJpegIccProfile, readJpegInfo } from './jpegMeta';
 import { sha256Hex } from './sha256';
 import { decodeTiff, TiffError, tiffDimensions } from './tiff';
 import { decodeHeic, HeicError, heicDimensions, isHeic } from './heic';
+import { IccError, loadLittleCms, type Chromaticities } from '../wasm/lcms';
 
 export class ImageImportError extends Error {
   readonly code: 'unreadable' | 'unsupported' | 'too-large';
@@ -45,7 +45,7 @@ export function fileBaseName(name: string): string {
   return dot > 0 ? base.slice(0, dot) : base;
 }
 
-/** Decodes with the browser (colour managed, EXIF orientation applied). */
+/** Decodes with the browser (colour managed, EXIF orientation applied) into an sRGB canvas. */
 export async function browserDecode(bytes: Uint8Array, mime: string): Promise<{ width: number; height: number; channels: 4; data: Uint8Array }> {
   let bitmap: ImageBitmap;
   try {
@@ -55,13 +55,31 @@ export async function browserDecode(bytes: Uint8Array, mime: string): Promise<{ 
   }
   try {
     const { width, height } = bitmap;
-    const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(width, height) : Object.assign(document.createElement('canvas'), { width, height });
-    const context = canvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+    if (typeof OffscreenCanvas === 'undefined') throw new ImageImportError('unsupported', 'This browser cannot read decoded image pixels.');
+    const canvas = new OffscreenCanvas(width, height);
+    const context = canvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
     if (!context) throw new ImageImportError('unreadable');
     context.drawImage(bitmap, 0, 0);
     const data = context.getImageData(0, 0, width, height, { colorSpace: 'srgb' }).data;
     return { width, height, channels: 4, data: new Uint8Array(data.buffer, data.byteOffset, data.byteLength) };
   } finally { bitmap.close(); }
+}
+
+const SRGB_CHROMATICITIES: Chromaticities = {
+  white: [0.3127, 0.3290], red: [0.64, 0.33], green: [0.30, 0.60], blue: [0.15, 0.06],
+};
+
+async function decodeManagedPng(bytes: Uint8Array): Promise<{ width: number; height: number; data: Uint8Array }> {
+  const png = decodePngColorSamples(bytes), lcms = await loadLittleCms();
+  let profile = png.iccProfile;
+  if (!profile) {
+    const gamma = png.gamma === null ? 2.2 : 1 / png.gamma;
+    profile = png.model === 'gray'
+      ? lcms.createGrayProfile(png.chromaticities?.white ?? SRGB_CHROMATICITIES.white, gamma)
+      : lcms.createRgbProfile(png.chromaticities ?? SRGB_CHROMATICITIES, gamma, png.gamma === null ? 'srgb' : 'gamma');
+  }
+  return { width: png.width, height: png.height,
+    data: lcms.transform(profile, png.colors, png.model, png.bits, png.alpha) };
 }
 
 /** Decodes an image file into a raster that remembers its original bytes. */
@@ -83,13 +101,20 @@ export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number
   if (kind === 'image/png') {
     let png: ReturnType<typeof decodePng>;
     try { png = decodePng(bytes); } catch { throw new ImageImportError('unreadable'); }
-    const managed = png.colorInfo.iccp || png.colorInfo.chrm || (png.colorInfo.gama !== null && !png.colorInfo.srgb && Math.abs(png.colorInfo.gama - 45455) > 50);
-    if (managed) pixels = await browserDecode(bytes, kind);
+    const managed = png.colorInfo.iccp || png.colorInfo.chrm
+      || (png.colorInfo.gama !== null && !png.colorInfo.srgb && Math.abs(png.colorInfo.gama - 0.45455) > 0.0005);
+    // ImageImporter.swift renders into an sRGB CIContext. Do the equivalent explicitly so
+    // workers and browsers agree, and so 16-bit sources reach ColorSync/lcms before RGBA8 quantization.
+    if (managed) {
+      try { pixels = await decodeManagedPng(bytes); }
+      catch (error) {
+        if (!(error instanceof IccError) && !(error instanceof RangeError)) throw error;
+        pixels = png.channels === 4 ? png : grayToRgba(png.data, png.width, png.height);
+      }
+    }
     else if (png.channels === 4) pixels = png;
     else {
-      const rgba = new Uint8Array(png.width * png.height * 4);
-      for (let i = 0; i < png.width * png.height; i++) { const v = png.data[i]!; rgba[i * 4] = v; rgba[i * 4 + 1] = v; rgba[i * 4 + 2] = v; rgba[i * 4 + 3] = 255; }
-      pixels = { width: png.width, height: png.height, data: rgba };
+      pixels = grayToRgba(png.data, png.width, png.height);
     }
   } else if (kind === 'image/tiff') {
     try { pixels = await decodeTiff(bytes); }
@@ -104,7 +129,21 @@ export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number
       if (error instanceof HeicError && error.code === 'unsupported') throw new ImageImportError('unsupported', error.message);
       throw new ImageImportError('unreadable');
     }
-  } else pixels = await browserDecode(bytes, kind);
+  } else {
+    // Chromium's JPEG decoder applies embedded RGB/gray/CMYK ICC profiles before exposing the
+    // ImageBitmap. Canvas readback is requested in sRGB, so a second lcms transform would double-convert.
+    readJpegIccProfile(bytes);
+    pixels = await browserDecode(bytes, kind);
+  }
   if (pixels.width > MAX_SIDE || pixels.height > MAX_SIDE || pixels.width * pixels.height > remainingPixels) throw new ImageImportError('too-large');
   return Raster.fromPixels(pixels.width, pixels.height, 4, pixels.data, { source: { bytes, mime: kind, sha256: sha256Hex(bytes) } });
+}
+
+function grayToRgba(gray: Uint8Array, width: number, height: number): { width: number; height: number; data: Uint8Array } {
+  const rgba = new Uint8Array(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    const value = gray[i]!, target = i * 4;
+    rgba[target] = value; rgba[target + 1] = value; rgba[target + 2] = value; rgba[target + 3] = 255;
+  }
+  return { width, height, data: rgba };
 }

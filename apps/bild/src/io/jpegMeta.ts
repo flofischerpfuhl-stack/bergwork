@@ -56,6 +56,32 @@ export function orientedSize(info: Pick<JpegInfo, 'width' | 'height' | 'orientat
     : { width: info.width, height: info.height };
 }
 
+/** Reassembles the ICC.1 multi-segment APP2 payload in sequence-number order. */
+export function readJpegIccProfile(bytes: Uint8Array): Uint8Array | null {
+  const chunks = new Map<number, Uint8Array>();
+  let total = 0;
+  for (const segment of jpegSegments(bytes)) {
+    if (segment.marker !== 0xe2 || !isAscii(bytes, segment.payloadOffset, 'ICC_PROFILE\0')) continue;
+    if (segment.payloadLength < 14) throw new JpegMetaError('Truncated JPEG ICC_PROFILE segment');
+    const sequence = bytes[segment.payloadOffset + 12]!, count = bytes[segment.payloadOffset + 13]!;
+    if (sequence < 1 || count < 1 || sequence > count || (total !== 0 && total !== count) || chunks.has(sequence)) {
+      throw new JpegMetaError('Invalid JPEG ICC_PROFILE segment sequence');
+    }
+    total = count;
+    chunks.set(sequence, bytes.slice(segment.payloadOffset + 14, segment.payloadOffset + segment.payloadLength));
+  }
+  if (total === 0) return null;
+  if (chunks.size !== total) throw new JpegMetaError('Incomplete JPEG ICC_PROFILE segment sequence');
+  let length = 0;
+  for (let sequence = 1; sequence <= total; sequence++) length += chunks.get(sequence)!.length;
+  const profile = new Uint8Array(length);
+  let offset = 0;
+  for (let sequence = 1; sequence <= total; sequence++) {
+    const chunk = chunks.get(sequence)!; profile.set(chunk, offset); offset += chunk.length;
+  }
+  return profile;
+}
+
 /**
  * Adds/updates JFIF density after browser JPEG encoding, matching the resolution
  * metadata written by ImageExporter.jpeg (Compositor/IO/ImageExporter.swift).
