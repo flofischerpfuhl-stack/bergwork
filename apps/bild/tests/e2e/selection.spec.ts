@@ -75,3 +75,40 @@ test('add mask from a selection hides the selected area', async ({ page }) => {
   // A white mask made from a selection has the selected area black: everything hidden.
   expect(pixels.data[3]).toBe(0);
 });
+
+test('Cmd-drag inside the selection moves its pixels as one undo step', async ({ page }) => {
+  await mountForTest(page);
+  await page.getByTestId('widthInput').fill('100');
+  await page.getByTestId('heightInput').fill('100');
+  await page.getByTestId('createCanvas').click();
+  await importThroughMenu(page, [{ name: 'blue.png', mimeType: 'image/png', buffer: solidPng(20, 20, [0, 0, 255, 255]) }]);
+  const pane = (await page.getByTestId('canvas-pane').boundingBox())!;
+  const zoom = parseFloat((await page.getByTestId('zoomStatus').textContent())!) / 100 / (await page.evaluate(() => devicePixelRatio));
+  const origin = { x: pane.x + pane.width / 2 - 50 * zoom, y: pane.y + pane.height / 2 - 50 * zoom };
+  const at = (x: number, y: number) => ({ x: origin.x + x * zoom, y: origin.y + y * zoom });
+  // The imported square sits at 40…60; select it with the marquee.
+  await page.getByTestId('tool-marquee').click();
+  let p = at(40, 40);
+  await page.mouse.move(p.x, p.y);
+  await page.mouse.down();
+  p = at(60, 60);
+  await page.mouse.move(p.x, p.y, { steps: 4 });
+  await page.mouse.up();
+  // Cmd/Ctrl-drag from inside by +30 px horizontally.
+  p = at(50, 50);
+  await page.mouse.move(p.x, p.y);
+  await page.keyboard.down(mod);
+  await page.mouse.down();
+  p = at(80, 50);
+  await page.mouse.move(p.x, p.y, { steps: 6 });
+  await page.mouse.up();
+  await page.keyboard.up(mod);
+  let pixels = await exportedPixels(page);
+  const px = (x: number, y: number) => pixels.data.slice((y * 100 + x) * 4, (y * 100 + x) * 4 + 4);
+  expect(px(85, 50)).toEqual([0, 0, 255, 255]);
+  expect(px(45, 50)[3]).toBe(0);
+  await page.getByTestId('compositor-editor').press(`${mod}+z`);
+  pixels = await exportedPixels(page);
+  expect(px(45, 50)).toEqual([0, 0, 255, 255]);
+  expect(px(85, 50)[3]).toBe(0);
+});

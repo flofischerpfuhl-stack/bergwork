@@ -5,11 +5,12 @@ import { Raster } from '../../src/core/raster';
 import { EditorSession } from '../../src/core/session';
 import {
   combineSelection, contractSelection, ellipseSelection, expandSelection, moveSelection, polygonSelection,
-  rectangleSelection, selectionBounds, selectionContains, selectionCoverage, selectionOutline,
+  rectangleSelection, resizeSelectionAsync, selectionBounds, selectionContains, selectionCoverage, selectionOutline,
 } from '../../src/core/selectionOps';
 import {
-  addMaskFromSelection, applySelection, beginSelectionTransform, clearSelectedPixels, displayedSelection, fillSelection,
-  invertPixels, loadLayerSelection,
+  addMaskFromSelection, applySelection, beginPixelMove, beginSelectionTransform, cancelPixelMove, clearSelectedPixels,
+  displayedSelection, fillSelection, finishPixelMove, invertPixels, loadLayerSelection, movePixels, nudgePixels,
+  pixelMoveState,
 } from '../../src/core/selectionCommands';
 import { InMemoryPixelClipboard, copySelection, cutSelection, paste } from '../../src/core/clipboard';
 
@@ -63,6 +64,24 @@ describe('selection geometry (SelectionTests.swift)', () => {
     const moved = moveSelection(box, -60, 0);
     expect(selectionBounds(moved)).toEqual({ x: -20, y: 40, width: 20, height: 20 });
     expect(selectionContains(moved, { x: -15, y: 45 })).toBe(true);
+  });
+
+  it('resizeSelectionAsync matches the pure result and discards stale requests', async () => {
+    const canvas = { width: 30, height: 30 }, selection = rectangleSelection({ x: 10, y: 10, width: 5, height: 5 }, canvas);
+    const asyncResult = await resizeSelectionAsync(selection, 2, canvas, { workerFactory: () => null });
+    expect(selectionBounds(asyncResult!)).toEqual({ x: 8, y: 8, width: 9, height: 9 });
+    const controller = new AbortController(); controller.abort();
+    expect(await resizeSelectionAsync(selection, 2, canvas, { signal: controller.signal, workerFactory: () => null })).toBeNull();
+    let terminated = false;
+    const pendingController = new AbortController();
+    const fakeWorker = {
+      onmessage: null, onerror: null, postMessage: (): void => {}, terminate: (): void => { terminated = true; },
+    } as unknown as Worker;
+    const pending = resizeSelectionAsync(selection, 2, canvas,
+      { signal: pendingController.signal, workerFactory: () => fakeWorker });
+    pendingController.abort();
+    expect(await pending).toBeNull();
+    expect(terminated).toBe(true);
   });
 });
 
@@ -139,5 +158,80 @@ describe('clipboard and floating selection (SelectionClipboardTests.swift)', () 
     session.cancelTransform();
     expect(session.document).toBe(before);
     expect(session.history.undoCount).toBe(count);
+  });
+});
+
+describe('moving selected pixels (SelectionEditTests.swift)', () => {
+  function twoColor(): Raster {
+    const data = new Uint8Array(100 * 40 * 4);
+    for (let y = 0; y < 40; y++) for (let x = 0; x < 100; x++) {
+      const offset = (y * 100 + x) * 4;
+      data[offset + (x < 50 ? 0 : 2)] = 255; data[offset + 3] = 255;
+    }
+    return Raster.fromPixels(100, 40, 4, data);
+  }
+
+  it('cmdDragMovesSelectedPixelsAndOutlineAsOneUndo and previews through the override', () => {
+    const session = sessionWith(twoColor());
+    applySelection(session, rectangleSelection({ x: 10, y: 10, width: 10, height: 10 }, session.document!), 'New', 'Select');
+    const before = session.document, count = session.history.undoCount;
+    expect(beginPixelMove(session)).toBe(true);
+    expect(movePixels(session, 30.4, 0)).toBe(true);
+    expect(movePixels(session, 60.2, 5)).toBe(true);
+    expect(pixelMoveState(session)?.offset).toEqual({ x: 60, y: 5 });
+    expect(session.rasterOverrides.get('pixels')).toBe(pixelMoveState(session)?.preview);
+    expect(selectionBounds(displayedSelection(session)!)).toEqual({ x: 70, y: 15, width: 10, height: 10 });
+    expect(finishPixelMove(session)).toBe(true);
+    expect(session.rasterOverrides.size).toBe(0);
+    expect(session.history.undoCount).toBe(count + 1);
+    expect(session.history.undoName).toBe('Move Pixels');
+    expect(session.activeLayer!.raster!.pixel(15, 15)[3]).toBe(0);
+    expect(session.activeLayer!.raster!.pixel(75, 20)).toEqual([255, 0, 0, 255]);
+    expect(session.activeLayer!.raster!.pixel(85, 20)).toEqual([0, 0, 255, 255]);
+    session.undo();
+    expect(session.document).toBe(before);
+  });
+
+  it('duplicatePixelDragPreservesSourceAndUndoesTogether', () => {
+    const session = sessionWith(twoColor());
+    applySelection(session, rectangleSelection({ x: 10, y: 10, width: 10, height: 10 }, session.document!), 'New', 'Select');
+    expect(beginPixelMove(session, true)).toBe(true);
+    movePixels(session, 60, 5); finishPixelMove(session);
+    expect(session.activeLayer!.raster!.pixel(15, 15)[0]).toBe(255);
+    expect(session.activeLayer!.raster!.pixel(75, 20)[0]).toBe(255);
+    expect(session.history.undoName).toBe('Duplicate Pixels');
+    session.undo();
+    expect(session.activeLayer!.raster!.pixel(75, 20)[2]).toBe(255);
+  });
+
+  it('cmdArrowNudgesPixels, cancel restores exactly, and masks refuse', () => {
+    const session = sessionWith(twoColor());
+    applySelection(session, rectangleSelection({ x: 40, y: 0, width: 10, height: 40 }, session.document!), 'New', 'Select');
+    expect(nudgePixels(session, 10, 0)).toBe(true);
+    expect(session.activeLayer!.raster!.pixel(45, 20)[3]).toBe(0);
+    expect(session.activeLayer!.raster!.pixel(55, 20)).toEqual([255, 0, 0, 255]);
+    const exact = session.document;
+    expect(beginPixelMove(session)).toBe(true); movePixels(session, -5, 0); cancelPixelMove(session);
+    expect(session.document).toBe(exact);
+    expect(session.rasterOverrides.size).toBe(0);
+    session.addLayerMask();
+    expect(beginPixelMove(session)).toBe(false);
+  });
+
+  it('grows the layer past its old rect and preserves soft selection coverage', () => {
+    const session = sessionWith(solid(10, 10, [255, 0, 0, 255]), 30, 10);
+    const soft = ellipseSelection({ x: 0, y: 1, width: 6, height: 8 }, session.document!, true);
+    applySelection(session, soft, 'New', 'Select');
+    const before = session.document;
+    expect(beginPixelMove(session)).toBe(true); movePixels(session, 20, 0);
+    const preview = pixelMoveState(session)?.preview;
+    expect(preview).not.toBeNull();
+    expect([...preview!.toPixels()].some((value, index) => index % 4 === 3 && value > 0 && value < 255)).toBe(true);
+    expect(finishPixelMove(session)).toBe(true);
+    expect(session.activeLayer!.raster!.width).toBeGreaterThan(20);
+    expect(session.activeLayer!.transform.size.width).toBeGreaterThan(20);
+    expect(selectionBounds(session.selection!)!.x).toBeGreaterThanOrEqual(20);
+    session.undo();
+    expect(session.document).toBe(before);
   });
 });

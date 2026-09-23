@@ -946,6 +946,9 @@ export class EditorSession {
   displayedMaskPlacement(layer: Layer): LayerTransform | null {
     const mask = layer.mask;
     if (!mask) return null;
+    // A preview that grows or moves the layer's pixel grid must not drag the mask along.
+    const preview = this.livePreview(layer.id);
+    if (preview && !preview.mask && !transformsEqual(preview.transform, layer.transform)) return mask.placement ?? layer.transform;
     const edit = this.transformEdit;
     if (edit?.group) {
       const original = edit.group.originals.get(layer.id);

@@ -369,6 +369,96 @@ export function contractSelection(selection: DocumentSelection, amount: number, 
   return resizeSelection(selection, -Math.abs(amount), canvas);
 }
 
+export interface ResizeSelectionAsyncOptions {
+  /** Aborting terminates a worker and resolves `null`, allowing stale UI requests to be discarded. */
+  readonly signal?: AbortSignal;
+  /** Test/platform injection; returning null selects the in-thread fallback. */
+  readonly workerFactory?: () => Worker | null;
+}
+
+interface ResizeWorkerRequest {
+  readonly kind: 'compositor-selection-resize';
+  readonly width: number;
+  readonly height: number;
+  readonly pixels: ArrayBuffer;
+  readonly x: number;
+  readonly y: number;
+  readonly antialiased: boolean;
+  readonly amount: number;
+  readonly canvas: CanvasSize;
+}
+
+interface ResizeWorkerResult {
+  readonly kind: 'compositor-selection-resized';
+  readonly width: number;
+  readonly height: number;
+  readonly pixels: ArrayBuffer;
+  readonly x: number;
+  readonly y: number;
+  readonly antialiased: boolean;
+}
+
+function defaultResizeWorker(): Worker | null {
+  if (typeof Worker === 'undefined') return null;
+  // This module is also the worker entry so the pure EDT implementation cannot drift.
+  return new Worker(new URL('./selectionOps.ts', import.meta.url), { type: 'module', name: 'selection-resize' });
+}
+
+/** Worker-backed form of `resizeSelection`; returns null when its AbortSignal makes the result stale. */
+export async function resizeSelectionAsync(selection: DocumentSelection, amount: number, canvas: CanvasSize,
+  options: ResizeSelectionAsyncOptions = {}): Promise<DocumentSelection | null> {
+  if (options.signal?.aborted) return null;
+  let worker: Worker | null = null;
+  try { worker = (options.workerFactory ?? defaultResizeWorker)(); } catch { worker = null; }
+  if (!worker) {
+    await Promise.resolve();
+    if (options.signal?.aborted) return null;
+    const result = resizeSelection(selection, amount, canvas);
+    return options.signal?.aborted ? null : result;
+  }
+  const pixels = selection.mask.toPixels();
+  const request: ResizeWorkerRequest = { kind: 'compositor-selection-resize', width: selection.mask.width,
+    height: selection.mask.height, pixels: pixels.buffer as ArrayBuffer, x: selection.x, y: selection.y,
+    antialiased: selection.antialiased, amount, canvas };
+  return await new Promise<DocumentSelection | null>((resolve) => {
+    let settled = false;
+    const finish = (value: DocumentSelection | null): void => {
+      if (settled) return; settled = true; options.signal?.removeEventListener('abort', abort); worker!.terminate(); resolve(value);
+    };
+    const abort = (): void => finish(null);
+    options.signal?.addEventListener('abort', abort, { once: true });
+    worker!.onmessage = (event: MessageEvent<ResizeWorkerResult>) => {
+      if (event.data.kind !== 'compositor-selection-resized' || options.signal?.aborted) { finish(null); return; }
+      const value = event.data;
+      finish({ mask: Raster.fromPixels(value.width, value.height, 1, new Uint8Array(value.pixels)), x: value.x, y: value.y,
+        antialiased: value.antialiased });
+    };
+    worker!.onerror = () => {
+      if (options.signal?.aborted) { finish(null); return; }
+      finish(resizeSelection(selection, amount, canvas));
+    };
+    worker!.postMessage(request, [request.pixels]);
+  });
+}
+
+const resizeWorkerGlobal = globalThis as typeof globalThis & {
+  document?: unknown;
+  postMessage?: (message: ResizeWorkerResult, transfer: Transferable[]) => void;
+};
+if (!('document' in resizeWorkerGlobal) && typeof resizeWorkerGlobal.addEventListener === 'function'
+  && typeof resizeWorkerGlobal.postMessage === 'function') {
+  resizeWorkerGlobal.addEventListener('message', ((event: MessageEvent<ResizeWorkerRequest>) => {
+    if (event.data?.kind !== 'compositor-selection-resize') return;
+    const request = event.data;
+    const selection: DocumentSelection = { mask: Raster.fromPixels(request.width, request.height, 1, new Uint8Array(request.pixels)),
+      x: request.x, y: request.y, antialiased: request.antialiased };
+    const result = resizeSelection(selection, request.amount, request.canvas), pixels = result.mask.toPixels();
+    const response: ResizeWorkerResult = { kind: 'compositor-selection-resized', width: result.mask.width,
+      height: result.mask.height, pixels: pixels.buffer as ArrayBuffer, x: result.x, y: result.y, antialiased: result.antialiased };
+    resizeWorkerGlobal.postMessage!(response, [response.pixels]);
+  }) as EventListener);
+}
+
 /** MaskTracing-style marching boundary at the 50% coverage contour, simplified to corners. */
 export function selectionOutline(selection: DocumentSelection): SelectionPolyline[] {
   const width = selection.mask.width, height = selection.mask.height, stride = width + 1;

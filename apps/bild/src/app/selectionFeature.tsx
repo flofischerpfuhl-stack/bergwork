@@ -23,6 +23,7 @@ import {
   addMaskFromSelection, applySelection, beginSelectionMove, beginSelectionTransform, canEditPixels, canEditSelection,
   canInvertPixels, canModifySelection, canMoveSelection, canTransformSelection, clearSelectedPixels, contractSelection,
   deleteKeyPressed, deselect, displayedSelection, endSelectionMove, expandSelection, fillSelection, invertPixels,
+  beginPixelMove, cancelPixelMove, finishPixelMove, movePixels, nudgePixels, pixelMoveState,
   invertSelection, loadLayerSelection, loadMaskSelection, nudgeSelection, previewSelectionMove, selectAll,
 } from '../core/selectionCommands';
 import {
@@ -325,6 +326,24 @@ export function mirrorSelection(document: CanvasDocument, horizontally: boolean)
 
 export function installSelection(controller: EditorController): void {
   controller.mirrorSelection = mirrorSelection;
+  // Cmd-drag / Cmd-arrows move the selected pixels (SelectionEdits.swift); the preview shows through
+  // a preview source so a grown layer keeps its place.
+  const previewed = new WeakSet<EditorSession>();
+  const withPreview = (session: EditorSession) => {
+    if (previewed.has(session)) return;
+    previewed.add(session);
+    session.previewSources.push((s) => {
+      const state = pixelMoveState(s);
+      return state?.preview && state.previewTransform ? { layerId: state.layerId, mask: false, raster: state.preview, transform: state.previewTransform } : null;
+    });
+  };
+  controller.pixelMove = {
+    begin: (session, duplicate) => { withPreview(session); return beginPixelMove(session, duplicate); },
+    move: (session, dx, dy) => { movePixels(session, dx, dy); },
+    finish: (session) => { finishPixelMove(session); session.notify('document'); },
+    cancel: (session) => { cancelPixelMove(session); session.notify('document'); },
+    nudge: (session, dx, dy) => { withPreview(session); nudgePixels(session, dx, dy); session.notify('document'); },
+  };
   // The rail icon follows the tool's mode (ContentView.toolRail).
   const previousIcon = controller.toolIcon;
   controller.toolIcon = (tool) => {
