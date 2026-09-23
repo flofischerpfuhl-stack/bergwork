@@ -4,8 +4,8 @@
  * normalised to straight-alpha sRGB RGBA8.
  *
  * PNG and TIFF profiles are converted explicitly through Little CMS so workers and browsers agree,
- * including conversion before 16-bit quantization. JPEG/HEIC use the browser codec where available;
- * HEIC otherwise follows the explicit policy in heic.ts.
+ * including conversion before 16-bit quantization. JPEG uses the browser's colour-managed codec.
+ * HEIC tries the browser codec, an optional host codec, then the explicitly enabled LGPL module in heic.ts.
  */
 
 import { Raster } from '../core/raster';
@@ -14,7 +14,7 @@ import { decodePng, decodePngColorSamples, pngDimensions } from './png';
 import { orientedSize, readJpegIccProfile, readJpegInfo } from './jpegMeta';
 import { sha256Hex } from './sha256';
 import { decodeTiff, TiffError, tiffDimensions } from './tiff';
-import { decodeHeic, HeicError, heicDimensions, isHeic } from './heic';
+import { decodeHeic, HeicError, heicDimensions, isHeic, type HeicDecodeOptions } from './heic';
 import { IccError, loadLittleCms, type Chromaticities } from '../wasm/lcms';
 
 export class ImageImportError extends Error {
@@ -83,7 +83,7 @@ async function decodeManagedPng(bytes: Uint8Array): Promise<{ width: number; hei
 }
 
 /** Decodes an image file into a raster that remembers its original bytes. */
-export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number): Promise<Raster> {
+export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number, options: HeicDecodeOptions = {}): Promise<Raster> {
   const kind = sniffImage(bytes);
   if (!kind) throw new ImageImportError('unsupported');
   let width = 0, height = 0;
@@ -124,7 +124,7 @@ export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number
       throw new ImageImportError('unreadable');
     }
   } else if (kind === 'image/heic') {
-    try { pixels = await decodeHeic(bytes); }
+    try { pixels = await decodeHeic(bytes, options); }
     catch (error) {
       if (error instanceof HeicError && error.code === 'unsupported') throw new ImageImportError('unsupported', error.message);
       throw new ImageImportError('unreadable');

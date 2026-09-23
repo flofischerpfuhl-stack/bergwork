@@ -26,6 +26,7 @@ import { encodePng } from '../io/png';
 import { sha256Hex } from '../io/sha256';
 import type { GpuCompositor } from '../render/gpuCompositor';
 import type { FileTargetHost, SaveTarget } from '../platform/browserHost';
+import type { ImageDecoderHost } from '../platform/imageDecoder';
 import { translator, type Locale } from './i18n';
 import { createUiStore, type Dialog, type UiStore } from './store';
 
@@ -72,7 +73,7 @@ export class EditorController {
   readonly locale: Locale;
   readonly theme: 'dark' | 'light';
   readonly ui: UiStore = createUiStore();
-  private readonly imports = new ImportQueue(decodeImageFile);
+  private readonly imports: ImportQueue;
   canvas: CanvasHost | null = null;
   /** The mounted canvas view (tools, overlay painters, touch toggles). */
   canvasView: CanvasView | null = null;
@@ -157,6 +158,7 @@ export class EditorController {
     this.locale = locale;
     this.theme = theme;
     this.t = translator(locale);
+    this.imports = new ImportQueue((bytes, remainingPixels) => this.decodeImage(bytes, remainingPixels));
     const services: SessionServices = {
       flatten: async (document) => this.flatten(document),
       bakeLiveMask: async (document, targetId) => this.bakeLiveMask(document, targetId),
@@ -167,6 +169,11 @@ export class EditorController {
           { label: this.t('Remove Links and Delete'), value: 'unlink' }])) as 'bake' | 'unlink' | 'cancel',
     };
     this.workspace = new ProjectWorkspace(services);
+  }
+
+  /** Uses optional capabilities carried by the mount host without widening contracts.ts. */
+  decodeImage(bytes: Uint8Array, remainingPixels: number) {
+    return decodeImageFile(bytes, remainingPixels, { host: this.host as HostAdapter & ImageDecoderHost });
   }
 
   get session(): EditorSession { return this.workspace.current.session; }
@@ -267,7 +274,7 @@ export class EditorController {
       transactionName: 'Paste',
       decoder: async (bytes, remainingPixels) => {
         usesInternalPixels = internal !== null && sha256Hex(bytes) === internalHash;
-        return usesInternalPixels ? internal!.raster : decodeImageFile(bytes, remainingPixels);
+        return usesInternalPixels ? internal!.raster : this.decodeImage(bytes, remainingPixels);
       },
       insert: (session, raster) => {
         const document = session.document;

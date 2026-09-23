@@ -33,7 +33,6 @@ import type { ToolContext, ToolHandler } from '../ui/canvas/tools';
 import { pixelClipboard } from '../core/clipboard';
 import { encodePng } from '../io/png';
 import { sha256Hex } from '../io/sha256';
-import { decodeImageFile } from '../io/imageImport';
 
 interface LassoDraft { points: Point[]; cursor: Point | null; mode: SelectionMode; kind: LassoKind; anchor: Point | null }
 
@@ -424,7 +423,7 @@ export function installSelection(controller: EditorController): void {
     if (!session.document || !session.canEditLayers) return;
     if (bytes && sha256Hex(bytes) !== lastWritten) {
       try {
-        const raster = await decodeImageFile(bytes, session.remainingPixelBudget());
+        const raster = await controller.decodeImage(bytes, session.remainingPixelBudget());
         pixelClipboard.clear();
         await paste(session, undefined, { readExternalRaster: () => raster });
       } catch (error) { controller.reportError('paste-failed', error); }
