@@ -20,6 +20,65 @@ closed except the software-rendering fallback, which is a documented deviation. 
 ported afterwards. They revealed one behavioural difference, which is fixed: switching tools discards an unfinished
 shape.
 
+## Phase 0 (PRODUCT-PLAN.md), 2026-09-24
+
+Status per feature-kit row: `artifacts/roadmap-status.md`. Measurement findings that change plan assumptions (M1–M7)
+are recorded in `research/compositor-port/PRODUCT-PLAN.md` under "Änderungen nach Messung".
+
+**B1 — saving and exporting large documents.** Save, Save As and export now choose the destination first and encode
+afterwards (`chooseSaveTarget` + `saveFileTo`). `showSaveFilePicker` is now called bound to `window`; unbound it threw
+"Illegal invocation". Evidence: `tests/e2e/large-save.spec.ts` (40 MP; checks that user activation is still valid
+when the picker opens, and that a valid ZIP and an 8000 px PNG are written).
+
+**B2 — texts.** Untranslated hints, tool names, tooltips and undo names are translated. Errors appear as a
+localized sentence plus technical details, never as a raw browser message. Generated layer names follow the UI
+language. Off Apple devices the UI says Ctrl/Strg and Alt instead of ⌘/Option, and German shortcut labels use
+Strg/Umschalt. Evidence: `tests/unit/ui-text.test.ts`; a DOM scan of the German UI shows no English leftovers.
+
+**E2 — own product name.**
+- "Fernwork Bildeditor" is used as window title, Tauri app name and in the About box. "Compositor" appears only
+  there, as a licence notice.
+- The ".comp copy" item is gone from the menu; reading `.comp` files still works.
+- Projects are saved as `.fwimg`. The format ID changes only with contracts v2 (M5).
+
+**A1 — Tauri 2 shell.**
+- The shell builds, starts and leaves no processes behind after quit. `.deb` and `.rpm` packages were built without
+  root.
+- WebView matrix (`artifacts/tauri-webview-matrix.md`) for Linux WebKitGTK:
+
+  | Measurement | Result | Pro budget |
+  |---|---|---|
+  | Pan p95 | 14 ms | ≤ 16 ms, met |
+  | Zoom p95 | 25 ms | ≤ 16 ms, missed |
+  | Brush p95 | 34 ms | ≤ 16 ms, missed |
+  | Opening a 46 MP JPEG | 2.4 s | ≤ 1.5 s, missed |
+
+- The misses are recorded as M1. An A6 spike in Phase 1 examines them.
+- Windows WebView2 is being measured on the Windows PC via the remote lane. macOS is not measured (E3).
+
+**A5 — CanvasKit.** All abort criteria pass, re-measured by the integrator:
+- identical raster output in Chromium, Firefox and WebKit (same SHA-256);
+- 3.0 MB gzip;
+- 500 characters in 9–11 ms p95.
+
+E4 is confirmed; the Lite host must serve `.wasm` and `.js` compressed.
+
+**A7 — PSD corpus.** 300 psd-tools files, pinned by commit and SHA-256; `third-party-psds/` and `issues/` are
+excluded.
+- Baseline, reproduced by the integrator: 276 files parsed, 43.3 % under the threshold.
+- The 13 existing blend modes pass against Photoshop's composite; 14 are missing (A8).
+- ag-psd reads no CMYK/Lab, no 32-bit and many descriptors not at all (M3).
+
+**Benchmarks (7.2).** 20 core tasks as E2E. 1 is green (object removal); 19 are red, each at its first missing
+capability (`artifacts/benchmarks.md`).
+
+**Verification (integration → master):**
+- unit tests: 355 passed;
+- Chromium: 53 passed, 1 skipped;
+- Firefox + WebKit: 95 passed, 1 skipped;
+- perf-gpu: passed;
+- runner gates including acceptance: green; `contracts.ts` unchanged.
+
 ## Tests (current master)
 
 | Suite | Result |
