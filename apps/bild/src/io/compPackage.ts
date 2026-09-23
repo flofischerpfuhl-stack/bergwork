@@ -21,7 +21,7 @@ import { ProjectError } from './project';
 import { sha256Hex } from './sha256';
 
 export const COMP_FORMAT = 'com.compositor.project';
-export const COMP_CURRENT_VERSION = 6;
+export const COMP_CURRENT_VERSION = 7;
 
 const MANIFEST_LIMIT = 4 * 1024 * 1024;
 const ASSET_LIMIT = 512 * 1024 * 1024;
@@ -82,12 +82,12 @@ interface ParsedLayer extends CompLayerRecord {
   maskSourceID?: string;
 }
 
-function invalid(detail: string): never {
-  throw new ProjectError('invalid', `This is not a valid Compositor project, or its metadata is damaged (${detail}).`);
+function invalid(_detail: string): never {
+  throw new ProjectError('invalid', 'This is not a valid Compositor project, or its metadata is damaged.');
 }
 
-function tooLarge(message = 'This project exceeds the supported canvas, layer, file-size, or 100-megapixel image limit.'): never {
-  throw new ProjectError('too-large', message);
+function tooLarge(): never {
+  throw new ProjectError('too-large', 'This project exceeds the supported canvas, layer, file-size, or 100-megapixel image limit.');
 }
 
 function missingImage(): never {
@@ -185,7 +185,7 @@ function parseManifest(bytes: Uint8Array): { manifest: CompManifest; layers: Par
   if (raw.format !== COMP_FORMAT) invalid('unknown format');
   const version = raw.version as number;
   if (version < 1 || version > COMP_CURRENT_VERSION) {
-    throw new ProjectError('version', `This project uses format version ${version}. This editor supports versions 1–${COMP_CURRENT_VERSION}.`);
+    throw new ProjectError('version', `This project uses format version ${version}. This app supports versions 1–${COMP_CURRENT_VERSION}.`);
   }
   if (raw.colorSpace !== 'sRGB') invalid('colour space');
   if (!Number.isInteger(raw.width) || !Number.isInteger(raw.height)
@@ -234,9 +234,8 @@ function parseManifest(bytes: Uint8Array): { manifest: CompManifest; layers: Par
     if (maskPlacement && maskFile === undefined) invalid('mask placement without mask');
     if (version < 5 && maskSourceID !== undefined) invalid('live mask before version 5');
 
-    // The task's v6 compatibility surface includes these later additive records.
     const adjustment = entry.adjustment == null ? undefined : parseAdjustment(entry.adjustment);
-    if (adjustment && (version < 6 || isGroup || imageFile !== undefined)) invalid('adjustment layer');
+    if (adjustment && (version < 7 || isGroup || imageFile !== undefined)) invalid('adjustment layer');
     const shape = entry.shape == null ? undefined : parseShape(entry.shape);
 
     return {
@@ -399,7 +398,7 @@ export async function readCompZip(bytes: Uint8Array): Promise<LoadedCompPackage>
     });
   } catch (error) {
     if (error instanceof ProjectError) throw error;
-    throw new ProjectError('invalid', 'This file is not a readable Compositor project archive.');
+    invalid('unreadable ZIP archive');
   }
   return readCompPackage(new Map(Object.entries(entries)));
 }
@@ -428,10 +427,14 @@ function assertWritableDocument(document: CanvasDocument, activeLayerId: string 
     if (layer.adjustment && (layer.isGroup || layer.raster)) invalid('adjustment layer');
     if (layer.adjustment) parseAdjustment(layer.adjustment);
     if (layer.shape) parseShape(layer.shape);
-    if (layer.raster) imagePixels += layer.raster.width * layer.raster.height;
+    if (layer.raster) {
+      if (layer.raster.width > MAX_SIDE || layer.raster.height > MAX_SIDE) tooLarge();
+      imagePixels += layer.raster.width * layer.raster.height;
+    }
     if (layer.mask) {
       if (layer.mask.raster.channels !== 1) invalid('mask is not grayscale');
       if (layer.mask.placement && !isValidTransform(layer.mask.placement)) invalid('mask placement');
+      if (layer.mask.raster.width > MAX_SIDE || layer.mask.raster.height > MAX_SIDE) tooLarge();
       maskPixels += layer.mask.raster.width * layer.mask.raster.height;
     }
   }
@@ -487,7 +490,7 @@ function sortedJsonValue(value: unknown): unknown {
   return value;
 }
 
-/** Writes a ZIP containing `<name>.comp/` in current upstream format version 6. */
+/** Writes a ZIP containing `<name>.comp/` in current upstream format version 7. */
 export async function writeCompZip(document: CanvasDocument, options: CompWriteOptions = {}): Promise<Uint8Array> {
   const activeLayerId = options.activeLayerId ?? null;
   assertWritableDocument(document, activeLayerId);

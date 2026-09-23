@@ -114,7 +114,10 @@ describe('upstream .comp packages (ProjectStore.swift)', () => {
 
   it('ProjectTests.unsupportedCorruptAndUnsafeMetadataAreRejected', async () => {
     const good = manifest(6, [record(BASE)]);
-    await expect(readCompPackage(packageMap({ ...good, version: 42 }))).rejects.toMatchObject({ code: 'version' });
+    await expect(readCompPackage(packageMap({ ...good, version: 8 }))).rejects.toMatchObject({
+      code: 'version',
+      message: 'This project uses format version 8. This app supports versions 1–7.',
+    });
     await expect(readCompPackage(new Map([['manifest.json', new TextEncoder().encode('not json')]])))
       .rejects.toMatchObject({ code: 'invalid' });
     await expect(readCompPackage(packageMap(manifest(6, [record(BASE, { imageFile: '../../outside.png' })]))))
@@ -140,7 +143,7 @@ describe('upstream .comp packages (ProjectStore.swift)', () => {
     expect(live.layers[0]!.id).toBe(CLIPPED);
   });
 
-  it('reads hand-written v1–v5 manifests with documented migration defaults and features', async () => {
+  it('reads hand-written v1–v6 manifests with documented migration defaults and features', async () => {
     const image = encodePng(pixels(), 2, 2, 4);
     const mask = encodePng(new Uint8Array([0, 64, 128, 255]), 2, 2, 1);
 
@@ -171,9 +174,15 @@ describe('upstream .comp packages (ProjectStore.swift)', () => {
       record(BASE), record(CLIPPED, { maskSourceID: BASE }),
     ])));
     expect(v5.document.layers[1]!.maskSourceId).toBe(BASE);
+
+    const v6 = await readCompPackage(packageMap(manifest(6, [record(GROUP, {
+      isGroup: true, maskFile: `${GROUP}.mask.png`, maskEnabled: true,
+    })]), { [`${GROUP}.mask.png`]: mask }));
+    expect(v6.document.layers[0]!.isGroup).toBe(true);
+    expect(v6.document.layers[0]!.mask?.raster.toPixels()).toEqual(new Uint8Array([0, 64, 128, 255]));
   });
 
-  it('version 6 round-trips groups, masks, placement/link state, clipping, adjustments, and shapes', async () => {
+  it('version 7 round-trips groups, masks, placement/link state, clipping, adjustments, and shapes', async () => {
     const groupMask = Raster.fromPixels(2, 1, 1, new Uint8Array([255, 10]));
     const placed = makeTransform({ x: 17, y: 19 }, { width: 40, height: 20 }, { rotation: -12, sampling: 'Smooth' });
     const group = blankLayer(GROUP, {
@@ -204,6 +213,25 @@ describe('upstream .comp packages (ProjectStore.swift)', () => {
     expect(loaded.document.layers[3]!.adjustment?.kind).toBe('Exposure');
     expect(loaded.document.layers[4]!.shape).toEqual(shape.shape);
     expect(loaded.document.layers[4]!.raster?.toPixels()).toEqual(pixels());
+  });
+
+  it('reads and round-trips a v7 adjustment layer, while v6 rejects it', async () => {
+    const adjustment = defaultAdjustment('Exposure', { red: 0, green: 0, blue: 0 }, { red: 1, green: 1, blue: 1 });
+    const adjustmentRecord = record(ADJUSTMENT, { name: 'Exposure', adjustment });
+    const loaded = await readCompPackage(packageMap(manifest(7, [adjustmentRecord])));
+    expect(loaded.document.layers[0]).toMatchObject({
+      id: ADJUSTMENT, raster: null, adjustment,
+    });
+
+    const archive = await writeCompZip(loaded.document, { name: 'Adjustment', activeLayerId: ADJUSTMENT });
+    const stored = JSON.parse(new TextDecoder().decode(unzipSync(archive)['Adjustment.comp/manifest.json'])) as CompManifest;
+    expect(stored.version).toBe(7);
+    expect(stored.layers[0]!.adjustment).toEqual(adjustment);
+    expect((await readCompZip(archive)).document.layers[0]!.adjustment).toEqual(adjustment);
+
+    await expect(readCompPackage(packageMap(manifest(6, [adjustmentRecord])))).rejects.toMatchObject({
+      code: 'invalid', message: 'This is not a valid Compositor project, or its metadata is damaged.',
+    });
   });
 
   it('rejects version-gated fields, invalid graphs, bad masks, and noncanonical asset names', async () => {
