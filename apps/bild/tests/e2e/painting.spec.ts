@@ -124,3 +124,39 @@ test('clone stamp copies from an Option-click source', async ({ page }) => {
   const c = pixels.data.slice((70 * 100 + 70) * 4, (70 * 100 + 70) * 4 + 4);
   expect(c[0]).toBeLessThan(60);
 });
+
+test('right-drag resizes the brush from its size at the press; with Shift it changes the hardness', async ({ page }) => {
+  await mountForTest(page);
+  await page.getByTestId('widthInput').fill('400');
+  await page.getByTestId('heightInput').fill('400');
+  await page.getByTestId('createCanvas').click();
+  await page.getByTestId('tool-brush').click();
+  const settings = () => page.evaluate(async () => {
+    const brush: any = await import(/* @vite-ignore */ '/src/core/brush/index.ts');
+    const s = brush.getBrushSettings((window as any).__editorForTests.session);
+    return { diameter: s.diameter, hardness: s.hardness };
+  });
+  const before = await settings();
+  const ppp = await page.evaluate(() => (window as any).__editorForTests.session.viewport.pointsPerPixel);
+  const pane = (await page.getByTestId('canvas-pane').boundingBox())!;
+  const start = { x: pane.x + pane.width / 2, y: pane.y + pane.height / 2 };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(start.x + 30, start.y, { steps: 4 });
+  await page.mouse.up({ button: 'right' });
+  const after = await settings();
+  expect(after.diameter).toBe(Math.round(before.diameter + 2 * 30 / ppp));
+  expect(after.hardness).toBe(before.hardness);
+  // Nothing was painted.
+  expect((await manifest(page)).layers[0].assetId ?? null).toBeNull();
+
+  await page.mouse.move(start.x, start.y);
+  await page.keyboard.down('Shift');
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(start.x - 50, start.y, { steps: 4 });
+  await page.mouse.up({ button: 'right' });
+  await page.keyboard.up('Shift');
+  const shifted = await settings();
+  expect(shifted.diameter).toBe(after.diameter);
+  expect(shifted.hardness).toBeCloseTo(Math.max(0, after.hardness - 50 / 200), 5);
+});

@@ -23,6 +23,11 @@ import type { GpuCompositor } from '../render/gpuCompositor';
 import { translator, type Locale } from './i18n';
 import { createUiStore, type Dialog, type UiStore } from './store';
 
+export interface SecondaryDrag {
+  move(dx: number, modifiers: { shift: boolean }): void;
+  end(): void;
+}
+
 export interface CanvasHost {
   readonly gpu: GpuCompositor | null;
   redraw(): void;
@@ -59,6 +64,8 @@ export class EditorController {
   panels: (() => ReactNode)[] = [];
   /** Canvas input taken over by an open panel (eyedroppers), ahead of the current tool. */
   canvasInterceptors: ((session: EditorSession) => ToolHandler | null)[] = [];
+  /** Secondary-button (right) drags on the canvas, e.g. resizing the brush; the first that accepts the press owns it. */
+  secondaryDrags: ((session: EditorSession) => SecondaryDrag | null)[] = [];
   /** Number keys for tools with their own opacity (brushes, gradient); true when handled. */
   opacityKey: ((digit: number) => boolean) | null = null;
   clipboardImageSize: (() => Promise<{ width: number; height: number } | null>) | null = null;

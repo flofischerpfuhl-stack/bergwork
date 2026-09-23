@@ -11,7 +11,7 @@ import type { CanvasDocument } from '../../core/document';
 import { rectUnion, type Point } from '../../core/geometry';
 import type { EditorSession } from '../../core/session';
 import { GpuCompositor, type CompositeHooks, type ViewSpec } from '../../render/gpuCompositor';
-import type { CanvasHost, EditorController } from '../controller';
+import type { CanvasHost, EditorController, SecondaryDrag } from '../controller';
 import { defaultTools, HandTool, overlayGeometry, type Modifiers, type ToolContext, type ToolHandler, type ToolRegistry } from './tools';
 
 export type OverlayPainter = (context: CanvasRenderingContext2D, session: EditorSession, time: number) => void;
@@ -46,6 +46,7 @@ export class CanvasView implements CanvasHost {
   private lastPoint: Point | null = null;
   /** The mouse/pen position over the canvas (view points), for brush cursors; null when away or touching. */
   hoverPoint: Point | null = null;
+  private secondary: { drag: SecondaryDrag; pointerId: number; start: Point } | null = null;
   private animating = false;
   private destroyed = false;
   failure: string | null = null;
@@ -329,6 +330,15 @@ export class CanvasView implements CanvasHost {
       this.element.setPointerCapture(event.pointerId);
       return;
     }
+    if (event.button === 2 && event.pointerType !== 'touch' && !this.active && !this.controller.ui.getState().spaceHeld) {
+      const drag = this.controller.secondaryDrags.map((start) => start(this.session)).find((d) => d) ?? null;
+      if (drag) {
+        this.secondary = { drag, pointerId: event.pointerId, start: point };
+        this.element.setPointerCapture(event.pointerId);
+        event.preventDefault();
+      }
+      return;
+    }
     if (event.button !== 0) return;
     const handler = this.toolHandler();
     if (!handler) return;
@@ -343,6 +353,13 @@ export class CanvasView implements CanvasHost {
     const point = this.localPoint(event);
     this.lastPoint = point;
     this.lastModifiers = modifiersOf(event);
+    if (this.secondary?.pointerId === event.pointerId) {
+      // The brush circle stays where the press was while its edge follows the pointer.
+      this.hoverPoint = this.secondary.start;
+      this.secondary.drag.move(point.x - this.secondary.start.x, { shift: event.shiftKey });
+      this.redrawOverlayOnly();
+      return;
+    }
     const previousHover = this.hoverPoint;
     this.hoverPoint = event.pointerType === 'touch' ? null : point;
     if (previousHover || this.hoverPoint) this.redrawOverlayOnly();
@@ -379,6 +396,13 @@ export class CanvasView implements CanvasHost {
   private onPointerUp = (event: PointerEvent): void => {
     const point = this.localPoint(event);
     this.pointers.delete(event.pointerId);
+    if (this.secondary?.pointerId === event.pointerId) {
+      this.secondary.drag.end();
+      this.secondary = null;
+      this.hoverPoint = point;
+      this.redrawOverlayOnly();
+      return;
+    }
     if (this.pinch) {
       if (this.pointers.size < 2) this.pinch = null;
       return;
@@ -395,6 +419,7 @@ export class CanvasView implements CanvasHost {
 
   private onPointerCancel = (event: PointerEvent): void => {
     this.pointers.delete(event.pointerId);
+    if (this.secondary?.pointerId === event.pointerId) { this.secondary.drag.end(); this.secondary = null; }
     if (this.pointers.size < 2) this.pinch = null;
     if (this.active && this.active.pointerId === event.pointerId) {
       this.active.handler.cancel(this.active.session);

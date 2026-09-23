@@ -695,6 +695,24 @@ export function installPainting(controller: EditorController): void {
     if (event.code === 'BracketLeft' || event.code === 'BracketRight') { step(event.code === 'BracketRight', event.shiftKey); return true; }
     return false;
   });
+  // Right-drag with a brush tool (EditorCanvas.rightMouseDown/Dragged): left/right resize the brush from its size at the
+  // press, each point moved widening the radius by a point on screen; with Shift the full hardness range spans 200 points.
+  controller.secondaryDrags.push((session) => {
+    if (!isBrushLike(session.tool) || isBrushStrokeActive(session) || !session.document) return null;
+    const smear = session.tool === 'blur';
+    const start = smear ? { ...paintState(session).smear } : { ...getBrushSettings(session) };
+    return {
+      move: (dx, { shift }) => {
+        const perPixel = Math.max(0.0001, session.viewport.pointsPerPixel);
+        const diameter = shift ? start.diameter : Math.min(2000, Math.max(1, Math.round(start.diameter + 2 * dx / perPixel)));
+        const hardness = shift ? Math.min(1, Math.max(0, start.hardness + dx / 200)) : start.hardness;
+        if (smear) paintState(session).smear = { ...paintState(session).smear, diameter, hardness };
+        else setBrushSettings(session, { ...getBrushSettings(session), diameter, hardness });
+        session.notify('ui');
+      },
+      end: () => {},
+    };
+  });
   controller.openColorPicker = (background) => {
     const session = controller.session;
     if (!session.canEditPalette) return;
