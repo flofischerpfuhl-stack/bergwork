@@ -23,6 +23,8 @@ import { uuid } from './ids';
 import { Raster } from './raster';
 import { CanvasViewport } from './viewport';
 import { defaultAdjustment } from './adjustments';
+import { redrawShapeLayer } from './shape';
+import { cancelGradient, hasPendingGradient, refreshGradientPalette, resolveGradient } from './gradient';
 
 export type Tool =
   | 'move' | 'marquee' | 'lasso' | 'wand' | 'crop' | 'brush' | 'spotHealing' | 'cloneStamp' | 'blur'
@@ -153,13 +155,13 @@ export class EditorSession {
 
   get canEditLayers(): boolean {
     return this.document !== null && !this.isProjectBusy && !this.isImporting && this.renamingLayerId === null
-      && this.transformEdit === null && this.cropRect === null && this.adjustmentEditingId === null;
+      && this.transformEdit === null && this.cropRect === null && this.adjustmentEditingId === null && !hasPendingGradient(this);
   }
   get canUseHistory(): boolean {
     return !this.isProjectBusy && !this.isImporting && this.renamingLayerId === null && this.transformEdit === null
       && !this.history.isInTransaction;
   }
-  get canUndo(): boolean { return this.canUseHistory && this.history.canUndo; }
+  get canUndo(): boolean { return this.canUseHistory && (this.history.canUndo || hasPendingGradient(this)); }
   get canRedo(): boolean { return this.canUseHistory && this.history.canRedo; }
   get canEditAppearance(): boolean { return this.canEditLayers && this.selectedLayerIds.size === 1 && this.activeLayer?.isGroup === false; }
   get canEditMask(): boolean { return this.canEditLayers && this.selectedLayerIds.size === 1 && this.activeLayer !== null; }
@@ -206,6 +208,8 @@ export class EditorSession {
   // MARK: Undo
 
   undo(): boolean {
+    // Gradient.swift / EditorSession.swift: the first Undo only discards the pending preview.
+    if (this.canUseHistory && cancelGradient(this)) return true;
     if (!this.canUndo) return false;
     const snapshot = this.history.undo();
     if (!snapshot) return false;
@@ -422,7 +426,7 @@ export class EditorSession {
   }
 
   selectLayer(id: string | null): void {
-    if (id !== this.activeLayerId) this.commitTransform();
+    if (id !== this.activeLayerId) { resolveGradient(this); this.commitTransform(); }
     this.setActiveLayer(id);
     this.notify('ui');
   }
@@ -430,7 +434,7 @@ export class EditorSession {
   selectLayers(ids: Iterable<string>, primary: string | null): void {
     const valid = new Set([...ids].filter((id) => this.document?.layers.some((l) => l.id === id)));
     const same = valid.size === this.selectedLayerIds.size && [...valid].every((id) => this.selectedLayerIds.has(id));
-    if (!same) this.commitTransform();
+    if (!same) { resolveGradient(this); this.commitTransform(); }
     const active = primary && valid.has(primary) ? primary : valid.values().next().value ?? null;
     if (active !== this.activeLayerId) this.isMaskSelected = false;
     this.activeLayerId = active;
@@ -441,6 +445,7 @@ export class EditorSession {
   /** Clicking a thumbnail targets the layer's image or its mask (selectLayerTarget). */
   selectLayerTarget(id: string, mask: boolean): void {
     if (this.isProjectBusy || this.isImporting) return;
+    resolveGradient(this);
     this.selectLayer(id);
     this.isMaskSelected = mask && !!this.activeLayer?.mask;
     this.notify('ui');
@@ -732,18 +737,21 @@ export class EditorSession {
       this.maskPaintWhite = background ? !white : white;
     } else if (background) this.backgroundColor = color;
     else this.foregroundColor = color;
+    refreshGradientPalette(this);
     this.notify('ui');
   }
   swapPaletteColors(): void {
     if (!this.canEditPalette) return;
     if (this.isMaskSelected) this.maskPaintWhite = !this.maskPaintWhite;
     else [this.foregroundColor, this.backgroundColor] = [this.backgroundColor, this.foregroundColor];
+    refreshGradientPalette(this);
     this.notify('ui');
   }
   resetPaletteColors(): void {
     if (!this.canEditPalette) return;
     if (this.isMaskSelected) this.maskPaintWhite = false;
     else { this.foregroundColor = BLACK; this.backgroundColor = WHITE; }
+    refreshGradientPalette(this);
     this.notify('ui');
   }
 
@@ -751,7 +759,7 @@ export class EditorSession {
 
   selectTool(value: Tool): void {
     if (this.isProjectBusy) return;
-    if (this.tool !== value) { this.commitTransform(); this.cancelCrop(); }
+    if (this.tool !== value) { resolveGradient(this); this.commitTransform(); this.cancelCrop(); }
     this.tool = value;
     if (value === 'crop' && !this.cropRect && this.document) {
       this.cropRatioChoice = 'Free';
@@ -937,7 +945,7 @@ export class EditorSession {
           for (const [id, original] of edit.group!.originals) {
             const moved = following(original, edit.group!.box, edit.draft);
             if (!isValidTransform(moved)) continue;
-            this.updateLayer(id, (l) => ({ ...l, transform: moved,
+            this.updateLayer(id, (l) => redrawShapeLayer({ ...l, transform: moved,
               mask: l.mask ? { ...l.mask, placement: maskPlacementMoving(l.mask, original, moved) } : null }));
           }
         });
@@ -945,7 +953,7 @@ export class EditorSession {
       }
       const layer = this.layer(edit.layerId);
       if (!isValidTransform(edit.draft) || !layer) return;
-      this.edit('Transform Layer', () => this.updateLayer(edit.layerId, (l) => ({ ...l, transform: edit.draft,
+      this.edit('Transform Layer', () => this.updateLayer(edit.layerId, (l) => redrawShapeLayer({ ...l, transform: edit.draft,
         mask: l.mask ? { ...l.mask, placement: maskPlacementMoving(l.mask, l.transform, edit.draft) } : null })));
     } finally {
       if (this.transformDuplicate) { this.transformDuplicate = null; this.endEdit(); }
@@ -1041,7 +1049,7 @@ export class EditorSession {
       this.isProjectBusy = false;
       this.edit('Distort', () => {
         for (const [id, result] of results) {
-          this.updateLayer(id, (l) => ({ ...l, raster: result.raster, transform: result.transform,
+          this.updateLayer(id, (l) => ({ ...l, raster: result.raster, shape: null, transform: result.transform,
             mask: l.mask ? { ...l.mask, placement: l.mask.linked && !l.mask.placement ? null : l.mask.placement ?? l.transform } : null }));
         }
       });
@@ -1328,7 +1336,7 @@ export class EditorSession {
   /** Replaces a layer's pixels (and optionally transform) as one undo step. */
   replaceLayerPixels(id: string, raster: Raster, name: string, transform?: LayerTransform): void {
     if (!this.layer(id)) return;
-    this.edit(name, () => this.updateLayer(id, (l) => ({ ...l, raster, transform: transform ?? l.transform })));
+    this.edit(name, () => this.updateLayer(id, (l) => ({ ...l, raster, shape: null, transform: transform ?? l.transform })));
   }
   replaceMaskPixels(id: string, raster: Raster, name: string): void {
     if (!this.layer(id)?.mask) return;
