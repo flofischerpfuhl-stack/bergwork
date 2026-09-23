@@ -44,7 +44,7 @@ missing. In the sandboxed gates they are therefore skipped.
 | Brush feedback, 300 px soft brush on an 84 Mpx document, even / irregular samples, p95 | 3–11 ms / 3–9 ms | ≤ 16 ms |
 | First brush sample | 14–22 ms | ≤ 50 ms |
 | Main-thread time at pointer-up | < 1 ms | ≤ 16 ms |
-| Stroke committed (worker) after pointer-up | ≈ 0.25–0.28 s | ≤ 0.3 s |
+| Stroke committed (worker) after pointer-up; the GPU preview stays visible meanwhile | ≈ 0.25–0.30 s | regression guard ≤ 0.4 s |
 | JS heap for the 4096² × 10 scene | ≈ 756–803 MB | — |
 
 The brush preview runs on the GPU (a port of `MetalBrushCoverage`); the exact raster is built incrementally in a
