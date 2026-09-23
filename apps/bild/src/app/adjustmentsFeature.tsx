@@ -700,7 +700,12 @@ function AdjustmentPanel({ controller }: { controller: EditorController }) {
   const onLayer = !!layerEdit;
   return (
     <FloatingPanel name={title} title={onLayer ? `${title} · ${t('Adjustment Layer')}` : title} onClose={() => cancel(session)} closeLabel={t('Cancel')}>
-      <fieldset className={styles.panelBody} disabled={busy}>
+      <fieldset className={styles.panelBody} disabled={busy} onKeyDown={(event) => {
+        // ⌥P toggles Preview (LevelsSheet); Escape cancels and Return confirms, as the panel's buttons do.
+        if (event.altKey && event.code === 'KeyP') { setPreview(session, edit, !edit.preview); event.preventDefault(); }
+        else if (event.key === 'Escape') { cancel(session); event.preventDefault(); }
+        else if (event.key === 'Enter' && !(event.target as Element).closest('input, select, textarea')) { void commit(controller, session); event.preventDefault(); }
+      }}>
         {body}
         <Check label={t('Preview')} checked={edit.preview} testId="adjustment-preview" onChange={(preview) => setPreview(session, edit, preview)} />
         {edit.kind === 'filter' && edit.error ? <p className={styles.panelError}>{edit.error}</p> : null}
@@ -745,6 +750,7 @@ export function installAdjustments(controller: EditorController): void {
     if (!currentEdit(session)) return false;
     if (event.key === 'Escape') { cancel(session); return true; }
     if (event.key === 'Enter') { void commit(controller, session); return true; }
+    if (event.altKey && event.code === 'KeyP') { const edit = currentEdit(session); if (edit) setPreview(session, edit, !edit.preview); return true; }
     return false;
   });
 }

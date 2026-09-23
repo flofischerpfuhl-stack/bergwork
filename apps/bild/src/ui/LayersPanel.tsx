@@ -268,7 +268,16 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
     const carried = new Set(ids.flatMap((x) => [...descendantIds(document!.layers, x)]));
     const state: DragState = { ids: ids.filter((x) => !carried.has(x)), startY: event.clientY, moved: false, target: null, copy: event.altKey };
     const list = listRef.current!;
+    // Near the list's top or bottom edge the list scrolls while dragging (NativeLayerList autoscroll).
+    let lastY = event.clientY;
+    const scroller = setInterval(() => {
+      if (!state.moved) return;
+      const rect = list.getBoundingClientRect(), edge = 28;
+      const speed = lastY < rect.top + edge ? -Math.min(20, rect.top + edge - lastY) : lastY > rect.bottom - edge ? Math.min(20, lastY - (rect.bottom - edge)) : 0;
+      if (speed) list.scrollTop += speed;
+    }, 16);
     const move = (e: PointerEvent) => {
+      lastY = e.clientY;
       if (!state.moved && Math.abs(e.clientY - state.startY) < 4) return;
       state.moved = true;
       state.copy = e.altKey;
@@ -288,6 +297,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
       setDrag({ ...state });
     };
     const up = (e: PointerEvent) => {
+      clearInterval(scroller);
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       setDrag(null);
