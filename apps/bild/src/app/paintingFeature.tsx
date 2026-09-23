@@ -6,11 +6,12 @@
  * the key handling in NativeLayerList/EditorCanvas ([ ] size, Shift-[ ] hardness, 1–0 opacity).
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import styles from '../ui/editor.module.css';
-import type { EditorController } from '../ui/controller';
+import type { ColorPickRequest, EditorController } from '../ui/controller';
 import { useSession } from '../ui/hooks';
 import { NumberField } from '../ui/ContextBar';
+import { FloatingPanel } from './panels';
 import type { EditorSession, PaletteColor, Tool } from '../core/session';
 import type { Point } from '../core/geometry';
 import {
@@ -533,21 +534,59 @@ function fromHsb(h: { hue: number; saturation: number; brightness: number }): Pa
 }
 const hex = (c: PaletteColor) => [c.red, c.green, c.blue].map((v) => Math.round(v * 255).toString(16).padStart(2, '0')).join('').toUpperCase();
 
-function ColorPickerDialog({ controller, background, close }: { controller: EditorController; background: boolean; close: () => void }) {
+/** 3- or 6-digit hex, with or without # (ColorPickerTests.hexParsesFullShorthandAndRejectsInvalid). */
+export function parseHex(text: string): PaletteColor | null {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(text.trim());
+  if (!m) return null;
+  const digits = m[1]!.length === 3 ? m[1]!.split('').map((d) => d + d).join('') : m[1]!;
+  return { red: parseInt(digits.slice(0, 2), 16) / 255, green: parseInt(digits.slice(2, 4), 16) / 255, blue: parseInt(digits.slice(4, 6), 16) / 255 };
+}
+
+/** RGB → HSB that keeps the previous hue for grays and hue/saturation for black (graysAndBlackKeepPreviousHueAndSaturation). */
+export function hsbKeeping(color: PaletteColor, previous: { hue: number; saturation: number; brightness: number }) {
+  const next = toHsb(color);
+  if (next.brightness === 0) return { hue: previous.hue, saturation: previous.saturation, brightness: 0 };
+  if (next.saturation === 0) return { ...next, hue: previous.hue };
+  return next;
+}
+
+/** The open picker, per controller; the panel renders while one is set. */
+const pickRequests = new WeakMap<EditorController, { request: ColorPickRequest; listeners: Set<() => void> }>();
+function pickerStore(controller: EditorController) {
+  let store = pickRequests.get(controller);
+  if (!store) { store = { request: null as unknown as ColorPickRequest, listeners: new Set() }; pickRequests.set(controller, store); }
+  return store;
+}
+function setPickRequest(controller: EditorController, request: ColorPickRequest | null): void {
+  const store = pickerStore(controller);
+  store.request = request as ColorPickRequest;
+  for (const listener of store.listeners) listener();
+}
+
+function ColorPickerPanel({ controller }: { controller: EditorController }) {
+  const store = pickerStore(controller);
+  const request = useSyncExternalStore((l) => { store.listeners.add(l); return () => store.listeners.delete(l); }, () => store.request);
+  return request ? <ColorPicker key={request.title + JSON.stringify(request.initial)} controller={controller} request={request} /> : null;
+}
+
+function ColorPicker({ controller, request }: { controller: EditorController; request: ColorPickRequest }) {
   const t = controller.t;
-  const session = controller.session;
-  const original = useRef(session.paletteColor(background)).current;
+  const original = request.initial;
   const [hsb, setHsb] = useState(() => toHsb(original));
   const [hexDraft, setHexDraft] = useState(hex(original));
   const color = fromHsb(hsb);
-  useEffect(() => { setHexDraft(hex(color)); }, [hsb.hue, hsb.saturation, hsb.brightness]); // eslint-disable-line react-hooks/exhaustive-deps
-  // While open, the Eyedropper samples into the picker ("Click the canvas to sample").
-  useEffect(() => {
-    controller.colorPickerTarget = { get: () => fromHsb(hsbRef.current), set: (c) => setHsb(toHsb(c)) };
-    return () => { controller.colorPickerTarget = null; };
-  }, [controller]);
   const hsbRef = useRef(hsb);
   hsbRef.current = hsb;
+  useEffect(() => { setHexDraft(hex(color)); request.preview?.(color); }, [hsb.hue, hsb.saturation, hsb.brightness]); // eslint-disable-line react-hooks/exhaustive-deps
+  // While open, clicks on the canvas sample the composite into the picker (ColorPickerSheet: "Click the canvas to sample").
+  useEffect(() => {
+    controller.colorPickerTarget = { get: () => fromHsb(hsbRef.current), set: (c) => setHsb((h) => hsbKeeping(c, h)) };
+    return () => { controller.colorPickerTarget = null; };
+  }, [controller]);
+  const finish = (commit: boolean) => {
+    setPickRequest(controller, null);
+    if (commit) request.commit(fromHsb(hsbRef.current)); else request.cancel?.();
+  };
   const drag = (element: HTMLElement, event: React.PointerEvent, apply: (x: number, y: number) => void) => {
     const rect = element.getBoundingClientRect();
     const handle = (e: PointerEvent | React.PointerEvent) => apply(Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)), Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height)));
@@ -561,55 +600,66 @@ function ColorPickerDialog({ controller, background, close }: { controller: Edit
   const pure = fromHsb({ hue: hsb.hue, saturation: 1, brightness: 1 });
   const channel = (label: string, key: keyof PaletteColor) => (
     <NumberField label={label} width={52} value={Math.round(color[key] * 255)}
-      onChange={(v) => setHsb(toHsb({ ...color, [key]: Math.min(255, Math.max(0, Math.round(v))) / 255 }))} />
+      onChange={(v) => setHsb((h) => hsbKeeping({ ...color, [key]: Math.min(255, Math.max(0, Math.round(v))) / 255 }, h))} />
   );
   return (
-    <div className={styles.dialog} style={{ width: 'min(560px, 100%)' }} role="dialog" aria-modal aria-label={background ? 'Color Picker (Background Color)' : 'Color Picker (Foreground Color)'}>
-      <h2 className={styles.dialogTitle}>{background ? 'Color Picker (Background Color)' : 'Color Picker (Foreground Color)'}</h2>
-      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+    <FloatingPanel name="colorPicker" title={request.title} onClose={() => finish(false)} closeLabel={t('Cancel')} testId="color-picker">
+      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}
+        onKeyDown={(event) => { if (event.key === 'Escape') finish(false); else if (event.key === 'Enter' && !(event.target as Element).closest('input')) finish(true); }}>
         <div role="slider" aria-label="Saturation and brightness" aria-valuetext={`${Math.round(hsb.saturation * 100)}%, ${Math.round(hsb.brightness * 100)}%`} tabIndex={0}
-          style={{ position: 'relative', width: 256, maxWidth: '100%', height: 256, flex: 'none', touchAction: 'none', border: '1px solid rgba(0,0,0,.6)',
+          style={{ position: 'relative', width: 220, maxWidth: '100%', height: 220, flex: 'none', touchAction: 'none', border: '1px solid rgba(0,0,0,.6)',
             background: `linear-gradient(to bottom, transparent, #000), linear-gradient(to right, #fff, ${css(pure)})` }}
           onPointerDown={(e) => drag(e.currentTarget, e, (x, y) => setHsb((h) => ({ ...h, saturation: x, brightness: 1 - y })))}>
           <span style={{ position: 'absolute', left: `calc(${hsb.saturation * 100}% - 6px)`, top: `calc(${(1 - hsb.brightness) * 100}% - 6px)`, width: 12, height: 12,
             borderRadius: '50%', border: '1.5px solid #fff', boxShadow: '0 0 0 0.75px #000', pointerEvents: 'none' }} />
         </div>
         <div role="slider" aria-label="Hue" aria-valuenow={Math.round(hsb.hue)} aria-valuemin={0} aria-valuemax={360} tabIndex={0}
-          style={{ position: 'relative', width: 34, height: 256, flex: 'none', touchAction: 'none' }}
+          style={{ position: 'relative', width: 30, height: 220, flex: 'none', touchAction: 'none' }}
           onPointerDown={(e) => drag(e.currentTarget, e, (_x, y) => setHsb((h) => ({ ...h, hue: (1 - y) * 360 })))}>
-          <span style={{ position: 'absolute', left: 7, width: 20, top: 0, bottom: 0, border: '1px solid rgba(0,0,0,.6)',
+          <span style={{ position: 'absolute', left: 6, width: 18, top: 0, bottom: 0, border: '1px solid rgba(0,0,0,.6)',
             background: 'linear-gradient(to bottom, #f00, #f0f, #00f, #0ff, #0f0, #ff0, #f00)' }} />
           <span style={{ position: 'absolute', left: 0, right: 0, top: `calc(${(1 - hsb.hue / 360) * 100}% - 1px)`, height: 2, background: 'var(--cmp-text)' }} />
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 180 }}>
-          <div style={{ display: 'flex', gap: 12 }}>
-            <div aria-label="New and current color" style={{ width: 64, height: 64, borderRadius: 5, overflow: 'hidden', border: '1px solid rgba(0,0,0,.6)' }}>
-              <div style={{ height: '50%', background: css(color) }} />
-              <div style={{ height: '50%', background: css(original) }} />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <button type="button" className={`${styles.pill} ${styles.pillPrimary}`} onClick={() => { session.setPaletteColor(color, background); close(); }}>{t('OK')}</button>
-              <button type="button" className={styles.pill} onClick={close}>{t('Cancel')}</button>
-            </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 120 }}>
+          <div aria-label="New and current color" style={{ width: 64, height: 56, borderRadius: 5, overflow: 'hidden', border: '1px solid rgba(0,0,0,.6)' }}>
+            <div style={{ height: '50%', background: css(color) }} />
+            <div style={{ height: '50%', background: css(original) }} />
           </div>
           {channel('R', 'red')}
           {channel('G', 'green')}
           {channel('B', 'blue')}
           <label className={styles.field}><span>#</span>
-            <input value={hexDraft} aria-label="Hex color" style={{ width: 84, fontFamily: 'ui-monospace, monospace' }}
+            <input value={hexDraft} aria-label="Hex color" data-testid="color-hex" style={{ width: 76, fontFamily: 'ui-monospace, monospace' }}
               onChange={(e) => setHexDraft(e.target.value)}
               onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
               onBlur={() => {
-                const m = /^#?([0-9a-f]{6})$/i.exec(hexDraft.trim());
-                if (m) setHsb(toHsb({ red: parseInt(m[1]!.slice(0, 2), 16) / 255, green: parseInt(m[1]!.slice(2, 4), 16) / 255, blue: parseInt(m[1]!.slice(4, 6), 16) / 255 }));
-                else setHexDraft(hex(color));
+                const parsed = parseHex(hexDraft);
+                if (parsed) setHsb((h) => hsbKeeping(parsed, h)); else setHexDraft(hex(color));
               }} />
           </label>
-          <span className={styles.secondary}>{t('Click the canvas to sample')}</span>
         </div>
       </div>
-    </div>
+      <span className={styles.panelNote}>{t('Click the canvas to sample')}</span>
+      <div className={styles.dialogButtons}>
+        <button type="button" className={styles.pill} onClick={() => finish(false)} data-testid="color-cancel">{t('Cancel')}</button>
+        <button type="button" className={`${styles.pill} ${styles.pillPrimary}`} onClick={() => finish(true)} data-testid="color-ok">{t('OK')}</button>
+      </div>
+    </FloatingPanel>
   );
+}
+
+/** Canvas clicks while the picker is open: sample the composite, whatever the tool (ColorPickerSheet sampling). */
+class PickerSampler implements ToolHandler {
+  constructor(private readonly controller: EditorController) {}
+  private sample(c: ToolContext): void {
+    const color = sampleComposite(this.controller, c.pixel);
+    if (color) this.controller.colorPickerTarget?.set(color);
+  }
+  down(c: ToolContext): void { this.sample(c); }
+  move(c: ToolContext): void { this.sample(c); }
+  up(): void {}
+  cancel(): void {}
+  hover(): string { return 'crosshair'; }
 }
 
 // MARK: Installation
@@ -725,8 +775,14 @@ export function installPainting(controller: EditorController): void {
       });
       return;
     }
-    controller.showDialog({ kind: 'custom', name: background ? 'colorPickerBackground' : 'colorPickerForeground' });
+    controller.pickColor?.({
+      title: background ? t('Color Picker (Background Color)') : t('Color Picker (Foreground Color)'),
+      initial: session.paletteColor(background),
+      commit: (color) => session.setPaletteColor(color, background),
+    });
   };
-  controller.dialogs.colorPickerForeground = (close) => <ColorPickerDialog controller={controller} background={false} close={close} />;
-  controller.dialogs.colorPickerBackground = (close) => <ColorPickerDialog controller={controller} background close={close} />;
+  controller.pickColor = (request) => { controller.colorPickerTarget = null; setPickRequest(controller, request); };
+  controller.panels.push(() => <ColorPickerPanel controller={controller} />);
+  const sampler = new PickerSampler(controller);
+  controller.canvasInterceptors.push(() => (pickerStore(controller).request ? sampler : null));
 }

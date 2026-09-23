@@ -15,6 +15,7 @@ import { useSession } from '../ui/hooks';
 import { NumberField } from '../ui/ContextBar';
 import type { ToolContext, ToolHandler } from '../ui/canvas/tools';
 import { editBlockers, type EditorSession } from '../core/session';
+import { FloatingPanel } from './panels';
 import { hierarchyEntries, type CanvasDocument, type LayerAdjustment } from '../core/document';
 import { apply, invert, makeTransform, pixelToDocument, type Point } from '../core/geometry';
 import { Raster } from '../core/raster';
@@ -587,7 +588,6 @@ function ExposureControls({ controller, settings, onChange }: { controller: Edit
 }
 
 const hex = (c: RGB) => `#${[c.red, c.green, c.blue].map((v) => Math.round(clamp(v, 0, 1) * 255).toString(16).padStart(2, '0')).join('')}`;
-const fromHex = (value: string): RGB => ({ red: parseInt(value.slice(1, 3), 16) / 255, green: parseInt(value.slice(3, 5), 16) / 255, blue: parseInt(value.slice(5, 7), 16) / 255 });
 
 function GradientMapControls({ controller, settings, onChange }: { controller: EditorController; settings: GradientMapSettings; onChange: (s: GradientMapSettings) => void }) {
   const t = controller.t;
@@ -596,13 +596,26 @@ function GradientMapControls({ controller, settings, onChange }: { controller: E
     <>
       <div className={styles.gradientRamp} style={{ background: `linear-gradient(to right, ${hex(dark)}, ${hex(light)})` }} />
       <div className={styles.panelRow}>
-        {(['shadows', 'highlights'] as const).map((end) => (
-          <label key={end} className={styles.check}>
-            <input type="color" className={styles.colorWell} value={hex(settings[end])} aria-label={t(end === 'shadows' ? 'Shadows color' : 'Highlights color')}
-              onChange={(event) => onChange({ ...settings, [end]: fromHex(event.target.value) })} />
-            {t(end === 'shadows' ? 'Shadows' : 'Highlights')}
-          </label>
-        ))}
+        {(['shadows', 'highlights'] as const).map((end) => {
+          const label = t(end === 'shadows' ? 'Shadows' : 'Highlights');
+          // The ends open the app's own color picker, previewing live (ImageAdjustmentTests.gradientMapColorsUseTheAppColorPicker).
+          const pick = () => {
+            const before = settings;
+            controller.pickColor?.({
+              title: `${t('Gradient Map')} · ${label}`, initial: settings[end],
+              preview: (color) => onChange({ ...before, [end]: color }),
+              commit: (color) => onChange({ ...before, [end]: color }),
+              cancel: () => onChange(before),
+            });
+          };
+          return (
+            <span key={end} className={styles.check}>
+              <button type="button" className={styles.colorWell} style={{ background: hex(settings[end]) }} onClick={pick}
+                aria-label={t(end === 'shadows' ? 'Shadows color' : 'Highlights color')} data-testid={`gradient-${end}`} />
+              {label}
+            </span>
+          );
+        })}
         <Check label={t('Reverse')} checked={settings.reversed} onChange={(reversed) => onChange({ ...settings, reversed })} />
       </div>
     </>
@@ -655,47 +668,9 @@ function FilterControls({ controller, session, edit }: { controller: EditorContr
 
 // MARK: The panel
 
+export { FloatingPanel };
+
 const TITLES: Record<string, string> = { levels: 'Levels', hue: 'Hue/Saturation', curves: 'Curves', exposure: 'Exposure', gradientMap: 'Gradient Map', grain: 'Grain' };
-
-/** A movable, non-modal panel (FloatingPanel.swift): it never dims the editor and reopens where it was left. */
-const panelPositions = new Map<string, { x: number; y: number }>();
-
-export function FloatingPanel({ name, title, children, onClose, closeLabel, testId = 'adjustment-panel' }: {
-  name: string; title: string; children: ReactNode; onClose: () => void; closeLabel: string; testId?: string;
-}) {
-  const [position, setPosition] = useState(() => panelPositions.get(name) ?? null);
-  const ref = useRef<HTMLDivElement>(null);
-  const drag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if ((event.target as Element).closest('button')) return;
-    const panel = ref.current, parent = panel?.offsetParent as HTMLElement | null;
-    if (!panel || !parent) return;
-    const start = { x: event.clientX, y: event.clientY, left: panel.offsetLeft, top: panel.offsetTop };
-    const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
-    const move = (e: PointerEvent) => {
-      const next = {
-        x: clamp(start.left + e.clientX - start.x, 0, Math.max(0, parent.clientWidth - panel.offsetWidth)),
-        y: clamp(start.top + e.clientY - start.y, 0, Math.max(0, parent.clientHeight - 40)),
-      };
-      panelPositions.set(name, next);
-      setPosition(next);
-    };
-    const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); };
-    handle.addEventListener('pointermove', move);
-    handle.addEventListener('pointerup', up);
-  };
-  return (
-    <div ref={ref} className={styles.floatingPanel} role="dialog" aria-label={title} data-testid={testId}
-      style={position ? { left: position.x, top: position.y, right: 'auto' } : undefined}
-      onKeyDown={(event) => event.stopPropagation()}>
-      <div className={styles.panelHeader} onPointerDown={drag}>
-        <h2 className={styles.dialogTitle}>{title}</h2>
-        <button type="button" className={styles.iconButton} aria-label={closeLabel} onClick={onClose}>×</button>
-      </div>
-      {children}
-    </div>
-  );
-}
 
 function AdjustmentPanel({ controller }: { controller: EditorController }) {
   const session = useSession(controller.session);

@@ -161,3 +161,34 @@ test('right-drag resizes the brush from its size at the press; with Shift it cha
   expect(shifted.diameter).toBe(after.diameter);
   expect(shifted.hardness).toBeCloseTo(Math.max(0, after.hardness - 50 / 200), 5);
 });
+
+test('the color picker is a panel: canvas clicks sample into it, only OK commits, shorthand hex works', async ({ page }) => {
+  await mountForTest(page);
+  await page.getByTestId('widthInput').fill('100');
+  await page.getByTestId('heightInput').fill('100');
+  await page.getByTestId('createCanvas').click();
+  await importThroughMenu(page, [{ name: 'blue.png', mimeType: 'image/png', buffer: solidPng(100, 100, [20, 40, 220, 255]) }]);
+  const palette = () => page.evaluate(() => {
+    const c = (window as any).__editorForTests.session.paletteColor(false);
+    return [c.red, c.green, c.blue].map((v: number) => Math.round(v * 255));
+  });
+  const before = await palette();
+  await page.getByRole('button', { name: 'Foreground color' }).first().click();
+  const picker = page.getByTestId('color-picker');
+  await expect(picker).toBeVisible();
+  // No modal backdrop: the canvas takes the click and samples the composite.
+  const at = await canvasMapper(page, 100);
+  const p = at(50, 50);
+  await page.mouse.click(p.x, p.y);
+  await expect(page.getByTestId('color-hex')).toHaveValue('1428DC');
+  expect(await palette()).toEqual(before);
+  await page.getByTestId('color-cancel').click();
+  expect(await palette()).toEqual(before);
+  // Shorthand hex, committed with OK.
+  await page.getByRole('button', { name: 'Foreground color' }).first().click();
+  await page.getByTestId('color-hex').fill('#f80');
+  await page.getByTestId('color-hex').press('Enter');
+  await page.getByTestId('color-ok').click();
+  await expect(picker).toHaveCount(0);
+  expect(await palette()).toEqual([255, 136, 0]);
+});

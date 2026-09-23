@@ -23,6 +23,15 @@ import type { GpuCompositor } from '../render/gpuCompositor';
 import { translator, type Locale } from './i18n';
 import { createUiStore, type Dialog, type UiStore } from './store';
 
+export interface ColorPickRequest {
+  readonly title: string;
+  readonly initial: { red: number; green: number; blue: number };
+  /** Live preview while the picker is open (optional). */
+  preview?(color: { red: number; green: number; blue: number }): void;
+  commit(color: { red: number; green: number; blue: number }): void;
+  cancel?(): void;
+}
+
 export interface SecondaryDrag {
   move(dx: number, modifiers: { shift: boolean }): void;
   end(): void;
@@ -54,6 +63,8 @@ export class EditorController {
   statusHints: Partial<Record<Tool, (session: EditorSession) => string>> = {};
   toolIcon: ((tool: Tool) => IconName | null) | null = null;
   openColorPicker: ((background: boolean) => void) | null = null;
+  /** Opens the app's color picker panel for any color (palette, Gradient Map ends…), provided by the painting module. */
+  pickColor: ((request: ColorPickRequest) => void) | null = null;
   /** Called once the canvas view exists, so modules can register tools and overlay painters. */
   canvasSetups: ((view: CanvasView) => void)[] = [];
   /** Extra dialogs by kind (Canvas Size, Image Size, adjustment panels…). */
