@@ -615,6 +615,8 @@ function ColorPickerDialog({ controller, background, close }: { controller: Edit
 // MARK: Installation
 
 export function installPainting(controller: EditorController): void {
+  const previousIcon = controller.toolIcon;
+  controller.toolIcon = (tool) => (tool === 'brush' && getBrushSettings(controller.session).mode === 'erase' ? 'eraser' : previousIcon?.(tool) ?? null);
   for (const tool of ['brush', 'cloneStamp', 'blur', 'gradient', 'shape', 'eyedropper'] as const) controller.availableTools.add(tool);
   controller.canvasSetups.push((view) => {
     const brush = new BrushTool();

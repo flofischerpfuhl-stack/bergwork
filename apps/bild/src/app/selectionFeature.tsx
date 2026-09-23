@@ -325,6 +325,14 @@ export function mirrorSelection(document: CanvasDocument, horizontally: boolean)
 
 export function installSelection(controller: EditorController): void {
   controller.mirrorSelection = mirrorSelection;
+  // The rail icon follows the tool's mode (ContentView.toolRail).
+  const previousIcon = controller.toolIcon;
+  controller.toolIcon = (tool) => {
+    const state = selectionState(controller.session);
+    if (tool === 'marquee' && state.marqueeKind === 'Ellipse') return 'marqueeEllipse';
+    if (tool === 'lasso' && state.lassoKind === 'Polygonal') return 'polygonalLasso';
+    return previousIcon?.(tool) ?? null;
+  };
   controller.availableTools.add('marquee');
   controller.availableTools.add('lasso');
   controller.canvasSetups.push((view) => {

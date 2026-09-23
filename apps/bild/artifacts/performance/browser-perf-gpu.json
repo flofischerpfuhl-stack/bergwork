@@ -1,0 +1,46 @@
+{
+  "project": "perf-gpu",
+  "date": "2026-09-23T15:25:51.264Z",
+  "targets": {
+    "panZoomP95Ms": 33,
+    "brushFeedbackMs": 50
+  },
+  "renderer": "ANGLE (Intel, Mesa Intel(R) HD Graphics 630 (KBL GT2), OpenGL 4.6)",
+  "viewport": {
+    "width": 1440,
+    "height": 900,
+    "dpr": 1
+  },
+  "floatTargets": true,
+  "panMs": {
+    "p95": 5.099999999627471,
+    "median": 2.099999999627471,
+    "max": 6.199999999254942
+  },
+  "zoomMs": {
+    "p95": 4.800000000745058,
+    "median": 2.199999999254942,
+    "max": 8.899999999441206
+  },
+  "panAt200PercentMs": {
+    "p95": 2.3999999994412065,
+    "median": 1.5,
+    "max": 3.400000000372529
+  },
+  "brushFeedbackMs": {
+    "p95": 51.200000000186265,
+    "median": 38.5,
+    "max": 62.700000000186265
+  },
+  "brushEngineMs": {
+    "p95": 50.799999999813735,
+    "median": 38.200000000186265
+  },
+  "brushRenderMs": {
+    "p95": 0.5,
+    "median": 0.2999999998137355
+  },
+  "jsHeapUsedMB": 756,
+  "estimatedGpuTextureMB": 853,
+  "notes": "Pan/zoom scene built directly (167 Mpx exceeds the upstream 100 Mpx import budget); brush measured with 5 layers (84 Mpx)."
+}

@@ -14,7 +14,12 @@ export default defineConfig({
   outputDir: 'artifacts/e2e-results',
   use: { baseURL: `http://127.0.0.1:${port}`, headless: true, trace: 'retain-on-failure' },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /performance\.spec/ },
+    // Real-GPU measurements (ANGLE on the host OpenGL driver); run with --project perf-gpu.
+    {
+      name: 'perf-gpu', testMatch: /performance\.spec/,
+      use: { ...devices['Desktop Chrome'], launchOptions: { args: ['--use-angle=gl', '--enable-gpu', '--ignore-gpu-blocklist'] } },
+    },
   ],
   webServer: {
     command: `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${port} --strictPort`,

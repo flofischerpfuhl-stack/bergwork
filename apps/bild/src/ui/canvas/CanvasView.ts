@@ -128,6 +128,15 @@ export class CanvasView implements CanvasHost {
     this.redraw();
   }
 
+  /** Draws immediately and waits for the GPU (measurements and tests). Returns milliseconds. */
+  renderNow(): number {
+    if (this.frame) { cancelAnimationFrame(this.frame); this.frame = 0; }
+    const start = performance.now();
+    this.draw(start);
+    this.gpu?.gl.finish();
+    return performance.now() - start;
+  }
+
   redraw(): void {
     if (this.frame || this.destroyed) return;
     this.frame = requestAnimationFrame((time) => { this.frame = 0; this.draw(time); });

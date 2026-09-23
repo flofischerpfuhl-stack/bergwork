@@ -19,6 +19,8 @@ export const mountEditor: MountEditor = async (root, options) => {
   root.append(container);
   const reactRoot = createRoot(container);
   flushSync(() => reactRoot.render(<EditorRoot controller={controller} />));
+  // Measurement and test hook; harmless in production (a property on the host window only in dev).
+  if (import.meta.env.DEV) (window as unknown as { __editorForTests?: EditorController }).__editorForTests = controller;
   let destroyed = false;
   const handle: EditorHandle = controller.handle(() => {
     if (destroyed) return;

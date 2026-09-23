@@ -353,3 +353,4 @@
 .contextMenu { position: fixed; z-index: 55; }
 
 .visuallyHidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.sheet .layersHeader { padding-right: 60px; }
