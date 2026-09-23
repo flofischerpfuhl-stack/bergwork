@@ -87,6 +87,9 @@ export class SpotHealingStroke {
   }
 
   /** BrushStroke's fixed 45% dark wash over the accumulated healing coverage. */
+  /** Placement of `currentRaster()` (the stroke's working grid). */
+  currentTransform(): LayerTransform { return this.coverage.currentTransform(); }
+
   currentRaster(): Raster {
     const coverage = this.coverage.currentRaster();
     let preview = this.liveBase;
@@ -243,6 +246,12 @@ export function addSpotHealingPoints(session: EditorSession, points: Point | rea
   active.changed ||= update.dirty.length > 0;
   session.notify('ui');
   return update;
+}
+
+/** The stroke in progress for the canvas preview (darkened coverage over the layer). */
+export function currentSpotHealingPreview(session: EditorSession): { layerId: string; mask: false; raster: Raster; transform: LayerTransform } | null {
+  const active = sessionState(session).active;
+  return active ? { layerId: active.layerId, mask: false, raster: active.stroke.currentRaster(), transform: active.stroke.currentTransform() } : null;
 }
 
 export function currentSpotHealingRaster(session: EditorSession): Raster | null {
