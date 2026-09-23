@@ -22,3 +22,12 @@ export interface DocumentSelection {
 
 export type SelectionMode = 'New' | 'Add' | 'Subtract';
 export type LassoKind = 'Freehand' | 'Polygonal' | 'Rectangle' | 'Ellipse';
+
+/** True for the explicit-empty selection (as opposed to `null`, which means no selection). */
+export function selectionIsEmpty(selection: DocumentSelection): boolean {
+  for (const tile of selection.mask.tiles) {
+    if (!tile) continue;
+    for (let i = 0; i < tile.length; i++) if (tile[i] !== 0) return false;
+  }
+  return true;
+}
