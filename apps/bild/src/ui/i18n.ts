@@ -83,6 +83,16 @@ const de: Record<string, string> = {
   'No tool selected · Press a tool\'s key to pick one · Space to pan': 'Kein Werkzeug · Taste eines Werkzeugs drücken · Leertaste verschiebt',
   'Unsaved changes will be lost.': 'Ungesicherte Änderungen gehen verloren.', 'Close without saving?': 'Ohne Sichern schließen?',
   'Save a copy?': 'Kopie sichern?', 'Don’t Save': 'Nicht sichern', 'Layer Properties': 'Ebeneneigenschaften', 'More': 'Mehr',
+  // Remove Background
+  'Remove Background': 'Hintergrund entfernen',
+  'Loading the subject model…': 'Motivmodell wird geladen …',
+  'Finding the subject…': 'Motiv wird gesucht …',
+  'Refining edges…': 'Kanten werden verfeinert …',
+  'Hide the background behind a layer mask, keeping the foreground subjects. The pixels stay, so the background can be painted back at any time.': 'Blendet den Hintergrund über eine Ebenenmaske aus und behält die Motive im Vordergrund. Die Pixel bleiben erhalten, der Hintergrund lässt sich jederzeit zurückmalen.',
+  'Basic': 'Einfach',
+  'Advanced': 'Erweitert',
+  'Refine': 'Verfeinern',
+  'Shift Edge': 'Kante verschieben',
   // Adjustments and filters
   'Add Noise': 'Rauschen hinzufügen',
   'Add a color to the range': 'Farbe zum Bereich hinzufügen',

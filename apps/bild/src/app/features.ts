@@ -9,6 +9,7 @@ import { installSelection } from './selectionFeature';
 import { installPainting } from './paintingFeature';
 import { installRetouch } from './retouchFeature';
 import { installAdjustments } from './adjustmentsFeature';
+import { installSubject } from './subjectFeature';
 
 export function installFeatures(controller: EditorController): void {
   installCanvasOps(controller);
@@ -16,4 +17,5 @@ export function installFeatures(controller: EditorController): void {
   installPainting(controller);
   installRetouch(controller);
   installAdjustments(controller);
+  installSubject(controller);
 }

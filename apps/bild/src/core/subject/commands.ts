@@ -157,6 +157,7 @@ async function applyResult(session: EditorSession, context: Context): Promise<Re
       timing: result?.timing ?? context.state.timing });
     session.endEdit();
     context.notify?.(context.state);
+    session.notify('document');
   } catch (error) {
     if (context.edit === edit && edit.generation === generation && !isAbort(error)) fail(session, context, error);
   }

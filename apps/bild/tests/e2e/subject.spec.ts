@@ -1,9 +1,11 @@
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 
 const flowerPath = '/home/oem/Dokumente/003_Projekte/17_fernwork/research/compositor-port/references/official-site/example2.png';
 
 test('real U²-Netp separates the flower from its background in Chromium', async ({ page }) => {
+  test.skip(!existsSync(flowerPath), 'reference photo from the upstream site is not available on this machine');
   test.setTimeout(120_000);
   const encoded = (await readFile(flowerPath)).toString('base64');
   await page.goto('/');
@@ -44,4 +46,31 @@ test('real U²-Netp separates the flower from its background in Chromium', async
   expect(result.timing.inferenceMs).toBeGreaterThan(0);
   expect(result.timing.estimatedBytes).toBeGreaterThan(4_574_861);
   console.log('Subject model metrics', result);
+});
+
+test('Filter > Remove Background previews a mask and applies it as one undo step', async ({ page }) => {
+  test.skip(!existsSync(flowerPath), 'reference photo from the upstream site is not available on this machine');
+  test.setTimeout(120_000);
+  const { importThroughMenu, manifest, mountForTest } = await import('./helpers');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mountForTest(page);
+  await page.getByTestId('createCanvas').click();
+  await importThroughMenu(page, [{ name: 'flower.png', mimeType: 'image/png', buffer: await readFile(flowerPath) }]);
+  await expect.poll(async () => (await manifest(page)).layers.length).toBe(2);
+  await page.getByTestId('menu-Filter').click();
+  await page.getByRole('menuitem', { name: 'Remove Background…' }).click();
+  const panel = page.getByTestId('remove-background-panel');
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId('remove-background-ok')).toBeEnabled({ timeout: 90_000 });
+  // The preview is a mask override; nothing is committed yet.
+  expect((await manifest(page)).layers[1].mask).toBeFalsy();
+  await page.getByRole('radio', { name: 'Advanced' }).click();
+  await expect(page.getByTestId('remove-background-ok')).toBeEnabled({ timeout: 60_000 });
+  await page.getByTestId('remove-background-ok').click();
+  await expect(panel).toHaveCount(0);
+  const layer = (await manifest(page)).layers[1];
+  expect(layer.mask).toBeTruthy();
+  expect(layer.mask.enabled).toBe(true);
+  await page.getByTestId('compositor-editor').press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  await expect.poll(async () => (await manifest(page)).layers[1].mask ?? null).toBeNull();
 });

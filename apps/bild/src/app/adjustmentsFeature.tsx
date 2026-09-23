@@ -237,7 +237,7 @@ function samplingActive(session: EditorSession): boolean {
 const clamp = (value: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, value));
 
 /** A slider plus an exact field (FilterSheet.control). Logarithmic sliders give small values most of the travel. */
-function SliderRow({ label, value, min, max, decimals = 0, logarithmic = false, suffix, onChange, testId }: {
+export function SliderRow({ label, value, min, max, decimals = 0, logarithmic = false, suffix, onChange, testId }: {
   label: string; value: number; min: number; max: number; decimals?: number; logarithmic?: boolean; suffix?: string;
   onChange: (value: number) => void; testId?: string;
 }) {
@@ -256,7 +256,7 @@ function SliderRow({ label, value, min, max, decimals = 0, logarithmic = false, 
   );
 }
 
-function Check({ label, checked, onChange, testId }: { label: string; checked: boolean; onChange: (value: boolean) => void; testId?: string }) {
+export function Check({ label, checked, onChange, testId }: { label: string; checked: boolean; onChange: (value: boolean) => void; testId?: string }) {
   return (
     <label className={styles.check}>
       <input type="checkbox" checked={checked} data-testid={testId} onChange={(event) => onChange(event.target.checked)} />{label}
@@ -264,7 +264,7 @@ function Check({ label, checked, onChange, testId }: { label: string; checked: b
   );
 }
 
-function Segmented<T extends string>({ label, options, value, onChange, labelOf }: {
+export function Segmented<T extends string>({ label, options, value, onChange, labelOf }: {
   label: string; options: readonly T[]; value: T; onChange: (value: T) => void; labelOf?: (value: T) => string;
 }) {
   return (
@@ -660,7 +660,9 @@ const TITLES: Record<string, string> = { levels: 'Levels', hue: 'Hue/Saturation'
 /** A movable, non-modal panel (FloatingPanel.swift): it never dims the editor and reopens where it was left. */
 const panelPositions = new Map<string, { x: number; y: number }>();
 
-function FloatingPanel({ name, title, children, onClose, closeLabel }: { name: string; title: string; children: ReactNode; onClose: () => void; closeLabel: string }) {
+export function FloatingPanel({ name, title, children, onClose, closeLabel, testId = 'adjustment-panel' }: {
+  name: string; title: string; children: ReactNode; onClose: () => void; closeLabel: string; testId?: string;
+}) {
   const [position, setPosition] = useState(() => panelPositions.get(name) ?? null);
   const ref = useRef<HTMLDivElement>(null);
   const drag = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -683,7 +685,7 @@ function FloatingPanel({ name, title, children, onClose, closeLabel }: { name: s
     handle.addEventListener('pointerup', up);
   };
   return (
-    <div ref={ref} className={styles.floatingPanel} role="dialog" aria-label={title} data-testid="adjustment-panel"
+    <div ref={ref} className={styles.floatingPanel} role="dialog" aria-label={title} data-testid={testId}
       style={position ? { left: position.x, top: position.y, right: 'auto' } : undefined}
       onKeyDown={(event) => event.stopPropagation()}>
       <div className={styles.panelHeader} onPointerDown={drag}>
