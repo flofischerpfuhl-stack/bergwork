@@ -84,14 +84,15 @@ Browser limits that remain:
    consider a lower document budget than upstream's 100 Mpx.
 3. **Self-host the best-quality subject model.** It is 200 MB, and the default URL points at Hugging Face. On devices
    without WebGPU it is slow (≈ 36 s) and memory-hungry (≈ 3 GB).
-5. **HEIC in the Tauri app.** Implement `decodeImage` with OS codecs (sketch in `docs/tauri-heic.md`).
 4. **Bundle size.** The main chunk is about 1 MB minified (≈ 310 KB gzip). The U²-Netp model (4.6 MB) and the ONNX
    runtime load only on first use of Remove Background.
+5. **HEIC in the Tauri app.** Implement `decodeImage` with OS codecs (sketch in `docs/tauri-heic.md`).
 
 ## Licences
 
 - **Upstream:** MIT (`LICENSE.upstream`).
 - **Copied upstream C kernels:** MIT; see `THIRD_PARTY_NOTICES.md`.
+- **Little CMS:** MIT. **BiRefNet_lite:** MIT (downloaded at runtime). **libheif/libde265:** LGPL-3.0, optional and off by default.
 - **U²-Netp weights:** Apache-2.0 (`MODEL_LICENSES.md`, pinned SHA-256).
 - **ONNX Runtime Web:** MIT.
 - **Runtime npm dependencies:** MIT or ISC (react, pixi.js, zustand, immer, idb, fflate).
