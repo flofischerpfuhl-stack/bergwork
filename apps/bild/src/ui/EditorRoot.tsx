@@ -67,6 +67,20 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
     return () => element.removeEventListener('focusout', focusOut);
   }, []);
 
+  // Engine errors left on a session (brush, retouch, transform, bake: EditorSession+Brush.brushError) become alerts.
+  useEffect(() => {
+    const check = () => {
+      const session = controller.session;
+      const message = session.errorMessage;
+      if (!message || controller.ui.getState().dialog) return;
+      session.errorMessage = null;
+      controller.reportError('editor-error', new Error(message));
+    };
+    // The workspace relays every tab's session changes.
+    check();
+    return controller.workspace.subscribe(check);
+  }, [controller]);
+
   // Closing the page with unsaved tabs asks first (ProjectWorkspace.confirmQuit). Browsers only allow their own
   // generic prompt here; per-tab Save/Don't Save questions are asked by the host shell or when closing a tab.
   useEffect(() => {
