@@ -18,7 +18,7 @@
       ],
       "exit_code": 0,
       "log": "/workspace/artifacts/gate-logs/claude.gate-1.log",
-      "sha256": "aaddf16933a8ab70c1d1fdea4e18e2247894434a67290e0a3c4b03841cf339e3"
+      "sha256": "f54a5f2b8137c8c23f03322aa345e633a7595d36586d419c7152a38b50847ced"
     },
     {
       "command": [
@@ -28,7 +28,7 @@
       ],
       "exit_code": 0,
       "log": "/workspace/artifacts/gate-logs/claude.gate-2.log",
-      "sha256": "5b578c9da5afd26bbdbcd5f083321f40d6a72c5ba14a451de9f51a3228a60ea4"
+      "sha256": "033628dfe9aca4e12cd4ccdb9b2dc27161cc53ee95573883548c6b3a58336b61"
     },
     {
       "command": [
@@ -38,7 +38,7 @@
       ],
       "exit_code": 0,
       "log": "/workspace/artifacts/gate-logs/claude.gate-3.log",
-      "sha256": "61528a42fe766102351488448913abae90f82f6f67628079d4543eb011b80261"
+      "sha256": "af08db29cfb645c413acaa2d020ff0f938c7fc9205253d54d875c97a7cee73b3"
     },
     {
       "command": [
@@ -48,7 +48,7 @@
       ],
       "exit_code": 0,
       "log": "/workspace/artifacts/gate-logs/claude.gate-4.log",
-      "sha256": "13462ff91535ccb2d244bf7bf5812a8b143aef3e5f3d7ca9260798e1e79a4edd"
+      "sha256": "2c82791c3356c8b23e4d9f58bab8dc472bab99aed5895db82bb2b6e50b03c48f"
     },
     {
       "command": [
@@ -60,7 +60,7 @@
       ],
       "exit_code": 0,
       "log": "/workspace/artifacts/gate-logs/claude.gate-5.log",
-      "sha256": "25144cbad41f3d07ec04a46ec946ed134c506aac76633af04ab7f96f5d3aa5c3"
+      "sha256": "8a9d635956a0076fbeb0e7d96a78ed450927ba8e613b4df8037c928c58c83dd3"
     }
   ],
   "contract_unchanged": true,
