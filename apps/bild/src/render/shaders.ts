@@ -100,11 +100,11 @@ vec4 bilinear(sampler2D t, vec2 p, ivec2 size) {
   vec4 d = fetchClamped(t, i + ivec2(1, 1), size);
   return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
-/** sampling: 0 nearest, 1 exact bilinear, 2 hardware trilinear (minified). */
-vec4 sampleGrid(sampler2D t, vec2 p, ivec2 size, int sampling) {
+/** sampling: 0 nearest, 1 exact bilinear, 2 one sharp mip level followed by hardware bilinear. */
+vec4 sampleGrid(sampler2D t, vec2 p, ivec2 size, int sampling, int mipLevel) {
   if (sampling == 0) return fetchClamped(t, ivec2(floor(p)), size);
   if (sampling == 1) return bilinear(t, p, size);
-  return texture(t, p / vec2(size));
+  return textureLod(t, p / vec2(size), float(mipLevel));
 }
 /** Coverage of the unit-grid rectangle [0,size] around p, antialiased over edgeScale target px per grid px. */
 float edgeCoverage(vec2 p, vec2 size, vec2 edgeScale) {
@@ -127,7 +127,13 @@ uniform mat3 uViewToDoc;
 uniform mat3 uDocToLayer;
 uniform vec2 uLayerSize;
 uniform vec2 uLayerEdge;
+uniform vec2 uChunkOrigin;
+uniform vec2 uChunkSize;
+uniform vec2 uTextureSize;
+uniform float uApron;
 uniform int uSampling;
+uniform int uMipLevel;
+uniform int uRestrictChunk;
 uniform float uOpacity;
 uniform int uMode;
 uniform int uHasMask;
@@ -147,19 +153,62 @@ void main() {
   if (uSnap == 1) doc = floor(doc) + 0.5;
   vec2 lp = (uDocToLayer * vec3(doc, 1.0)).xy;
   float cover = edgeCoverage(lp, uLayerSize, uLayerEdge);
-  if (cover <= 0.0) { finalColor = dst; return; }
-  vec4 src = sampleGrid(uLayer, lp, ivec2(uLayerSize), uSampling) * (cover * uOpacity);
+  vec2 chunkMax = uChunkOrigin + uChunkSize;
+  if (cover <= 0.0 || lp.x < uChunkOrigin.x || lp.y < uChunkOrigin.y || lp.x >= chunkMax.x || lp.y >= chunkMax.y) {
+    if (uRestrictChunk == 1) discard;
+    finalColor = dst;
+    return;
+  }
+  vec2 chunkPixel = lp - uChunkOrigin + vec2(uApron);
+  vec4 src = sampleGrid(uLayer, chunkPixel, ivec2(uTextureSize), uSampling, uMipLevel) * (cover * uOpacity);
   if (uHasMask == 1) {
-    vec2 mp = (uDocToMask * vec3(doc, 1.0)).xy;
-    float m = sampleGrid(uMask, mp, ivec2(uMaskSize), uMaskSampling).r;
-    if (uMaskPlaced == 1) {
-      float inside = edgeCoverage(mp, uMaskSize, uMaskEdge);
-      m = mix(uMaskBackground, m, inside);
-    }
-    src *= m;
+    src *= texelFetch(uMask, ivec2(vPos), 0).r;
   }
   if (uHasClip == 1) src *= texelFetch(uClip, ivec2(vPos), 0).r;
   finalColor = uReplace == 1 ? src : composite(uMode, dst, src);
+}
+`;
+
+/**
+ * Builds view-space mask coverage from sparse chunks. The base pass supplies the placed-mask
+ * background outside the mask and zero inside; chunk passes replace their disjoint interiors.
+ */
+export const MASK_FRAGMENT = /* glsl */ `${COMMON}
+in vec2 vPos;
+out vec4 finalColor;
+uniform sampler2D uPrevious;
+uniform sampler2D uMask;
+uniform int uHasPrevious;
+uniform int uDrawChunk;
+uniform mat3 uViewToDoc;
+uniform mat3 uDocToMask;
+uniform vec2 uMaskSize;
+uniform vec2 uMaskEdge;
+uniform vec2 uChunkOrigin;
+uniform vec2 uChunkSize;
+uniform vec2 uTextureSize;
+uniform float uApron;
+uniform float uBackground;
+uniform int uSampling;
+uniform int uMipLevel;
+uniform int uSnap;
+
+void main() {
+  float previous = uHasPrevious == 1 ? texelFetch(uPrevious, ivec2(vPos), 0).r : 1.0;
+  vec2 doc = (uViewToDoc * vec3(vPos, 1.0)).xy;
+  if (uSnap == 1) doc = floor(doc) + 0.5;
+  vec2 mp = (uDocToMask * vec3(doc, 1.0)).xy;
+  float inside = edgeCoverage(mp, uMaskSize, uMaskEdge);
+  float value = uBackground * (1.0 - inside);
+  if (uDrawChunk == 1) {
+    vec2 chunkMax = uChunkOrigin + uChunkSize;
+    if (mp.x < uChunkOrigin.x || mp.y < uChunkOrigin.y || mp.x >= chunkMax.x || mp.y >= chunkMax.y) discard;
+    vec2 chunkPixel = mp - uChunkOrigin + vec2(uApron);
+    float sampled = sampleGrid(uMask, chunkPixel, ivec2(uTextureSize), uSampling, uMipLevel).r;
+    value = mix(uBackground, sampled, inside);
+  }
+  float c = previous * value;
+  finalColor = vec4(c, c, c, 1.0);
 }
 `;
 
