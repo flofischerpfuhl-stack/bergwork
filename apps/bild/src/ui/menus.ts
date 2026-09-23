@@ -99,8 +99,8 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         feature('canvasSize', t('Canvas Size…'), 'mod+alt+c'),
         feature('imageSize', t('Image Size…'), 'mod+alt+i'),
         'separator',
-        { label: t('Flip Canvas Horizontal'), enabled: session.canEditLayers, run: () => session.flipCanvas(true) },
-        { label: t('Flip Canvas Vertical'), enabled: session.canEditLayers, run: () => session.flipCanvas(false) },
+        { label: t('Flip Canvas Horizontal'), enabled: session.canEditLayers, run: () => session.flipCanvas(true, controller.mirrorSelection ? (d) => controller.mirrorSelection!(d, true) : undefined) },
+        { label: t('Flip Canvas Vertical'), enabled: session.canEditLayers, run: () => session.flipCanvas(false, controller.mirrorSelection ? (d) => controller.mirrorSelection!(d, false) : undefined) },
       ],
     },
     {

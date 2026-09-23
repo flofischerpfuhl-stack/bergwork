@@ -11,6 +11,7 @@ import type { ReactNode } from 'react';
 import type { FeatureRegistry } from './menus';
 import type { IconName } from './icons';
 import type { CanvasView } from './canvas/CanvasView';
+import type { ClipboardHooks } from '../core/clipboard';
 import { ProjectWorkspace, type ProjectTab } from '../core/workspace';
 import { buildManifest, readArchive, writeArchive, ProjectError } from '../io/project';
 import { browserDecode, decodeImageFile, fileBaseName, ImageImportError } from '../io/imageImport';
@@ -62,6 +63,21 @@ export class EditorController {
     this.session.selectTool(tool);
   }
   toolKeyHandlers: Record<string, (shift: boolean) => void> = {};
+
+  /** Moving selected pixels (Cmd-drag, Cmd-arrows), provided by the selection engine. */
+  pixelMove: {
+    begin(session: EditorSession, duplicate: boolean): boolean;
+    move(session: EditorSession, dx: number, dy: number): void;
+    finish(session: EditorSession): void;
+    cancel(session: EditorSession): void;
+    nudge(session: EditorSession, dx: number, dy: number): void;
+  } | null = null;
+  /** Magic Wand options in the selection header, provided by the wand module. */
+  wandControls: ((session: EditorSession) => ReactNode) | null = null;
+  /** Mirrors the selection for Flip Canvas. */
+  mirrorSelection: ((document: CanvasDocument, horizontally: boolean) => CanvasDocument['selection']) | null = null;
+  /** System clipboard bridges for copied pixels (platform work). */
+  clipboardHooks: ClipboardHooks = {};
 
   /** A rename requested from a menu; the row picks it up and starts editing. */
   renamingLayerId: string | null = null;
