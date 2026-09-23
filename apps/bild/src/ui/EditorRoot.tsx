@@ -61,6 +61,8 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
       if (isTextTarget(event.target)) return;
       const shortcut = shortcutOf(event);
       const modified = event.metaKey || event.ctrlKey || event.altKey;
+      // ⌘V goes through the browser's paste event, which carries clipboard images without a prompt.
+      if (shortcut === 'mod+v') return;
       // Menu shortcuts first (CompositorApp commands).
       const item = shortcutMap(buildMenus(controller, controller.features)).get(shortcut);
       if (item) {
@@ -126,9 +128,14 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
       controller.canvasView?.refreshCursor(event);
       void modifiersOf;
     };
+    const onPaste = (event: ClipboardEvent) => {
+      if (isTextTarget(event.target) || controller.ui.getState().dialog) return;
+      if (controller.pasteEvent?.(event)) event.preventDefault();
+    };
     element.addEventListener('keydown', onKeyDown);
     element.addEventListener('keyup', onKeyUp);
-    return () => { element.removeEventListener('keydown', onKeyDown); element.removeEventListener('keyup', onKeyUp); };
+    element.addEventListener('paste', onPaste);
+    return () => { element.removeEventListener('keydown', onKeyDown); element.removeEventListener('keyup', onKeyUp); element.removeEventListener('paste', onPaste); };
   }, [controller]);
 
   const className = `${styles.root} ${controller.theme === 'light' ? styles.light : ''} ${layout === 'compact' ? styles.compact : layout === 'compactLandscape' ? styles.compactLandscape : ''}`;

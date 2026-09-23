@@ -30,6 +30,10 @@ import {
   canCopyMerged, canCopyPixels, canCutPixels, canPaste, copyMergedSelection, copySelection, cutSelection, layerViaCopy, paste,
 } from '../core/clipboard';
 import type { ToolContext, ToolHandler } from '../ui/canvas/tools';
+import { pixelClipboard } from '../core/clipboard';
+import { encodePng } from '../io/png';
+import { sha256Hex } from '../io/sha256';
+import { decodeImageFile } from '../io/imageImport';
 
 interface LassoDraft { points: Point[]; cursor: Point | null; mode: SelectionMode; kind: LassoKind; anchor: Point | null }
 
@@ -387,7 +391,48 @@ export function installSelection(controller: EditorController): void {
   f.copy = { enabled: () => canCopyPixels(s()), run: () => copySelection(s(), undefined, controller.clipboardHooks) };
   f.cut = { enabled: () => canCutPixels(s()), run: () => cutSelection(s(), undefined, controller.clipboardHooks) };
   f.copyMerged = { enabled: () => canCopyMerged(s()), run: () => void copyMergedSelection(s(), undefined, controller.clipboardHooks) };
-  f.paste = { enabled: () => canPaste(s(), undefined, true), run: () => void paste(s(), undefined, controller.clipboardHooks) };
+  // System clipboard: copies also go out as PNG; a pasted image that is not our own last copy is
+  // external and lands centred, our own copy returns to its place (SelectionClipboard.paste).
+  let lastWritten: string | null = null;
+  controller.clipboardHooks = {
+    toPngBlobData: async (raster) => {
+      const bytes = encodePng(raster.toPixels(), raster.width, raster.height, 4);
+      lastWritten = sha256Hex(bytes);
+      try { await navigator.clipboard?.write?.([new ClipboardItem({ 'image/png': new Blob([bytes as BlobPart], { type: 'image/png' }) })]); } catch { /* no permission */ }
+    },
+  };
+  const pasteBytes = async (bytes: Uint8Array | null) => {
+    const session = s();
+    if (!session.document || !session.canEditLayers) return;
+    if (bytes && sha256Hex(bytes) !== lastWritten) {
+      try {
+        const raster = await decodeImageFile(bytes, session.remainingPixelBudget());
+        pixelClipboard.clear();
+        await paste(session, undefined, { readExternalRaster: () => raster });
+      } catch (error) { controller.reportError('paste-failed', error); }
+      return;
+    }
+    await paste(session, undefined, controller.clipboardHooks);
+  };
+  controller.pasteEvent = (event) => {
+    const file = [...(event.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
+    if (!file && !pixelClipboard.entry) return false;
+    void (file ? file.arrayBuffer().then((b) => pasteBytes(new Uint8Array(b))) : pasteBytes(null));
+    return true;
+  };
+  f.paste = {
+    enabled: () => canPaste(s(), undefined, true),
+    run: () => void (async () => {
+      let bytes: Uint8Array | null = null;
+      try {
+        for (const item of await navigator.clipboard.read()) {
+          const type = item.types.find((t) => t.startsWith('image/'));
+          if (type) { bytes = new Uint8Array(await (await item.getType(type)).arrayBuffer()); break; }
+        }
+      } catch { /* permission denied or unsupported: internal clipboard only */ }
+      await pasteBytes(bytes);
+    })(),
+  };
   f.layerViaCopy = { enabled: () => canCopyPixels(s()), run: () => layerViaCopy(s()) };
   f.transformCommand = {
     enabled: () => s().canTransform || canTransformSelection(s()),

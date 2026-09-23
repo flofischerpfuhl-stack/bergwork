@@ -277,10 +277,18 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
       state.target = target;
       setDrag({ ...state });
     };
-    const up = () => {
+    const up = (e: PointerEvent) => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       setDrag(null);
+      // Dropped on another project's tab (or the New button): copy the layer there (ProjectWorkspace.copyLayer).
+      const element = globalThis.document.elementFromPoint(e.clientX, e.clientY);
+      const tab = (element?.closest('[data-tab-id]') as HTMLElement | null)?.dataset.tabId;
+      const newTab = element?.closest('[data-new-tab]');
+      if (state.moved && (tab || newTab) && state.ids[0]) {
+        if (tab !== controller.workspace.selectedId) void controller.workspace.copyLayer(state.ids[0], tab ?? null);
+        return;
+      }
       if (!state.moved || !state.target) return;
       const { index, into } = state.target;
       let parent: string | null, above: string | null = null, atBottom = false;

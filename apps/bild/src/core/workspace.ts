@@ -4,6 +4,7 @@
  */
 
 import { uuid } from './ids';
+import { descendantIds, MAX_PIXELS, type Layer } from './document';
 import { EditorSession, type SessionServices } from './session';
 
 export class ProjectTab {
@@ -107,6 +108,64 @@ export class ProjectWorkspace {
       this.selectedId = tab.id;
     } else if (this.selectedId === id) this.selectedId = this.tabs[Math.min(index, this.tabs.length - 1)]!.id;
     this.notify();
+  }
+
+  /**
+   * ProjectWorkspace.copyLayer: a layer (with its folder contents) copied into another tab or a new
+   * one, centred at `point` or the canvas centre. Live masks whose source stays behind are baked into
+   * pixels (adjustments just lose the link); ids are fresh; one undo step in the destination.
+   */
+  async copyLayer(id: string, destination: string | null, point: { x: number; y: number } | null = null): Promise<string | null> {
+    const source = this.tabs.find((t) => t.session.document?.layers.some((l) => l.id === id));
+    if (!this.canSwitch || !source || !source.session.canEditLayers || source.id === destination) return null;
+    const sourceDocument = source.session.document!;
+    let target: ProjectTab;
+    if (destination) {
+      const existing = this.tabs.find((t) => t.id === destination);
+      if (!existing || !existing.session.canStartProjectOperation) return null;
+      target = existing;
+    } else target = this.addTab(false);
+    if (target.session.document && !target.session.canEditLayers) return null;
+    const included = new Set([id, ...descendantIds(sourceDocument.layers, id)]);
+    const copied = sourceDocument.layers.filter((l) => included.has(l.id)).map((l) => ({ ...l }));
+    const pixels = (layers: readonly Layer[]) => layers.reduce((n, l) => n + (l.raster ? l.raster.width * l.raster.height : 0), 0);
+    if (pixels(target.session.document?.layers ?? []) + pixels(copied) > MAX_PIXELS) {
+      target.session.errorMessage = 'The copied layers exceed this project’s 100-megapixel limit.';
+      target.session.notify('ui');
+      return null;
+    }
+    for (let i = 0; i < copied.length; i++) {
+      const layer = copied[i]!;
+      if (!layer.maskSourceId || included.has(layer.maskSourceId)) continue;
+      if (layer.adjustment) { copied[i] = { ...layer, maskSourceId: null }; continue; }
+      const baked = await this.services?.bakeLiveMask(sourceDocument, layer.id);
+      copied[i] = { ...layer, raster: baked ?? layer.raster, maskSourceId: null };
+    }
+    const mapping = new Map(copied.map((l) => [l.id, uuid()]));
+    const size = target.session.document ?? sourceDocument;
+    const anchorLayer = copied.find((l) => l.id === id);
+    const anchor = anchorLayer ? { x: anchorLayer.transform.origin.x + anchorLayer.transform.size.width / 2, y: anchorLayer.transform.origin.y + anchorLayer.transform.size.height / 2 }
+      : { x: sourceDocument.width / 2, y: sourceDocument.height / 2 };
+    const centre = point ?? { x: size.width / 2, y: size.height / 2 };
+    const dx = centre.x - anchor.x, dy = centre.y - anchor.y;
+    const layers: Layer[] = copied.map((layer) => ({
+      ...layer,
+      id: mapping.get(layer.id)!,
+      parentId: layer.parentId ? mapping.get(layer.parentId) ?? null : null,
+      maskSourceId: layer.maskSourceId ? mapping.get(layer.maskSourceId) ?? null : null,
+      transform: { ...layer.transform, origin: { x: layer.transform.origin.x + dx, y: layer.transform.origin.y + dy } },
+      mask: layer.mask ? { ...layer.mask, placement: layer.mask.placement
+        ? { ...layer.mask.placement, origin: { x: layer.mask.placement.origin.x + dx, y: layer.mask.placement.origin.y + dy } } : null } : null,
+    }));
+    const session = target.session;
+    session.beginEdit('Copy Layers from Project');
+    if (!session.document) session.createDocument(sourceDocument.width, sourceDocument.height);
+    session.replaceDocument({ ...session.document!, layers: [...session.document!.layers, ...layers] });
+    session.setActiveLayer(mapping.get(id) ?? null);
+    session.endEdit();
+    this.selectedId = target.id;
+    this.notify();
+    return mapping.get(id) ?? null;
   }
 
   destroy(): void {

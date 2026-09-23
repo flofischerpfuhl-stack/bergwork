@@ -83,6 +83,8 @@ export class EditorController {
   lastOpacityDigit: { digit: number; time: number } | null = null;
   /** Spot Healing options in the brush header, provided by the healing module. */
   spotHealingControls: ((session: EditorSession) => ReactNode) | null = null;
+  /** Handles a DOM paste event (⌘V); true when it pasted. */
+  pasteEvent: ((event: ClipboardEvent) => boolean) | null = null;
   /** Mirrors the selection for Flip Canvas. */
   mirrorSelection: ((document: CanvasDocument, horizontally: boolean) => CanvasDocument['selection']) | null = null;
   /** System clipboard bridges for copied pixels (platform work). */

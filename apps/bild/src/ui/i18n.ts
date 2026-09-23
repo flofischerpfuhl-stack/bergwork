@@ -66,6 +66,7 @@ const de: Record<string, string> = {
   'Gradient': 'Verlauf', 'Linear': 'Linear', 'Radial': 'Radial', 'Foreground to Background': 'Vordergrund zu Hintergrund',
   'Foreground to Transparent': 'Vordergrund zu Transparent', 'Reverse': 'Umkehren', 'Shape': 'Form', 'Radius': 'Radius', 'Fill': 'Füllung',
   'Click the canvas to sample': 'Auf die Leinwand klicken, um aufzunehmen', 'Mask background': 'Maskenhintergrund', 'Mask foreground': 'Maskenvordergrund',
+  'Drop images here for new tabs': 'Bilder hier ablegen für neue Tabs',
   'OK': 'OK', 'Crop': 'Freistellen', 'Apply Crop': 'Freistellen anwenden', 'Free': 'Frei', 'Original': 'Original',
   'Drag to crop · Enter apply · Escape cancel · Space to pan': 'Ziehen stellt frei · Eingabe wendet an · Esc bricht ab · Leertaste verschiebt', 'Export': 'Exportieren', 'Quality': 'Qualität', 'Background for transparency': 'Hintergrund für Transparenz',
   'Not yet available in the browser port': 'Im Browser-Port noch nicht verfügbar',

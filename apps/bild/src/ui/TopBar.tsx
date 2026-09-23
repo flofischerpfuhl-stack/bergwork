@@ -100,13 +100,29 @@ export function TopBar({ controller, compact }: { controller: EditorController; 
           ))}
         </nav>
       )}
-      <button type="button" className={styles.iconButton} aria-label={t('New canvas')} title={`${t('New canvas')} (${shortcutLabel('mod+alt+n')})`}
-        disabled={!workspace.canSwitch} onClick={() => controller.showDialog({ kind: 'newCanvas' })} data-testid="new-canvas"><Icon name="plus" /></button>
+      <button type="button" className={styles.iconButton} aria-label={t('New canvas')} title={`${t('New canvas')} (${shortcutLabel('mod+alt+n')}) · ${t('Drop images here for new tabs')}`}
+        disabled={!workspace.canSwitch} onClick={() => controller.showDialog({ kind: 'newCanvas' })} data-testid="new-canvas" data-new-tab
+        onDragOver={(event) => { if ([...event.dataTransfer.types].includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
+        onDrop={(event) => {
+          // Dock/new-tab drops open one project per image (ProjectWorkspace.receive).
+          event.preventDefault();
+          for (const file of [...event.dataTransfer.files]) {
+            if (/\.zip$/i.test(file.name)) { void controller.openArchive(file).catch((error) => controller.reportError('open-failed', error)); continue; }
+            const tab = workspace.addTab();
+            void controller.importFiles([file], tab);
+          }
+        }}><Icon name="plus" /></button>
       <div className={styles.tabs} role="tablist" aria-label={t('Project tabs')}>
         {workspace.tabs.map((tab) => {
           const active = tab.id === workspace.selectedId;
           return (
-            <div key={tab.id} className={`${styles.tab} ${active ? styles.tabActive : ''}`}>
+            <div key={tab.id} className={`${styles.tab} ${active ? styles.tabActive : ''}`} data-tab-id={tab.id}
+              onDragOver={(event) => { if ([...event.dataTransfer.types].includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
+              onDrop={(event) => {
+                event.preventDefault();
+                workspace.select(tab.id);
+                void controller.importFiles([...event.dataTransfer.files].filter((f) => !/\.zip$/i.test(f.name)), tab);
+              }}>
               <button type="button" role="tab" aria-selected={active} className={styles.tabLabel} title={tab.title}
                 disabled={!workspace.canSwitch && !active} onClick={() => workspace.select(tab.id)}>
                 {tab.session.isModified && tab.session.document ? <span className={styles.tabDot} aria-label={t('Unsaved changes')} /> : null}
