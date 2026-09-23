@@ -70,6 +70,7 @@ test('canvas pan, zoom and brush feedback on 4096² × 10 layers', async ({ page
     brush.setBrushSettings(session, { ...brush.getBrushSettings(session), diameter: 300, hardness: 0 });
     const feedback: number[] = [], cpu: number[] = [], render: number[] = [];
     brush.beginBrushStroke(session, { x: 500, y: 500 });
+    let firstSampleMs = 0;
     for (let i = 1; i <= 60; i++) {
       const t0 = performance.now();
       brush.extendBrushStroke(session, { x: 500 + i * 40, y: 500 + i * 30 });
@@ -77,8 +78,12 @@ test('canvas pan, zoom and brush feedback on 4096² × 10 layers', async ({ page
       view.renderNow();
       const t2 = performance.now();
       feedback.push(t2 - t0); cpu.push(t1 - t0); render.push(t2 - t1);
+      if (i === 1) firstSampleMs = t2 - t0;
     }
+    let t = performance.now();
     brush.finishBrushStroke(session);
+    view.renderNow();
+    const finishEvenMs = performance.now() - t;
     // The same stroke with irregular steps (as real pointer input has), so no two segments are congruent.
     const jittered: number[] = [];
     let seed = 5, x = 500, y = 2500;
@@ -91,7 +96,10 @@ test('canvas pan, zoom and brush feedback on 4096² × 10 layers', async ({ page
       view.renderNow();
       jittered.push(performance.now() - t0);
     }
+    t = performance.now();
     brush.finishBrushStroke(session);
+    view.renderNow();
+    const finishIrregularMs = performance.now() - t;
     const gl = view.gpu.gl as WebGL2RenderingContext;
     const ext = gl.getExtension('WEBGL_debug_renderer_info');
     const memory = (performance as any).memory;
@@ -104,6 +112,8 @@ test('canvas pan, zoom and brush feedback on 4096² × 10 layers', async ({ page
       brushFeedbackIrregularMs: { p95: p95(jittered), median: median(jittered), max: Math.max(...jittered) },
       brushEngineMs: { p95: p95(cpu), median: median(cpu) },
       brushRenderMs: { p95: p95(render), median: median(render) },
+      brushFirstSampleMs: firstSampleMs,
+      brushFinishMs: { even: finishEvenMs, irregular: finishIrregularMs },
       jsHeapUsedMB: memory ? Math.round(memory.usedJSHeapSize / 1048576) : null,
       estimatedGpuTextureMB: Math.round(10 * 4096 * 4096 * 4 * 4 / 3 / 1048576),
       notes: 'Pan/zoom scene built directly (167 Mpx exceeds the upstream 100 Mpx import budget); brush measured with 5 layers (84 Mpx).',
