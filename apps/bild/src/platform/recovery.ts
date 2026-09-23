@@ -33,8 +33,12 @@ export class RecoveryStore {
   static available(): boolean { return typeof indexedDB !== 'undefined'; }
 
   async put(record: Omit<RecoveryRecord, 'instance'>): Promise<void> {
+    // Stored as bytes, not a Blob: WebKit refuses Blobs in IndexedDB in some configurations
+    // ("Error preparing Blob/File data to be stored in object store").
+    const bytes = await record.archive.arrayBuffer();
     const db = await this.open();
-    await db.put(STORE, { ...record, instance: this.instance });
+    const { archive, ...rest } = record;
+    await db.put(STORE, { ...rest, bytes, type: archive.type, instance: this.instance });
   }
   async remove(id: string): Promise<void> {
     const db = await this.open();
@@ -43,8 +47,9 @@ export class RecoveryStore {
   /** Records left behind by earlier page loads. */
   async previous(): Promise<RecoveryRecord[]> {
     const db = await this.open();
-    const all = (await db.getAll(STORE)) as RecoveryRecord[];
-    return all.filter((record) => record.instance !== this.instance).sort((a, b) => a.savedAt - b.savedAt);
+    const all = (await db.getAll(STORE)) as (Omit<RecoveryRecord, 'archive'> & { archive?: Blob; bytes?: ArrayBuffer; type?: string })[];
+    return all.filter((record) => record.instance !== this.instance).sort((a, b) => a.savedAt - b.savedAt)
+      .map(({ bytes, type, archive, ...rest }) => ({ ...rest, archive: archive ?? new Blob([bytes ?? new ArrayBuffer(0)], { type: type ?? 'application/zip' }) }));
   }
   close(): void { void this.db?.then((db) => db.close()); this.db = null; }
 }
