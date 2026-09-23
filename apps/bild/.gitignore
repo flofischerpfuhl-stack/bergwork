@@ -6,3 +6,8 @@ artifacts/acceptance-results
 artifacts/e2e-results
 *.log
 .tmp
+
+# Downloaded by scripts/fetch-psd-corpus.sh; only provenance and hashes are tracked.
+tests/fixtures/psd/*
+!tests/fixtures/psd/SOURCES.md
+!tests/fixtures/psd/SHA256SUMS

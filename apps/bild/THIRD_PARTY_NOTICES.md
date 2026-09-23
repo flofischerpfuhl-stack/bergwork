@@ -29,6 +29,24 @@ License 1.1. The complete license is in `public/fonts/OFL.txt`.
   `2bc5d431b584d89e646214bf6cfa75494e76ceea`, SHA-256
   `14ec4af41f27482216d1c2229f417ff9b1425e1babb014e57d1d40d03229853e`
 
+## ag-psd
+
+PSD parsing for the offline import/fidelity spike uses `ag-psd` 31.0.2,
+copyright (c) 2016 Agamnentzar, under the MIT License. Source and license:
+https://github.com/Agamnentzar/ag-psd
+
+The ag-psd license explicitly excludes image and brush files in its repository.
+No such files, including ag-psd's test PSDs, are used or redistributed here.
+
+## psd-tools fidelity fixtures
+
+The optional PSD fidelity corpus fetched by `scripts/fetch-psd-corpus.sh` comes
+from psd-tools commit `30bf79c2a88e0fc63104ee85713e23b04362153d`,
+copyright (c) 2019 Kota Yamaguchi, under the MIT License. The downloaded files
+are git-ignored and remain outside the application bundle. Fixture provenance,
+checksums, and deliberate exclusions are recorded in
+`tests/fixtures/psd/SOURCES.md` and `tests/fixtures/psd/SHA256SUMS`.
+
 ## Compositor C rendering kernels
 
 The files in `src/wasm/c` are copied verbatim from Compositor at commit
