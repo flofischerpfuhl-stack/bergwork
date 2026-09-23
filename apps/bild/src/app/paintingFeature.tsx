@@ -17,7 +17,7 @@ import type { Point } from '../core/geometry';
 import {
   beginBrushStroke, cancelBrushStroke, changeBrushHardness, changeBrushSize, cloneSamplePoint, currentCpuBrushPreview,
   extendBrushStroke, finishBrushStroke, getBrushSettings, getCloneSettings, isBrushStrokeActive, setBrushSettings,
-  setCloneSettings, setCloneSource, brushOutlineRadius, type BrushSettings,
+  setCloneSettings, setCloneSource, waitForBrushStroke, brushOutlineRadius, type BrushSettings,
 } from '../core/brush';
 import { beginRetouch, cancelRetouch, commitRetouch, currentRetouchPreview, updateRetouch, type RetouchMode } from '../core/retouch';
 import {
@@ -114,6 +114,7 @@ class BrushTool implements ToolHandler {
     if (!isBrushStrokeActive(session)) return;
     finishBrushStroke(session);
     syncPreview(session);
+    void waitForBrushStroke(session).then(() => syncPreview(session));
   }
   cancel(session: EditorSession): void {
     if (cancelBrushStroke(session)) syncPreview(session);

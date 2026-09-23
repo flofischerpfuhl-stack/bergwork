@@ -103,6 +103,8 @@ interface BrushChunk {
   bounds: Rect | null;
 }
 
+type BrushTargets = Pick<BrushChunk, 'permanent' | 'alternate' | 'scratch' | 'tail' | 'painted'>;
+
 interface BrushGpuState {
   readonly preview: GpuBrushPreview;
   readonly chunks: Map<string, BrushChunk>;
@@ -140,6 +142,7 @@ export class GpuCompositor {
   private readonly white: TextureSource;
   private lutSources = new Map<string, TextureSource>();
   private brushState: BrushGpuState | null = null;
+  private readonly brushTargetPool: BrushTargets[] = [];
   /** The LUT bytes last uploaded per layer, so an unchanged adjustment is not re-uploaded every frame. */
   private lutUploaded = new Map<string, Uint8Array>();
   adjustmentPrograms: AdjustmentProgramProvider = adjustmentProgram;
@@ -181,7 +184,9 @@ export class GpuCompositor {
       renderer.destroy();
       throw new Error('WebGL 2 is required to render the canvas.');
     }
-    return new GpuCompositor(renderer);
+    const compositor = new GpuCompositor(renderer);
+    await compositor.prepareBrushPipeline();
+    return compositor;
   }
 
   destroy(): void {
@@ -191,6 +196,8 @@ export class GpuCompositor {
     for (const rt of this.inUse) rt.destroy(true);
     for (const lut of this.lutSources.values()) lut.destroy();
     this.destroyBrushState();
+    for (const targets of this.brushTargetPool) for (const target of Object.values(targets)) target.destroy(true);
+    this.brushTargetPool.length = 0;
     this.mesh.destroy();
     this.white.destroy();
     this.renderer.destroy();
@@ -519,6 +526,33 @@ export class GpuCompositor {
 
   // MARK: Active brush coverage
 
+  /** Compile/link at compositor startup and retain one cleared native-grid tile for the first sample. */
+  private async prepareBrushPipeline(): Promise<void> {
+    const programs = ['brushCoverage', 'brushPaint', 'brushMax', 'brushMask'].map((name) =>
+      this.renderer.shader._getProgramData(this.pass(name).shader.glProgram).program);
+    const parallel = this.gl.getExtension('KHR_parallel_shader_compile') as { COMPLETION_STATUS_KHR: number } | null;
+    if (parallel) {
+      while (programs.some((program) => !this.gl.getProgramParameter(program, parallel.COMPLETION_STATUS_KHR))) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+    }
+    const targets = this.createBrushTargets(BRUSH_CHUNK_SIZE + BRUSH_APRON * 2,
+      BRUSH_CHUNK_SIZE + BRUSH_APRON * 2);
+    for (const target of Object.values(targets)) this.clear(target);
+    this.brushTargetPool.push(targets);
+  }
+
+  private createBrushTargets(width: number, height: number): BrushTargets {
+    const format = this.floatTargets ? 'rgba16float' : 'rgba8unorm';
+    const coverage = () => RenderTexture.create({ width, height, format, antialias: false, resolution: 1 });
+    return {
+      permanent: coverage(), alternate: coverage(), scratch: coverage(), tail: coverage(),
+      painted: RenderTexture.create({ width, height, format,
+        mipLevelCount: Math.floor(Math.log2(Math.max(width, height))) + 1,
+        autoGenerateMipmaps: false, antialias: false, resolution: 1 }),
+    };
+  }
+
   private destroyBrushState(): void {
     if (!this.brushState) return;
     const sources = new Set<TextureSource>();
@@ -532,11 +566,11 @@ export class GpuCompositor {
       for (const [key, resource] of Object.entries(resources)) if (sources.has(resource as TextureSource)) resources[key] = this.white;
     }
     for (const chunk of this.brushState.chunks.values()) {
-      chunk.permanent.destroy(true);
-      chunk.alternate.destroy(true);
-      chunk.scratch.destroy(true);
-      chunk.tail.destroy(true);
-      chunk.painted.destroy(true);
+      const targets = { permanent: chunk.permanent, alternate: chunk.alternate, scratch: chunk.scratch,
+        tail: chunk.tail, painted: chunk.painted };
+      if (this.brushTargetPool.length < 2 && chunk.permanent.width === BRUSH_CHUNK_SIZE + BRUSH_APRON * 2
+        && chunk.permanent.height === BRUSH_CHUNK_SIZE + BRUSH_APRON * 2) this.brushTargetPool.push(targets);
+      else for (const target of Object.values(targets)) target.destroy(true);
     }
     this.brushState = null;
   }
@@ -549,15 +583,9 @@ export class GpuCompositor {
     const width = Math.min(BRUSH_CHUNK_SIZE, state.preview.width - x);
     const height = Math.min(BRUSH_CHUNK_SIZE, state.preview.height - y);
     const textureWidth = width + BRUSH_APRON * 2, textureHeight = height + BRUSH_APRON * 2;
-    const format = this.floatTargets ? 'rgba16float' : 'rgba8unorm';
-    const permanent = RenderTexture.create({ width: textureWidth, height: textureHeight, format, antialias: false, resolution: 1 });
-    const alternate = RenderTexture.create({ width: textureWidth, height: textureHeight, format, antialias: false, resolution: 1 });
-    const scratch = RenderTexture.create({ width: textureWidth, height: textureHeight, format, antialias: false, resolution: 1 });
-    const tail = RenderTexture.create({ width: textureWidth, height: textureHeight, format, antialias: false, resolution: 1 });
-    const painted = RenderTexture.create({ width: textureWidth, height: textureHeight,
-      format: this.floatTargets ? 'rgba16float' : 'rgba8unorm',
-      mipLevelCount: Math.floor(Math.log2(Math.max(textureWidth, textureHeight))) + 1,
-      autoGenerateMipmaps: false, antialias: false, resolution: 1 });
+    const pooled = textureWidth === BRUSH_CHUNK_SIZE + BRUSH_APRON * 2
+      && textureHeight === BRUSH_CHUNK_SIZE + BRUSH_APRON * 2 ? this.brushTargetPool.pop() : undefined;
+    const { permanent, alternate, scratch, tail, painted } = pooled ?? this.createBrushTargets(textureWidth, textureHeight);
     const chunk = { col, row, x, y, width, height, permanent, alternate, scratch, tail, painted, bounds: null };
     state.chunks.set(key, chunk);
     this.clear(permanent); this.clear(alternate); this.clear(scratch); this.clear(tail); this.clear(painted);

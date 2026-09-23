@@ -9,6 +9,7 @@ import {
   type Stroke, type StrokeResult, type StrokeUpdate,
 } from './stroke';
 import { validateBrushSettings, type BrushSettings } from './settings';
+import { BrushRasterWorker } from './workerClient';
 
 interface RecordedUpdate {
   readonly points: readonly Point[];
@@ -52,8 +53,10 @@ export class RecordedBrushStroke implements Stroke {
   private readonly samples: Point[] = [];
   private readonly pressures: number[] = [];
   private cpu: Stroke | null = null;
+  private readonly background: BrushRasterWorker | null;
   private replayed = 0;
   private done = false;
+  private finalSegments: readonly BrushSegment[] | null = null;
 
   constructor(private readonly options: BeginStrokeOptions) {
     validateBrushSettings(options.settings);
@@ -65,12 +68,14 @@ export class RecordedBrushStroke implements Stroke {
       transform: target.transform, sourceRect: target.sourceRect, source: target.source,
       settled, tail, revision: 0,
     };
+    this.background = BrushRasterWorker.create(options, target);
   }
 
   addPoints(points: readonly Point[], options: { readonly pressure?: number | readonly number[] } = {}): StrokeUpdate {
     this.assertActive();
     this.updates.push({ points: points.map((p) => ({ ...p })), pressure: clonePressure(options.pressure) });
     const dirty: Rect[] = [];
+    const settledForWorker: BrushSegment[] = [];
     let changed = false;
     for (let i = 0; i < points.length; i++) {
       const point = points[i]!;
@@ -87,19 +92,21 @@ export class RecordedBrushStroke implements Stroke {
         ? [brushSegment(point, point, pressure)]
         : n >= 3
           ? continuousBrushCurve(this.samples[n - 3]!, this.samples[n - 2]!, this.samples[Math.max(0, n - 4)]!, point,
-            this.pressures[n - 3]!, this.pressures[n - 2]!, 0.2)
+            this.pressures[n - 3]!, this.pressures[n - 2]!, this.curveTolerance())
           : [];
       const nextTail = n >= 2
         ? [brushSegment(this.samples[n - 2]!, point, (this.pressures[n - 2]! + pressure) / 2)] : [];
       const mutable = this.gpuPreview as Mutable<GpuBrushPreview>;
       const previousTail = [...mutable.tail];
       (mutable.settled as BrushSegment[]).push(...newlySettled);
+      settledForWorker.push(...newlySettled);
       (mutable.tail as BrushSegment[]).splice(0, mutable.tail.length, ...nextTail);
       mutable.revision++;
       changed = true;
       dirty.push(...documentDirty([...previousTail, ...newlySettled, ...nextTail], this.options.settings.diameter,
         this.options.canvas));
     }
+    this.background?.addSettled(settledForWorker);
     if (this.cpu) this.replayCpu();
     return { dirty: changed && !dirty.length ? [{ x: 0, y: 0, width: 1, height: 1 }] : dirty };
   }
@@ -109,12 +116,47 @@ export class RecordedBrushStroke implements Stroke {
 
   finish(): StrokeResult {
     this.assertActive();
-    this.replayCpu();
+    this.prepareFinalSegments();
+    this.background?.cancel();
     this.done = true;
-    return this.cpu!.finish();
+    return this.finishCpu();
   }
 
-  cancel(): void { this.done = true; this.cpu?.cancel(); }
+  /** Starts the exact worker tail flush. Null means this environment uses the synchronous fallback. */
+  finishInBackground(): Promise<StrokeResult> | null {
+    this.assertActive();
+    if (!this.background) return null;
+    const final = this.prepareFinalSegments();
+    this.done = true;
+    return this.background.finish(final).catch(() => this.finishCpu());
+  }
+
+  get usesBackgroundWorker(): boolean { return this.background !== null; }
+
+  cancel(): void { this.done = true; this.background?.cancel(); this.cpu?.cancel(); }
+
+  private prepareFinalSegments(): readonly BrushSegment[] {
+    if (this.finalSegments) return this.finalSegments;
+    const n = this.samples.length;
+    this.finalSegments = n >= 2
+      ? continuousBrushCurve(this.samples[n - 2]!, this.samples[n - 1]!, this.samples[Math.max(0, n - 3)]!,
+        this.samples[n - 1]!, this.pressures[n - 2]!, this.pressures[n - 1]!, this.curveTolerance()) : [];
+    const mutable = this.gpuPreview as Mutable<GpuBrushPreview>;
+    (mutable.settled as BrushSegment[]).push(...this.finalSegments);
+    (mutable.tail as BrushSegment[]).splice(0);
+    mutable.revision++;
+    return this.finalSegments;
+  }
+
+  private curveTolerance(): number {
+    return this.options.target !== 'mask' && this.options.settings.mode === 'paint' && !this.options.clone
+      && !this.options.selection && this.options.settings.diameter >= 256 ? 0.3 : 0.2;
+  }
+
+  private finishCpu(): StrokeResult {
+    this.replayCpu();
+    return this.cpu!.finish();
+  }
 
   private replayCpu(): void {
     if (!this.cpu) this.cpu = beginStroke(this.options);

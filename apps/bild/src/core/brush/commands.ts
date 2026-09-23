@@ -1,7 +1,7 @@
 import { effectiveVisibleIds, type CanvasDocument, type Layer, type LayerMask } from '../document';
 import { apply, invert, pixelToDocument, type Point } from '../geometry';
 import { Raster, TILE } from '../raster';
-import type { EditorSession } from '../session';
+import { editBlockers, pendingUndoHandlers, type EditorSession } from '../session';
 import { CloneStampState, cloneSample, type CloneSettings } from './clone';
 import {
   DEFAULT_BRUSH_SETTINGS, DEFAULT_CLONE_SETTINGS, changeBrushHardness as stepHardness,
@@ -22,11 +22,24 @@ interface ActiveStroke {
   readonly name: string;
   changed: boolean;
 }
+interface PendingFinish {
+  readonly active: ActiveStroke;
+  promise: Promise<StrokeResult | null>;
+  undoRequested: boolean;
+}
+interface QueuedStroke {
+  readonly point: Point;
+  readonly options: BeginSessionStrokeOptions;
+  readonly additions: { readonly points: readonly Point[]; readonly pressure?: number | readonly number[] }[];
+  finished: boolean;
+}
 interface SessionBrushState {
   brush: BrushSettings;
   cloneBrush: BrushSettings;
   readonly clone: CloneStampState;
   active: ActiveStroke | null;
+  pending: PendingFinish | null;
+  queued: QueuedStroke | null;
   last: LastPoint | null;
 }
 
@@ -36,7 +49,7 @@ function state(session: EditorSession): SessionBrushState {
   let result = states.get(session);
   if (!result) {
     result = { brush: DEFAULT_BRUSH_SETTINGS, cloneBrush: DEFAULT_CLONE_SETTINGS,
-      clone: new CloneStampState(), active: null, last: null };
+      clone: new CloneStampState(), active: null, pending: null, queued: null, last: null };
     states.set(session, result);
   }
   return result;
@@ -98,6 +111,12 @@ export interface BeginSessionStrokeOptions {
 /** EditorSession+Brush.beginBrush, kept external so the shared session does not need brush-only fields. */
 export function beginBrushStroke(session: EditorSession, point: Point, options: BeginSessionStrokeOptions = {}): StrokeUpdate | null {
   const value = state(session), layer = session.activeLayer, document = session.document;
+  if (value.pending) {
+    if (value.queued || !layer || !document) return null;
+    value.queued = { point: { ...point }, options: { ...options }, additions: [], finished: false };
+    session.notify('ui');
+    return { dirty: [] };
+  }
   if (value.active || !canPaint(session, layer, document)) return null;
   const mask = session.isMaskSelected;
   let settings = options.settings ?? getBrushSettings(session);
@@ -145,6 +164,12 @@ export function beginBrushStroke(session: EditorSession, point: Point, options: 
 export function extendBrushStroke(session: EditorSession, points: Point | readonly Point[],
   options?: { readonly pressure?: number | readonly number[] }): StrokeUpdate | null {
   const value = state(session), active = value.active;
+  if (!active && value.queued && !value.queued.finished) {
+    const list = (Array.isArray(points) ? points : [points]).map((point) => ({ ...point }));
+    value.queued.additions.push({ points: list, pressure: clonePressure(options?.pressure) });
+    session.notify('ui');
+    return { dirty: [] };
+  }
   if (!active) return null;
   const list = Array.isArray(points) ? points : [points];
   const update = active.stroke.addPoints(list, options);
@@ -157,30 +182,40 @@ export function extendBrushStroke(session: EditorSession, points: Point | readon
 
 /** The stroke in progress as the canvas should show it: which layer (or its mask), pixels and placement. */
 export function currentBrushPreview(session: EditorSession): { layerId: string; mask: boolean; raster: Raster; transform: Layer['transform'] } | null {
-  const active = state(session).active;
+  const value = state(session), active = value.active ?? value.pending?.active ?? null;
   if (!active) return null;
   return { layerId: active.layerId, mask: active.mask, raster: active.stroke.currentRaster(), transform: active.stroke.currentTransform() };
 }
 
 /** Geometry-only live preview used by the WebGL compositor. */
 export function currentGpuBrushPreview(session: EditorSession): GpuBrushPreview | null {
-  const active = state(session).active;
+  const value = state(session), active = value.active ?? value.pending?.active ?? null;
   return active?.gpu ?? null;
 }
 
 /** CPU previews are registered only for brush modes that cannot use MetalBrushCoverage-equivalent rendering. */
 export function currentCpuBrushPreview(session: EditorSession): ReturnType<typeof currentBrushPreview> {
-  return state(session).active?.gpu ? null : currentBrushPreview(session);
+  const value = state(session), active = value.active ?? value.pending?.active ?? null;
+  return active?.gpu ? null : currentBrushPreview(session);
 }
 
-export function isBrushStrokeActive(session: EditorSession): boolean { return state(session).active !== null; }
+export function isBrushStrokeActive(session: EditorSession): boolean {
+  const value = state(session);
+  return value.active !== null || (!!value.queued && !value.queued.finished);
+}
 
 export function currentBrushRaster(session: EditorSession): Raster | null {
-  return state(session).active?.stroke.currentRaster() ?? null;
+  const value = state(session), active = value.active ?? value.pending?.active ?? null;
+  return active?.stroke.currentRaster() ?? null;
 }
 
 export function cancelBrushStroke(session: EditorSession): boolean {
   const value = state(session), active = value.active;
+  if (!active && value.queued && !value.queued.finished) {
+    value.queued = null;
+    session.notify('ui');
+    return true;
+  }
   if (!active) return false;
   active.stroke.cancel();
   value.active = null;
@@ -190,19 +225,70 @@ export function cancelBrushStroke(session: EditorSession): boolean {
 
 export function finishBrushStroke(session: EditorSession): StrokeResult | null {
   const value = state(session), active = value.active;
+  if (!active && value.queued && !value.queued.finished) {
+    value.queued.finished = true;
+    session.notify('ui');
+    return null;
+  }
   if (!active) return null;
+  if (active.stroke instanceof RecordedBrushStroke) {
+    const worker = active.stroke.finishInBackground();
+    if (worker) {
+      value.active = null;
+      const pending: PendingFinish = { active, promise: Promise.resolve(null), undoRequested: false };
+      value.pending = pending;
+      pending.promise = worker.then((result) => settleBackgroundFinish(session, value, pending, result), () => null);
+      session.notify('ui');
+      return null;
+    }
+  }
   let result: StrokeResult;
   try { result = active.stroke.finish(); } finally { value.active = null; }
-  if (!active.changed) { session.notify('ui'); return result; }
+  commitResult(session, active, result);
+  return result;
+}
+
+/** Resolves every queued worker commit for callers that need a stable document (save/export/tests). */
+export async function waitForBrushStroke(session: EditorSession): Promise<StrokeResult | null> {
+  let result: StrokeResult | null = null;
+  for (;;) {
+    const pending = state(session).pending;
+    if (!pending) return result;
+    result = await pending.promise;
+  }
+}
+
+function settleBackgroundFinish(session: EditorSession, value: SessionBrushState, pending: PendingFinish,
+  result: StrokeResult): StrokeResult {
+  if (value.pending !== pending) return result;
+  value.pending = null;
+  commitResult(session, pending.active, result);
+  const undo = pending.undoRequested;
+  const queued = value.queued;
+  value.queued = null;
+  if (undo) session.undo();
+  else if (queued) {
+    beginBrushStroke(session, queued.point, queued.options);
+    for (const addition of queued.additions) {
+      extendBrushStroke(session, addition.points, addition.pressure === undefined ? undefined : { pressure: addition.pressure });
+    }
+    if (queued.finished) finishBrushStroke(session);
+  }
+  session.notify('document');
+  return result;
+}
+
+function commitResult(session: EditorSession, active: ActiveStroke, result: StrokeResult): void {
+  if (!active.changed) { session.notify('ui'); return; }
   const document = session.document;
   const index = document?.layers.findIndex((layer) => layer.id === active.layerId) ?? -1;
   const current = index >= 0 ? document!.layers[index]! : null;
   if (!current || current.raster !== active.sourceRaster || (current.mask?.raster ?? null) !== active.sourceMaskRaster
-    || !sameTransform(current.transform, active.sourceTransform)) return result;
+    || !sameTransform(current.transform, active.sourceTransform)) return;
   const layers = document!.layers.slice();
   if (active.mask) {
     const oldMask = current.mask;
-    if (!oldMask) return result;
+    if (!oldMask) return;
     layers[index] = { ...current, mask: { ...oldMask, raster: result.raster } };
   } else {
     let mask = current.mask;
@@ -215,8 +301,21 @@ export function finishBrushStroke(session: EditorSession): StrokeResult | null {
   session.beginEdit(active.name);
   session.replaceDocument({ ...document!, layers });
   session.endEdit();
-  return result;
 }
+
+function clonePressure(value: number | readonly number[] | undefined): number | readonly number[] | undefined {
+  return Array.isArray(value) ? [...value] : value;
+}
+
+editBlockers.push((session) => states.get(session)?.pending !== null && states.get(session)?.pending !== undefined);
+pendingUndoHandlers.push((session) => {
+  const value = states.get(session), pending = value?.pending;
+  if (!value || !pending) return false;
+  pending.undoRequested = true;
+  value.queued = null;
+  session.notify('ui');
+  return true;
+});
 
 function canPaint(session: EditorSession, layer: Layer | null, document: CanvasDocument | null): boolean {
   if (!document || !layer || !session.canEditLayers || session.selectedLayerIds.size !== 1 || layer.locked) return false;

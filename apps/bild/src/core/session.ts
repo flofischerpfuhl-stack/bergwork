@@ -93,6 +93,8 @@ export interface SessionServices {
 
 /** Open edits outside the session (adjustment and filter panels) that make the document read-only meanwhile. */
 export const editBlockers: ((session: EditorSession) => boolean)[] = [];
+/** Pending external edits can consume Undo now and perform it once their transaction lands. */
+export const pendingUndoHandlers: ((session: EditorSession) => boolean)[] = [];
 
 export class EditorSession {
   document: CanvasDocument | null = null;
@@ -188,7 +190,8 @@ export class EditorSession {
   get canEditAppearance(): boolean { return this.canEditLayers && this.selectedLayerIds.size === 1 && this.activeLayer?.isGroup === false; }
   get canEditMask(): boolean { return this.canEditLayers && this.selectedLayerIds.size === 1 && this.activeLayer !== null; }
   get canStartProjectOperation(): boolean {
-    return !this.isProjectBusy && !this.isImporting && this.renamingLayerId === null && this.adjustmentEditingId === null;
+    return !editBlockers.some((blocks) => blocks(this)) && !this.isProjectBusy && !this.isImporting
+      && this.renamingLayerId === null && this.adjustmentEditingId === null;
   }
 
   get layerRows(): HierarchyEntry[] {
@@ -230,6 +233,7 @@ export class EditorSession {
   // MARK: Undo
 
   undo(): boolean {
+    if (pendingUndoHandlers.some((handle) => handle(this))) return true;
     // Gradient.swift / EditorSession.swift: the first Undo only discards the pending preview.
     if (this.canUseHistory && cancelGradient(this)) return true;
     if (!this.canUndo) return false;

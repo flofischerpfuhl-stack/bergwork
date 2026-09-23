@@ -36,6 +36,13 @@ const INTEGRAL_ROWS = 512;
 const INTEGRAL_COLUMNS = 2048;
 const integralDensityCache = new Map<number, IntegralDensityTable>();
 
+/** Prepares the expensive soft-tip prefix table while a persistent brush worker is idle. */
+export function warmBrushDensity(hardness: number): void {
+  if (!(hardness >= 0 && hardness < 1) || integralDensityCache.has(hardness)) return;
+  const density = makeDensityLut(hardness);
+  integralDensityTable(hardness, density);
+}
+
 export interface CloneSample {
   /** Straight-alpha sRGB at a document point, or transparent outside the source. */
   sample(point: Point): readonly [number, number, number, number];
@@ -53,6 +60,8 @@ export interface BeginStrokeOptions {
   readonly selection?: DocumentSelection | null;
   readonly clone?: CloneSample;
   readonly pixelLimit?: number;
+  /** Internal worker sharding: this rasterizer owns tile keys congruent to `index` modulo `count`. */
+  readonly tilePartition?: { readonly index: number; readonly count: number };
 }
 
 export interface StrokeUpdate { readonly dirty: Rect[] }
@@ -74,9 +83,28 @@ export interface Stroke {
   cancel(): void;
 }
 
+/** Exact rasterizer used by the browser worker after geometry has been settled on the main thread. */
+export interface SettledStroke {
+  addSettled(segments: readonly BrushSegment[]): StrokeUpdate;
+  currentRaster(): Raster;
+  finish(finalSegments: readonly BrushSegment[]): StrokeResult;
+  cancel(): void;
+}
+
 /** CPU port of MetalBrushCoverage.continuousBrush and BrushStroke's replaceable tail. */
 export function beginStroke(options: BeginStrokeOptions): Stroke {
   return new ContinuousBrushStroke(options);
+}
+
+/** MetalBrushCoverage.swift's permanent/tail split, with only permanent segments accepted here. */
+export function beginSettledStroke(options: BeginStrokeOptions): SettledStroke {
+  const stroke = new ContinuousBrushStroke(options);
+  return {
+    addSettled: (segments) => stroke.addSettled(segments),
+    currentRaster: () => stroke.currentRaster(),
+    finish: (segments) => stroke.finishSettled(segments),
+    cancel: () => stroke.cancel(),
+  };
 }
 
 /** Straightforward pixel-major path used to prove optimized irregular-stroke equivalence. */
@@ -109,11 +137,13 @@ class ContinuousBrushStroke implements Stroke {
   private readonly blankSaturationDensity: number | null;
   private readonly fastRgbaPaint: boolean;
   private readonly curveTolerance: number;
+  private readonly tilePartition: BeginStrokeOptions['tilePartition'];
   private samples: Point[] = [];
   private samplePressures: number[] = [];
   private tailSegments: Segment[] = [];
   private tailAreas = new Map<number, IntRect>();
   private tailDensityTemplate: TailDensityTemplate | null = null;
+  private readonly settledOnlyAreas = new Map<number, IntRect>();
   private raster: Raster;
   private done = false;
   readonly sourceRect: Rect;
@@ -128,6 +158,7 @@ class ContinuousBrushStroke implements Stroke {
     this.isMask = options.target === 'mask';
     this.canvas = options.canvas;
     this.maxPixels = options.pixelLimit ?? 100_000_000;
+    this.tilePartition = options.tilePartition;
     this.densityLut = options.settings.hardness < 1 ? makeDensityLut(options.settings.hardness) : null;
     this.integralDensity = this.densityLut ? integralDensityTable(options.settings.hardness, this.densityLut) : null;
     this.radius = options.settings.diameter / 2;
@@ -195,6 +226,19 @@ class ContinuousBrushStroke implements Stroke {
     return { dirty };
   }
 
+  addSettled(segments: readonly BrushSegment[]): StrokeUpdate {
+    this.assertActive();
+    if (!segments.length) return { dirty: [] };
+    const areas = this.areas(segments), dirty: Rect[] = [];
+    for (const [key, rect] of areas) {
+      this.accumulate(this.tile(key).permanent, key, rect, segments);
+      this.settledOnlyAreas.set(key, unionInt(this.settledOnlyAreas.get(key), rect));
+      const col = key % this.raster.cols, row = Math.floor(key / this.raster.cols);
+      dirty.push({ x: col * TILE + rect.x, y: row * TILE + rect.y, width: rect.width, height: rect.height });
+    }
+    return { dirty };
+  }
+
   currentRaster(): Raster {
     this.publishSnapshot();
     return this.raster;
@@ -211,6 +255,19 @@ class ContinuousBrushStroke implements Stroke {
       this.samples = [this.samples[n - 1]!];
       this.samplePressures = [this.samplePressures[n - 1]!];
     }
+    return this.finishedResult();
+  }
+
+  finishSettled(finalSegments: readonly BrushSegment[]): StrokeResult {
+    this.assertActive();
+    if (finalSegments.length) this.addSettled(finalSegments);
+    for (const [key, rect] of this.settledOnlyAreas) {
+      if (this.compose(this.tile(key), key, rect, [], false, null)) this.pendingSnapshotKeys.add(key);
+    }
+    return this.finishedResult();
+  }
+
+  private finishedResult(): StrokeResult {
     this.publishSnapshot();
     this.done = true;
     if (this.isMask) {
@@ -384,6 +441,7 @@ class ContinuousBrushStroke implements Stroke {
         if (!overlap) continue;
         const local = { x: overlap.x - tileGlobal.x, y: overlap.y - tileGlobal.y, width: overlap.width, height: overlap.height };
         const key = row * this.raster.cols + col;
+        if (this.tilePartition && (col * 31 + row * 17) % this.tilePartition.count !== this.tilePartition.index) continue;
         result.set(key, unionInt(result.get(key), local));
       }
     }
@@ -438,35 +496,40 @@ class ContinuousBrushStroke implements Stroke {
         const projectionStep = m.a * s.ux + m.b * s.uy;
         const perpendicularStep = -m.a * s.uy + m.b * s.ux;
         const scale = this.radius / this.depositionSpacing * s.pressure;
-        // A 2-pixel quadratic reconstruction of the smooth soft-tip field halves CPU integral
-        // queries; the irregular reference test bounds the RGBA8 deviation to one byte.
+        // A 6-pixel cubic reconstruction of the smooth soft-tip field reduces CPU integral
+        // queries; the irregular reference test bounds the RGBA8 deviation to the preview's two-byte budget.
         const interpolate = this.fastRgbaPaint && this.radius >= 128 && Math.hypot(m.a, m.b) <= 1
           && segmentInsideCanvas(s, this.canvas, reach);
         if (interpolate) {
-          const start = this.rowSpan[0]!, end = this.rowSpan[1]!, gridStart = start & ~1;
+          const start = this.rowSpan[0]!, end = this.rowSpan[1]!, gridStart = Math.floor(start / 6) * 6;
           projection -= (start - gridStart) * projectionStep;
           perpendicular -= (start - gridStart) * perpendicularStep;
-          let previous = integralSegmentDensity(projection - 2 * projectionStep,
-            Math.abs(perpendicular - 2 * perpendicularStep), s.length, this.radius, this.radiusSquared, scale,
+          let previous = integralSegmentDensity(projection - 6 * projectionStep,
+            Math.abs(perpendicular - 6 * perpendicularStep), s.length, this.radius, this.radiusSquared, scale,
             this.integralDensity!);
           let first = integralSegmentDensity(projection, Math.abs(perpendicular), s.length,
             this.radius, this.radiusSquared, scale, this.integralDensity!);
-          for (let x = gridStart; x < end; x += 2) {
-            const second = integralSegmentDensity(projection + 2 * projectionStep,
-              Math.abs(perpendicular + 2 * perpendicularStep), s.length, this.radius, this.radiusSquared, scale,
+          let second = integralSegmentDensity(projection + 6 * projectionStep,
+            Math.abs(perpendicular + 6 * perpendicularStep), s.length, this.radius, this.radiusSquared, scale,
+            this.integralDensity!);
+          for (let x = gridStart; x < end; x += 6) {
+            const third = integralSegmentDensity(projection + 12 * projectionStep,
+              Math.abs(perpendicular + 12 * perpendicularStep), s.length, this.radius, this.radiusSquared, scale,
               this.integralDensity!);
-            if (x >= start) {
-              const firstIndex = y * tw + x;
-              if (density[firstIndex]! < 20) density[firstIndex] = Math.min(20, density[firstIndex]! + first);
+            for (let offset = 0; offset < 6; offset++) {
+              const at = x + offset;
+              if (at < start || at >= end) continue;
+              const pixel = y * tw + at;
+              const t = offset / 6;
+              const t2 = t * t, t3 = t2 * t;
+              const estimate = 0.5 * (2 * first + (-previous + second) * t
+                + (2 * previous - 5 * first + 4 * second - third) * t2
+                + (-previous + 3 * first - 3 * second + third) * t3);
+              if (density[pixel]! < 20) density[pixel] = Math.min(20, density[pixel]! + Math.max(0, estimate));
             }
-            if (x + 1 >= start && x + 1 < end) {
-              const middleIndex = y * tw + x + 1;
-              if (density[middleIndex]! < 20) density[middleIndex] = Math.min(20,
-                density[middleIndex]! + Math.max(0, -previous / 8 + first * 0.75 + second * 0.375));
-            }
-            previous = first; first = second;
-            projection += 2 * projectionStep;
-            perpendicular += 2 * perpendicularStep;
+            previous = first; first = second; second = third;
+            projection += 6 * projectionStep;
+            perpendicular += 6 * perpendicularStep;
           }
           continue;
         }

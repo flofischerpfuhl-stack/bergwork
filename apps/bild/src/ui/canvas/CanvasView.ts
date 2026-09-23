@@ -281,7 +281,7 @@ export class CanvasView implements CanvasHost {
 
   readRegion(document: CanvasDocument, x: number, y: number, width: number, height: number): Uint8Array {
     if (!this.gpu) throw new Error(this.failure ?? 'The canvas renderer is not ready.');
-    const pixels = this.gpu.readRegion(document, x, y, width, height);
+    const pixels = this.gpu.readRegion(document, x, y, width, height, this.hooks(this.session));
     this.redraw();
     return pixels;
   }
