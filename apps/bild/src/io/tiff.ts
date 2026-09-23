@@ -1,4 +1,5 @@
 import { inflateSync, unzlibSync } from 'fflate';
+import { IccError, loadLittleCms, type IccColorModel } from '../wasm/lcms';
 
 const MAX_SIDE = 30_000;
 const MAX_PIXELS = 100_000_000;
@@ -49,6 +50,7 @@ interface Parsed {
   orientation: number;
   dpi: TiffDpi | null;
   hasIcc: boolean;
+  iccProfile: Uint8Array | null;
 }
 
 interface DecodeLayout {
@@ -85,11 +87,23 @@ export function tiffDimensions(bytes: Uint8Array): TiffProbe {
   return { width: parsed.width, height: parsed.height, dpi: parsed.dpi, hasIcc: parsed.hasIcc };
 }
 
-/** Decodes the first TIFF IFD to straight-alpha sRGB-ish RGBA8. ICC profiles are reported, not applied. */
+/** Decodes the first TIFF IFD to straight-alpha sRGB RGBA8, applying an embedded ICC profile when present. */
 export async function decodeTiff(bytes: Uint8Array): Promise<TiffResult> {
   const parsed = parse(bytes);
   const layout = readLayout(parsed);
   if (layout.compression === 7) return decodeJpegTiff(parsed, layout);
+
+  if (parsed.iccProfile && [0, 1, 2, 3, 5].includes(layout.photometric)) {
+    const samples = decodeIccSamples(parsed, layout);
+    const lcms = await loadLittleCms();
+    try {
+      const data = lcms.transform(parsed.iccProfile, samples.colors, samples.model, samples.bits, samples.alpha);
+      return { width: parsed.width, height: parsed.height, data, dpi: parsed.dpi, hasIcc: true };
+    } catch (error) {
+      // ImageIO ignores malformed embedded profiles and decodes using the format's fallback interpretation.
+      if (!(error instanceof IccError)) throw error;
+    }
+  }
 
   const output = new Uint8Array(parsed.width * parsed.height * 4);
   for (let i = 3; i < output.length; i += 4) output[i] = 255;
@@ -146,7 +160,83 @@ function parse(bytes: Uint8Array): Parsed {
     if (Number.isFinite(x) && Number.isFinite(y) && x > 0 && y > 0) dpi = { x, y };
   }
   const icc = entries.get(34675);
-  return { bytes, view, little, entries, sourceWidth, sourceHeight, width, height, orientation, dpi, hasIcc: !!icc && icc.count > 0 };
+  const iccProfile = icc && icc.count > 0 ? byteValues({ bytes }, icc) : null;
+  return { bytes, view, little, entries, sourceWidth, sourceHeight, width, height, orientation, dpi,
+    hasIcc: iccProfile !== null, iccProfile };
+}
+
+interface TiffIccSamples {
+  model: IccColorModel;
+  bits: 8 | 16;
+  colors: Uint8Array | Uint16Array;
+  alpha: Uint8Array | Uint16Array | null;
+}
+
+/** Keeps 16-bit TIFF samples intact until Little CMS has produced the final RGBA8 pixels. */
+function decodeIccSamples(parsed: Parsed, layout: DecodeLayout): TiffIccSamples {
+  const model: IccColorModel = layout.photometric === 0 || layout.photometric === 1 ? 'gray'
+    : layout.photometric === 5 ? 'cmyk' : 'rgb';
+  const colorChannels = model === 'gray' ? 1 : model === 'rgb' ? 3 : 4;
+  const bits: 8 | 16 = layout.bits === 16 || layout.photometric === 3 ? 16 : 8;
+  const count = parsed.width * parsed.height, maximum = bits === 16 ? 65535 : 255;
+  const colors = bits === 16 ? new Uint16Array(count * colorChannels) : new Uint8Array(count * colorChannels);
+  const alpha = layout.alphaSample >= 0 ? (bits === 16 ? new Uint16Array(count) : new Uint8Array(count)) : null;
+  if (alpha) alpha.fill(maximum);
+  for (const segment of readSegments(parsed, layout)) {
+    const segmentSamples = layout.planar === 1 ? layout.samples : 1;
+    const rowBytes = Math.ceil(segment.storedWidth * segmentSamples * layout.bits / 8);
+    const expected = checkedMultiply(rowBytes, segment.storedHeight, 'decoded segment size');
+    const compressed = parsed.bytes.subarray(segment.offset, segment.offset + segment.count);
+    const raw = decompress(compressed, layout.compression, expected);
+    if (layout.predictor === 2) undoHorizontalPredictor(raw, rowBytes, segment.storedWidth,
+      segmentSamples, layout.bits, parsed.little);
+    const sourceMaximum = layout.bits === 16 ? 65535 : layout.bits === 8 ? 255 : 1;
+    for (let row = 0; row < segment.copyHeight; row++) {
+      const rowStart = row * rowBytes;
+      for (let col = 0; col < segment.copyWidth; col++) {
+        const pixel = orientedOffset(parsed, segment.x + col, segment.y + row) / 4;
+        if (layout.planar === 2) {
+          const value = sample(raw, rowStart, col, layout.bits, parsed.little);
+          writeIccSample(colors, alpha, pixel, segment.plane, value, sourceMaximum, maximum, layout);
+        } else {
+          const base = col * layout.samples;
+          for (let channel = 0; channel < layout.samples; channel++) {
+            const value = sample(raw, rowStart, base + channel, layout.bits, parsed.little);
+            writeIccSample(colors, alpha, pixel, channel, value, sourceMaximum, maximum, layout);
+          }
+        }
+      }
+    }
+  }
+  if (layout.associatedAlpha && alpha) unassociateIccSamples(colors, alpha, colorChannels, maximum);
+  return { model, bits, colors, alpha };
+}
+
+function writeIccSample(colors: Uint8Array | Uint16Array, alpha: Uint8Array | Uint16Array | null,
+  pixel: number, channel: number, value: number, sourceMaximum: number, maximum: number, layout: DecodeLayout): void {
+  const scaled = sourceMaximum === maximum ? value : Math.floor((value * maximum + Math.floor(sourceMaximum / 2)) / sourceMaximum);
+  if (channel === layout.alphaSample) { if (alpha) alpha[pixel] = scaled; return; }
+  if (channel >= layout.colorSamples) return;
+  if (layout.photometric === 3) {
+    if (channel !== 0) return;
+    const palette = layout.palette!, size = sourceMaximum + 1, target = pixel * 3;
+    if (value >= size) throw new TiffError('data', 'TIFF palette index is out of range');
+    colors[target] = palette[value]!; colors[target + 1] = palette[value + size]!; colors[target + 2] = palette[value + size * 2]!;
+    return;
+  }
+  const target = pixel * layout.colorSamples + channel;
+  colors[target] = layout.photometric === 0 ? maximum - scaled : scaled;
+}
+
+function unassociateIccSamples(colors: Uint8Array | Uint16Array, alpha: Uint8Array | Uint16Array,
+  channels: number, maximum: number): void {
+  for (let pixel = 0; pixel < alpha.length; pixel++) {
+    const a = alpha[pixel]!, offset = pixel * channels;
+    for (let channel = 0; channel < channels; channel++) {
+      const value = colors[offset + channel]!;
+      colors[offset + channel] = a === 0 ? 0 : Math.min(maximum, Math.floor((value * maximum + Math.floor(a / 2)) / a));
+    }
+  }
 }
 
 function readLayout(parsed: Parsed): DecodeLayout {
@@ -407,7 +497,9 @@ async function decodeJpegTiff(parsed: Parsed, layout: DecodeLayout): Promise<Tif
   }
   let bitmap: ImageBitmap;
   try {
-    bitmap = await createImageBitmap(new Blob([jpeg as BlobPart], { type: 'image/jpeg' }), { imageOrientation: 'none', premultiplyAlpha: 'none', colorSpaceConversion: 'default' });
+    bitmap = await createImageBitmap(new Blob([jpeg as BlobPart], { type: 'image/jpeg' }), {
+      imageOrientation: 'none', premultiplyAlpha: 'none', colorSpaceConversion: parsed.iccProfile ? 'none' : 'default',
+    });
   } catch (cause) {
     throw new TiffError('unsupported', `This browser cannot decode JPEG-in-TIFF: ${message(cause)}`);
   }
@@ -418,10 +510,21 @@ async function decodeJpegTiff(parsed: Parsed, layout: DecodeLayout): Promise<Tif
     if (!context) throw new TiffError('unsupported', 'This browser cannot read JPEG-in-TIFF pixels');
     context.drawImage(bitmap, 0, 0);
     const source = context.getImageData(0, 0, bitmap.width, bitmap.height, { colorSpace: 'srgb' }).data;
+    let managed: Uint8Array | Uint8ClampedArray = source;
+    if (parsed.iccProfile) {
+      const rgb = new Uint8Array(bitmap.width * bitmap.height * 3);
+      for (let pixel = 0, target = 0; pixel < bitmap.width * bitmap.height; pixel++, target += 3) {
+        const offset = pixel * 4;
+        rgb[target] = source[offset]!; rgb[target + 1] = source[offset + 1]!; rgb[target + 2] = source[offset + 2]!;
+      }
+      try { managed = (await loadLittleCms()).transform(parsed.iccProfile, rgb, 'rgb', 8); }
+      catch (error) { if (!(error instanceof IccError)) throw error; }
+    }
     const output = new Uint8Array(parsed.width * parsed.height * 4);
     for (let y = 0; y < parsed.sourceHeight; y++) for (let x = 0; x < parsed.sourceWidth; x++) {
       const src = (y * parsed.sourceWidth + x) * 4, dst = orientedOffset(parsed, x, y);
-      output[dst] = source[src]!; output[dst + 1] = source[src + 1]!; output[dst + 2] = source[src + 2]!; output[dst + 3] = source[src + 3]!;
+      output[dst] = managed[src]!; output[dst + 1] = managed[src + 1]!; output[dst + 2] = managed[src + 2]!;
+      output[dst + 3] = managed[src + 3]!;
     }
     return { width: parsed.width, height: parsed.height, data: output, dpi: parsed.dpi, hasIcc: parsed.hasIcc };
   } finally { bitmap.close(); }
@@ -587,7 +690,7 @@ function numericValue(parsed: Pick<Parsed, 'view' | 'little'>, type: number, at:
   }
 }
 
-function byteValues(parsed: Parsed, entry: Entry): Uint8Array {
+function byteValues(parsed: Pick<Parsed, 'bytes'>, entry: Entry): Uint8Array {
   const size = typeSize(entry.type), length = checkedMultiply(entry.count, size, 'tag byte size');
   const start = length <= 4 ? entry.inline : entry.value;
   bounds(parsed.bytes, start, length, 'tag bytes');
