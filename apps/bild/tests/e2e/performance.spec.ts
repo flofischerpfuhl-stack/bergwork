@@ -4,9 +4,9 @@ import { expect, test } from '@playwright/test';
 import { mountForTest } from './helpers';
 
 /**
- * Measured (not asserted) canvas performance on this machine's GPU, following STACK.md targets:
+ * Measured and asserted canvas performance on this machine's GPU, following STACK.md targets:
  * desktop 4096×4096 with 10 raster layers, pan/zoom p95 frame ≤ 33 ms after warm-up, brush
- * feedback ≤ 50 ms. Results go to artifacts/performance/browser.json with the renderer string.
+ * feedback ≤ 16 ms. Results go to artifacts/performance/browser.json with the renderer string.
  * The project `perf-gpu` launches Chromium on the real GPU; under SwiftShader numbers are software.
  */
 test('canvas pan, zoom and brush feedback on 4096² × 10 layers', async ({ page }, info) => {
@@ -79,11 +79,17 @@ test('canvas pan, zoom and brush feedback on 4096² × 10 layers', async ({ page
       const t2 = performance.now();
       feedback.push(t2 - t0); cpu.push(t1 - t0); render.push(t2 - t1);
       if (i === 1) firstSampleMs = t2 - t0;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
     let t = performance.now();
     brush.finishBrushStroke(session);
-    view.renderNow();
     const finishEvenMs = performance.now() - t;
+    view.renderNow();
+    const evenCommitStart = t;
+    await brush.waitForBrushStroke(session);
+    const readyEvenMs = performance.now() - evenCommitStart;
+    view.renderNow();
+    const commitEvenMs = performance.now() - evenCommitStart;
     // The same stroke with irregular steps (as real pointer input has), so no two segments are congruent.
     const jittered: number[] = [];
     let seed = 5, x = 500, y = 2500;
@@ -95,11 +101,17 @@ test('canvas pan, zoom and brush feedback on 4096² × 10 layers', async ({ page
       brush.extendBrushStroke(session, { x, y });
       view.renderNow();
       jittered.push(performance.now() - t0);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
     t = performance.now();
     brush.finishBrushStroke(session);
-    view.renderNow();
     const finishIrregularMs = performance.now() - t;
+    view.renderNow();
+    const irregularCommitStart = t;
+    await brush.waitForBrushStroke(session);
+    const readyIrregularMs = performance.now() - irregularCommitStart;
+    view.renderNow();
+    const commitIrregularMs = performance.now() - irregularCommitStart;
     const gl = view.gpu.gl as WebGL2RenderingContext;
     const ext = gl.getExtension('WEBGL_debug_renderer_info');
     const memory = (performance as any).memory;
@@ -114,6 +126,9 @@ test('canvas pan, zoom and brush feedback on 4096² × 10 layers', async ({ page
       brushRenderMs: { p95: p95(render), median: median(render) },
       brushFirstSampleMs: firstSampleMs,
       brushFinishMs: { even: finishEvenMs, irregular: finishIrregularMs },
+      brushCommitMs: { even: commitEvenMs, irregular: commitIrregularMs },
+      brushWorkerReadyMs: { even: readyEvenMs, irregular: readyIrregularMs },
+      brushWorkerTiming: brush.lastBrushWorkerTiming,
       jsHeapUsedMB: memory ? Math.round(memory.usedJSHeapSize / 1048576) : null,
       estimatedGpuTextureMB: Math.round(10 * 4096 * 4096 * 4 * 4 / 3 / 1048576),
       notes: 'Pan/zoom scene built directly (167 Mpx exceeds the upstream 100 Mpx import budget); brush measured with 5 layers (84 Mpx).',
@@ -121,8 +136,20 @@ test('canvas pan, zoom and brush feedback on 4096² × 10 layers', async ({ page
   });
   const out = path.resolve('artifacts/performance');
   fs.mkdirSync(out, { recursive: true });
-  const record = { project: info.project.name, date: new Date().toISOString(), targets: { panZoomP95Ms: 33, brushFeedbackMs: 50 }, ...result };
+  const record = { project: info.project.name, date: new Date().toISOString(), targets: {
+    panZoomP95Ms: 33, brushFeedbackP95Ms: 16, brushFirstSampleMs: 50, brushFinishMainThreadMs: 16,
+    brushCommitMs: 300,
+  }, ...result };
   fs.writeFileSync(path.join(out, `browser-${info.project.name}.json`), JSON.stringify(record, null, 2));
   console.log(JSON.stringify(record, null, 2));
   expect(result.panMs.p95).toBeGreaterThan(0);
+  if (info.project.name === 'perf-gpu') {
+    expect(result.brushFirstSampleMs).toBeLessThanOrEqual(50);
+    expect(result.brushFinishMs.even).toBeLessThanOrEqual(16);
+    expect(result.brushFinishMs.irregular).toBeLessThanOrEqual(16);
+    expect(result.brushCommitMs.even).toBeLessThanOrEqual(300);
+    expect(result.brushCommitMs.irregular).toBeLessThanOrEqual(300);
+    expect(result.brushFeedbackMs.p95).toBeLessThanOrEqual(16);
+    expect(result.brushFeedbackIrregularMs.p95).toBeLessThanOrEqual(16);
+  }
 });
