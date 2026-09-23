@@ -60,6 +60,16 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+## libjpeg-turbo
+
+Four-component and ICC-tagged JPEG decoding uses the libjpeg API library from
+libjpeg-turbo 3.1.2. This software is based in part on the work of the
+Independent JPEG Group. libjpeg-turbo is distributed under the IJG License,
+Modified 3-Clause BSD License, and zlib License. The generated WebAssembly,
+exact source release and checksum, build command, and complete applicable
+license notices are documented in `src/wasm/jpeg/README.md`,
+`src/wasm/jpeg/LICENSE.md`, and `src/wasm/jpeg/README.ijg`.
+
 ## Optional HEIC decoder (not loaded by default)
 
 The separately replaceable files `src/wasm/heif/libheif.mjs` and

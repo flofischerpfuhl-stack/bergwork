@@ -131,8 +131,8 @@ static cmsStage* identity_curves(uint32_t channels) {
     return stage;
 }
 
-// A compact deterministic CMYK output profile for real-profile codec fixtures. Imports never
-// substitute this for a missing profile.
+// A compact deterministic generic CMYK profile. ImageIO has a platform generic CMYK profile;
+// browser builds use this subtractive-sRGB approximation for untagged CMYK instead.
 uint32_t lcms_create_cmyk_profile(uint8_t* output, uint32_t capacity) {
     cmsHPROFILE profile = NULL, srgb = NULL, lab = NULL;
     cmsPipeline* pipeline = NULL;

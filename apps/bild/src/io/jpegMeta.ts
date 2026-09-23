@@ -50,6 +50,20 @@ export function readJpegInfo(bytes: Uint8Array): JpegInfo {
   return { width, height, orientation, dpi: jfifDpi ?? exifDpi };
 }
 
+/** Returns the SOF component count used to select browser versus explicit JPEG decoding. */
+export function readJpegComponentCount(bytes: Uint8Array): number {
+  for (const segment of jpegSegments(bytes)) {
+    if (!isSof(segment.marker)) continue;
+    if (segment.payloadLength < 6) throw new JpegMetaError('Truncated JPEG SOF segment');
+    const components = bytes[segment.payloadOffset + 5]!;
+    if (components === 0 || segment.payloadLength !== 6 + components * 3) {
+      throw new JpegMetaError('Invalid JPEG SOF component table');
+    }
+    return components;
+  }
+  throw new JpegMetaError('JPEG has no supported SOF component table');
+}
+
 export function orientedSize(info: Pick<JpegInfo, 'width' | 'height' | 'orientation'>): { width: number; height: number } {
   return info.orientation >= 5
     ? { width: info.height, height: info.width }
