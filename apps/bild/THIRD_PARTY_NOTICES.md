@@ -1,5 +1,34 @@
 # Third-party notices
 
+## CanvasKit / Skia
+
+The optional text and vector engine uses `canvaskit-wasm` 0.42.0, built from
+Skia and distributed by Google under the BSD 3-Clause License. It is loaded
+only when the text/vector engine is requested. The exact npm artifact is pinned
+in `package-lock.json` with integrity
+`sha512-N3ikotmzYwDVAcpQKDMptBT2P5pIEWS9ywdmrQA2awwaMF9cxKEFuxZZHv9ay1Em9kDjxDsPtwUzDm1uNj136g==`.
+Source and license: https://github.com/google/skia/tree/main/modules/canvaskit and
+`node_modules/canvaskit-wasm/LICENSE` after installation.
+
+The package includes `@webgpu/types` 0.1.21, also under the BSD 3-Clause
+License. It supplies TypeScript declarations only and is not runtime code.
+
+## Bundled Noto Sans fonts
+
+The variable fonts in `public/fonts` are from the Google Fonts Noto families,
+copyright The Noto Project Authors, and are distributed under the SIL Open Font
+License 1.1. The complete license is in `public/fonts/OFL.txt`.
+
+- `NotoSans-Variable.ttf`, Google Fonts commit
+  `2984c575fdce412ee02b2baaba67672b9a9434d8`, SHA-256
+  `bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d`
+- `NotoSansArabic-Variable.ttf`, Google Fonts commit
+  `e5ee31305efa101c2cae65f44d9642df2c8f0b4d`, SHA-256
+  `63111b5b2e074dd48cc67692e0a2726d86ee94c1c37fe8598257b7b4e87e869e`
+- `NotoSansDevanagari-Variable.ttf`, Google Fonts commit
+  `2bc5d431b584d89e646214bf6cfa75494e76ceea`, SHA-256
+  `14ec4af41f27482216d1c2229f417ff9b1425e1babb014e57d1d40d03229853e`
+
 ## Compositor C rendering kernels
 
 The files in `src/wasm/c` are copied verbatim from Compositor at commit
