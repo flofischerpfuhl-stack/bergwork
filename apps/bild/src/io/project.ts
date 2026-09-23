@@ -11,6 +11,7 @@
  * `extensions["org.compositor.port"]`. Readers without it reconstruct them from the matrices.
  */
 
+import { isValidAdjustment } from '../core/adjustments';
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 import type { AssetRecord, LayerRecord, Matrix2D, ProjectManifestV1 } from '../../contracts';
 import {
@@ -337,6 +338,6 @@ function isLayerTransform(value: unknown): value is LayerTransform {
 
 function validAdjustment(parameters: unknown): LayerAdjustment {
   const value = parameters as LayerAdjustment;
-  if (!value || typeof value !== 'object' || typeof value.kind !== 'string') invalid('adjustment parameters');
+  if (!value || typeof value !== 'object' || typeof value.kind !== 'string' || !isValidAdjustment(value)) invalid('adjustment parameters');
   return value;
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import styles from './editor.module.css';
 import type { EditorController } from './controller';
 import { useUi, useWorkspace } from './hooks';
@@ -158,6 +158,7 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
           </div>
         </>
       ) : null}
+      {controller.panels.map((panel, index) => <Fragment key={index}>{panel()}</Fragment>)}
       <DialogHost controller={controller} />
     </div>
   );

@@ -87,14 +87,26 @@ function grainParams(s: GrainSettings): Float32Array {
   const seed = s.seed >>> 0; return params([s.amount, s.size, seed & 0xffff, seed >>> 16, s.roughness]);
 }
 
+/** Programs per (immutable) adjustment value, so tables and cubes are built once, not every frame. */
+const programs = new WeakMap<object, AdjustmentProgram | null>();
+
 /** All six variants required by `GpuCompositor.adjustmentPrograms`. */
 export function adjustmentProgram(layer: Layer): AdjustmentProgram | null {
   if (!layer.adjustment) return null;
+  let program = programs.get(layer.adjustment);
+  if (program === undefined) { program = makeProgram(layer); programs.set(layer.adjustment, program); }
+  return program;
+}
+
+function once<T>(make: () => T): () => T { let value: T | undefined; return () => (value ??= make()); }
+
+function makeProgram(layer: Layer): AdjustmentProgram | null {
+  if (!layer.adjustment) return null;
   const value = resolveAdjustment(layer.adjustment);
   switch (value.kind) {
-    case 'Hue/Saturation': return { key: 'hsv-cube-33', glsl: HUE_GLSL, params: () => params(), lut: () => hueTexture(value.hsvSettings) };
-    case 'Levels': return { key: 'levels-table', glsl: TABLE_GLSL, params: () => params(), lut: () => tableTexture(levelsTables(value.levels)) };
-    case 'Curves': return { key: 'curves-table', glsl: TABLE_GLSL, params: () => params(), lut: () => tableTexture(curvesTables(value.curves)) };
+    case 'Hue/Saturation': return { key: 'hsv-cube-33', glsl: HUE_GLSL, params: () => params(), lut: once(() => hueTexture(value.hsvSettings)) };
+    case 'Levels': return { key: 'levels-table', glsl: TABLE_GLSL, params: () => params(), lut: once(() => tableTexture(levelsTables(value.levels))) };
+    case 'Curves': return { key: 'curves-table', glsl: TABLE_GLSL, params: () => params(), lut: once(() => tableTexture(curvesTables(value.curves))) };
     case 'Exposure': return { key: 'exposure-linear', glsl: EXPOSURE_GLSL,
       params: () => params([value.exposureSettings.exposure, value.exposureSettings.offset, value.exposureSettings.gamma]) };
     case 'Gradient Map': {

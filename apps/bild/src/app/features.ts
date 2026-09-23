@@ -8,10 +8,12 @@ import { installCanvasOps } from './canvasOpsFeature';
 import { installSelection } from './selectionFeature';
 import { installPainting } from './paintingFeature';
 import { installRetouch } from './retouchFeature';
+import { installAdjustments } from './adjustmentsFeature';
 
 export function installFeatures(controller: EditorController): void {
   installCanvasOps(controller);
   installSelection(controller);
   installPainting(controller);
   installRetouch(controller);
+  installAdjustments(controller);
 }

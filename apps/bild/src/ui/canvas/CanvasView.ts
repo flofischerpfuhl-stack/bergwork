@@ -305,6 +305,10 @@ export class CanvasView implements CanvasHost {
   private toolHandler(): ToolHandler | null {
     const spaceHeld = this.controller.ui.getState().spaceHeld;
     if (spaceHeld) return this.hand;
+    for (const intercept of this.controller.canvasInterceptors) {
+      const handler = intercept(this.session);
+      if (handler) return handler;
+    }
     return this.tools[this.session.tool] ?? null;
   }
 

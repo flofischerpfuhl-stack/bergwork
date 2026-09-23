@@ -89,6 +89,9 @@ export interface SessionServices {
   confirmLiveMaskDeletion?(count: number): Promise<'bake' | 'unlink' | 'cancel'>;
 }
 
+/** Open edits outside the session (adjustment and filter panels) that make the document read-only meanwhile. */
+export const editBlockers: ((session: EditorSession) => boolean)[] = [];
+
 export class EditorSession {
   document: CanvasDocument | null = null;
   readonly history = new DocumentHistory();
@@ -171,11 +174,11 @@ export class EditorSession {
   get selection() { return this.document?.selection ?? null; }
 
   get canEditLayers(): boolean {
-    return this.document !== null && !this.isProjectBusy && !this.isImporting && this.renamingLayerId === null
+    return this.document !== null && !editBlockers.some((blocks) => blocks(this)) && !this.isProjectBusy && !this.isImporting && this.renamingLayerId === null
       && this.transformEdit === null && this.cropRect === null && this.adjustmentEditingId === null && !hasPendingGradient(this);
   }
   get canUseHistory(): boolean {
-    return !this.isProjectBusy && !this.isImporting && this.renamingLayerId === null && this.transformEdit === null
+    return !editBlockers.some((blocks) => blocks(this)) && !this.isProjectBusy && !this.isImporting && this.renamingLayerId === null && this.transformEdit === null
       && !this.history.isInTransaction;
   }
   get canUndo(): boolean { return this.canUseHistory && (this.history.canUndo || hasPendingGradient(this)); }

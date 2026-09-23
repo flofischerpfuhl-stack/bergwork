@@ -9,6 +9,7 @@
  * adjustment layers applied to everything below.
  */
 
+import { adjustmentProgram } from './adjustPrograms';
 import {
   Mesh, MeshGeometry, RenderTexture, Shader, State, Texture, TextureSource, WebGLRenderer,
 } from 'pixi.js';
@@ -94,7 +95,9 @@ export class GpuCompositor {
   private frame = 0;
   private readonly white: TextureSource;
   private lutSources = new Map<string, TextureSource>();
-  adjustmentPrograms: AdjustmentProgramProvider = () => null;
+  /** The LUT bytes last uploaded per layer, so an unchanged adjustment is not re-uploaded every frame. */
+  private lutUploaded = new Map<string, Uint8Array>();
+  adjustmentPrograms: AdjustmentProgramProvider = adjustmentProgram;
   /** Adjustment layers drawn without a GPU implementation in the last composite. */
   skippedAdjustments = 0;
 
@@ -554,14 +557,18 @@ export class GpuCompositor {
       let source = this.lutSources.get(lutKey);
       if (!source || source.width !== lutData.width || source.height !== lutData.height) {
         source?.destroy();
+        this.lutUploaded.delete(lutKey);
         source = new TextureSource({ width: lutData.width, height: lutData.height, format: 'rgba8unorm',
           scaleMode: 'linear', addressMode: 'clamp-to-edge' });
         this.lutSources.set(lutKey, source);
       }
-      this.renderer.texture.bindSource(source, 0);
-      this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-      this.gl.texSubImage2D(this.gl.TEXTURE_2D, 0, 0, 0, lutData.width, lutData.height, this.gl.RGBA, this.gl.UNSIGNED_BYTE, lutData.data);
-      this.restoreUnpack();
+      if (this.lutUploaded.get(lutKey) !== lutData.data) {
+        this.renderer.texture.bindSource(source, 0);
+        this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        this.gl.texSubImage2D(this.gl.TEXTURE_2D, 0, 0, 0, lutData.width, lutData.height, this.gl.RGBA, this.gl.UNSIGNED_BYTE, lutData.data);
+        this.restoreUnpack();
+        this.lutUploaded.set(lutKey, lutData.data);
+      }
       lut = source;
     }
     this.run(pass, out, view.width, view.height, { uBackdrop: backdrop.source, uClip: clip?.source ?? this.white, uLut: lut }, {
