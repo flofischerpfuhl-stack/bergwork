@@ -1,0 +1,85 @@
+/** Framework-free filter preview/apply/cancel state machine with latest-request-wins previews. */
+import type { LayerTransform } from '../geometry';
+import type { Raster } from '../raster';
+import type { EditorSession } from '../session';
+import type { Layer } from '../document';
+import { defaultFilterSettings, normalizeFilterSettings, type FilterKind, type FilterSettings } from './settings';
+import { filterPixelJob, type PixelJob } from '../adjust/pixelWorkerClient';
+import { carryMask } from './apply';
+
+export interface FilterEditState {
+  readonly kind: FilterKind;
+  readonly layerId: string;
+  readonly originalRaster: Raster;
+  readonly originalTransform: LayerTransform;
+  settings: FilterSettings;
+  /** Stable random pattern for Noise/Grain for the lifetime of this panel. */
+  readonly seed: number;
+  preview: boolean;
+  committing: boolean;
+  preparing: boolean;
+  previewError: string | null;
+  request: number;
+}
+
+const edits = new WeakMap<EditorSession, FilterEditState>();
+const jobs = new WeakMap<EditorSession, PixelJob>();
+export function filterEditState(session: EditorSession): FilterEditState | null { return edits.get(session) ?? null; }
+
+export function beginFilterEdit(session: EditorSession, kind: FilterKind,
+  settings: FilterSettings = defaultFilterSettings()): FilterEditState | null {
+  const layer = session.activeLayer;
+  if (edits.has(session) || !session.canEditLayers || session.selectedLayerIds.size !== 1 || !layer?.raster
+    || layer.isGroup || !!layer.adjustment || session.isMaskSelected) return null;
+  const state: FilterEditState = { kind, layerId: layer.id, originalRaster: layer.raster, originalTransform: layer.transform,
+    settings: normalizeFilterSettings(settings), seed: Math.floor(Math.random() * 0x1_0000_0000), preview: true,
+    committing: false, preparing: false, previewError: null, request: 0 };
+  edits.set(session, state); void updateFilterEdit(session, state.settings, true); session.notify('ui'); return state;
+}
+
+export async function updateFilterEdit(session: EditorSession, settings: FilterSettings, preview = true): Promise<void> {
+  const state = edits.get(session); if (!state || state.committing) return;
+  state.settings = normalizeFilterSettings(settings); state.preview = preview; state.previewError = null; const request = ++state.request;
+  jobs.get(session)?.cancel(); jobs.delete(session);
+  if (!preview) { state.preparing = false; session.rasterOverrides.delete(state.layerId); session.notify('document'); return; }
+  state.preparing = true;
+  try {
+    const job = filterPixelJob(state.kind, state.originalRaster, state.originalTransform, state.settings,
+      session.selection, state.seed, false); jobs.set(session, job); const made = await job.promise;
+    if (request !== state.request || edits.get(session) !== state) return;
+    // Raster overrides use the stored transform, so previews retain the original grid; Apply expands the bounds.
+    session.rasterOverrides.set(state.layerId, made.raster); session.notify('document');
+  } catch (error) { if (request === state.request) state.previewError = error instanceof Error ? error.message : String(error); }
+  finally { if (request === state.request) { state.preparing = false; jobs.delete(session); session.notify('ui'); } }
+}
+
+export function cancelFilterEdit(session: EditorSession): void {
+  const state = edits.get(session); if (!state || state.committing) return;
+  state.request++; jobs.get(session)?.cancel(); jobs.delete(session); session.rasterOverrides.delete(state.layerId); edits.delete(session); session.notify('document');
+}
+
+export async function applyFilterEdit(session: EditorSession): Promise<boolean> {
+  const state = edits.get(session); if (!state || state.committing) return false;
+  state.committing = true; state.request++; jobs.get(session)?.cancel(); jobs.delete(session);
+  const current = session.layer(state.layerId);
+  if (!current || current.raster !== state.originalRaster || current.transform !== state.originalTransform) {
+    session.rasterOverrides.delete(state.layerId); edits.delete(session); session.notify('document'); return false;
+  }
+  try {
+    const job = filterPixelJob(state.kind, state.originalRaster, state.originalTransform, state.settings,
+      session.selection, state.seed, true); jobs.set(session, job); const made = await job.promise;
+    session.rasterOverrides.delete(state.layerId); edits.delete(session);
+    const changedGrid = made.raster.width !== state.originalRaster.width || made.raster.height !== state.originalRaster.height;
+    if (changedGrid && current.mask?.placement === null) {
+      const mask = { ...current.mask, raster: carryMask(current.mask.raster, current.transform, made.transform, made.raster.width, made.raster.height) };
+      const replacement: Layer = { ...current, raster: made.raster, transform: made.transform, mask };
+      const document = session.document!;
+      session.beginEdit(state.kind);
+      session.replaceDocument({ ...document, layers: document.layers.map((layer) => layer.id === state.layerId ? replacement : layer) });
+      session.endEdit();
+    } else session.replaceLayerPixels(state.layerId, made.raster, state.kind, made.transform);
+    return true;
+  } catch (error) {
+    state.committing = false; state.previewError = error instanceof Error ? error.message : String(error); session.notify('ui'); return false;
+  }
+}
