@@ -10,8 +10,9 @@
 import type { CanvasDocument } from '../../core/document';
 import { rectUnion, type Point } from '../../core/geometry';
 import type { EditorSession } from '../../core/session';
-import { currentGpuBrushPreview } from '../../core/brush';
+import { currentBrushPreview, currentGpuBrushPreview } from '../../core/brush';
 import { GpuCompositor, type CompositeHooks, type ViewSpec } from '../../render/gpuCompositor';
+import { SoftwareCompositor } from '../../render/softwareCompositor';
 import type { CanvasHost, EditorController, SecondaryDrag } from '../controller';
 import { defaultTools, HandTool, overlayGeometry, type Modifiers, type ToolContext, type ToolHandler, type ToolRegistry } from './tools';
 
@@ -25,9 +26,12 @@ export function modifiersOf(event: { shiftKey: boolean; altKey: boolean; metaKey
 
 export class CanvasView implements CanvasHost {
   readonly element: HTMLDivElement;
-  private readonly glCanvas: HTMLCanvasElement;
+  private glCanvas: HTMLCanvasElement;
   private readonly overlay: HTMLCanvasElement;
   gpu: GpuCompositor | null = null;
+  /** Actual backend; `gpu` remains the historical CanvasHost-compatible compositor handle. */
+  private software: SoftwareCompositor | null = null;
+  rendererKind: 'webgl2' | 'software' | 'none' = 'none';
   private readonly controller: EditorController;
   private frame = 0;
   private resizeObserver: ResizeObserver;
@@ -86,11 +90,27 @@ export class CanvasView implements CanvasHost {
   async start(): Promise<void> {
     try {
       this.gpu = await GpuCompositor.create(this.glCanvas, 1, 1);
+      this.rendererKind = 'webgl2';
     } catch (error) {
-      this.failure = (error as Error).message;
-      this.controller.host.reportError({ code: 'webgl2-unavailable', message: this.failure });
+      try {
+        // A failed Pixi initialization may already have selected a WebGL context mode; Canvas cannot
+        // switch that element to 2D, so replace only the drawing surface and preserve its attributes.
+        const replacement = document.createElement('canvas');
+        replacement.style.cssText = this.glCanvas.style.cssText;
+        replacement.setAttribute('aria-label', 'Canvas'); replacement.setAttribute('role', 'img');
+        replacement.dataset.testid = 'editor-canvas';
+        this.glCanvas.replaceWith(replacement); this.glCanvas = replacement;
+        this.software = await SoftwareCompositor.create(replacement, 1, 1);
+        // Existing canvas/export/bake consumers use the compositor's public structural API through
+        // this legacy property. SoftwareCompositor deliberately implements those same methods.
+        this.gpu = this.software as unknown as GpuCompositor;
+        this.rendererKind = 'software';
+      } catch (fallbackError) {
+        this.failure = `${(error as Error).message} ${(fallbackError as Error).message}`;
+        this.controller.host.reportError({ code: 'canvas-renderer-unavailable', message: this.failure });
+      }
     }
-    if (this.destroyed) { this.gpu?.destroy(); this.gpu = null; return; }
+    if (this.destroyed) { this.gpu?.destroy(); this.gpu = null; this.software = null; this.rendererKind = 'none'; return; }
     this.syncGeometry();
     this.redraw();
   }
@@ -103,6 +123,8 @@ export class CanvasView implements CanvasHost {
     this.workspaceOff();
     this.gpu?.destroy();
     this.gpu = null;
+    this.software = null;
+    this.rendererKind = 'none';
     this.element.remove();
   }
 
@@ -146,13 +168,16 @@ export class CanvasView implements CanvasHost {
   }
 
   private hooks(session: EditorSession): CompositeHooks {
+    // RasterSnapshotTests.softwareFallbackKeepsTheSoftStrokeContinuous: without the Metal/WebGL
+    // coverage preview, replay the exact CPU stroke and use it as the layer replacement.
+    const brush = this.software ? currentBrushPreview(session) : null;
     return {
-      transform: (l) => session.displayedTransform(l),
+      transform: (l) => brush?.layerId === l.id && !brush.mask ? brush.transform : session.displayedTransform(l),
       maskPlacement: (l) => session.displayedMaskPlacement(l),
       blendMode: (l) => session.displayedBlendMode(l),
-      raster: (l) => session.displayedRaster(l),
-      maskRaster: (l) => session.displayedMaskRaster(l),
-      brush: currentGpuBrushPreview(session),
+      raster: (l) => brush?.layerId === l.id && !brush.mask ? brush.raster : session.displayedRaster(l),
+      maskRaster: (l) => brush?.layerId === l.id && brush.mask ? brush.raster : session.displayedMaskRaster(l),
+      brush: this.software ? null : currentGpuBrushPreview(session),
     };
   }
 
