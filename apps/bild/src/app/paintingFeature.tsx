@@ -603,7 +603,7 @@ function ColorPicker({ controller, request }: { controller: EditorController; re
       onChange={(v) => setHsb((h) => hsbKeeping({ ...color, [key]: Math.min(255, Math.max(0, Math.round(v))) / 255 }, h))} />
   );
   return (
-    <FloatingPanel name="colorPicker" title={request.title} onClose={() => finish(false)} closeLabel={t('Cancel')} testId="color-picker">
+    <FloatingPanel name="colorPicker" title={request.title} onClose={() => finish(false)} closeLabel={t('Cancel')} testId="color-picker" secondary>
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}
         onKeyDown={(event) => { if (event.key === 'Escape') finish(false); else if (event.key === 'Enter' && !(event.target as Element).closest('input')) finish(true); }}>
         <div role="slider" aria-label="Saturation and brightness" aria-valuetext={`${Math.round(hsb.saturation * 100)}%, ${Math.round(hsb.brightness * 100)}%`} tabIndex={0}

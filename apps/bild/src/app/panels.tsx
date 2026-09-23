@@ -8,8 +8,10 @@ const clamp = (value: number, lo: number, hi: number) => Math.min(hi, Math.max(l
 /** A movable, non-modal panel (FloatingPanel.swift): it never dims the editor and reopens where it was left. */
 const panelPositions = new Map<string, { x: number; y: number }>();
 
-export function FloatingPanel({ name, title, children, onClose, closeLabel, testId = 'adjustment-panel' }: {
+export function FloatingPanel({ name, title, children, onClose, closeLabel, testId = 'adjustment-panel', secondary = false }: {
   name: string; title: string; children: ReactNode; onClose: () => void; closeLabel: string; testId?: string;
+  /** Opened from another panel (the color picker): drawn above it and, the first time, beside it. */
+  secondary?: boolean;
 }) {
   const [position, setPosition] = useState(() => panelPositions.get(name) ?? null);
   const ref = useRef<HTMLDivElement>(null);
@@ -33,8 +35,8 @@ export function FloatingPanel({ name, title, children, onClose, closeLabel, test
     handle.addEventListener('pointerup', up);
   };
   return (
-    <div ref={ref} className={styles.floatingPanel} role="dialog" aria-label={title} data-testid={testId}
-      style={position ? { left: position.x, top: position.y, right: 'auto' } : undefined}
+    <div ref={ref} className={`${styles.floatingPanel} ${secondary ? styles.floatingPanelSecondary : ''}`} role="dialog" aria-label={title} data-testid={testId}
+      style={position ? { left: position.x, top: position.y, right: 'auto', bottom: 'auto' } : undefined}
       onKeyDown={(event) => event.stopPropagation()}>
       <div className={styles.panelHeader} onPointerDown={drag}>
         <h2 className={styles.dialogTitle}>{title}</h2>
