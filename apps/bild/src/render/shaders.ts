@@ -3,8 +3,7 @@
  * fragment centre in target pixels (origin top-left). Colour targets hold premultiplied sRGB.
  *
  * Semantics follow Compositor's CoreGraphics/CoreImage pipeline (LayerRenderer.swift,
- * LiveMaskRenderer.swift, SeparableBlend.swift): PDF blend formulas in 8-bit sRGB, except Color
- * Dodge and Color Burn, which upstream renders through CoreImage in its linear working space.
+ * LiveMaskRenderer.swift, SeparableBlend.swift): PDF blend formulas on 8-bit sRGB values.
  */
 
 export const VERTEX = /* glsl */ `#version 300 es
@@ -81,13 +80,8 @@ vec4 composite(int mode, vec4 dst, vec4 src) {
   vec3 cs = src.rgb / as_;
   float ao = as_ + ab - as_ * ab;
   if (mode == 0) return vec4(src.rgb + dst.rgb * (1.0 - as_), ao);
-  if (mode == 7 || mode == 8) {
-    // CoreImage blends in linear light (SeparableBlend.swift).
-    vec3 lb = toLinear(cb), ls = toLinear(cs);
-    vec3 co = ls * as_ * (1.0 - ab) + lb * ab * (1.0 - as_) + as_ * ab * blendColor(mode, lb, ls);
-    vec3 straight = ao > 0.0 ? co / ao : vec3(0.0);
-    return vec4(toSRGB(straight) * ao, ao);
-  }
+  // Colour Dodge/Burn go through Core Image upstream only to fix CoreGraphics' alpha handling
+  // (SeparableBlend.swift); LayerAppearanceTests pins the result to the sRGB formula (burn 0.4/0.8 = 0.25).
   vec3 co = src.rgb * (1.0 - ab) + dst.rgb * (1.0 - as_) + as_ * ab * blendColor(mode, cb, cs);
   return vec4(co, ao);
 }
@@ -237,7 +231,7 @@ void main() {
 
 /**
  * Adjustment layer (LiveMaskRenderer.adjust): adjusted colour, optional blend at full coverage with
- * the original alpha restored, opacity lerp in linear light (CIBlendWithMask), then a copy through
+ * the original alpha restored, opacity lerp (CIBlendWithMask), then a copy through
  * the clip: result = mix(original, adjusted, clip).
  * ADJUST_FUNCTION is spliced in per adjustment kind.
  */
@@ -263,10 +257,7 @@ void main() {
   vec3 adjusted = clamp(adjustColor(straight, doc), 0.0, 1.0);
   if (uMode != 0) adjusted = clamp(blendColor(uMode, straight, adjusted), 0.0, 1.0);
   vec4 result = vec4(adjusted * original.a, original.a);
-  if (uOpacity < 1.0) {
-    vec3 lo = toLinear(straight), la = toLinear(adjusted);
-    result = vec4(toSRGB(mix(lo, la, uOpacity)) * original.a, original.a);
-  }
+  if (uOpacity < 1.0) result = vec4(mix(straight, adjusted, uOpacity) * original.a, original.a);
   float clip = uHasClip == 1 ? texelFetch(uClip, p, 0).r : 1.0;
   finalColor = mix(original, result, clip);
 }

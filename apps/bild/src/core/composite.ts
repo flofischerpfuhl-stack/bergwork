@@ -1,5 +1,5 @@
 /** CPU reference for LiveMaskRenderer, LayerRenderer, FolderMaskClip, AdjustmentSurface and ImageExporter.render. */
-import { blendRgbInto, clamp01, compositePremultiplied, linearToSrgb, srgbToLinear } from './blend';
+import { blendRgbInto, clamp01, compositePremultiplied } from './blend';
 import { ancestorIds, renderLayers, type BlendMode, type CanvasDocument, type Layer, type LayerAdjustment } from './document';
 import type { Affine, LayerTransform, Rect } from './geometry';
 import { concat, invert, pixelToDocument, samePlacement } from './geometry';
@@ -202,7 +202,7 @@ class BandRenderer {
           target[offset + 1] = sg + target[offset + 1]! * inverse;
           target[offset + 2] = sb + target[offset + 2]! * inverse;
           target[offset + 3] = alpha + target[offset + 3]! * inverse;
-        } else compositePremultiplied(target, offset, sr, sg, sb, alpha, mode, true, this.blendScratch);
+        } else compositePremultiplied(target, offset, sr, sg, sb, alpha, mode, false, this.blendScratch);
       }
     }
     return true;
@@ -257,7 +257,7 @@ class BandRenderer {
         if (coverage <= 0) continue;
         const offset = (py * width + px) * 4;
         compositePremultiplied(target, offset, sample[0]! * coverage, sample[1]! * coverage,
-          sample[2]! * coverage, sample[3]! * coverage, mode, true, this.blendScratch);
+          sample[2]! * coverage, sample[3]! * coverage, mode, false, this.blendScratch);
       }
     }
   }
@@ -333,15 +333,18 @@ class BandRenderer {
     }
   }
 
-  /** CIBlendWithMask operates in premultiplied linear sRGB. */
+  /**
+   * CIBlendWithMask: a lerp from the original to the adjusted colour by the opacity. Computed on sRGB
+   * values like the Color Dodge/Burn paths, whose upstream test pins sRGB results.
+   */
   private adjustmentOpacity(original: Float32Array, adjusted: Float32Array, opacity: number): void {
     for (let offset = 0; offset < adjusted.length; offset += 4) {
       const alpha = original[offset + 3]!;
       if (alpha <= 0) { adjusted[offset] = adjusted[offset + 1] = adjusted[offset + 2] = 0; continue; }
       for (let channel = 0; channel < 3; channel++) {
-        const from = srgbToLinear(clamp01(original[offset + channel]! / alpha));
-        const to = srgbToLinear(clamp01(adjusted[offset + channel]! / Math.max(adjusted[offset + 3]!, 1e-30)));
-        adjusted[offset + channel] = linearToSrgb(from * (1 - opacity) + to * opacity) * alpha;
+        const from = clamp01(original[offset + channel]! / alpha);
+        const to = clamp01(adjusted[offset + channel]! / Math.max(adjusted[offset + 3]!, 1e-30));
+        adjusted[offset + channel] = (from * (1 - opacity) + to * opacity) * alpha;
       }
       adjusted[offset + 3] = alpha;
     }
@@ -386,7 +389,7 @@ class BandRenderer {
       const folder = this.folderCoverage(stack.base, originX + px + 0.5, originY + py + 0.5);
       if (folder <= 0) continue;
       compositePremultiplied(target, offset, group[offset]! * folder, group[offset + 1]! * folder,
-        group[offset + 2]! * folder, group[offset + 3]! * folder, mode, true, this.blendScratch);
+        group[offset + 2]! * folder, group[offset + 3]! * folder, mode, false, this.blendScratch);
     }
   }
 

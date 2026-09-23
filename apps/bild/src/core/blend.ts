@@ -72,8 +72,12 @@ function channel(mode: BlendMode, backdrop: number, source: number): number {
   }
 }
 
-/** Straight-colour blend function B(Cb, Cs). SeparableBlend.swift routes dodge/burn through linear Core Image. */
-export function blendRgb(mode: BlendMode, backdrop: RGB, source: RGB, linearDodgeBurn = true): RGB {
+/**
+ * Straight-colour blend function B(Cb, Cs) in sRGB. `linearDodgeBurn` exists for experiments only: the
+ * upstream test LayerAppearanceTests.blendModesAndOpacityMatchKnownPixels (burn of 0.8 over 0.4 = 0.25)
+ * shows Color Dodge/Burn results follow the sRGB formula.
+ */
+export function blendRgb(mode: BlendMode, backdrop: RGB, source: RGB, linearDodgeBurn = false): RGB {
   const out = new Float64Array(6);
   blendRgbInto(mode, backdrop[0], backdrop[1], backdrop[2], source[0], source[1], source[2], out, linearDodgeBurn);
   return [out[0]!, out[1]!, out[2]!];
@@ -81,7 +85,7 @@ export function blendRgb(mode: BlendMode, backdrop: RGB, source: RGB, linearDodg
 
 /** Allocation-free form used by the compositor's pixel loop; `out` needs six elements. */
 export function blendRgbInto(mode: BlendMode, br: number, bg: number, bb: number,
-  sr: number, sg: number, sb: number, out: Float64Array, linearDodgeBurn = true): void {
+  sr: number, sg: number, sb: number, out: Float64Array, linearDodgeBurn = false): void {
   switch (mode) {
     case 'hue':
       setSatInto(sr, sg, sb, sat3(br, bg, bb), out, 3);
@@ -107,7 +111,7 @@ export function blendRgbInto(mode: BlendMode, br: number, bg: number, bb: number
 
 /** PDF/W3C source-over blend on premultiplied sRGB values. */
 export function compositePremultiplied(backdrop: Float32Array, offset: number,
-  sr: number, sg: number, sb: number, sa: number, mode: BlendMode, linearDodgeBurn = true,
+  sr: number, sg: number, sb: number, sa: number, mode: BlendMode, linearDodgeBurn = false,
   scratch = new Float64Array(6)): void {
   if (sa <= 0) return;
   const ba = backdrop[offset + 3]!;

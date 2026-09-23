@@ -1,0 +1,17 @@
+{
+  "node": "v22.18.0",
+  "date": "2026-09-23T15:41:50.240Z",
+  "medianMs": {
+    "raster.withRegion 64² on 4096²": 29.6,
+    "insert 200 layers with undo steps": 68.3,
+    "undo 200 steps": 69.9,
+    "ellipse 7000² selection": 904.9,
+    "400-point lasso 7000²": 723.2,
+    "outline of 3000² ellipse": 138.3,
+    "expand 3000² ellipse by 20 px": 709.6,
+    "PNG encode 2048² noise": 1158,
+    "PNG decode 2048² noise": 438.2,
+    "SHA-256 16 MB": 477.1,
+    "CPU composite 1024² × 5": 1610.3
+  }
+}

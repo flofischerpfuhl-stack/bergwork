@@ -36,10 +36,23 @@ describe('blend modes (LayerAppearanceTests.blendModesAndOpacityMatchKnownPixels
   const expected: Record<BlendMode, readonly number[]> = {
     normal: [149, 85, 149, 192], multiply: [101, 75, 139, 192], screen: [155, 117, 181, 192],
     overlay: [117, 86, 171, 192], darken: [107, 85, 149, 192], lighten: [149, 107, 171, 192],
-    difference: [128, 85, 128, 192], colorDodge: [116, 108, 178, 192], colorBurn: [85, 64, 106, 192],
+    difference: [128, 85, 128, 192], colorDodge: [171, 121, 192, 192], colorBurn: [86, 64, 150, 192],
     hue: [152, 87, 151, 192], saturation: [107, 107, 171, 192], color: [152, 87, 151, 192],
     luminosity: [104, 105, 169, 192],
   };
+
+  it('upstream known pixels: 0.8 over 0.4 (LayerAppearanceTests.blendModesAndOpacityMatchKnownPixels)', () => {
+    const cases: [BlendMode, number][] = [['normal', 0.8], ['multiply', 0.32], ['screen', 0.88], ['overlay', 0.64], ['darken', 0.4],
+      ['lighten', 0.8], ['difference', 0.4], ['colorDodge', 1], ['colorBurn', 0.25]];
+    for (const [mode, value] of cases) {
+      const g = (v: number) => rgba(4, 4, Array.from({ length: 16 }, () => [v, v, v, 255]).flat());
+      const back = layer('back', g(Math.round(0.4 * 255)), transform(0, 0, 4, 4));
+      const top = layer('top', g(Math.round(0.8 * 255)), transform(0, 0, 4, 4), { blendMode: mode });
+      const pixel = render(document(4, 4, [back, top]));
+      expect(Math.abs(pixel[0]! / 255 - value), mode).toBeLessThan(0.02);
+      expect(pixel[3]).toBe(255);
+    }
+  });
 
   for (const mode of modes) it(`${mode} matches the PDF/W3C formula over a translucent backdrop`, () => {
     const back = layer('back', rgba(1, 1, [64, 128, 192, 128]), transform(0, 0, 1, 1));
@@ -168,12 +181,12 @@ describe('adjustment surface (AdjustmentLayerTests)', () => {
     expect(result.rgba).toEqual(new Uint8Array([255, 0, 0, 255]));
   });
 
-  it('applies adjustment opacity in linear light and copies through its mask', () => {
+  it('applies adjustment opacity as an sRGB lerp and copies through its mask', () => {
     const base = layer('base', rgba(2, 1, [255, 0, 0, 255, 255, 0, 0, 255]), transform(0, 0, 2, 1));
     const change = layer('adjust', null, transform(0, 0, 2, 1), { adjustment, opacity: 0.5,
       mask: { raster: mask(2, 1, [255, 0]), enabled: true, placement: null, linked: true } });
     expect(Array.from(render(document(2, 1, [base, change]), { adjust: invert })))
-      .toEqual([188, 188, 188, 255, 255, 0, 0, 255]);
+      .toEqual([128, 128, 128, 255, 255, 0, 0, 255]);
   });
 
   it('uses the adjustment blend mode at full coverage and skips linked adjustments outside stacks', () => {

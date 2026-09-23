@@ -65,8 +65,8 @@ test('GPU compositor reproduces upstream compositing semantics', async ({ page }
   near(o.liveMaskHiddenBase!, [0, 255, 0, 255, 0, 0, 0, 0]);
   near(o.folderMask!, [0, 0, 0, 0, 9, 9, 9, 255]);
   near(o.rotated!, [255, 0, 0, 255, 0, 0, 255, 255], 0);
-  // Colour Dodge in linear light (CoreImage): lin(0.502)=0.2159; 0.2159/(1-0.2159)=0.2753 → sRGB 0.5617.
-  near(o.dodge!, [143, 143, 143, 255], 2);
+  // Colour Dodge on sRGB values (LayerAppearanceTests pins dodge/burn to the sRGB formula): 0.502/(1-0.502) → 1.
+  near(o.dodge!, [255, 255, 255, 255], 1);
   // Hue: SetLum(SetSat(s, Sat(b)), Lum(b)).
   near(o.hueMode!, hueExpected([200, 100, 50], [50, 100, 200]), 2);
   console.log('GPU info', results.info);
