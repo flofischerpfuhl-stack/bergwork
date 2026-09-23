@@ -11,6 +11,8 @@ export interface MenuItem {
   label: string;
   /** Shortcut in the form 'mod+shift+z' (mod = ⌘ on macOS, Ctrl elsewhere). */
   shortcut?: string;
+  /** Further shortcuts for the same command, not shown (e.g. ⌘N, which browsers keep but desktop shells pass on). */
+  aliases?: string[];
   enabled: boolean;
   checked?: boolean;
   run?: () => void;
@@ -42,7 +44,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
     {
       title: t('File'),
       items: [
-        { label: t('New Canvas…'), shortcut: 'mod+alt+n', enabled: canStart, run: () => controller.showDialog({ kind: 'newCanvas' }), testId: 'menu-new-canvas' },
+        { label: t('New Canvas…'), shortcut: 'mod+alt+n', aliases: ['mod+n'], enabled: canStart, run: () => { controller.workspace.newCanvas(); }, testId: 'menu-new-canvas' },
         { label: t('Open Project…'), shortcut: 'mod+o', enabled: canStart, run: () => void controller.chooseAndOpen() },
         { label: t('Import Images…'), enabled: !session.isImporting && !session.isProjectBusy, run: () => void controller.chooseAndImport(), testId: 'menu-import' },
         'separator',
@@ -52,7 +54,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         { label: t('Export PNG…'), shortcut: 'mod+shift+e', enabled: !!document && canStart, run: () => void controller.exportTo('png'), testId: 'menu-export-png' },
         { label: t('Export JPEG…'), shortcut: 'mod+alt+shift+s', enabled: !!document && canStart, run: () => controller.showDialog({ kind: 'jpeg' }) },
         'separator',
-        { label: t('Close Project'), shortcut: 'mod+alt+w', enabled: canStart, run: () => void controller.closeTab(controller.workspace.selectedId) },
+        { label: t('Close Project'), shortcut: 'mod+alt+w', aliases: ['mod+w'], enabled: canStart, run: () => void controller.closeTab(controller.workspace.selectedId) },
       ],
     },
     {
@@ -170,6 +172,7 @@ export function shortcutMap(menus: Menu[]): Map<string, MenuItem> {
     for (const item of items) {
       if (item === 'separator') continue;
       if (item.shortcut) map.set(item.shortcut, item);
+      for (const alias of item.aliases ?? []) map.set(alias, item);
       if (item.submenu) visit(item.submenu);
     }
   };

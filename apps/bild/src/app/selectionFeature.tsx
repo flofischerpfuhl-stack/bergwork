@@ -329,6 +329,18 @@ export function mirrorSelection(document: CanvasDocument, horizontally: boolean)
 }
 
 export function installSelection(controller: EditorController): void {
+  // M chooses the Marquee, pressed again it switches Rectangle/Ellipse; L likewise for Freehand/Polygonal. The shape
+  // stays as last set (SelectionTests.mKeyChoosesTheMarqueeThenSwitchesItsShape, lKeyChoosesTheLassoThenSwitchesItsMode).
+  controller.toolKeyHandlers.m = () => {
+    const session = controller.session, state = selectionState(session);
+    if (session.tool === 'marquee') { cancelLasso(session); state.marqueeKind = state.marqueeKind === 'Rectangle' ? 'Ellipse' : 'Rectangle'; session.notify('ui'); }
+    else session.selectTool('marquee');
+  };
+  controller.toolKeyHandlers.l = () => {
+    const session = controller.session, state = selectionState(session);
+    if (session.tool === 'lasso') { cancelLasso(session); state.lassoKind = state.lassoKind === 'Freehand' ? 'Polygonal' : 'Freehand'; session.notify('ui'); }
+    else session.selectTool('lasso');
+  };
   controller.mirrorSelection = mirrorSelection;
   // Cmd-drag / Cmd-arrows move the selected pixels (SelectionEdits.swift); the preview shows through
   // a preview source so a grown layer keeps its place.

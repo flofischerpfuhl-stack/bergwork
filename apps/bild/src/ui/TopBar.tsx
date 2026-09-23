@@ -101,7 +101,7 @@ export function TopBar({ controller, compact }: { controller: EditorController; 
         </nav>
       )}
       <button type="button" className={styles.iconButton} aria-label={t('New canvas')} title={`${t('New canvas')} (${shortcutLabel('mod+alt+n')}) · ${t('Drop images here for new tabs')}`}
-        disabled={!workspace.canSwitch} onClick={() => controller.showDialog({ kind: 'newCanvas' })} data-testid="new-canvas" data-new-tab
+        disabled={!workspace.canSwitch} onClick={() => { workspace.newCanvas(); }} data-testid="new-canvas" data-new-tab
         onDragOver={(event) => { if ([...event.dataTransfer.types].includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
         onDrop={(event) => {
           // Dock/new-tab drops open one project per image (ProjectWorkspace.receive).

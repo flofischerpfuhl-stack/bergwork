@@ -252,8 +252,8 @@
 .sheetTitle { font: 600 20px/1.2 var(--cmp-font); margin: 0; }
 .secondary { color: var(--cmp-text-secondary); }
 .dimensionRow { display: flex; align-items: flex-end; gap: 16px; }
-.dimension { flex: 1; display: flex; flex-direction: column; gap: 8px; font: 500 13px/1 var(--cmp-font); }
-.dimensionInput { display: flex; align-items: center; gap: 6px; padding: 12px; border-radius: 7px; background: var(--cmp-control); }
+.dimension { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; font: 500 13px/1 var(--cmp-font); }
+.dimensionInput { display: flex; align-items: center; gap: 6px; padding: 12px; border-radius: 7px; background: var(--cmp-control); min-width: 0; }
 .dimensionInput input {
   flex: 1; min-width: 0; border: 0; background: transparent; color: var(--cmp-text); font: 15px/1 var(--cmp-font); outline: none;
   font-variant-numeric: tabular-nums;

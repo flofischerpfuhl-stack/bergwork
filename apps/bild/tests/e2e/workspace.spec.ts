@@ -47,3 +47,30 @@ test('pasting an external image centres it on a new layer', async ({ page }) => 
   const layer = (await manifest(page)).layers[1];
   expect(layer.transform).toEqual([1, 0, 0, 1, 45, 30]);
 });
+
+test('New Canvas opens an empty tab without a modal; M and L switch the selection shapes', async ({ page }) => {
+  await mountForTest(page);
+  await page.getByTestId('createCanvas').click();
+  // The editor has keyboard focus from the start.
+  expect(await page.evaluate(() => document.activeElement?.closest('[data-testid=compositor-editor]') !== null)).toBe(true);
+  await page.getByTestId('menu-File').click();
+  await page.getByTestId('menu-new-canvas').click();
+  await expect(page.getByRole('tab')).toHaveCount(2);
+  await expect(page.getByRole('tab').nth(1)).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('[role=alertdialog], [aria-modal=true]')).toHaveCount(0);
+  await page.getByTestId('createCanvas').click();
+  const editor = page.getByTestId('compositor-editor');
+  const tool = () => page.evaluate(() => (window as any).__editorForTests.session.tool);
+  await editor.press('m');
+  expect(await tool()).toBe('marquee');
+  await expect(page.getByRole('radio', { name: 'Rectangle' })).toHaveAttribute('aria-checked', 'true');
+  await editor.press('m');
+  await expect(page.getByRole('radio', { name: 'Ellipse' })).toHaveAttribute('aria-checked', 'true');
+  await editor.press('l');
+  expect(await tool()).toBe('lasso');
+  await editor.press('l');
+  await expect(page.getByRole('radio', { name: 'Polygonal' })).toHaveAttribute('aria-checked', 'true');
+  await editor.press('b');
+  await editor.press('m');
+  await expect(page.getByRole('radio', { name: 'Ellipse' })).toHaveAttribute('aria-checked', 'true');
+});

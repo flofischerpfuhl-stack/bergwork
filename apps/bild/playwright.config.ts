@@ -20,6 +20,11 @@ export default defineConfig({
       name: 'perf-gpu', testMatch: /performance\.spec/,
       use: { ...devices['Desktop Chrome'], launchOptions: { args: ['--use-angle=gl', '--enable-gpu', '--ignore-gpu-blocklist'] } },
     },
+    // Cross-browser runs of the workflow specs (opt-in: E2E_ALL_BROWSERS=1; needs `playwright install firefox webkit`).
+    ...(process.env.E2E_ALL_BROWSERS ? [
+      { name: 'firefox', use: { ...devices['Desktop Firefox'] }, testIgnore: /performance\.spec|gpu-vs-cpu|adjust-gpu|subject/ },
+      { name: 'webkit', use: { ...devices['Desktop Safari'] }, testIgnore: /performance\.spec|gpu-vs-cpu|adjust-gpu|subject/ },
+    ] : []),
   ],
   webServer: {
     command: `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${port} --strictPort`,

@@ -52,6 +52,33 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
     return () => observer.disconnect();
   }, [controller]);
 
+  // The editor takes keyboard focus when it mounts (CanvasView.consumeFocusRequest), so shortcuts work at once.
+  // Focus also comes back when the focused control disappears (the new-canvas sheet after Create, a closed panel).
+  useEffect(() => {
+    const element = root.current!;
+    element.focus({ preventScroll: true });
+    const focusOut = (event: FocusEvent) => {
+      const lost = event.target as Element;
+      queueMicrotask(() => {
+        if (!lost.isConnected && element.isConnected && (!document.activeElement || document.activeElement === document.body)) element.focus({ preventScroll: true });
+      });
+    };
+    element.addEventListener('focusout', focusOut);
+    return () => element.removeEventListener('focusout', focusOut);
+  }, []);
+
+  // Closing the page with unsaved tabs asks first (ProjectWorkspace.confirmQuit). Browsers only allow their own
+  // generic prompt here; per-tab Save/Don't Save questions are asked by the host shell or when closing a tab.
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!controller.workspace.tabs.some((tab) => tab.session.document && tab.session.isModified)) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    addEventListener('beforeunload', beforeUnload);
+    return () => removeEventListener('beforeunload', beforeUnload);
+  }, [controller]);
+
   useEffect(() => {
     const element = root.current!;
     const onKeyDown = (event: KeyboardEvent) => {
