@@ -72,6 +72,9 @@ export interface TransformEdit {
 }
 
 export type ChangeKind = 'document' | 'view' | 'ui';
+
+/** Pixels a tool shows in place of a layer's (or its mask's) stored raster while it works. */
+export interface LayerPreview { readonly layerId: string; readonly mask: boolean; readonly raster: Raster; readonly transform: LayerTransform }
 export type Listener = (kind: ChangeKind) => void;
 
 /** Renderer/compositor capabilities the session needs for merges and bakes. */
@@ -122,6 +125,20 @@ export class EditorSession {
   /** Pixels a tool is previewing in place of a layer's stored raster (brush strokes, moves, filters). */
   rasterOverrides = new Map<string, Raster>();
   maskOverrides = new Map<string, Raster>();
+  /** Placement for an overridden raster whose working grid differs from the layer's. */
+  transformOverrides = new Map<string, LayerTransform>();
+  /**
+   * Live previews queried on every draw (strokes, pending gradients); unlike the override maps they
+   * can never go stale when a tool's state is resolved elsewhere.
+   */
+  previewSources: ((session: EditorSession) => LayerPreview | null)[] = [];
+  private livePreview(layerId: string): LayerPreview | null {
+    for (const source of this.previewSources) {
+      const preview = source(this);
+      if (preview && preview.layerId === layerId) return preview;
+    }
+    return null;
+  }
   /** Tool previews with their own drawing (lasso drafts, gradient lines…) ask the canvas to redraw. */
   overlayRevision = 0;
   /** Called after long-running edits so the canvas can redraw immediately. */
@@ -897,9 +914,23 @@ export class EditorSession {
     }
     return edit.layerId === layer.id ? edit.draft : null;
   }
-  displayedTransform(layer: Layer): LayerTransform { return this.pendingTransform(layer) ?? layer.transform; }
-  displayedRaster(layer: Layer): Raster | null { return this.rasterOverrides.get(layer.id) ?? layer.raster; }
-  displayedMaskRaster(layer: Layer): Raster | null { return this.maskOverrides.get(layer.id) ?? layer.mask?.raster ?? null; }
+  displayedTransform(layer: Layer): LayerTransform {
+    const pending = this.pendingTransform(layer);
+    if (pending) return pending;
+    const preview = this.livePreview(layer.id);
+    if (preview && !preview.mask) return preview.transform;
+    return this.transformOverrides.get(layer.id) ?? layer.transform;
+  }
+  displayedRaster(layer: Layer): Raster | null {
+    const preview = this.livePreview(layer.id);
+    if (preview && !preview.mask) return preview.raster;
+    return this.rasterOverrides.get(layer.id) ?? layer.raster;
+  }
+  displayedMaskRaster(layer: Layer): Raster | null {
+    const preview = this.livePreview(layer.id);
+    if (preview?.mask) return preview.raster;
+    return this.maskOverrides.get(layer.id) ?? layer.mask?.raster ?? null;
+  }
 
   /** Where the transform handles sit for `layer`. */
   editedTransform(layer: Layer): LayerTransform {

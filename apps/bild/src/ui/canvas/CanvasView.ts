@@ -44,6 +44,8 @@ export class CanvasView implements CanvasHost {
   private readonly hand = new HandTool();
   private lastModifiers: Modifiers = { shift: false, option: false, command: false, control: false };
   private lastPoint: Point | null = null;
+  /** The mouse/pen position over the canvas (view points), for brush cursors; null when away or touching. */
+  hoverPoint: Point | null = null;
   private animating = false;
   private destroyed = false;
   failure: string | null = null;
@@ -285,6 +287,7 @@ export class CanvasView implements CanvasHost {
     const modifiers = modifiersOf(event);
     return {
       session, point, pixel, modifiers, pointerType: event.pointerType, distortArmed: this.distortArmed,
+      pressure: event.pointerType === 'pen' ? event.pressure : null,
       redraw: () => this.redraw(),
       setCursor: (cursor) => { this.element.style.cursor = cursor; },
     };
@@ -327,6 +330,9 @@ export class CanvasView implements CanvasHost {
     const point = this.localPoint(event);
     this.lastPoint = point;
     this.lastModifiers = modifiersOf(event);
+    const previousHover = this.hoverPoint;
+    this.hoverPoint = event.pointerType === 'touch' ? null : point;
+    if (previousHover || this.hoverPoint) this.redrawOverlayOnly();
     if (this.pointers.has(event.pointerId)) this.pointers.set(event.pointerId, point);
     if (this.pinch && this.pointers.size >= 2) {
       const [a, b] = [...this.pointers.values()] as [Point, Point];
@@ -385,7 +391,11 @@ export class CanvasView implements CanvasHost {
     this.panning = null;
   };
 
-  private onPointerLeave = (): void => { this.controller.ui.setState({ pointerOverCanvas: false }); };
+  private onPointerLeave = (): void => {
+    this.hoverPoint = null;
+    this.redrawOverlayOnly();
+    this.controller.ui.setState({ pointerOverCanvas: false });
+  };
 
   private updateHoverCursor(event: { shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean; pointerType?: string }, point: Point): void {
     const handler = this.toolHandler();
@@ -394,7 +404,7 @@ export class CanvasView implements CanvasHost {
     if (!handler?.hover || !document) { this.element.style.cursor = 'default'; return; }
     const context: ToolContext = {
       session, point, pixel: session.viewport.documentPoint(point, document), modifiers: modifiersOf(event),
-      pointerType: event.pointerType ?? 'mouse', distortArmed: this.distortArmed, redraw: () => this.redraw(),
+      pointerType: event.pointerType ?? 'mouse', distortArmed: this.distortArmed, pressure: null, redraw: () => this.redraw(),
       setCursor: (cursor) => { this.element.style.cursor = cursor; },
     };
     this.element.style.cursor = handler.hover(context);

@@ -143,6 +143,11 @@ const pending = new WeakMap<EditorSession, PendingGradient>();
 
 export function pendingGradient(session: EditorSession): GradientEdit | null { return pending.get(session)?.edit ?? null; }
 export function hasPendingGradient(session: EditorSession): boolean { return pending.has(session); }
+/** The pending gradient for the canvas preview. */
+export function pendingGradientPreview(session: EditorSession): { layerId: string; mask: boolean; raster: Raster; transform: import('./geometry').LayerTransform } | null {
+  const active = pending.get(session);
+  return active ? { layerId: active.layerId, mask: active.mask, raster: active.edit.currentRaster(), transform: active.edit.transform } : null;
+}
 export function gradientPreview(session: EditorSession): Raster | null { return pending.get(session)?.edit.currentRaster() ?? null; }
 
 export function beginGradient(session: EditorSession, point: Point,

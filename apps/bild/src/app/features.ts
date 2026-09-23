@@ -6,8 +6,10 @@
 import type { EditorController } from '../ui/controller';
 import { installCanvasOps } from './canvasOpsFeature';
 import { installSelection } from './selectionFeature';
+import { installPainting } from './paintingFeature';
 
 export function installFeatures(controller: EditorController): void {
   installCanvasOps(controller);
   installSelection(controller);
+  installPainting(controller);
 }

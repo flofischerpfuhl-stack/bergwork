@@ -41,6 +41,12 @@ export function updateRetouch(session: EditorSession, points: readonly Point[]):
   return strokes.get(session)?.stroke.addPoints(points) ?? [];
 }
 
+/** The retouch stroke in progress for the canvas preview. */
+export function currentRetouchPreview(session: EditorSession): { layerId: string; mask: boolean; raster: ReturnType<RetouchStroke['currentRaster']>; transform: import('../geometry').LayerTransform } | null {
+  const active = strokes.get(session);
+  return active ? { layerId: active.layerId, mask: active.mask, raster: active.stroke.currentRaster(), transform: active.transform } : null;
+}
+
 export function currentRetouch(session: EditorSession): ReturnType<RetouchStroke['currentRaster']> | null {
   return strokes.get(session)?.stroke.currentRaster() ?? null;
 }

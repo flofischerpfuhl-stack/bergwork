@@ -150,7 +150,7 @@ export function DialogHost({ controller }: { controller: EditorController }) {
     queueMicrotask(() => { close(); controller.session.notify('ui'); });
     return null;
   } else {
-    const custom = controller.dialogs[dialog.kind];
+    const custom = controller.dialogs[dialog.kind === 'custom' ? dialog.name : dialog.kind];
     content = custom ? custom(close) : null;
   }
   return (

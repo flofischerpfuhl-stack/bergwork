@@ -27,6 +27,8 @@ export interface ToolContext {
   readonly pixel: Point;
   readonly modifiers: Modifiers;
   readonly pointerType: string;
+  /** Pen pressure 0…1, or null for mouse and touch. */
+  readonly pressure: number | null;
   /** Touch alternative for Cmd-drag distortion (context-bar toggle). */
   readonly distortArmed: boolean;
   redraw(): void;

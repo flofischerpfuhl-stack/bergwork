@@ -56,6 +56,8 @@ export interface StrokeResult {
 export interface Stroke {
   addPoints(points: readonly Point[], options?: { readonly pressure?: number | readonly number[] }): StrokeUpdate;
   currentRaster(): Raster;
+  /** Where `currentRaster()` sits on the document (the working grid may extend past the layer). */
+  currentTransform(): LayerTransform;
   finish(): StrokeResult;
   cancel(): void;
 }
@@ -152,6 +154,7 @@ class ContinuousBrushStroke implements Stroke {
   }
 
   currentRaster(): Raster { return this.raster; }
+  currentTransform(): LayerTransform { return this.paintTransform; }
 
   finish(): StrokeResult {
     this.assertActive();

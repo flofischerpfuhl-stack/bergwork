@@ -148,6 +148,15 @@ export function extendBrushStroke(session: EditorSession, points: Point | readon
   return update;
 }
 
+/** The stroke in progress as the canvas should show it: which layer (or its mask), pixels and placement. */
+export function currentBrushPreview(session: EditorSession): { layerId: string; mask: boolean; raster: Raster; transform: Layer['transform'] } | null {
+  const active = state(session).active;
+  if (!active) return null;
+  return { layerId: active.layerId, mask: active.mask, raster: active.stroke.currentRaster(), transform: active.stroke.currentTransform() };
+}
+
+export function isBrushStrokeActive(session: EditorSession): boolean { return state(session).active !== null; }
+
 export function currentBrushRaster(session: EditorSession): Raster | null {
   return state(session).active?.stroke.currentRaster() ?? null;
 }

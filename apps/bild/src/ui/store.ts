@@ -9,7 +9,9 @@ export type Dialog =
   | { kind: 'rename'; layerId: string }
   | { kind: 'canvasSize' }
   | { kind: 'imageSize' }
-  | { kind: 'newCanvas' };
+  | { kind: 'newCanvas' }
+  /** A dialog registered by a feature module under `controller.dialogs[name]`. */
+  | { kind: 'custom'; name: string };
 
 export interface UiState {
   dialog: Dialog | null;

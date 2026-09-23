@@ -74,6 +74,13 @@ export class EditorController {
   } | null = null;
   /** Magic Wand options in the selection header, provided by the wand module. */
   wandControls: ((session: EditorSession) => ReactNode) | null = null;
+  /** While the Color Picker is open, the Eyedropper samples into it. */
+  colorPickerTarget: { get(): { red: number; green: number; blue: number }; set(color: { red: number; green: number; blue: number }): void } | null = null;
+  /** Touch alternative for Option-click: the next canvas tap sets the Clone Stamp source. */
+  cloneSourceArmed = false;
+  lastOpacityDigit: { digit: number; time: number } | null = null;
+  /** Spot Healing options in the brush header, provided by the healing module. */
+  spotHealingControls: ((session: EditorSession) => ReactNode) | null = null;
   /** Mirrors the selection for Flip Canvas. */
   mirrorSelection: ((document: CanvasDocument, horizontally: boolean) => CanvasDocument['selection']) | null = null;
   /** System clipboard bridges for copied pixels (platform work). */
