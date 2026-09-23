@@ -79,6 +79,19 @@ test('canvas pan, zoom and brush feedback on 4096² × 10 layers', async ({ page
       feedback.push(t2 - t0); cpu.push(t1 - t0); render.push(t2 - t1);
     }
     brush.finishBrushStroke(session);
+    // The same stroke with irregular steps (as real pointer input has), so no two segments are congruent.
+    const jittered: number[] = [];
+    let seed = 5, x = 500, y = 2500;
+    const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32; };
+    brush.beginBrushStroke(session, { x, y });
+    for (let i = 1; i <= 60; i++) {
+      x += 20 + rand() * 40; y += (rand() - 0.5) * 50;
+      const t0 = performance.now();
+      brush.extendBrushStroke(session, { x, y });
+      view.renderNow();
+      jittered.push(performance.now() - t0);
+    }
+    brush.finishBrushStroke(session);
     const gl = view.gpu.gl as WebGL2RenderingContext;
     const ext = gl.getExtension('WEBGL_debug_renderer_info');
     const memory = (performance as any).memory;
@@ -88,6 +101,7 @@ test('canvas pan, zoom and brush feedback on 4096² × 10 layers', async ({ page
       floatTargets: view.gpu.floatTargets,
       panMs: pan, zoomMs: zoom, panAt200PercentMs: zoomed,
       brushFeedbackMs: { p95: p95(feedback), median: median(feedback), max: Math.max(...feedback) },
+      brushFeedbackIrregularMs: { p95: p95(jittered), median: median(jittered), max: Math.max(...jittered) },
       brushEngineMs: { p95: p95(cpu), median: median(cpu) },
       brushRenderMs: { p95: p95(render), median: median(render) },
       jsHeapUsedMB: memory ? Math.round(memory.usedJSHeapSize / 1048576) : null,
