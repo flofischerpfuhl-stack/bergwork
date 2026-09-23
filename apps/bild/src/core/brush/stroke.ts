@@ -7,10 +7,11 @@ import { Raster, TILE } from '../raster';
 import type { DocumentSelection } from '../selection';
 import { falloff, validateBrushSettings, type BrushSettings } from './settings';
 
-interface Segment {
+export interface BrushSegment {
   x0: number; y0: number; x1: number; y1: number; pressure: number;
   vx: number; vy: number; length: number; ux: number; uy: number;
 }
+type Segment = BrushSegment;
 interface IntRect { x: number; y: number; width: number; height: number }
 interface CoverageTile {
   readonly permanent: Float32Array;
@@ -741,14 +742,17 @@ class ContinuousBrushStroke implements Stroke {
   }
 }
 
-function segment(a: Point, b: Point, pressure: number): Segment {
+export function brushSegment(a: Point, b: Point, pressure: number): BrushSegment {
   const vx = b.x - a.x, vy = b.y - a.y, length = Math.hypot(vx, vy);
   return { x0: a.x, y0: a.y, x1: b.x, y1: b.y, pressure, vx, vy, length,
     ux: length > 0 ? vx / length : 0, uy: length > 0 ? vy / length : 0 };
 }
 
+const segment = brushSegment;
+
 /** Centripetal Catmull-Rom with BrushStroke's 0.2-document-pixel adaptive chords. */
-function continuousCurve(start: Point, end: Point, before: Point, after: Point, startPressure: number, endPressure: number,
+export function continuousBrushCurve(start: Point, end: Point, before: Point, after: Point,
+  startPressure: number, endPressure: number,
   tolerance: number): Segment[] {
   const knot = (t: number, a: Point, b: Point) => t + Math.max(0.0001, Math.sqrt(Math.hypot(b.x - a.x, b.y - a.y)));
   const mix = (a: Point, b: Point, ta: number, tb: number, t: number): Point => {
@@ -782,6 +786,8 @@ function continuousCurve(start: Point, end: Point, before: Point, after: Point, 
   subdivide(start, end, 0, 1, 0);
   return result;
 }
+
+const continuousCurve = continuousBrushCurve;
 
 function brushCoverage(distanceSquared: number, settings: BrushSettings, mapping: Affine): number {
   const distance = Math.sqrt(distanceSquared), radius = settings.diameter / 2;

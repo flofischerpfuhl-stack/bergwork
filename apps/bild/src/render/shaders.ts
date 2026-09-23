@@ -134,6 +134,9 @@ uniform float uApron;
 uniform int uSampling;
 uniform int uMipLevel;
 uniform int uRestrictChunk;
+uniform int uRestrictBounds;
+uniform vec2 uDrawOrigin;
+uniform vec2 uDrawSize;
 uniform float uOpacity;
 uniform int uMode;
 uniform int uHasMask;
@@ -152,6 +155,8 @@ void main() {
   vec2 doc = (uViewToDoc * vec3(vPos, 1.0)).xy;
   if (uSnap == 1) doc = floor(doc) + 0.5;
   vec2 lp = (uDocToLayer * vec3(doc, 1.0)).xy;
+  if (uRestrictBounds == 1 && (lp.x < uDrawOrigin.x || lp.y < uDrawOrigin.y
+    || lp.x >= uDrawOrigin.x + uDrawSize.x || lp.y >= uDrawOrigin.y + uDrawSize.y)) discard;
   float cover = edgeCoverage(lp, uLayerSize, uLayerEdge);
   vec2 chunkMax = uChunkOrigin + uChunkSize;
   if (cover <= 0.0 || lp.x < uChunkOrigin.x || lp.y < uChunkOrigin.y || lp.x >= chunkMax.x || lp.y >= chunkMax.y) {
@@ -166,6 +171,177 @@ void main() {
   }
   if (uHasClip == 1) src *= texelFetch(uClip, ivec2(vPos), 0).r;
   finalColor = uReplace == 1 ? src : composite(uMode, dst, src);
+}
+`;
+
+/** MetalBrushCoverage.continuousBrush for one settled or provisional spline chord. */
+export const BRUSH_COVERAGE_FRAGMENT = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 vPos;
+out vec4 finalColor;
+uniform mat3 uPixelToDoc;
+uniform vec2 uGridOrigin;
+uniform vec2 uCanvas;
+uniform vec4 uSegment;
+uniform float uPressure;
+uniform float uRadius;
+uniform float uHardness;
+uniform float uAntialias;
+uniform float uSpacing;
+
+float falloff(float t) {
+  const float edge = 0.08208499862; // exp(-2.5)
+  return max(0.0, (exp(-2.5 * t * t) - edge) / (1.0 - edge));
+}
+float tipCoverage(float distanceSquared) {
+  float distance = sqrt(distanceSquared);
+  if (uHardness >= 1.0) return clamp((uRadius - distance) / uAntialias + 0.5, 0.0, 1.0);
+  float t = clamp((distance / uRadius - uHardness) / (1.0 - uHardness), 0.0, 1.0);
+  return falloff(t);
+}
+float tipDensity(float distanceSquared) {
+  return -log(max(1.0 - tipCoverage(distanceSquared), 0.001));
+}
+float segmentDistanceSquared(vec2 p) {
+  vec2 v = uSegment.zw - uSegment.xy;
+  float t = clamp(dot(p - uSegment.xy, v) / max(dot(v, v), 1e-12), 0.0, 1.0);
+  vec2 d = p - (uSegment.xy + t * v);
+  return dot(d, d);
+}
+float segmentDensity(vec2 p) {
+  vec2 v = uSegment.zw - uSegment.xy;
+  float len = length(v);
+  if (len < 1e-6) { vec2 d = p - uSegment.xy; return tipDensity(dot(d, d)) * uPressure; }
+  vec2 direction = v / len;
+  float projection = dot(p - uSegment.xy, direction);
+  vec2 perpendicular = p - uSegment.xy - projection * direction;
+  float perpendicularSquared = dot(perpendicular, perpendicular);
+  float radiusSquared = uRadius * uRadius;
+  if (perpendicularSquared >= radiusSquared) return 0.0;
+  float reach = sqrt(radiusSquared - perpendicularSquared);
+  float lo = max(0.0, projection - reach), hi = min(len, projection + reach);
+  if (hi <= lo) return 0.0;
+  float midpoint = (lo + hi) * 0.5, halfLength = (hi - lo) * 0.5;
+  const vec4 nodes = vec4(0.1834346425, 0.5255324099, 0.7966664774, 0.9602898565);
+  const vec4 weights = vec4(0.3626837834, 0.3137066459, 0.2223810345, 0.1012285363);
+  float integral = 0.0;
+  for (int i = 0; i < 4; ++i) {
+    float a = midpoint - halfLength * nodes[i] - projection;
+    float b = midpoint + halfLength * nodes[i] - projection;
+    integral += weights[i] * (tipDensity(perpendicularSquared + a * a)
+      + tipDensity(perpendicularSquared + b * b));
+  }
+  return integral * halfLength / uSpacing * uPressure;
+}
+void main() {
+  vec2 grid = uGridOrigin + vPos;
+  vec2 p = (uPixelToDoc * vec3(grid, 1.0)).xy;
+  if (any(lessThan(p, vec2(0.0))) || any(greaterThanEqual(p, uCanvas))) { finalColor = vec4(0.0); return; }
+  float coverage = uHardness >= 1.0
+    ? tipCoverage(segmentDistanceSquared(p)) * uPressure
+    : 1.0 - exp(-min(segmentDensity(p), 20.0));
+  finalColor = vec4(coverage);
+}
+`;
+
+/** Original native-grid pixels composed once through permanent + tail coverage. */
+export const BRUSH_PAINT_FRAGMENT = /* glsl */ `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+in vec2 vPos;
+out vec4 finalColor;
+uniform sampler2D uBase;
+uniform sampler2D uPermanent;
+uniform sampler2D uTail;
+uniform vec2 uGridOrigin;
+uniform vec2 uGridSize;
+uniform vec4 uSourceRect;
+uniform vec2 uSourceSize;
+uniform vec2 uBaseOrigin;
+uniform vec2 uBaseTextureSize;
+uniform float uBaseApron;
+uniform int uHasBase;
+uniform int uMask;
+uniform int uHard;
+uniform int uErase;
+uniform vec3 uColor;
+uniform float uOpacity;
+
+vec4 basePixel(vec2 grid) {
+  if (uHasBase == 0) return uMask == 1 ? vec4(1.0) : vec4(0.0);
+  vec2 source = floor((grid - uSourceRect.xy) * uSourceSize / uSourceRect.zw);
+  if (any(lessThan(source, vec2(0.0))) || any(greaterThanEqual(source, uSourceSize))) {
+    return uMask == 1 ? vec4(1.0) : vec4(0.0);
+  }
+  ivec2 p = clamp(ivec2(source - uBaseOrigin + vec2(uBaseApron)), ivec2(0), ivec2(uBaseTextureSize) - 1);
+  return texelFetch(uBase, p, 0);
+}
+void main() {
+  vec2 grid = floor(clamp(uGridOrigin + vPos, vec2(0.0), uGridSize - 1.0));
+  ivec2 p = ivec2(vPos);
+  float permanent = texelFetch(uPermanent, p, 0).r;
+  float tail = texelFetch(uTail, p, 0).r;
+  float coverage = (uHard == 1 ? max(permanent, tail) : 1.0 - (1.0 - permanent) * (1.0 - tail)) * uOpacity;
+  vec4 base = basePixel(grid);
+  vec3 straightBase = base.a > 0.0 ? clamp(base.rgb / base.a, 0.0, 1.0) : vec3(0.0);
+  vec3 paint = floor(uColor * 255.0 + 0.5) / 255.0;
+  if (uMask == 1) {
+    float value = floor(mix(base.r, paint.r, coverage) * 255.0 + 0.5) / 255.0;
+    finalColor = vec4(value, value, value, 1.0);
+  } else if (uErase == 1) {
+    float alpha = floor(base.a * (1.0 - coverage) * 255.0 + 0.5) / 255.0;
+    finalColor = vec4(straightBase * alpha, alpha);
+  } else {
+    float alpha = coverage + base.a * (1.0 - coverage);
+    vec3 premultiplied = paint * coverage + base.rgb * (1.0 - coverage);
+    vec3 straight = alpha > 0.0 ? floor(premultiplied / alpha * 255.0 + 0.5) / 255.0 : vec3(0.0);
+    alpha = floor(alpha * 255.0 + 0.5) / 255.0;
+    finalColor = vec4(straight * alpha, alpha);
+  }
+}
+`;
+
+export const BRUSH_MAX_FRAGMENT = /* glsl */ `#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 vPos;
+out vec4 finalColor;
+uniform sampler2D uFirst;
+uniform sampler2D uSecond;
+void main() {
+  ivec2 p = ivec2(vPos);
+  finalColor = max(texelFetch(uFirst, p, 0), texelFetch(uSecond, p, 0));
+}
+`;
+
+/** Replaces one touched mask-tile interior over the already-rendered stored mask. */
+export const BRUSH_MASK_FRAGMENT = /* glsl */ `${COMMON}
+in vec2 vPos;
+out vec4 finalColor;
+uniform sampler2D uBackdrop;
+uniform sampler2D uPainted;
+uniform mat3 uViewToDoc;
+uniform mat3 uDocToMask;
+uniform vec2 uMaskSize;
+uniform vec2 uMaskEdge;
+uniform vec2 uChunkOrigin;
+uniform vec2 uChunkSize;
+uniform vec2 uTextureSize;
+uniform float uApron;
+uniform int uSampling;
+uniform int uMipLevel;
+uniform int uSnap;
+void main() {
+  vec2 doc = (uViewToDoc * vec3(vPos, 1.0)).xy;
+  if (uSnap == 1) doc = floor(doc) + 0.5;
+  vec2 mp = (uDocToMask * vec3(doc, 1.0)).xy;
+  vec2 chunkMax = uChunkOrigin + uChunkSize;
+  if (mp.x < uChunkOrigin.x || mp.y < uChunkOrigin.y || mp.x >= chunkMax.x || mp.y >= chunkMax.y) discard;
+  vec2 texturePixel = mp - uChunkOrigin + vec2(uApron);
+  float value = sampleGrid(uPainted, texturePixel, ivec2(uTextureSize), uSampling, uMipLevel).r;
+  value = mix(0.0, value, edgeCoverage(mp, uMaskSize, uMaskEdge));
+  finalColor = vec4(value, value, value, 1.0);
 }
 `;
 
