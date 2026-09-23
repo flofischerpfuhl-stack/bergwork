@@ -5,6 +5,9 @@ import { alphaBounds, cropRaster, Raster } from '../raster';
 import type { DocumentSelection } from '../selection';
 import { adjustRaster } from '../adjust/raster';
 import { blurMargin, normalizeFilterSettings, type FilterKind, type FilterSettings } from './settings';
+import { gaussianBlur, motionBlur } from './blur';
+
+export { gaussianBlur, motionBlur } from './blur';
 
 export interface FilterResult { readonly raster: Raster; readonly transform: LayerTransform }
 export interface FilterOptions { readonly selection?: DocumentSelection | null; readonly seed?: number; readonly expand?: boolean }
@@ -35,90 +38,6 @@ function expanded(raster: Raster, transform: LayerTransform, margin: number): Fi
   const size = { width: width * transform.size.width / raster.width, height: height * transform.size.height / raster.height };
   return { raster: Raster.fromPixels(width, height, 4, pixels),
     transform: { ...transform, size, origin: { x: middle.x - size.width / 2, y: middle.y - size.height / 2 } } };
-}
-
-function premultiplied(raster: Raster): Float32Array {
-  const bytes = raster.toPixels(), out = new Float32Array(bytes.length);
-  for (let i = 0; i < bytes.length; i += 4) {
-    const a = bytes[i + 3]! / 255; out[i] = bytes[i]! / 255 * a; out[i + 1] = bytes[i + 1]! / 255 * a;
-    out[i + 2] = bytes[i + 2]! / 255 * a; out[i + 3] = a;
-  }
-  return out;
-}
-function fromPremultiplied(data: Float32Array, width: number, height: number): Raster {
-  const out = new Uint8Array(data.length);
-  for (let i = 0; i < data.length; i += 4) {
-    const a = Math.min(1, Math.max(0, data[i + 3]!)); out[i + 3] = Math.round(a * 255);
-    if (a > 0) { out[i] = Math.round(Math.min(1, Math.max(0, data[i]! / a)) * 255); out[i + 1] = Math.round(Math.min(1, Math.max(0, data[i + 1]! / a)) * 255); out[i + 2] = Math.round(Math.min(1, Math.max(0, data[i + 2]! / a)) * 255); }
-  }
-  return Raster.fromPixels(width, height, 4, out);
-}
-
-// Three box passes approximate Core Image's Gaussian in O(pixels), avoiding radius-proportional work.
-function boxSizes(sigma: number, count = 3): number[] {
-  const ideal = Math.sqrt((12 * sigma * sigma / count) + 1), lower = Math.max(1, Math.floor(ideal) | 1), upper = lower + 2;
-  const m = Math.round((12 * sigma * sigma - count * lower * lower - 4 * count * lower - 3 * count) / (-4 * lower - 4));
-  return Array.from({ length: count }, (_, i) => i < m ? lower : upper);
-}
-function boxHorizontal(source: Float32Array, target: Float32Array, width: number, height: number, radius: number): void {
-  const divisor = radius * 2 + 1;
-  for (let y = 0; y < height; y++) for (let c = 0; c < 4; c++) {
-    let sum = 0; for (let x = 0; x <= radius && x < width; x++) sum += source[(y * width + x) * 4 + c]!;
-    for (let x = 0; x < width; x++) {
-      target[(y * width + x) * 4 + c] = sum / divisor;
-      const remove = x - radius, add = x + radius + 1;
-      if (remove >= 0) sum -= source[(y * width + remove) * 4 + c]!;
-      if (add < width) sum += source[(y * width + add) * 4 + c]!;
-    }
-  }
-}
-function boxVertical(source: Float32Array, target: Float32Array, width: number, height: number, radius: number): void {
-  const divisor = radius * 2 + 1;
-  for (let x = 0; x < width; x++) for (let c = 0; c < 4; c++) {
-    let sum = 0; for (let y = 0; y <= radius && y < height; y++) sum += source[(y * width + x) * 4 + c]!;
-    for (let y = 0; y < height; y++) {
-      target[(y * width + x) * 4 + c] = sum / divisor;
-      const remove = y - radius, add = y + radius + 1;
-      if (remove >= 0) sum -= source[(remove * width + x) * 4 + c]!;
-      if (add < height) sum += source[(add * width + x) * 4 + c]!;
-    }
-  }
-}
-export function gaussianBlur(raster: Raster, sigma: number): Raster {
-  let a: Float32Array<ArrayBufferLike> = premultiplied(raster), b: Float32Array<ArrayBufferLike> = new Float32Array(a.length);
-  for (const size of boxSizes(Math.max(0.01, sigma))) { const radius = (size - 1) / 2; boxHorizontal(a, b, raster.width, raster.height, radius); [a, b] = [b, a]; boxVertical(a, b, raster.width, raster.height, radius); [a, b] = [b, a]; }
-  return fromPremultiplied(a, raster.width, raster.height);
-}
-
-export function motionBlur(raster: Raster, distance: number, angle: number): Raster {
-  const source = premultiplied(raster), sigma = distance / Math.sqrt(12);
-  // Axis-aligned motion blur is by far the common case. Three sliding box passes match the
-  // measured CIMotionBlur Gaussian spread in O(pixels), rather than O(distance × pixels).
-  if (Math.abs(angle) < 1e-9 || Math.abs(Math.abs(angle) - 90) < 1e-9) {
-    let a: Float32Array<ArrayBufferLike> = source, b: Float32Array<ArrayBufferLike> = new Float32Array(source.length);
-    for (const size of boxSizes(sigma)) { const radius = (size - 1) / 2;
-      if (Math.abs(angle) < 1e-9) boxHorizontal(a, b, raster.width, raster.height, radius);
-      else boxVertical(a, b, raster.width, raster.height, radius);
-      [a, b] = [b, a];
-    }
-    return fromPremultiplied(a, raster.width, raster.height);
-  }
-  const out = new Float32Array(source.length);
-  const reach = Math.max(1, Math.ceil(Math.min(distance / 2 + 2, sigma * 3))), radians = angle * Math.PI / 180;
-  const dx = Math.cos(radians), dy = -Math.sin(radians), weights = new Float32Array(reach * 2 + 1);
-  let total = 0; for (let t = -reach; t <= reach; t++) { const w = Math.exp(-0.5 * (t / sigma) ** 2); weights[t + reach] = w; total += w; }
-  for (let i = 0; i < weights.length; i++) weights[i] = weights[i]! / total;
-  const w = raster.width, h = raster.height;
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) for (let t = -reach; t <= reach; t++) {
-    const sx = x + t * dx, sy = y + t * dy, x0 = Math.floor(sx), y0 = Math.floor(sy), fx = sx - x0, fy = sy - y0, weight = weights[t + reach]!;
-    for (let yy = 0; yy < 2; yy++) { const py = y0 + yy; if (py < 0 || py >= h) continue;
-      for (let xx = 0; xx < 2; xx++) { const px = x0 + xx; if (px < 0 || px >= w) continue;
-        const q = weight * (xx ? fx : 1 - fx) * (yy ? fy : 1 - fy), src = (py * w + px) * 4, dst = (y * w + x) * 4;
-        for (let c = 0; c < 4; c++) out[dst + c] = out[dst + c]! + source[src + c]! * q;
-      }
-    }
-  }
-  return fromPremultiplied(out, w, h);
 }
 
 function hash32(value: number): number { let x = value >>> 0; x ^= x >>> 16; x = Math.imul(x, 0x7feb352d) >>> 0; x ^= x >>> 15; x = Math.imul(x, 0x846ca68b) >>> 0; x ^= x >>> 16; return x >>> 0; }
