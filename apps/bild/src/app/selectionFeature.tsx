@@ -433,7 +433,10 @@ export function installSelection(controller: EditorController): void {
     await paste(session, undefined, controller.clipboardHooks);
   };
   controller.pasteEvent = (event) => {
-    const file = [...(event.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
+    // Some browsers list pasted images only as items, not files.
+    const data = event.clipboardData;
+    const file = [...(data?.files ?? [])].find((f) => f.type.startsWith('image/'))
+      ?? [...(data?.items ?? [])].find((i) => i.kind === 'file' && i.type.startsWith('image/'))?.getAsFile() ?? undefined;
     if (!file && !pixelClipboard.entry) return false;
     void (file ? file.arrayBuffer().then((b) => pasteBytes(new Uint8Array(b))) : pasteBytes(null));
     return true;

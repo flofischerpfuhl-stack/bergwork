@@ -53,19 +53,30 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
   }, [controller]);
 
   // The editor takes keyboard focus when it mounts (CanvasView.consumeFocusRequest), so shortcuts work at once.
-  // Focus also comes back when the focused control disappears (the new-canvas sheet after Create, a closed panel).
+  // Focus also comes back when the focused control disappears (the new-canvas sheet after Create, a closed panel):
+  // while the editor held focus and nothing else took it, the next change refocuses the editor. Chrome reports the
+  // removal as a focusout of a detached element; Firefox reports nothing, hence the check on workspace changes.
   useEffect(() => {
     const element = root.current!;
+    let holds = true;
     element.focus({ preventScroll: true });
+    const focusIn = () => { holds = true; };
     const focusOut = (event: FocusEvent) => {
-      const lost = event.target as Element;
-      queueMicrotask(() => {
-        if (!lost.isConnected && element.isConnected && (!document.activeElement || document.activeElement === document.body)) element.focus({ preventScroll: true });
-      });
+      const next = event.relatedTarget as Node | null;
+      if (next ? !element.contains(next) : (event.target as Element).isConnected) holds = false;
     };
+    const refocus = () => {
+      if (holds && element.isConnected && (!document.activeElement || document.activeElement === document.body)) element.focus({ preventScroll: true });
+    };
+    element.addEventListener('focusin', focusIn);
     element.addEventListener('focusout', focusOut);
-    return () => element.removeEventListener('focusout', focusOut);
-  }, []);
+    const later = () => queueMicrotask(refocus);
+    element.addEventListener('focusout', later);
+    const unwatch = controller.workspace.subscribe(() => queueMicrotask(refocus));
+    return () => {
+      element.removeEventListener('focusin', focusIn); element.removeEventListener('focusout', focusOut); element.removeEventListener('focusout', later); unwatch();
+    };
+  }, [controller]);
 
   // Engine errors left on a session (brush, retouch, transform, bake: EditorSession+Brush.brushError) become alerts.
   useEffect(() => {

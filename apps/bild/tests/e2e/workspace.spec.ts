@@ -30,7 +30,9 @@ test('dragging a layer onto another tab copies it there as one undo step', async
   await expect.poll(async () => (await manifest(page)).layers.length).toBe(1);
 });
 
-test('pasting an external image centres it on a new layer', async ({ page }) => {
+test('pasting an external image centres it on a new layer', async ({ page, browserName }) => {
+  // Firefox's ClipboardEvent constructor drops a synthetic clipboardData, so the event carries no image there.
+  test.skip(browserName === 'firefox', 'synthetic paste events carry no data in Firefox');
   await mountForTest(page);
   await page.getByTestId('widthInput').fill('100');
   await page.getByTestId('heightInput').fill('80');
