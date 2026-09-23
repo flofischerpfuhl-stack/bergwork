@@ -42,6 +42,8 @@ export interface ToolHandler {
   cancel(session: EditorSession): void;
   /** Cursor while hovering without a button pressed. */
   hover?(context: ToolContext): string;
+  /** Whether the last move changed only the overlay, so the composite need not be redrawn (CropTests.cropDraggingRedrawsOnlyTheOverlay). */
+  overlayOnly?(session: EditorSession): boolean;
   /** Whether the current gesture scrolls the canvas when the pointer nears its edge (EditorCanvas.updateMarqueeAutoscroll). */
   autoscrolls?(session: EditorSession): boolean;
 }

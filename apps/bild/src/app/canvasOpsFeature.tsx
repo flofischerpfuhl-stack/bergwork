@@ -115,8 +115,17 @@ class CropTool implements ToolHandler {
     const ratio = cropRatioChoice(session.cropRatioChoice as CropRatioChoice, document);
     let next = updateCropDrag(drag, c.pixel, ratio, c.modifiers.option);
     if (this.snap && !c.modifiers.control) next = applyCropSnap(next, drag, c.pixel, ratio, this.snap, c.modifiers.option);
-    if (validCropRect(next)) { session.cropRect = next; session.notify('document'); }
+    if (validCropRect(next)) {
+      const inside = (r: { x: number; y: number; width: number; height: number } | null) =>
+        !!r && r.x >= 0 && r.y >= 0 && r.x + r.width <= document.width && r.y + r.height <= document.height;
+      // Within the canvas only the frame moves; past its edge the shown region grows, so the canvas redraws.
+      this.lastOverlayOnly = inside(session.cropRect) && inside(next);
+      session.cropRect = next;
+      session.notify(this.lastOverlayOnly ? 'overlay' : 'document');
+    }
   }
+  private lastOverlayOnly = false;
+  overlayOnly(): boolean { return this.lastOverlayOnly; }
   up(c: ToolContext): void {
     this.drag = null;
     if (!c.session.cropRect && c.session.document) {

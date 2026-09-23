@@ -1,73 +1,246 @@
 {
   "schemaVersion": 1,
-  "upstream": { "repository": "https://github.com/robbietilton/Compositor", "commit": "a19db9011282399785dc18efcfded904627bdcc2", "license": "MIT" },
-  "statusValues": ["not_started", "in_progress", "blocked", "implemented", "verified"],
+  "upstream": {
+    "repository": "https://github.com/robbietilton/Compositor",
+    "commit": "a19db9011282399785dc18efcfded904627bdcc2",
+    "license": "MIT"
+  },
+  "statusValues": [
+    "not_started",
+    "in_progress",
+    "blocked",
+    "implemented",
+    "verified"
+  ],
   "statusMeaning": {
     "implemented": "Behaviour ported and reachable in the UI; covered by tests, but not every upstream test case has a ported equivalent.",
     "verified": "Additionally, the upstream test cases of the area have ported equivalents that pass (unit and/or browser e2e).",
     "in_progress": "Implemented, but a required target (e.g. performance) is not met yet."
   },
   "features": [
-    { "id": "application-workspace", "status": "implemented",
-      "evidence": ["tests/e2e/workspace.spec.ts", "tests/e2e/editor-workflows.spec.ts", "tests/e2e/recovery.spec.ts"],
-      "deviations": ["Browsers reserve ⌘N/⌘W: ⌥⌘N/⌥⌘W in a browser, ⌘N/⌘W as aliases where a host passes them on.",
-                     "Page close offers only the browser's generic prompt; per-tab Save/Don't Save happens when closing a tab. IndexedDB recovery copies cover reloads and crashes."] },
-    { "id": "history-transactions", "status": "verified",
-      "evidence": ["tests/unit/core.test.ts", "tests/unit/importQueue.test.ts", "tests/unit/transform.test.ts"],
-      "deviations": [] },
-    { "id": "layers-groups-appearance", "status": "implemented",
-      "evidence": ["tests/e2e/editor-workflows.spec.ts", "tests/unit/core.test.ts", "tests/unit/composite.test.ts", "tests/e2e/gpu-vs-cpu.spec.ts"],
-      "deviations": ["Non-separable blend modes stacked on each other can differ by isolated large values between GPU and CPU where SetSat is discontinuous (statistical bound in gpu-vs-cpu)."] },
-    { "id": "masks-clipping", "status": "implemented",
-      "evidence": ["tests/e2e/gpu-compositor.spec.ts", "tests/e2e/selection.spec.ts", "tests/unit/transform-distort.test.ts"],
-      "deviations": [] },
-    { "id": "canvas-renderer", "status": "implemented",
-      "evidence": ["tests/e2e/gpu-compositor.spec.ts", "tests/e2e/gpu-vs-cpu.spec.ts", "tests/e2e/gpu-chunks.spec.ts", "tests/e2e/performance.spec.ts"],
-      "deviations": ["WebGL 2 is required; there is no software-rendering fallback (upstream: CoreGraphics fallback).",
-                     "Layer textures are sparse chunks with 64 px aprons instead of TiledLayerRenderer pieces; readback is full resolution beyond MAX_TEXTURE_SIZE."] },
-    { "id": "transform-distort-flip", "status": "verified",
-      "evidence": ["tests/unit/transform.test.ts", "tests/unit/transform-distort.test.ts", "tests/unit/distort.test.ts", "tests/e2e/editor-workflows.spec.ts"],
-      "deviations": ["Core Image perspective sampling is replaced by inverse homography with premultiplied bilinear sampling."] },
-    { "id": "crop-canvas-image-size", "status": "implemented",
-      "evidence": ["tests/unit/canvasops.test.ts", "tests/e2e/editor-workflows.spec.ts"],
-      "deviations": ["Crop dragging recomposites the document each frame instead of redrawing only the overlay (performance only)."] },
-    { "id": "selections-clipboard", "status": "implemented",
-      "evidence": ["tests/unit/selection.test.ts", "tests/unit/wand.test.ts", "tests/e2e/selection.spec.ts", "tests/e2e/workspace.spec.ts"],
-      "deviations": ["The system clipboard is read through the paste event or the async Clipboard API; after a denied permission only the internal clipboard is available."] },
-    { "id": "brush-engine", "status": "in_progress",
-      "evidence": ["tests/unit/brush.test.ts", "tests/performance/brush.perf.test.ts", "tests/e2e/painting.spec.ts", "tests/e2e/performance.spec.ts"],
-      "deviations": ["Large soft brushes use a two-pixel quadratic density reconstruction (≤1/255 against the reference implementation)."],
-      "open": ["Brush feedback on an 84 Mpx document exceeds the 16 ms p95 target; a GPU coverage preview (MetalBrushCoverage equivalent) is being implemented."] },
-    { "id": "retouch-content-aware", "status": "implemented",
-      "evidence": ["tests/unit/retouch.test.ts", "tests/unit/heal.test.ts", "tests/unit/contentfill.test.ts", "tests/e2e/retouch.spec.ts", "tests/e2e/painting.spec.ts"],
-      "deviations": [] },
-    { "id": "gradient-shapes-color", "status": "implemented",
-      "evidence": ["tests/unit/gradient.test.ts", "tests/unit/shape.test.ts", "tests/e2e/painting.spec.ts"],
-      "deviations": [] },
-    { "id": "adjustments-filters", "status": "implemented",
-      "evidence": ["tests/unit/adjust.test.ts", "tests/unit/filter.test.ts", "tests/e2e/adjustments.spec.ts", "tests/e2e/adjust-gpu.spec.ts"],
-      "deviations": ["Core Image Gaussian and axis-aligned motion blur use three sliding box passes; oblique motion blur uses sampled Gaussian convolution.",
-                     "Blur previews keep the original layer grid; Apply uses the expanded bounds as upstream."] },
-    { "id": "subject-removal", "status": "implemented",
-      "evidence": ["tests/unit/subject.test.ts", "tests/e2e/subject.spec.ts"],
-      "deviations": ["Apple Vision is replaced by the local U²-Netp model (Apache-2.0) on ONNX Runtime Web; it yields one fused salient map, not separate subject instances.",
-                     "The browser test needs a reference photo outside the repository and is skipped when it is absent."] },
-    { "id": "io-project-format", "status": "implemented",
-      "evidence": ["tests/unit/codec.test.ts", "tests/unit/tiff.test.ts", "tests/unit/compPackage.test.ts", "tests/e2e/editor-workflows.spec.ts", "tests/e2e/workspace.spec.ts"],
-      "deviations": ["HEIC is decoded only by browsers that support it; elsewhere a readable error asks for JPEG/PNG.",
-                     "Default project format is the host contract's ZIP archive; the macOS .comp package (versions 1–7) is read (zipped or as a folder) and written as a copy.",
-                     "Save overwrites a chosen file only where the File System Access API exists (Chromium); other browsers download.",
-                     "No ICC colour conversion: documents are sRGB."] }
+    {
+      "id": "application-workspace",
+      "status": "implemented",
+      "evidence": [
+        "tests/e2e/workspace.spec.ts",
+        "tests/e2e/editor-workflows.spec.ts",
+        "tests/e2e/recovery.spec.ts"
+      ],
+      "deviations": [
+        "Browsers reserve ⌘N/⌘W: ⌥⌘N/⌥⌘W in a browser, ⌘N/⌘W as aliases where a host passes them on.",
+        "Page close offers only the browser's generic prompt; per-tab Save/Don't Save happens when closing a tab. IndexedDB recovery copies cover reloads and crashes."
+      ]
+    },
+    {
+      "id": "history-transactions",
+      "status": "verified",
+      "evidence": [
+        "tests/unit/core.test.ts",
+        "tests/unit/importQueue.test.ts",
+        "tests/unit/transform.test.ts"
+      ],
+      "deviations": []
+    },
+    {
+      "id": "layers-groups-appearance",
+      "status": "implemented",
+      "evidence": [
+        "tests/e2e/editor-workflows.spec.ts",
+        "tests/unit/core.test.ts",
+        "tests/unit/composite.test.ts",
+        "tests/e2e/gpu-vs-cpu.spec.ts"
+      ],
+      "deviations": [
+        "Non-separable blend modes stacked on each other can differ by isolated large values between GPU and CPU where SetSat is discontinuous (statistical bound in gpu-vs-cpu)."
+      ]
+    },
+    {
+      "id": "masks-clipping",
+      "status": "implemented",
+      "evidence": [
+        "tests/e2e/gpu-compositor.spec.ts",
+        "tests/e2e/selection.spec.ts",
+        "tests/unit/transform-distort.test.ts"
+      ],
+      "deviations": []
+    },
+    {
+      "id": "canvas-renderer",
+      "status": "implemented",
+      "evidence": [
+        "tests/e2e/gpu-compositor.spec.ts",
+        "tests/e2e/gpu-vs-cpu.spec.ts",
+        "tests/e2e/gpu-chunks.spec.ts",
+        "tests/e2e/performance.spec.ts"
+      ],
+      "deviations": [
+        "WebGL 2 is required; there is no software-rendering fallback (upstream: CoreGraphics fallback).",
+        "Layer textures are sparse chunks with 64 px aprons instead of TiledLayerRenderer pieces; readback is full resolution beyond MAX_TEXTURE_SIZE."
+      ]
+    },
+    {
+      "id": "transform-distort-flip",
+      "status": "verified",
+      "evidence": [
+        "tests/unit/transform.test.ts",
+        "tests/unit/transform-distort.test.ts",
+        "tests/unit/distort.test.ts",
+        "tests/e2e/editor-workflows.spec.ts"
+      ],
+      "deviations": [
+        "Core Image perspective sampling is replaced by inverse homography with premultiplied bilinear sampling."
+      ]
+    },
+    {
+      "id": "crop-canvas-image-size",
+      "status": "implemented",
+      "evidence": [
+        "tests/unit/canvasops.test.ts",
+        "tests/e2e/editor-workflows.spec.ts",
+        "tests/e2e/editor-workflows.spec.ts (crop overlay-only redraw)"
+      ],
+      "deviations": []
+    },
+    {
+      "id": "selections-clipboard",
+      "status": "implemented",
+      "evidence": [
+        "tests/unit/selection.test.ts",
+        "tests/unit/wand.test.ts",
+        "tests/e2e/selection.spec.ts",
+        "tests/e2e/workspace.spec.ts"
+      ],
+      "deviations": [
+        "The system clipboard is read through the paste event or the async Clipboard API; after a denied permission only the internal clipboard is available."
+      ]
+    },
+    {
+      "id": "brush-engine",
+      "status": "in_progress",
+      "evidence": [
+        "tests/unit/brush.test.ts",
+        "tests/performance/brush.perf.test.ts",
+        "tests/e2e/painting.spec.ts",
+        "tests/e2e/performance.spec.ts"
+      ],
+      "deviations": [
+        "Large soft brushes use a two-pixel quadratic density reconstruction (≤1/255 against the reference implementation)."
+      ],
+      "open": [
+        "Brush feedback on an 84 Mpx document exceeds the 16 ms p95 target; a GPU coverage preview (MetalBrushCoverage equivalent) is being implemented."
+      ]
+    },
+    {
+      "id": "retouch-content-aware",
+      "status": "implemented",
+      "evidence": [
+        "tests/unit/retouch.test.ts",
+        "tests/unit/heal.test.ts",
+        "tests/unit/contentfill.test.ts",
+        "tests/e2e/retouch.spec.ts",
+        "tests/e2e/painting.spec.ts"
+      ],
+      "deviations": []
+    },
+    {
+      "id": "gradient-shapes-color",
+      "status": "implemented",
+      "evidence": [
+        "tests/unit/gradient.test.ts",
+        "tests/unit/shape.test.ts",
+        "tests/e2e/painting.spec.ts"
+      ],
+      "deviations": []
+    },
+    {
+      "id": "adjustments-filters",
+      "status": "implemented",
+      "evidence": [
+        "tests/unit/adjust.test.ts",
+        "tests/unit/filter.test.ts",
+        "tests/e2e/adjustments.spec.ts",
+        "tests/e2e/adjust-gpu.spec.ts"
+      ],
+      "deviations": [
+        "Core Image Gaussian and axis-aligned motion blur use three sliding box passes; oblique motion blur uses sampled Gaussian convolution.",
+        "Blur previews keep the original layer grid; Apply uses the expanded bounds as upstream."
+      ]
+    },
+    {
+      "id": "subject-removal",
+      "status": "implemented",
+      "evidence": [
+        "tests/unit/subject.test.ts",
+        "tests/e2e/subject.spec.ts"
+      ],
+      "deviations": [
+        "Apple Vision is replaced by the local U²-Netp model (Apache-2.0) on ONNX Runtime Web; it yields one fused salient map, not separate subject instances.",
+        "The browser test needs a reference photo outside the repository and is skipped when it is absent."
+      ]
+    },
+    {
+      "id": "io-project-format",
+      "status": "implemented",
+      "evidence": [
+        "tests/unit/codec.test.ts",
+        "tests/unit/tiff.test.ts",
+        "tests/unit/compPackage.test.ts",
+        "tests/e2e/editor-workflows.spec.ts",
+        "tests/e2e/workspace.spec.ts"
+      ],
+      "deviations": [
+        "HEIC is decoded only by browsers that support it; elsewhere a readable error asks for JPEG/PNG.",
+        "Default project format is the host contract's ZIP archive; the macOS .comp package (versions 1–7) is read (zipped or as a folder) and written as a copy.",
+        "Save overwrites a chosen file only where the File System Access API exists (Chromium); other browsers download.",
+        "No ICC colour conversion: documents are sRGB."
+      ]
+    }
   ],
   "platformReplacements": [
-    { "dependency": "AppKit/SwiftUI", "replacement": "React 19 UI, desktop and compact/phone layouts, de/en", "status": "implemented" },
-    { "dependency": "CoreGraphics", "replacement": "Tiled TypeScript rasters, CPU reference compositor, resamplers", "status": "implemented" },
-    { "dependency": "CoreImage", "replacement": "TypeScript/WASM filters and GLSL adjustment programs", "status": "implemented" },
-    { "dependency": "Vision", "replacement": "U²-Netp via onnxruntime-web (WebGPU or WASM)", "status": "implemented" },
-    { "dependency": "Metal", "replacement": "WebGL 2 via PixiJS 8 with custom GLSL passes", "status": "implemented" },
-    { "dependency": "Accelerate/vImage", "replacement": "TypeScript and upstream C kernels compiled to WASM", "status": "implemented" },
-    { "dependency": "ImageIO/UniformTypeIdentifiers", "replacement": "Own PNG/TIFF codecs, browser JPEG/HEIC decode, JPEG metadata writer", "status": "implemented" },
-    { "dependency": "Foundation/Observation/Combine", "replacement": "Session notifications, zustand UI store, Web Workers, IndexedDB", "status": "implemented" },
-    { "dependency": "Sparkle", "replacement": "Not applicable (updates are the host's job)", "status": "implemented" }
+    {
+      "dependency": "AppKit/SwiftUI",
+      "replacement": "React 19 UI, desktop and compact/phone layouts, de/en",
+      "status": "implemented"
+    },
+    {
+      "dependency": "CoreGraphics",
+      "replacement": "Tiled TypeScript rasters, CPU reference compositor, resamplers",
+      "status": "implemented"
+    },
+    {
+      "dependency": "CoreImage",
+      "replacement": "TypeScript/WASM filters and GLSL adjustment programs",
+      "status": "implemented"
+    },
+    {
+      "dependency": "Vision",
+      "replacement": "U²-Netp via onnxruntime-web (WebGPU or WASM)",
+      "status": "implemented"
+    },
+    {
+      "dependency": "Metal",
+      "replacement": "WebGL 2 via PixiJS 8 with custom GLSL passes",
+      "status": "implemented"
+    },
+    {
+      "dependency": "Accelerate/vImage",
+      "replacement": "TypeScript and upstream C kernels compiled to WASM",
+      "status": "implemented"
+    },
+    {
+      "dependency": "ImageIO/UniformTypeIdentifiers",
+      "replacement": "Own PNG/TIFF codecs, browser JPEG/HEIC decode, JPEG metadata writer",
+      "status": "implemented"
+    },
+    {
+      "dependency": "Foundation/Observation/Combine",
+      "replacement": "Session notifications, zustand UI store, Web Workers, IndexedDB",
+      "status": "implemented"
+    },
+    {
+      "dependency": "Sparkle",
+      "replacement": "Not applicable (updates are the host's job)",
+      "status": "implemented"
+    }
   ]
 }

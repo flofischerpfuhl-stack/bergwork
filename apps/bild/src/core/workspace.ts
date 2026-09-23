@@ -47,7 +47,7 @@ export class ProjectWorkspace {
   }
   private watch(tab: ProjectTab): void {
     // Tab titles and unsaved dots follow their sessions.
-    this.detach.set(tab.id, tab.session.subscribe((kind) => { if (kind !== 'view') this.notify(); }));
+    this.detach.set(tab.id, tab.session.subscribe((kind) => { if (kind !== 'view' && kind !== 'overlay') this.notify(); }));
   }
 
   get current(): ProjectTab { return this.tabs.find((t) => t.id === this.selectedId) ?? this.tabs[0]!; }

@@ -180,3 +180,30 @@ test.describe('phone layout', () => {
     await expect(page.getByTestId('layerCount')).toHaveText('3');
   });
 });
+
+test('dragging a crop frame inside the canvas redraws only the overlay', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mountForTest(page);
+  await page.getByTestId('widthInput').fill('400');
+  await page.getByTestId('heightInput').fill('300');
+  await page.getByTestId('createCanvas').click();
+  await page.getByTestId('tool-crop').click();
+  await page.evaluate(() => {
+    const w = window as any;
+    const gpu = w.__editorForTests.canvasView.gpu;
+    const original = gpu.composite.bind(gpu);
+    w.__composites = 0;
+    gpu.composite = (...args: unknown[]) => { w.__composites++; return original(...args); };
+  });
+  const pane = (await page.getByTestId('canvas-pane').boundingBox())!;
+  const zoom = await page.evaluate(() => (window as any).__editorForTests.session.viewport.pointsPerPixel);
+  const origin = { x: pane.x + pane.width / 2 - 200 * zoom, y: pane.y + pane.height / 2 - 150 * zoom };
+  // Drag the right edge handle inward in several steps.
+  await page.mouse.move(origin.x + 400 * zoom, origin.y + 150 * zoom);
+  await page.mouse.down();
+  for (let i = 1; i <= 8; i++) { await page.mouse.move(origin.x + (400 - i * 10) * zoom, origin.y + 150 * zoom); await page.waitForTimeout(30); }
+  await page.mouse.up();
+  const crop = await page.evaluate(() => (window as any).__editorForTests.session.cropRect);
+  expect(crop.width).toBeLessThan(330);
+  expect(await page.evaluate(() => (window as any).__composites)).toBeLessThanOrEqual(2);
+});

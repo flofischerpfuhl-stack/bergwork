@@ -72,7 +72,8 @@ export interface TransformEdit {
   readonly group?: TransformGroup;
 }
 
-export type ChangeKind = 'document' | 'view' | 'ui';
+/** 'overlay': only on-canvas guides changed (e.g. a crop frame inside the canvas); the composite stays valid. */
+export type ChangeKind = 'document' | 'view' | 'ui' | 'overlay';
 
 /** Pixels a tool shows in place of a layer's (or its mask's) stored raster while it works. */
 export interface LayerPreview { readonly layerId: string; readonly mask: boolean; readonly raster: Raster; readonly transform: LayerTransform }

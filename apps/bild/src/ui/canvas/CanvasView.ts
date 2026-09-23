@@ -111,7 +111,7 @@ export class CanvasView implements CanvasHost {
     if (this.active) { this.active.handler.cancel(this.active.session); this.active = null; }
     this.unsubscribe?.();
     this.watched = session;
-    this.unsubscribe = session.subscribe(() => this.redraw());
+    this.unsubscribe = session.subscribe((kind) => { if (kind === 'overlay') this.redrawOverlayOnly(); else this.redraw(); });
     this.syncGeometry();
     this.redraw();
   }
@@ -388,7 +388,7 @@ export class CanvasView implements CanvasHost {
       const events = typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [];
       const samples = events.length ? events : [event];
       for (const sample of samples) this.active.handler.move(this.context(sample, this.localPoint(sample)));
-      this.redraw();
+      if (this.active.handler.overlayOnly?.(this.active.session)) this.redrawOverlayOnly(); else this.redraw();
       this.updateAutoscroll(event, point);
       return;
     }
