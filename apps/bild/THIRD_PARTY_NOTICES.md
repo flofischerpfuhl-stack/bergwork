@@ -1,5 +1,20 @@
 # Third-party notices
 
+## Tauri CLI (development only)
+
+The desktop build uses `@tauri-apps/cli` 2.11.5, copyright the Tauri
+Programme within The Commons Conservancy. It is distributed under the Apache
+License 2.0 or MIT License and is not included in the application runtime.
+Source and licence: https://github.com/tauri-apps/tauri
+
+## Tauri desktop runtime and official plugins
+
+The desktop application uses Tauri 2.11.6, `tauri-plugin-fs` 2.5.2, and
+`tauri-plugin-dialog` 2.7.3. Copyright the Tauri Programme within The Commons
+Conservancy. They are distributed under the Apache License 2.0 or MIT License.
+Sources and licences: https://github.com/tauri-apps/tauri and
+https://github.com/tauri-apps/plugins-workspace
+
 ## Compositor C rendering kernels
 
 The files in `src/wasm/c` are copied verbatim from Compositor at commit
