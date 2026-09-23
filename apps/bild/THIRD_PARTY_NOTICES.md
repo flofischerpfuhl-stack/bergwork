@@ -90,3 +90,13 @@ The test file `tests/e2e/heic-quadrants.heic` was generated for this project
 from an original 64×64 red/green image using Ubuntu libheif 1.17.6 and x265
 3.5 (`heif-enc --quality 95`). It contains no third-party artwork. Its SHA-256
 is `b496c28c0bb1b99dce93e4c40ac0c5aa506732c9e0c656af8e103b2a91474208`.
+
+## BiRefNet_lite model weights
+
+The optional best-quality subject model is BiRefNet_lite by Peng Zheng,
+Dehong Gao, Deng-Ping Fan, Li Liu, Jorma Laaksonen, Wanli Ouyang, and Nicu
+Sebe. The official weights and implementation are MIT licensed. The browser
+artifact is a reproducible static ONNX repackaging of those weights and is
+downloaded on first use rather than shipped in this repository. Full immutable
+provenance, checksums, rationale, and the license text are in
+`MODEL_LICENSES.md` and `public/models/birefnet-lite.LICENSE.txt`.

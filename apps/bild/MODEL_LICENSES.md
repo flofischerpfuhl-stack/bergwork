@@ -19,9 +19,9 @@
 U²-Netp was selected because it handles general subjects, is permissively
 licensed, and is small enough for local browser inference. Full U²-Net and
 IS-Net general-use are around 176 MB; MODNet is specialized for portraits;
-BiRefNet lite is higher quality but substantially larger and its browser WASM
-path has much higher memory requirements. BRIA RMBG was excluded because its
-weights do not have a suitable permissive commercial license.
+BiRefNet lite is provided separately as the opt-in Best model below. BRIA RMBG
+was excluded because its weights do not have a suitable permissive commercial
+license.
 
 ### Apache License
 
@@ -42,3 +42,40 @@ limitations under the License.
 The complete Apache License 2.0 text distributed by the original project is
 included beside the model as `public/models/u2netp.LICENSE.txt` and is also
 available at https://github.com/xuebinqin/U-2-Net/blob/master/LICENSE.
+
+## BiRefNet_lite 1024
+
+- Purpose: best-quality general dichotomous segmentation, including fine edges.
+- Architecture and official source: https://github.com/ZhengPeng7/BiRefNet
+- Official source weights: `ZhengPeng7/BiRefNet_lite/model.safetensors` at
+  immutable revision `7838f1c3472f827cd8ce13ab5ccc2ce48077360f` (177,634,392
+  bytes; SHA-256 `4417d89795250e698c3cb0ae8df15743810065f646f48a694fdfa7ca052d0815`).
+- Browser ONNX export: `CoderViking/birefnet-lite-onnx` at immutable revision
+  `dc06453148f01ef4131f17e9b791345e32e8ee78`.
+- Runtime file: `birefnet-lite-1024.onnx`, 199,681,624 bytes; it is downloaded
+  on first use and is not committed to this repository.
+- Pinned URL:
+  `https://huggingface.co/CoderViking/birefnet-lite-onnx/resolve/dc06453148f01ef4131f17e9b791345e32e8ee78/birefnet-lite-1024.onnx?download=true`.
+- SHA-256: `50a57872cc739192446da2a934159f957c81af8b5a161dfda8e3daa51660ca67`.
+- Tensor contract: float32 NCHW RGB, ImageNet normalization, fixed 1024×1024
+  input; float32 1024×1024 logits output, followed by sigmoid.
+- License: MIT. The official model repository describes itself as the official
+  tiny-version weights, links to the MIT-licensed BiRefNet project, and the ONNX
+  artifact's model card declares MIT and identifies the exact source-weight
+  digest above. Commercial use is permitted by MIT. The exact upstream MIT text
+  is included as `public/models/birefnet-lite.LICENSE.txt`.
+
+The fp32 static export is intentional. The smaller community fp16 export uses a
+dynamic deformable-convolution decomposition that is documented to fall back
+from ONNX Runtime Web WebGPU and exhaust the 32-bit WASM heap at 1024². The
+selected export replaces that operation with a validated static GridSample
+decomposition and is published as working on both WebGPU and WASM. The export
+card reports maximum post-sigmoid deviation of 1.3e-9 from the official PyTorch
+model. `scripts/fetch-model-hq.sh` downloads and verifies the pinned artifact
+for local tests or self-hosting.
+
+### MIT License
+
+Copyright (c) 2024 ZhengPeng. The complete license is in
+`public/models/birefnet-lite.LICENSE.txt` and at
+https://github.com/ZhengPeng7/BiRefNet/blob/main/LICENSE.

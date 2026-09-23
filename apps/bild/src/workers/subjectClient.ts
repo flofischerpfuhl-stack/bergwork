@@ -1,8 +1,28 @@
 import type { BackgroundSettings } from '../core/subject/maskProcessing';
+import type { SubjectModel, SubjectModelUrls } from '../core/subject/models';
 import type { SubjectStage, SubjectTiming, SubjectWorkerRequest, SubjectWorkerResponse } from './subjectProtocol';
 
-export interface SubjectInferenceResult { readonly mask: Uint8Array; readonly timing: SubjectTiming }
-export interface SubjectProgress { readonly stage: SubjectStage; readonly progress: number }
+export interface SubjectInferenceResult {
+  readonly mask: Uint8Array;
+  readonly timing: SubjectTiming;
+  readonly componentCount: number;
+}
+export interface SubjectProgress {
+  readonly stage: SubjectStage;
+  readonly progress: number;
+  readonly downloadedBytes?: number;
+  readonly totalBytes?: number | null;
+}
+
+export class SubjectInferenceError extends Error {
+  readonly downloadedBytes?: number;
+  readonly totalBytes?: number | null;
+  readonly resumable?: boolean;
+  constructor(message: string, details: Pick<SubjectWorkerResponse & { type: 'error' },
+    'downloadedBytes' | 'totalBytes' | 'resumable'> = {}) {
+    super(message); this.name = 'SubjectInferenceError'; Object.assign(this, details);
+  }
+}
 
 interface Pending {
   readonly resolve: (value: SubjectInferenceResult) => void;
@@ -18,11 +38,11 @@ export class SubjectInferenceClient {
   private readonly pending = new Map<number, Pending>();
 
   infer(cacheKey: string, rgba: Uint8Array, width: number, height: number, settings: BackgroundSettings,
-    refinementLimit: number, modelUrl = '/models/u2netp.onnx', progress?: (value: SubjectProgress) => void,
-    signal?: AbortSignal): Promise<SubjectInferenceResult> {
+    refinementLimit: number, model: SubjectModel = 'fast', modelUrls: Partial<SubjectModelUrls> = {},
+    progress?: (value: SubjectProgress) => void, signal?: AbortSignal): Promise<SubjectInferenceResult> {
     // Ownership moves to the worker. Callers use a fresh Raster.toPixels() copy, avoiding a second
     // contiguous allocation for a 100 Mpx layer.
-    const request: SubjectWorkerRequest = { op: 'infer', id: nextId++, cacheKey, modelUrl, width, height,
+    const request: SubjectWorkerRequest = { op: 'infer', id: nextId++, cacheKey, model, modelUrls, width, height,
       rgba, settings, refinementLimit };
     return this.send(request, progress, signal, [request.rgba.buffer]);
   }
@@ -78,10 +98,14 @@ export class SubjectInferenceClient {
   private receive(message: SubjectWorkerResponse): void {
     const pending = this.pending.get(message.id);
     if (!pending) return; // A cancelled or superseded result is intentionally discarded.
-    if (message.type === 'progress') { pending.progress?.({ stage: message.stage, progress: message.progress }); return; }
+    if (message.type === 'progress') {
+      pending.progress?.({ stage: message.stage, progress: message.progress, downloadedBytes: message.downloadedBytes,
+        totalBytes: message.totalBytes });
+      return;
+    }
     this.pending.delete(message.id);
-    if (message.type === 'error') pending.reject(new Error(message.error));
-    else pending.resolve({ mask: message.mask, timing: message.timing });
+    if (message.type === 'error') pending.reject(new SubjectInferenceError(message.error, message));
+    else pending.resolve({ mask: message.mask, timing: message.timing, componentCount: message.componentCount });
   }
 }
 

@@ -4,12 +4,13 @@ import { EditorSession } from '../../src/core/session';
 import { rectangleSelection } from '../../src/core/selectionOps';
 import { boxMean, guidedFilter, refineGuidedMask } from '../../src/core/subject/guidedMatte';
 import {
-  postprocessU2Net, preprocessU2Net, refineSubjectMask, SUBJECT_INPUT_SIZE,
+  BIREFNET_INPUT_SIZE, countMaskComponents, postprocessBiRefNet, postprocessU2Net, preprocessBiRefNet,
+  preprocessU2Net, refineSubjectMask, SUBJECT_INPUT_SIZE,
 } from '../../src/core/subject/maskProcessing';
 import {
   removeBackground, subjectCommands, subjectRemovalState, type RemoveBackgroundOptions,
 } from '../../src/core/subject/commands';
-import type { SubjectInferenceResult } from '../../src/workers/subjectClient';
+import { SubjectInferenceError, type SubjectInferenceResult } from '../../src/workers/subjectClient';
 
 function rgba(width: number, height: number, color: readonly [number, number, number, number]): Raster {
   const pixels = new Uint8Array(width * height * 4);
@@ -17,12 +18,13 @@ function rgba(width: number, height: number, color: readonly [number, number, nu
   return Raster.fromPixels(width, height, 4, pixels);
 }
 
-const timing = { modelLoadMs: 10, inferenceMs: 20, refinementMs: 2, estimatedBytes: 1234, backend: 'wasm' as const };
+const timing = { downloadMs: 5, modelLoadMs: 10, inferenceMs: 20, refinementMs: 2, modelBytes: 100,
+  modelCacheHit: false, estimatedBytes: 1234, backend: 'wasm' as const };
 
 function fakeInference(mask: readonly number[], delay = 0): NonNullable<RemoveBackgroundOptions['inference']> {
   const result = async (): Promise<SubjectInferenceResult> => {
     if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-    return { mask: Uint8Array.from(mask), timing };
+    return { mask: Uint8Array.from(mask), timing, componentCount: 1 };
   };
   return { infer: result, refine: result };
 }
@@ -81,6 +83,35 @@ describe('U²-Net processing', () => {
   });
 });
 
+describe('BiRefNet processing and Vision instance emulation', () => {
+  it('preprocesses a 1024² BiRefNet tensor with RGB ImageNet normalization', () => {
+    const result = preprocessBiRefNet(Uint8Array.from([255, 128, 0, 255]), 1, 1);
+    const plane = BIREFNET_INPUT_SIZE ** 2;
+    expect(result).toHaveLength(plane * 3);
+    expect(result[0]).toBeCloseTo((1 - 0.485) / 0.229, 5);
+    expect(result[plane]).toBeCloseTo((128 / 255 - 0.456) / 0.224, 5);
+    expect(result[plane * 2]).toBeCloseTo(-0.406 / 0.225, 5);
+  });
+
+  it('applies sigmoid to BiRefNet logits without min-max changing its alpha confidence', () => {
+    const output = new Float32Array(BIREFNET_INPUT_SIZE ** 2);
+    const result = postprocessBiRefNet(output, 1, 1);
+    expect(result.pixels[0]).toBe(128);
+    expect(result.dynamicRange).toBe(0);
+  });
+
+  it('counts 8-connected final-mask components while retaining every foreground pixel', () => {
+    const mask = Uint8Array.from([
+      255, 0, 0, 0, 255,
+      0, 255, 0, 0, 255,
+      0, 0, 255, 0, 0,
+    ]);
+    const before = mask.slice();
+    expect(countMaskComponents(mask, 5, 3)).toBe(2);
+    expect(mask).toEqual(before);
+  });
+});
+
 describe('Remove Background state machine (Filters.swift commitBackgroundMask)', () => {
   it('previews a mask, applies it without changing pixels, and records one named undo step', async () => {
     const session = new EditorSession();
@@ -90,6 +121,7 @@ describe('Remove Background state machine (Filters.swift commitBackgroundMask)',
     const inference = fakeInference([255, 200, 10, 0]);
     const state = await removeBackground(session, { action: 'begin', inference });
     expect(state.phase).toBe('ready');
+    expect(state.componentCount).toBe(1);
     expect(session.maskOverrides.get(id)?.toPixels()).toEqual(Uint8Array.from([255, 200, 10, 0]));
     await removeBackground(session, { action: 'apply' });
     expect(session.layer(id)!.raster).toBe(source);
@@ -97,6 +129,27 @@ describe('Remove Background state machine (Filters.swift commitBackgroundMask)',
     expect(session.layer(id)!.mask).toMatchObject({ enabled: true, placement: null, linked: true });
     expect(session.isMaskSelected).toBe(true);
     expect(session.history.undoName).toBe('Remove Background');
+  });
+
+  it('selects the best model and forwards host model URL overrides and download bytes', async () => {
+    const session = new EditorSession();
+    session.createNewProject(2, 1);
+    session.insertRaster(rgba(2, 1, [20, 40, 60, 255]), 'image');
+    let chosen: unknown[] = [];
+    const inference: NonNullable<RemoveBackgroundOptions['inference']> = {
+      infer: async (...args) => {
+        chosen = args;
+        args[8]?.({ stage: 'downloading-model', progress: 0.5, downloadedBytes: 50, totalBytes: 100 });
+        return { mask: Uint8Array.from([255, 0]), timing, componentCount: 1 };
+      },
+      refine: async () => ({ mask: Uint8Array.from([255, 0]), timing, componentCount: 1 }),
+    };
+    const state = await removeBackground(session, {
+      model: 'best', modelUrls: { best: 'https://models.example/birefnet.onnx' }, inference,
+    });
+    expect(chosen[6]).toBe('best');
+    expect(chosen[7]).toEqual({ best: 'https://models.example/birefnet.onnx' });
+    expect(state).toMatchObject({ model: 'best', downloadedBytes: 50, totalBytes: 100, componentCount: 1 });
   });
 
   it('multiplies an existing local mask and changes only selected layer pixels', async () => {
@@ -136,5 +189,20 @@ describe('Remove Background state machine (Filters.swift commitBackgroundMask)',
     expect(state.phase).toBe('error');
     expect(state.error).toContain('No foreground subject was detected');
     expect(session.layer(id)!.mask).toBeNull();
+  });
+
+  it('reports resumable model-download failures with the saved byte offset', async () => {
+    const session = new EditorSession();
+    session.createNewProject(1, 1);
+    session.insertRaster(rgba(1, 1, [0, 0, 0, 255]), 'image');
+    const inference: NonNullable<RemoveBackgroundOptions['inference']> = {
+      infer: async () => { throw new SubjectInferenceError('Retry to resume the download.', {
+        downloadedBytes: 4096, totalBytes: 8192, resumable: true,
+      }); },
+      refine: async () => { throw new Error('unused'); },
+    };
+    const state = await removeBackground(session, { model: 'best', inference });
+    expect(state).toMatchObject({ phase: 'error', downloadedBytes: 4096, totalBytes: 8192,
+      downloadResumable: true });
   });
 });
