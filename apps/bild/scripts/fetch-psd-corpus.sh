@@ -35,7 +35,7 @@ mv -- "$WORK_DIR/corpus" "$DEST_DIR/corpus"
 (
   cd -- "$DEST_DIR"
   find corpus -type f \( -iname '*.psd' -o -iname '*.psb' \) -print0 \
-    | sort -z | xargs -0 sha256sum > SHA256SUMS
+    | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS
 )
 
 count="$(wc -l < "$DEST_DIR/SHA256SUMS")"
