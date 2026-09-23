@@ -193,11 +193,13 @@
         "tests/e2e/editor-workflows.spec.ts",
         "tests/e2e/workspace.spec.ts",
         "tests/unit/icc.test.ts",
-        "tests/unit/heic.test.ts"
+        "tests/unit/heic.test.ts",
+        "tests/unit/jpeg.test.ts",
+        "tests/e2e/own-files.spec.ts (integrator files: AdobeRGB/ECI/ProPhoto16/CMYK TIFF+JPEG, camera HEIC)"
       ],
       "deviations": [
         "HEIC: decoded by the browser where supported (Safari); otherwise by an optional host codec (planned Tauri app: OS codecs, see docs/tauri-heic.md), or by the opt-in LGPL-3.0 libheif/libde265 WASM module (off by default; HEVC patents are the distributor's responsibility); else a readable error.",
-        "ICC profiles in PNG (iCCP, cHRM/gAMA, sRGB) and TIFF are converted to sRGB with Little CMS 2 (MIT, WASM); JPEG relies on the browser's colour-managed decoder (verified in Chromium); the libheif path applies NCLX but not arbitrary embedded ICC profiles.",
+        "Colour: embedded ICC profiles are converted to sRGB with Little CMS 2 (MIT, WASM) for PNG (iCCP, cHRM/gAMA, sRGB), TIFF (tag 34675) and tagged JPEG (decoded with libjpeg-turbo, IJG/BSD, incl. Adobe CMYK/YCCK), identical in Chromium, Firefox and WebKit; untagged JPEGs use the browser decoder; untagged CMYK uses a generic subtractive profile; the libheif path applies NCLX but not arbitrary embedded ICC profiles.",
         "Default project format is the host contract's ZIP archive; the macOS .comp package (versions 1–7) is read (zipped or as a folder) and written as a copy.",
         "Save overwrites a chosen file only where the File System Access API exists (Chromium); other browsers download."
       ]

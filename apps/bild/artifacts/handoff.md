@@ -25,14 +25,33 @@ shape.
 | Suite | Result |
 |---|---|
 | TypeScript (`tsc --noEmit`, whole project) | clean |
-| Unit (Vitest, 35 files) | 340 passed |
-| Browser e2e, Chromium | 44 passed, 1 skipped (best-quality subject model not downloaded locally) |
-| Browser e2e, Firefox + WebKit (`E2E_ALL_BROWSERS=1`) | 77 passed, 1 skipped: Firefox drops `clipboardData` on synthetic paste events, a test artefact |
+| Unit (Vitest, 36 files) | 347 passed |
+| Browser e2e, Chromium | 51 passed, 1 skipped (best-quality subject model not downloaded locally) |
+| Browser e2e, Firefox + WebKit (`E2E_ALL_BROWSERS=1`) | 91 passed, 1 skipped: Firefox drops `clipboardData` on synthetic paste events, a test artefact |
 | Acceptance specs (research/compositor-port/acceptance) | 5 passed |
 | Official runner gates (sandboxed: typecheck, build, unit, e2e, perf, acceptance) | all passed, contract unchanged; 5 e2e specs skipped (reference photos and the downloaded best-quality model are absent in the sandbox); see `artifacts/runner-gates.json` |
 
 The subject-removal and visual-tour specs use reference photos outside the repository and are skipped when they are
 missing. In the sandboxed gates they are therefore skipped.
+
+## Integrator's own checks with unseen files
+
+Files that no lane saw: ImageMagick conversions of a reference photo with system ICC profiles, plus a real camera HEIC
+found elsewhere on the machine. Values are mean |Δ| to the sRGB original; "raw" is the error without any conversion.
+
+| File | Result | Raw |
+|---|---|---|
+| AdobeRGB PNG | 0.61 | 10.1 |
+| AdobeRGB JPEG | 2.62 | 10.1 |
+| ECI TIFF | 0.23 | 8.5 |
+| ProPhoto 16-bit TIFF | 0.76 | 11.3 |
+| CMYK TIFF | 6.69 | 17.0 |
+| CMYK JPEG | 6.96 | 17.0 |
+| Camera HEIC | 0.38 | — |
+
+- **CMYK:** the residual reflects FOGRA39 gamut limits.
+- **Blur:** Gaussian blur (σ 8) against ImageMagick in the image interior gives mean 0.50, max 1.
+- **Found by these checks, then fixed:** the CMYK JPEG was at 27.2, and Firefox did not convert AdobeRGB JPEGs.
 
 ## Performance (real GPU)
 
@@ -44,7 +63,7 @@ missing. In the sandboxed gates they are therefore skipped.
 | Brush feedback, 300 px soft brush on an 84 Mpx document, even / irregular samples, p95 | 3–11 ms / 3–9 ms | ≤ 16 ms |
 | First brush sample | 14–22 ms | ≤ 50 ms |
 | Main-thread time at pointer-up | < 1 ms | ≤ 16 ms |
-| Stroke committed (worker) after pointer-up; the GPU preview stays visible meanwhile | ≈ 0.25–0.30 s | regression guard ≤ 0.4 s |
+| Stroke committed (worker) after pointer-up; the GPU preview stays visible meanwhile | ≈ 0.25–0.37 s on a quiet system; up to 0.41 s measured under load (load average ≈ 6) | regression guard ≤ 0.4 s (load-sensitive) |
 | JS heap for the 4096² × 10 scene | ≈ 756–803 MB | — |
 
 The brush preview runs on the GPU (a port of `MetalBrushCoverage`); the exact raster is built incrementally in a
@@ -67,7 +86,7 @@ Apple-only parts are replaced by the nearest available alternative:
 |---|---|
 | GPU renderer | WebGL 2, with a CPU/Canvas 2D fallback when WebGL 2 is missing |
 | HEIC decoding | Browser codec; otherwise a host OS codec (Tauri); otherwise an opt-in LGPL WASM decoder |
-| ColorSync | Little CMS for PNG and TIFF; the browser's colour management for JPEG |
+| ColorSync | Little CMS for PNG, TIFF and tagged JPEG (libjpeg-turbo decoder, incl. CMYK), identical in all browsers |
 | Vision (subject masks) | U²-Netp ("Fast") and BiRefNet_lite ("Best quality", 200 MB download) |
 | Core Image blurs | True Gaussian and Gaussian-weighted directional blur |
 
