@@ -17,6 +17,7 @@ interface CoverageTile {
   tail: Float32Array | null;
   readonly base: Uint8Array | null;
   readonly baseIsZero: boolean;
+  readonly baseIsOpaque: boolean;
   output: Uint8Array;
 }
 
@@ -25,6 +26,11 @@ const COVERAGE_LUT = new Float32Array(COVERAGE_LUT_SIZE + 1);
 for (let i = 0; i <= COVERAGE_LUT_SIZE; i++) COVERAGE_LUT[i] = 1 - Math.exp(-20 * i / COVERAGE_LUT_SIZE);
 
 interface IntegralDensityTable { readonly values: Float32Array; readonly rows: number; readonly columns: number }
+interface TailDensityTemplate {
+  readonly segment: Segment;
+  readonly x: number; readonly y: number; readonly width: number; readonly height: number;
+  readonly values: Float32Array;
+}
 const INTEGRAL_ROWS = 512;
 const INTEGRAL_COLUMNS = 2048;
 const integralDensityCache = new Map<number, IntegralDensityTable>();
@@ -99,6 +105,7 @@ class ContinuousBrushStroke implements Stroke {
   private samplePressures: number[] = [];
   private tailSegments: Segment[] = [];
   private tailAreas = new Map<number, IntRect>();
+  private tailDensityTemplate: TailDensityTemplate | null = null;
   private raster: Raster;
   private done = false;
   readonly sourceRect: Rect;
@@ -214,6 +221,7 @@ class ContinuousBrushStroke implements Stroke {
     this.pendingSnapshotKeys.clear();
     this.tailSegments = [];
     this.tailAreas.clear();
+    this.tailDensityTemplate = null;
   }
 
   private assertActive(): void {
@@ -256,6 +264,13 @@ class ContinuousBrushStroke implements Stroke {
     const tailAreas = this.areas(tail);
     const promotesTail = settled.length > 0 && segmentsEqual(settled, this.tailSegments);
     const changed = promotesTail ? tailAreas : mergeAreaMaps(this.tailAreas, settledAreas, tailAreas);
+    let templateShift: Point | null = null;
+
+    if (promotesTail && tail.length === 1 && this.tailSegments.length === 1
+      && translatedSegments(this.tailSegments[0]!, tail[0]!, this.canvas, this.settings.diameter / 2 + 2)) {
+      if (!this.templateShift(this.tailSegments[0]!)) this.captureTailDensity(this.tailSegments[0]!, this.tailAreas);
+      templateShift = this.templateShift(tail[0]!);
+    }
 
     if (promotesTail) {
       for (const [key, rect] of this.tailAreas) this.promoteTail(this.tile(key), key, rect, this.tailSegments[0]!);
@@ -272,7 +287,7 @@ class ContinuousBrushStroke implements Stroke {
     for (const [key, rect] of changed) {
       const state = this.tile(key);
       const col = key % this.raster.cols, row = Math.floor(key / this.raster.cols);
-      const changedOutput = this.compose(state, key, rect, tail, promotesTail);
+      const changedOutput = this.compose(state, key, rect, tail, promotesTail, templateShift);
       if (!changedOutput) continue;
       this.pendingSnapshotKeys.add(key);
       dirty.push({ x: col * TILE + rect.x, y: row * TILE + rect.y, width: rect.width, height: rect.height });
@@ -286,6 +301,42 @@ class ContinuousBrushStroke implements Stroke {
     this.tailSegments = [...tail];
     this.tailAreas = tailAreas;
     return dirty;
+  }
+
+  /** Reuse an identical translated tail's density; regular pointer sampling often repeats its chord exactly. */
+  private captureTailDensity(segment: Segment, areas: ReadonlyMap<number, IntRect>): void {
+    let left = this.raster.width, top = this.raster.height, right = 0, bottom = 0;
+    for (const [key, rect] of areas) {
+      const col = key % this.raster.cols, row = Math.floor(key / this.raster.cols);
+      left = Math.min(left, col * TILE + rect.x); top = Math.min(top, row * TILE + rect.y);
+      right = Math.max(right, col * TILE + rect.x + rect.width);
+      bottom = Math.max(bottom, row * TILE + rect.y + rect.height);
+    }
+    if (right <= left || bottom <= top) return;
+    const width = right - left, height = bottom - top;
+    const values = new Float32Array(width * height);
+    for (const [key, rect] of areas) {
+      const state = this.coverage.get(key), tail = state?.tail;
+      if (!tail) continue;
+      const col = key % this.raster.cols, row = Math.floor(key / this.raster.cols), tw = this.raster.tileWidth(col);
+      const gx = col * TILE + rect.x, gy = row * TILE + rect.y;
+      for (let y = 0; y < rect.height; y++) {
+        const source = (rect.y + y) * tw + rect.x;
+        const destination = (gy + y - top) * width + gx - left;
+        values.set(tail.subarray(source, source + rect.width), destination);
+      }
+    }
+    this.tailDensityTemplate = { segment, x: left, y: top, width, height, values };
+  }
+
+  private templateShift(segment: Segment): Point | null {
+    const template = this.tailDensityTemplate;
+    if (!template || template.segment.vx !== segment.vx || template.segment.vy !== segment.vy
+      || template.segment.pressure !== segment.pressure) return null;
+    const dx = segment.x0 - template.segment.x0, dy = segment.y0 - template.segment.y0;
+    const gx = this.inverse.a * dx + this.inverse.c * dy, gy = this.inverse.b * dx + this.inverse.d * dy;
+    const x = Math.round(gx), y = Math.round(gy);
+    return Math.abs(gx - x) < 1e-9 && Math.abs(gy - y) < 1e-9 ? { x, y } : null;
   }
 
   /** RasterSnapshot-style handoff: working tiles stay owned; published tiles never mutate. */
@@ -334,9 +385,12 @@ class ContinuousBrushStroke implements Stroke {
     const col = key % this.raster.cols, row = Math.floor(key / this.raster.cols);
     const width = this.raster.tileWidth(col), height = this.raster.tileHeight(row);
     const existing = this.raster.tiles[key];
-    const base = existing ? existing.slice() : null;
+    // Raster tiles are immutable, so BrushStroke.allocateTile's base snapshot can retain the
+    // original tile instead of copying it.
+    const base = existing ?? null;
     state = { permanent: new Float32Array(width * height), tail: null,
-      base, baseIsZero: !existing, output: base ? base.slice() : new Uint8Array(width * height * this.raster.channels) };
+      base, baseIsZero: !existing, baseIsOpaque: this.raster.channels === 4 && !!base && isOpaqueRgba(base),
+      output: base ? base.slice() : new Uint8Array(width * height * this.raster.channels) };
     this.coverage.set(key, state);
     return state;
   }
@@ -385,13 +439,19 @@ class ContinuousBrushStroke implements Stroke {
     state.tail = null;
   }
 
-  private compose(state: CoverageTile, key: number, rect: IntRect, tail: readonly Segment[], tailOnly: boolean): boolean {
+  private compose(state: CoverageTile, key: number, rect: IntRect, tail: readonly Segment[], tailOnly: boolean,
+    templateShift: Point | null): boolean {
     const col = key % this.raster.cols, row = Math.floor(key / this.raster.cols);
     const tw = this.raster.tileWidth(col), ch = this.raster.channels;
     const hard = this.settings.hardness >= 1;
     const m = this.mapping;
+    const opaquePaint = ch === 4 && state.baseIsOpaque && !this.clone && !this.selection && this.settings.mode === 'paint';
+    const saturatedOpaquePaint = opaquePaint && this.settings.opacity === 1;
     const tailBuffer = state.tail ?? new Float32Array(tw * this.raster.tileHeight(row));
     state.tail = tailBuffer;
+    if (!hard && tailOnly && tail.length === 1 && templateShift && saturatedOpaquePaint) {
+      return this.composeOpaqueTemplate(state, col, row, rect, tail[0]!, tailBuffer, templateShift);
+    }
     let changed = false;
     for (let y = rect.y; y < rect.y + rect.height; y++) {
       const hasSpan = tailOnly && tail.length === 1 && capsuleRowSpan(m, col, row, y, rect, tail[0]!,
@@ -403,10 +463,15 @@ class ContinuousBrushStroke implements Stroke {
         const gx = col * TILE + x + 0.5, gy = row * TILE + y + 0.5;
         const px = m.a * gx + m.c * gy + m.tx, py = m.b * gx + m.d * gy + m.ty;
         const pixel = y * tw + x;
+        const offset = pixel * ch;
         let coverage = state.permanent[pixel]!;
         const saturatedBlank = !hard && state.baseIsZero && this.blankSaturationDensity !== null
           && coverage >= this.blankSaturationDensity;
-        if (tailOnly && ((hard && coverage >= 1) || (!hard && coverage >= 20) || saturatedBlank)) {
+        // BrushStroke composes once from stroke coverage over the immutable base. Once an opaque
+        // pixel has reached the paint colour, more coverage cannot change its RGBA8 result.
+        const saturatedOpaque = saturatedOpaquePaint && state.output[offset] === this.paintRed
+          && state.output[offset + 1] === this.paintGreen && state.output[offset + 2] === this.paintBlue;
+        if (tailOnly && ((hard && coverage >= 1) || (!hard && coverage >= 20) || saturatedBlank || saturatedOpaque)) {
           tailBuffer[pixel] = 0;
           continue;
         }
@@ -418,14 +483,22 @@ class ContinuousBrushStroke implements Stroke {
             coverage = Math.max(coverage, tailCoverage);
           } else {
             let tailDensity = 0;
-            for (const s of tail) tailDensity += segmentDensityXY(px, py, s, this.radius, this.radiusSquared,
-              this.depositionSpacing, this.densityLut!, this.integralDensity!);
+            const template = this.tailDensityTemplate;
+            if (templateShift && template) {
+              const tx = col * TILE + x - templateShift.x - template.x;
+              const ty = row * TILE + y - templateShift.y - template.y;
+              if (tx >= 0 && ty >= 0 && tx < template.width && ty < template.height) {
+                tailDensity = template.values[ty * template.width + tx]!;
+              }
+            } else {
+              for (const s of tail) tailDensity += segmentDensityXY(px, py, s, this.radius, this.radiusSquared,
+                this.depositionSpacing, this.densityLut!, this.integralDensity!);
+            }
             tailBuffer[pixel] = tailDensity;
             coverage = densityCoverage(coverage + tailDensity);
           }
         } else { coverage = 0; tailBuffer[pixel] = 0; }
         coverage *= this.selectionCoverageXY(px, py) * this.settings.opacity;
-        const offset = pixel * ch;
         if (ch === 1) changed = this.composeMask(state, offset, coverage) || changed;
         else if (state.baseIsZero && !this.clone && this.settings.mode === 'paint') {
           const alpha = coverage <= 0 ? 0 : clampByte(coverage * 255);
@@ -440,11 +513,57 @@ class ContinuousBrushStroke implements Stroke {
             }
           }
         }
-        else {
+        else if (opaquePaint) {
+          const base = state.base!;
+          const keep = 1 - coverage;
+          const r = clampByte(this.settings.red * 255 * coverage + base[offset]! * keep);
+          const g = clampByte(this.settings.green * 255 * coverage + base[offset + 1]! * keep);
+          const b = clampByte(this.settings.blue * 255 * coverage + base[offset + 2]! * keep);
+          if (r !== state.output[offset] || g !== state.output[offset + 1] || b !== state.output[offset + 2]) {
+            state.output[offset] = r; state.output[offset + 1] = g; state.output[offset + 2] = b;
+            changed = true;
+          }
+        } else {
           const r = state.output[offset]!, g = state.output[offset + 1]!, b = state.output[offset + 2]!, a = state.output[offset + 3]!;
           this.composeColour(state, offset, coverage, px, py);
           changed ||= r !== state.output[offset] || g !== state.output[offset + 1]
             || b !== state.output[offset + 2] || a !== state.output[offset + 3];
+        }
+      }
+    }
+    return changed;
+  }
+
+  private composeOpaqueTemplate(state: CoverageTile, col: number, row: number, rect: IntRect, segment: Segment,
+    tailBuffer: Float32Array, shift: Point): boolean {
+    const template = this.tailDensityTemplate!;
+    const tw = this.raster.tileWidth(col), permanent = state.permanent, output = state.output, base = state.base!;
+    const tileX = col * TILE, tileY = row * TILE;
+    const lookupX = tileX - shift.x - template.x, lookupY = tileY - shift.y - template.y;
+    const lutScale = COVERAGE_LUT_SIZE / 20;
+    let changed = false;
+    for (let y = rect.y; y < rect.y + rect.height; y++) {
+      if (!capsuleRowSpan(this.mapping, col, row, y, rect, segment, this.radius, this.rowSpan)) continue;
+      const rowOffset = y * tw, templateRow = (lookupY + y) * template.width + lookupX;
+      for (let x = this.rowSpan[0]!; x < this.rowSpan[1]!; x++) {
+        const pixel = rowOffset + x, offset = pixel * 4;
+        if (output[offset] === this.paintRed && output[offset + 1] === this.paintGreen
+          && output[offset + 2] === this.paintBlue) {
+          tailBuffer[pixel] = 0;
+          continue;
+        }
+        const tailDensity = template.values[templateRow + x]!;
+        tailBuffer[pixel] = tailDensity;
+        const density = permanent[pixel]! + tailDensity;
+        const coverage = density <= 0 ? 0 : density >= 20 ? COVERAGE_LUT[COVERAGE_LUT_SIZE]!
+          : COVERAGE_LUT[Math.round(density * lutScale)]!;
+        const keep = 1 - coverage;
+        const r = clampByte(this.settings.red * 255 * coverage + base[offset]! * keep);
+        const g = clampByte(this.settings.green * 255 * coverage + base[offset + 1]! * keep);
+        const b = clampByte(this.settings.blue * 255 * coverage + base[offset + 2]! * keep);
+        if (r !== output[offset] || g !== output[offset + 1] || b !== output[offset + 2]) {
+          output[offset] = r; output[offset + 1] = g; output[offset + 2] = b;
+          changed = true;
         }
       }
     }
@@ -754,6 +873,16 @@ function segmentsEqual(a: readonly Segment[], b: readonly Segment[]): boolean {
   });
 }
 
+function translatedSegments(a: Segment, b: Segment, canvas: Size, reach: number): boolean {
+  if (a.vx !== b.vx || a.vy !== b.vy || a.pressure !== b.pressure) return false;
+  return segmentInsideCanvas(a, canvas, reach) && segmentInsideCanvas(b, canvas, reach);
+}
+
+function segmentInsideCanvas(s: Segment, canvas: Size, reach: number): boolean {
+  return Math.min(s.x0, s.x1) - reach >= 0 && Math.min(s.y0, s.y1) - reach >= 0
+    && Math.max(s.x0, s.x1) + reach <= canvas.width && Math.max(s.y0, s.y1) + reach <= canvas.height;
+}
+
 /** Integer pixel-centre span where one raster row intersects a document-space round-tip sweep. */
 function capsuleRowSpan(mapping: Affine, col: number, row: number, y: number, rect: IntRect,
   segment: Segment, radius: number, output: Int32Array): boolean {
@@ -816,6 +945,10 @@ function samePoint(a: Point | undefined, b: Point): boolean { return !!a && a.x 
 function insideCanvasXY(x: number, y: number, canvas: Size): boolean { return x >= 0 && y >= 0 && x < canvas.width && y < canvas.height; }
 function clampByte(value: number): number { return Math.min(255, Math.max(0, Math.round(value))); }
 function isZero(data: Uint8Array): boolean { for (let i = 0; i < data.length; i++) if (data[i]) return false; return true; }
+function isOpaqueRgba(data: Uint8Array): boolean {
+  for (let i = 3; i < data.length; i += 4) if (data[i] !== 255) return false;
+  return true;
+}
 
 function rasterChannel(raster: Raster, x: number, y: number, channel: number): number {
   if (x < 0 || y < 0 || x >= raster.width || y >= raster.height) return 0;
