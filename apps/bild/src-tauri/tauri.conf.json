@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Fernwork Bildeditor",
+  "version": "0.1.0",
+  "identifier": "de.fernwork.bildeditor",
+  "build": {
+    "beforeDevCommand": "bash scripts/tauri-vite.sh dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "bash scripts/tauri-vite.sh build",
+    "frontendDist": "../dist-tauri"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["fwimg"],
+        "name": "Fernwork image project",
+        "description": "Fernwork Bildeditor project",
+        "role": "Editor",
+        "mimeType": "application/vnd.fernwork.image"
+      },
+      {
+        "ext": ["psd"],
+        "name": "Photoshop document",
+        "description": "Layered image document",
+        "role": "Editor",
+        "mimeType": "image/vnd.adobe.photoshop"
+      },
+      {
+        "ext": ["png", "jpg", "jpeg", "webp", "tif", "tiff", "heic", "heif"],
+        "name": "Image",
+        "description": "Image file",
+        "role": "Editor",
+        "mimeType": "image/*"
+      }
+    ]
+  }
+}
