@@ -19,7 +19,8 @@
     "zustand": "5.0.15",
     "immer": "11.1.18",
     "idb": "8.0.3",
-    "fflate": "0.8.3"
+    "fflate": "0.8.3",
+    "onnxruntime-web": "1.30.0"
   },
   "devDependencies": {
     "typescript": "7.0.2",
