@@ -12,13 +12,16 @@ import type { FeatureRegistry } from './menus';
 import type { IconName } from './icons';
 import type { CanvasView } from './canvas/CanvasView';
 import type { Modifiers, ToolHandler } from './canvas/tools';
-import type { ClipboardHooks } from '../core/clipboard';
+import { pixelClipboard, type ClipboardHooks, type PixelClipboardEntry } from '../core/clipboard';
+import { failureMessage, ImportQueue } from '../core/importQueue';
 import { ProjectWorkspace, type ProjectTab } from '../core/workspace';
 import { buildManifest, readArchive, ProjectError } from '../io/project';
 import { encodeArchive } from '../workers/archiveClient';
 import { isQuotaError, RecoveryStore } from '../platform/recovery';
 import { browserDecode, decodeImageFile, fileBaseName, ImageImportError } from '../io/imageImport';
 import { DEFAULT_JPEG, jpegBlob, pngBlob, type JpegOptions } from '../io/export';
+import { encodePng } from '../io/png';
+import { sha256Hex } from '../io/sha256';
 import type { GpuCompositor } from '../render/gpuCompositor';
 import type { FileTargetHost, SaveTarget } from '../platform/browserHost';
 import { translator, type Locale } from './i18n';
@@ -55,6 +58,7 @@ export class EditorController {
   readonly locale: Locale;
   readonly theme: 'dark' | 'light';
   readonly ui: UiStore = createUiStore();
+  private readonly imports = new ImportQueue(decodeImageFile);
   canvas: CanvasHost | null = null;
   /** The mounted canvas view (tools, overlay painters, touch toggles). */
   canvasView: CanvasView | null = null;
@@ -111,7 +115,11 @@ export class EditorController {
   /** Spot Healing options in the brush header, provided by the healing module. */
   spotHealingControls: ((session: EditorSession) => ReactNode) | null = null;
   /** Handles a DOM paste event (⌘V); true when it pasted. */
-  pasteEvent: ((event: ClipboardEvent) => boolean) | null = null;
+  private assignedPasteEvent: ((event: ClipboardEvent) => boolean) | null = null;
+  get pasteEvent(): ((event: ClipboardEvent) => boolean) | null {
+    return this.assignedPasteEvent ? this.dispatchPasteEvent : null;
+  }
+  set pasteEvent(value: ((event: ClipboardEvent) => boolean) | null) { this.assignedPasteEvent = value; }
   /** Mirrors the selection for Flip Canvas. */
   mirrorSelection: ((document: CanvasDocument, horizontally: boolean) => CanvasDocument['selection']) | null = null;
   /** System clipboard bridges for copied pixels (platform work). */
@@ -198,32 +206,71 @@ export class EditorController {
   }
 
   async importFiles(files: readonly File[], into: ProjectTab = this.workspace.current, point: { x: number; y: number } | null = null): Promise<string[]> {
-    const session = into.session;
-    const failures: string[] = [];
-    const ids: string[] = [];
-    if (!files.length) return ids;
-    session.commitTransform();
-    session.isImporting = true;
-    session.notify('ui');
-    try {
-      session.beginEdit('Import Images');
-      for (const file of files) {
-        try {
-          const bytes = new Uint8Array(await file.arrayBuffer());
-          const raster = await decodeImageFile(bytes, session.remainingPixelBudget());
-          session.isImporting = false;
-          ids.push(session.insertRaster(raster, fileBaseName(file.name), session.document ? point : null));
-          session.isImporting = true;
-        } catch (error) {
-          failures.push(`${file.name}: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-    } finally {
-      session.isImporting = false;
-      session.endEdit();
+    const result = await this.imports.enqueue(into.session, files.map((file) => ({
+      name: file.name,
+      layerName: fileBaseName(file.name),
+      read: async () => new Uint8Array(await file.arrayBuffer()),
+    })), { point });
+    const message = failureMessage(result);
+    if (message) this.reportError('import-failed', new Error(message), this.t('Import couldn’t finish'));
+    return [...result.layerIds];
+  }
+
+  /** Browser paste entry point: external decoding shares the same per-session queue as file drops. */
+  private readonly dispatchPasteEvent = (event: ClipboardEvent): boolean => {
+    const file = [...(event.clipboardData?.files ?? [])].find((candidate) => candidate.type.startsWith('image/'));
+    const tab = this.workspace.current;
+    const internal = pixelClipboard.entry;
+    if (!file && internal && tab.session.document && (tab.session.isImporting || tab.session.isProjectBusy)) {
+      void this.importInternalPaste(tab, internal);
+      return true;
     }
-    if (failures.length) this.reportError('import-failed', new Error(failures.join('\n\n')), this.t('Import couldn’t finish'));
-    return ids;
+    if (!file || !tab.session.document
+      || !(tab.session.canEditLayers || tab.session.isImporting || tab.session.isProjectBusy)) {
+      return this.assignedPasteEvent?.(event) ?? false;
+    }
+    void this.importPastedFile(file, tab, internal);
+    return true;
+  };
+
+  private async importInternalPaste(into: ProjectTab, entry: PixelClipboardEntry): Promise<void> {
+    await this.imports.enqueue(into.session, [{ name: 'Pasted image', read: async () => new Uint8Array() }], {
+      transactionName: 'Paste',
+      decoder: async () => entry.raster,
+      insert: (session) => session.addPixelLayer(entry.raster, entry.origin, session.nextLayerName(), 'Paste'),
+    });
+  }
+
+  private async importPastedFile(file: File, into: ProjectTab, internal: PixelClipboardEntry | null): Promise<void> {
+    let usesInternalPixels = false;
+    const internalHash = internal
+      ? sha256Hex(encodePng(internal.raster.toPixels(), internal.raster.width, internal.raster.height, internal.raster.channels))
+      : null;
+    const result = await this.imports.enqueue(into.session, [{
+      name: file.name || 'Pasted image',
+      read: async () => new Uint8Array(await file.arrayBuffer()),
+    }], {
+      transactionName: 'Paste',
+      decoder: async (bytes, remainingPixels) => {
+        usesInternalPixels = internal !== null && sha256Hex(bytes) === internalHash;
+        return usesInternalPixels ? internal!.raster : decodeImageFile(bytes, remainingPixels);
+      },
+      insert: (session, raster) => {
+        const document = session.document;
+        if (!document) return null;
+        if (!usesInternalPixels) pixelClipboard.clear();
+        const pasted = usesInternalPixels ? internal! : {
+          raster,
+          origin: {
+            x: Math.floor((document.width - raster.width) / 2),
+            y: Math.floor((document.height - raster.height) / 2),
+          },
+        };
+        return session.addPixelLayer(pasted.raster, pasted.origin, session.nextLayerName(), 'Paste');
+      },
+    });
+    const failure = result.failures[0];
+    if (failure) this.reportError('paste-failed', failure.error);
   }
 
   async chooseAndImport(): Promise<void> {
@@ -424,15 +471,17 @@ export class EditorController {
       },
       importImage: async (file: Blob, name: string): Promise<LayerId> => {
         const session = this.session;
-        session.commitTransform();
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        let raster: Raster;
-        try { raster = await decodeImageFile(bytes, session.remainingPixelBudget()); } catch (error) {
+        const result = await this.imports.enqueue(session, [{ name, read: async () => new Uint8Array(await file.arrayBuffer()) }]);
+        const failure = result.failures[0];
+        if (failure) {
+          const error = failure.error;
           const code = error instanceof ImageImportError ? error.code : 'unreadable';
-          this.host.reportError({ code: `import-${code}`, message: (error as Error).message });
+          this.host.reportError({ code: `import-${code}`, message: error instanceof Error ? error.message : String(error) });
           throw error;
         }
-        return session.insertRaster(raster, name);
+        const id = result.layerIds[0];
+        if (!id) throw new Error('The image could not be imported.');
+        return id;
       },
       openProject: async (archive: Blob) => {
         try { await this.openArchive(archive); } catch (error) {
