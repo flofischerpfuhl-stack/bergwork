@@ -45,7 +45,8 @@ const de: Record<string, string> = {
   'Pan': 'Verschieben', 'Zoom': 'Zoom', 'Select a tool': 'Werkzeug wählen', 'Eyedropper': 'Pipette', 'Sample Ring': 'Aufnahmering',
   'Rename…': 'Umbenennen …', 'Hide/Show Layer': 'Ebene aus-/einblenden', 'Add White Mask': 'Weiße Maske hinzufügen', 'Add Black Mask': 'Schwarze Maske hinzufügen',
   'Enable/Disable Mask': 'Maske aktivieren/deaktivieren', 'Delete Mask': 'Maske löschen', 'Delete Layer / Folder': 'Ebene/Ordner löschen',
-  'OK': 'OK', 'Export': 'Exportieren', 'Quality': 'Qualität', 'Background for transparency': 'Hintergrund für Transparenz',
+  'OK': 'OK', 'Crop': 'Freistellen', 'Apply Crop': 'Freistellen anwenden', 'Free': 'Frei', 'Original': 'Original',
+  'Drag to crop · Enter apply · Escape cancel · Space to pan': 'Ziehen stellt frei · Eingabe wendet an · Esc bricht ab · Leertaste verschiebt', 'Export': 'Exportieren', 'Quality': 'Qualität', 'Background for transparency': 'Hintergrund für Transparenz',
   'Not yet available in the browser port': 'Im Browser-Port noch nicht verfügbar',
   'This layer supplies a live mask': 'Diese Ebene liefert eine Live-Maske', 'These layers supply live masks': 'Diese Ebenen liefern Live-Masken',
   'Bake keeps the current masked appearance in the dependent layers’ pixels. Remove Links reveals their pixels. You can undo either choice.':

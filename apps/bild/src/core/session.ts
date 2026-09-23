@@ -94,6 +94,9 @@ export class EditorSession {
   isMaskSelected = false;
   collapsedGroupIds: ReadonlySet<string> = new Set();
   transformEdit: TransformEdit | null = null;
+  /** The Crop tool's frame (document pixels) and ratio choice (Crop.swift). */
+  cropRect: Rect | null = null;
+  cropRatioChoice = 'Free';
   transformDuplicate: { copy: string; source: string } | null = null;
   snapGuides: { xs: number[]; ys: number[] } = { xs: [], ys: [] };
   locksTransformRatio = true;
@@ -150,7 +153,7 @@ export class EditorSession {
 
   get canEditLayers(): boolean {
     return this.document !== null && !this.isProjectBusy && !this.isImporting && this.renamingLayerId === null
-      && this.transformEdit === null && this.adjustmentEditingId === null;
+      && this.transformEdit === null && this.cropRect === null && this.adjustmentEditingId === null;
   }
   get canUseHistory(): boolean {
     return !this.isProjectBusy && !this.isImporting && this.renamingLayerId === null && this.transformEdit === null
@@ -217,6 +220,7 @@ export class EditorSession {
     return true;
   }
   private restore(snapshot: HistorySnapshot): void {
+    this.cropRect = null;
     const changedCanvas = this.document?.id !== snapshot.document?.id;
     const keepMaskTarget = this.isMaskSelected && this.activeLayerId === snapshot.activeLayerId;
     this.document = snapshot.document;
@@ -747,9 +751,19 @@ export class EditorSession {
 
   selectTool(value: Tool): void {
     if (this.isProjectBusy) return;
-    if (this.tool !== value) this.commitTransform();
+    if (this.tool !== value) { this.commitTransform(); this.cancelCrop(); }
     this.tool = value;
+    if (value === 'crop' && !this.cropRect && this.document) {
+      this.cropRatioChoice = 'Free';
+      this.cropRect = { x: 0, y: 0, width: this.document.width, height: this.document.height };
+    }
     this.notify('ui');
+  }
+
+  cancelCrop(): void {
+    if (!this.cropRect) return;
+    this.cropRect = null;
+    this.notify('document');
   }
 
   // MARK: Transform

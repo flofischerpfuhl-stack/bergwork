@@ -4,7 +4,8 @@
  */
 
 import type { EditorController } from '../ui/controller';
+import { installCanvasOps } from './canvasOpsFeature';
 
 export function installFeatures(controller: EditorController): void {
-  void controller;
+  installCanvasOps(controller);
 }

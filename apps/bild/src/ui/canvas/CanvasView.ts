@@ -8,7 +8,7 @@
  */
 
 import type { CanvasDocument } from '../../core/document';
-import type { Point } from '../../core/geometry';
+import { rectUnion, type Point } from '../../core/geometry';
 import type { EditorSession } from '../../core/session';
 import { GpuCompositor, type CompositeHooks, type ViewSpec } from '../../render/gpuCompositor';
 import type { CanvasHost, EditorController } from '../controller';
@@ -157,7 +157,12 @@ export class CanvasView implements CanvasHost {
         gpu.present(null, width, height, { x: 0, y: 0, width: 0, height: 0 }, dpr, false, 1);
       } else {
         const docRect = viewport.documentRect(document);
-        const device = { x: docRect.x * dpr, y: docRect.y * dpr, width: docRect.width * dpr, height: docRect.height * dpr };
+        // While cropping, the frame may reach past the canvas; show what lies there too (renderBounds).
+        const crop = session.tool === 'crop' ? session.cropRect : null;
+        const bounds = crop ? rectUnion({ x: 0, y: 0, width: document.width, height: document.height }, crop) : { x: 0, y: 0, width: document.width, height: document.height };
+        const shown = { x: docRect.x + bounds.x * viewport.pointsPerPixel, y: docRect.y + bounds.y * viewport.pointsPerPixel,
+          width: bounds.width * viewport.pointsPerPixel, height: bounds.height * viewport.pointsPerPixel };
+        const device = { x: shown.x * dpr, y: shown.y * dpr, width: shown.width * dpr, height: shown.height * dpr };
         const x0 = Math.max(0, Math.floor(device.x)), y0 = Math.max(0, Math.floor(device.y));
         const x1 = Math.min(width, Math.ceil(device.x + device.width)), y1 = Math.min(height, Math.ceil(device.y + device.height));
         const ppp = viewport.pointsPerPixel;
