@@ -49,7 +49,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         { label: t('Import Images…'), enabled: !session.isImporting && !session.isProjectBusy, run: () => void controller.chooseAndImport(), testId: 'menu-import' },
         'separator',
         { label: t('Save'), shortcut: 'mod+s', enabled: !!document && canStart, run: () => void controller.save(), testId: 'menu-save' },
-        { label: t('Save As…'), shortcut: 'mod+shift+s', enabled: !!document && canStart, run: () => void controller.save() },
+        { label: t('Save As…'), shortcut: 'mod+shift+s', enabled: !!document && canStart, run: () => void controller.save(true) },
         'separator',
         { label: t('Export PNG…'), shortcut: 'mod+shift+e', enabled: !!document && canStart, run: () => void controller.exportTo('png'), testId: 'menu-export-png' },
         { label: t('Export JPEG…'), shortcut: 'mod+alt+shift+s', enabled: !!document && canStart, run: () => controller.showDialog({ kind: 'jpeg' }) },

@@ -20,6 +20,7 @@ import { isQuotaError, RecoveryStore } from '../platform/recovery';
 import { browserDecode, decodeImageFile, fileBaseName, ImageImportError } from '../io/imageImport';
 import { DEFAULT_JPEG, jpegBlob, pngBlob, type JpegOptions } from '../io/export';
 import type { GpuCompositor } from '../render/gpuCompositor';
+import type { FileTargetHost, SaveTarget } from '../platform/browserHost';
 import { translator, type Locale } from './i18n';
 import { createUiStore, type Dialog, type UiStore } from './store';
 
@@ -43,6 +44,9 @@ export interface CanvasHost {
   /** Straight-alpha pixels of a document region composited like the canvas. */
   readRegion(document: CanvasDocument, x: number, y: number, width: number, height: number): Uint8Array;
 }
+
+/** Where each project was last saved, for Save without asking again. */
+const saveTargets = new WeakMap<EditorSession, SaveTarget>();
 
 export class EditorController {
   readonly workspace: ProjectWorkspace;
@@ -330,13 +334,23 @@ export class EditorController {
     }
   }
 
-  async save(): Promise<void> {
+  /** Save overwrites the place the project was last saved to; Save As (or the first save) asks where (ProjectController.save). */
+  async save(saveAs = false): Promise<void> {
     const session = this.session;
     if (!session.document || !this.workspace.canSwitch) return;
     try {
       const blob = await this.archive(session);
       const name = `${session.projectName ?? this.workspace.current.title}.compositor.zip`;
-      await this.host.saveFile(blob, name);
+      const host = this.host as FileTargetHost;
+      const target = saveTargets.get(session);
+      if (target && !saveAs && host.saveFileTo) await host.saveFileTo(target, blob);
+      else if (host.saveFileAs) {
+        const chosen = await host.saveFileAs(blob, name, 'project');
+        // Cancelled: nothing was written, so the project stays unsaved.
+        if (!chosen) return;
+        saveTargets.set(session, chosen);
+        session.projectName = chosen.name.replace(/(\.compositor)?\.zip$/i, '');
+      } else await this.host.saveFile(blob, name);
       session.projectName ??= this.workspace.current.title;
       session.history.markSaved();
       this.recoveryPaused.delete(this.workspace.current.id);
@@ -364,7 +378,10 @@ export class EditorController {
     try {
       const blob = await this.exportBlob(format);
       if (format === 'jpeg') storeQuality(this.jpegOptions.quality);
-      await this.host.saveFile(blob, `${session.projectName ?? this.workspace.current.title}.${format === 'png' ? 'png' : 'jpg'}`);
+      const name = `${session.projectName ?? this.workspace.current.title}.${format === 'png' ? 'png' : 'jpg'}`;
+      const host = this.host as FileTargetHost;
+      if (host.saveFileAs) await host.saveFileAs(blob, name, format);
+      else await this.host.saveFile(blob, name);
     } catch (error) { this.reportError('export-failed', error); }
   }
 

@@ -9,27 +9,38 @@ export function solidPng(width: number, height: number, rgba: [number, number, n
 }
 
 /** Mounts the editor through the public API with a host that records downloads and errors. */
-export async function mountForTest(page: Page, options: { locale?: 'de' | 'en' } = {}): Promise<void> {
+export async function mountForTest(page: Page, options: { locale?: 'de' | 'en'; fileTargets?: boolean } = {}): Promise<void> {
   await page.goto('/?harness=ui');
-  await page.evaluate(async (locale) => {
+  await page.evaluate(async ({ locale, fileTargets }) => {
     document.body.style.cssText = 'margin:0;width:100vw;height:100vh;overflow:hidden';
     const root = document.getElementById('root')!;
     const load = (path: string): Promise<any> => import(/* @vite-ignore */ path);
     const { mountEditor } = await load('/src/index.ts');
     const { createBrowserHost } = await load('/src/platform/browserHost.ts');
-    const base = createBrowserHost();
+    // The real save picker would block a headless run: file targets are either absent or recorded fakes.
+    const { saveFileAs: _as, saveFileTo: _to, ...base } = createBrowserHost();
+    const targets = fileTargets ? {
+      async saveFileAs(blob: Blob, name: string, kind: string) {
+        const answer = (w.__pickerAnswer as string | null | undefined) ?? name;
+        (w.__targetWrites as unknown[]).push({ op: 'as', name, kind, size: blob.size, answer });
+        return answer === 'cancel' ? null : { name: answer };
+      },
+      async saveFileTo(target: { name: string }, blob: Blob) { (w.__targetWrites as unknown[]).push({ op: 'to', name: target.name, size: blob.size }); },
+    } : {};
     const w = window as unknown as Record<string, unknown>;
     w.__saved = [];
     w.__errors = [];
+    w.__targetWrites = [];
     w.__handle = await mountEditor(root, {
       locale, theme: 'dark',
       host: {
         ...base,
+        ...targets,
         async saveFile(blob: Blob, name: string) { (w.__saved as unknown[]).push({ name, type: blob.type, size: blob.size, blob }); },
         reportError(error: { code: string; message: string }) { (w.__errors as unknown[]).push(error); },
       },
     });
-  }, options.locale ?? 'en');
+  }, { locale: options.locale ?? 'en', fileTargets: options.fileTargets ?? false });
 }
 
 export async function manifest(page: Page): Promise<any> {

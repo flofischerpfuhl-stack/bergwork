@@ -74,3 +74,31 @@ test('New Canvas opens an empty tab without a modal; M and L switch the selectio
   await editor.press('m');
   await expect(page.getByRole('radio', { name: 'Ellipse' })).toHaveAttribute('aria-checked', 'true');
 });
+
+test('Save asks where once and then overwrites; Save As asks again; a cancelled save leaves the project unsaved', async ({ page }) => {
+  await mountForTest(page, { fileTargets: true });
+  await page.getByTestId('widthInput').fill('40');
+  await page.getByTestId('heightInput').fill('40');
+  await page.getByTestId('createCanvas').click();
+  const editor = page.getByTestId('compositor-editor');
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  const writes = () => page.evaluate(() => (window as any).__targetWrites.map((w: any) => `${w.op}:${w.name}`));
+  const modified = () => page.evaluate(() => (window as any).__editorForTests.session.isModified);
+  await page.getByTestId('menu-Layer').click();
+  await page.getByTestId('menu-new-layer').click();
+  await page.evaluate(() => { (window as any).__pickerAnswer = 'cancel'; });
+  await editor.press(`${mod}+s`);
+  await expect.poll(writes).toEqual(['as:Untitled.compositor.zip']);
+  expect(await modified()).toBe(true);
+  await page.evaluate(() => { (window as any).__pickerAnswer = 'Poster.compositor.zip'; });
+  await editor.press(`${mod}+s`);
+  await expect.poll(async () => (await writes()).length).toBe(2);
+  expect(await modified()).toBe(false);
+  await expect(page.getByRole('tab', { selected: true })).toContainText('Poster');
+  await page.getByTestId('menu-Layer').click();
+  await page.getByTestId('menu-new-layer').click();
+  await editor.press(`${mod}+s`);
+  await expect.poll(writes).toEqual(['as:Untitled.compositor.zip', 'as:Untitled.compositor.zip', 'to:Poster.compositor.zip']);
+  await editor.press(`${mod}+Shift+s`);
+  await expect.poll(async () => (await writes())[3]).toBe('as:Poster.compositor.zip');
+});
