@@ -4,6 +4,9 @@
  */
 
 import type { HostAdapter } from '../../contracts';
+import type { ImageDecoderHost } from './imageDecoder';
+
+export type { HostDecodedImage, ImageDecoderHost } from './imageDecoder';
 
 /** A place a file was saved to, which Save can overwrite later without asking again. */
 export interface SaveTarget { readonly name: string }
@@ -12,7 +15,7 @@ export interface SaveTarget { readonly name: string }
  * Optional host capabilities beyond the shared contract: choosing where to save (null when the user cancels) and
  * overwriting that place again (ProjectController.save / ProjectStore atomic replacement).
  */
-export interface FileTargetHost extends HostAdapter {
+export interface FileTargetHost extends HostAdapter, ImageDecoderHost {
   saveFileAs?(blob: Blob, suggestedName: string, kind: 'project' | 'png' | 'jpeg'): Promise<SaveTarget | null>;
   saveFileTo?(target: SaveTarget, blob: Blob): Promise<void>;
 }

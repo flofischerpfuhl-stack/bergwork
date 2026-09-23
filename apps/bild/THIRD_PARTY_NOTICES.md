@@ -31,3 +31,34 @@ are in `MODEL_LICENSES.md`.
 Browser inference uses `onnxruntime-web` 1.30.0, copyright Microsoft
 Corporation, under the MIT License. Source and license:
 https://github.com/microsoft/onnxruntime
+
+## Optional HEIC decoder (not loaded by default)
+
+The separately replaceable files `src/wasm/heif/libheif.mjs` and
+`src/wasm/heif/libheif.wasm` contain:
+
+- libheif 1.23.5, copyright Struktur AG and contributors, LGPL-3.0-or-later.
+  Source: https://github.com/strukturag/libheif/releases/tag/v1.23.5
+  (`libheif-1.23.5.tar.gz`, SHA-256
+  `fd9036064c4432f0550d15072ddf34956a248279ee9aeaff0fba3fa0f77d8f1a`).
+- libde265 1.1.1, copyright Struktur AG and contributors, LGPL-3.0-or-later.
+  Source: https://github.com/strukturag/libde265/releases/tag/v1.1.1
+  (`libde265-1.1.1.tar.gz`, SHA-256
+  `fd48a927e94ed74fc7ce8829d222b9d8599fcbfe8b6448ba66705babc56ab219`).
+
+The complete LGPL-3.0 and incorporated GPL-3.0 texts are in
+`src/wasm/heif/LICENSE.LGPL-3.0.txt` and `src/wasm/heif/LICENSE.GPL-3.0.txt`. The
+corresponding source can be obtained from the release links above and rebuilt
+with `scripts/build-heif-wasm.sh` and the pinned Emscripten toolchain recorded
+in `toolchain.json`. The generated JS and WASM are kept separate from the
+application and can be replaced with a modified/relinked build. They are
+fetched only after a host explicitly opts in with `heicDecoder: 'lgpl-wasm'`.
+
+HEVC/H.265 is covered by patents in a number of jurisdictions. The LGPL
+licences for libheif and libde265 do not grant patent licences; distributors
+are responsible for assessing any patent-licensing obligations.
+
+The test file `tests/e2e/heic-quadrants.heic` was generated for this project
+from an original 64×64 red/green image using Ubuntu libheif 1.17.6 and x265
+3.5 (`heif-enc --quality 95`). It contains no third-party artwork. Its SHA-256
+is `b496c28c0bb1b99dce93e4c40ac0c5aa506732c9e0c656af8e103b2a91474208`.

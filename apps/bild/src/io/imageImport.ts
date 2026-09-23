@@ -5,8 +5,8 @@
  *
  * PNGs without colour-profile chunks go through the lossless decoder in png.ts (canvas decoding
  * premultiplies and loses precision in semi-transparent pixels). Everything else uses the browser's
- * colour-managed decoder. TIFF uses the dependency-free decoder in tiff.ts; HEIC uses the
- * browser codec where available and otherwise follows the explicit policy in heic.ts.
+ * colour-managed decoder. TIFF uses the dependency-free decoder in tiff.ts; HEIC tries the
+ * browser codec, an optional host codec, then the explicitly enabled LGPL module in heic.ts.
  */
 
 import { Raster } from '../core/raster';
@@ -15,7 +15,7 @@ import { decodePng, pngDimensions } from './png';
 import { orientedSize, readJpegInfo } from './jpegMeta';
 import { sha256Hex } from './sha256';
 import { decodeTiff, TiffError, tiffDimensions } from './tiff';
-import { decodeHeic, HeicError, heicDimensions, isHeic } from './heic';
+import { decodeHeic, HeicError, heicDimensions, isHeic, type HeicDecodeOptions } from './heic';
 
 export class ImageImportError extends Error {
   readonly code: 'unreadable' | 'unsupported' | 'too-large';
@@ -65,7 +65,7 @@ export async function browserDecode(bytes: Uint8Array, mime: string): Promise<{ 
 }
 
 /** Decodes an image file into a raster that remembers its original bytes. */
-export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number): Promise<Raster> {
+export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number, options: HeicDecodeOptions = {}): Promise<Raster> {
   const kind = sniffImage(bytes);
   if (!kind) throw new ImageImportError('unsupported');
   let width = 0, height = 0;
@@ -99,7 +99,7 @@ export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number
       throw new ImageImportError('unreadable');
     }
   } else if (kind === 'image/heic') {
-    try { pixels = await decodeHeic(bytes); }
+    try { pixels = await decodeHeic(bytes, options); }
     catch (error) {
       if (error instanceof HeicError && error.code === 'unsupported') throw new ImageImportError('unsupported', error.message);
       throw new ImageImportError('unreadable');
