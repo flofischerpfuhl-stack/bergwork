@@ -78,6 +78,11 @@ export function beginStroke(options: BeginStrokeOptions): Stroke {
   return new ContinuousBrushStroke(options);
 }
 
+/** Straightforward pixel-major path used to prove optimized irregular-stroke equivalence. */
+export function beginReferenceStroke(options: BeginStrokeOptions): Stroke {
+  return new ContinuousBrushStroke(options, true);
+}
+
 class ContinuousBrushStroke implements Stroke {
   private readonly settings: BrushSettings;
   private readonly selection: DocumentSelection | null;
@@ -101,6 +106,8 @@ class ContinuousBrushStroke implements Stroke {
   private readonly paintGreen: number;
   private readonly paintBlue: number;
   private readonly blankSaturationDensity: number | null;
+  private readonly fastRgbaPaint: boolean;
+  private readonly curveTolerance: number;
   private samples: Point[] = [];
   private samplePressures: number[] = [];
   private tailSegments: Segment[] = [];
@@ -110,7 +117,7 @@ class ContinuousBrushStroke implements Stroke {
   private done = false;
   readonly sourceRect: Rect;
 
-  constructor(options: BeginStrokeOptions) {
+  constructor(options: BeginStrokeOptions, private readonly reference = false) {
     validateBrushSettings(options.settings);
     if (!Number.isInteger(options.canvas.width) || !Number.isInteger(options.canvas.height)
       || options.canvas.width < 1 || options.canvas.height < 1) throw new RangeError('Invalid canvas size');
@@ -133,6 +140,9 @@ class ContinuousBrushStroke implements Stroke {
     this.blankSaturationDensity = options.settings.hardness < 1 && options.settings.mode === 'paint'
       && !options.clone && !options.selection && saturationCoverage > 0 && saturationCoverage < 1
       ? -Math.log(1 - saturationCoverage) : null;
+    this.fastRgbaPaint = !this.reference && !this.isMask && options.settings.mode === 'paint'
+      && !options.clone && !options.selection;
+    this.curveTolerance = this.fastRgbaPaint && this.radius >= 128 ? 0.3 : 0.2;
 
     const placedMask = this.isMask && options.layer.mask?.placement ? options.layer.mask : null;
     const baseTransform = placedMask ? maskTransform(options.layer) : options.layer.transform;
@@ -175,7 +185,7 @@ class ContinuousBrushStroke implements Stroke {
       if (n === 1) settled = [segment(point, point, pressure)];
       else if (n >= 3) {
         settled = continuousCurve(this.samples[n - 3]!, this.samples[n - 2]!, this.samples[Math.max(0, n - 4)]!, point,
-          this.samplePressures[n - 3]!, this.samplePressures[n - 2]!);
+          this.samplePressures[n - 3]!, this.samplePressures[n - 2]!, this.curveTolerance);
       }
       const nextTail = n >= 2
         ? [segment(this.samples[n - 2]!, point, (this.samplePressures[n - 2]! + pressure) / 2)] : [];
@@ -195,7 +205,7 @@ class ContinuousBrushStroke implements Stroke {
     const n = this.samples.length;
     if (n >= 2) {
       const settled = continuousCurve(this.samples[n - 2]!, this.samples[n - 1]!, this.samples[Math.max(0, n - 3)]!,
-        this.samples[n - 1]!, this.samplePressures[n - 2]!, this.samplePressures[n - 1]!);
+        this.samples[n - 1]!, this.samplePressures[n - 2]!, this.samplePressures[n - 1]!, this.curveTolerance);
       this.render(settled, []);
       this.samples = [this.samples[n - 1]!];
       this.samplePressures = [this.samplePressures[n - 1]!];
@@ -396,10 +406,83 @@ class ContinuousBrushStroke implements Stroke {
   }
 
   private accumulate(density: Float32Array, key: number, rect: IntRect, segments: readonly Segment[]): void {
+    if (this.reference) { this.accumulateReference(density, key, rect, segments); return; }
     const col = key % this.raster.cols, row = Math.floor(key / this.raster.cols);
-    const tw = this.raster.tileWidth(col);
+    const tw = this.raster.tileWidth(col), m = this.mapping;
     const hard = this.settings.hardness >= 1;
-    const m = this.mapping;
+    const tileX = col * TILE, tileY = row * TILE;
+    // MetalBrushCoverage.continuousBrush adds every settled segment. Segment-major spans avoid
+    // re-testing every spline chord in the empty corners of their shared bounding rectangle.
+    for (const s of segments) {
+      const reach = this.radius + (hard ? 2 : 0);
+      for (let y = rect.y; y < rect.y + rect.height; y++) {
+        if (!capsuleRowSpan(m, col, row, y, rect, s, reach, this.rowSpan)) continue;
+        const gy = tileY + y + 0.5;
+        let gx = tileX + this.rowSpan[0]! + 0.5;
+        let px = m.a * gx + m.c * gy + m.tx, py = m.b * gx + m.d * gy + m.ty;
+        let index = y * tw + this.rowSpan[0]!;
+        if (hard || s.length < 1e-6) {
+          for (let x = this.rowSpan[0]!; x < this.rowSpan[1]!; x++, index++, px += m.a, py += m.b) {
+            if (!insideCanvasXY(px, py, this.canvas)) continue;
+            const value = density[index]!;
+            if (hard) density[index] = Math.max(value, hardSegmentCoverageXY(px, py, s, this.settings, m));
+            else if (value < 20) density[index] = Math.min(20, value + segmentDensityXY(px, py, s,
+              this.radius, this.radiusSquared, this.depositionSpacing, this.densityLut!, this.integralDensity!));
+          }
+          continue;
+        }
+        const dx = px - s.x0, dy = py - s.y0;
+        let projection = dx * s.ux + dy * s.uy;
+        let perpendicular = -dx * s.uy + dy * s.ux;
+        const projectionStep = m.a * s.ux + m.b * s.uy;
+        const perpendicularStep = -m.a * s.uy + m.b * s.ux;
+        const scale = this.radius / this.depositionSpacing * s.pressure;
+        // A 2-pixel quadratic reconstruction of the smooth soft-tip field halves CPU integral
+        // queries; the irregular reference test bounds the RGBA8 deviation to one byte.
+        const interpolate = this.fastRgbaPaint && this.radius >= 128 && Math.hypot(m.a, m.b) <= 1
+          && segmentInsideCanvas(s, this.canvas, reach);
+        if (interpolate) {
+          const start = this.rowSpan[0]!, end = this.rowSpan[1]!, gridStart = start & ~1;
+          projection -= (start - gridStart) * projectionStep;
+          perpendicular -= (start - gridStart) * perpendicularStep;
+          let previous = integralSegmentDensity(projection - 2 * projectionStep,
+            Math.abs(perpendicular - 2 * perpendicularStep), s.length, this.radius, this.radiusSquared, scale,
+            this.integralDensity!);
+          let first = integralSegmentDensity(projection, Math.abs(perpendicular), s.length,
+            this.radius, this.radiusSquared, scale, this.integralDensity!);
+          for (let x = gridStart; x < end; x += 2) {
+            const second = integralSegmentDensity(projection + 2 * projectionStep,
+              Math.abs(perpendicular + 2 * perpendicularStep), s.length, this.radius, this.radiusSquared, scale,
+              this.integralDensity!);
+            if (x >= start) {
+              const firstIndex = y * tw + x;
+              if (density[firstIndex]! < 20) density[firstIndex] = Math.min(20, density[firstIndex]! + first);
+            }
+            if (x + 1 >= start && x + 1 < end) {
+              const middleIndex = y * tw + x + 1;
+              if (density[middleIndex]! < 20) density[middleIndex] = Math.min(20,
+                density[middleIndex]! + Math.max(0, -previous / 8 + first * 0.75 + second * 0.375));
+            }
+            previous = first; first = second;
+            projection += 2 * projectionStep;
+            perpendicular += 2 * perpendicularStep;
+          }
+          continue;
+        }
+        for (let x = this.rowSpan[0]!; x < this.rowSpan[1]!;
+          x++, index++, px += m.a, py += m.b, projection += projectionStep, perpendicular += perpendicularStep) {
+          if (!insideCanvasXY(px, py, this.canvas) || density[index]! >= 20) continue;
+          const value = integralSegmentDensity(projection, Math.abs(perpendicular), s.length,
+            this.radius, this.radiusSquared, scale, this.integralDensity!);
+          density[index] = Math.min(20, density[index]! + value);
+        }
+      }
+    }
+  }
+
+  private accumulateReference(density: Float32Array, key: number, rect: IntRect, segments: readonly Segment[]): void {
+    const col = key % this.raster.cols, row = Math.floor(key / this.raster.cols), tw = this.raster.tileWidth(col);
+    const hard = this.settings.hardness >= 1, m = this.mapping;
     for (let y = rect.y; y < rect.y + rect.height; y++) for (let x = rect.x; x < rect.x + rect.width; x++) {
       const gx = col * TILE + x + 0.5, gy = row * TILE + y + 0.5;
       const px = m.a * gx + m.c * gy + m.tx, py = m.b * gx + m.d * gy + m.ty;
@@ -407,7 +490,7 @@ class ContinuousBrushStroke implements Stroke {
       const index = y * tw + x;
       if (hard) {
         let value = density[index]!;
-        for (const s of segments) value = Math.max(value, hardSegmentCoverageXY(px, py, s, this.settings, this.mapping));
+        for (const s of segments) value = Math.max(value, hardSegmentCoverageXY(px, py, s, this.settings, m));
         density[index] = value;
       } else {
         let value = density[index]!;
@@ -459,12 +542,33 @@ class ContinuousBrushStroke implements Stroke {
       if (tailOnly && !hasSpan) continue;
       const startX = hasSpan ? this.rowSpan[0]! : rect.x;
       const endX = hasSpan ? this.rowSpan[1]! : rect.x + rect.width;
-      for (let x = startX; x < endX; x++) {
-        const gx = col * TILE + x + 0.5, gy = row * TILE + y + 0.5;
-        const px = m.a * gx + m.c * gy + m.tx, py = m.b * gx + m.d * gy + m.ty;
+      const gy = row * TILE + y + 0.5;
+      const gx = col * TILE + startX + 0.5;
+      let px = m.a * gx + m.c * gy + m.tx, py = m.b * gx + m.d * gy + m.ty;
+      const singleTail = tail.length === 1 && tail[0]!.length >= 1e-6 ? tail[0]! : null;
+      let tailProjection = 0, tailPerpendicular = 0, projectionStep = 0, perpendicularStep = 0;
+      if (singleTail) {
+        const dx = px - singleTail.x0, dy = py - singleTail.y0;
+        tailProjection = dx * singleTail.ux + dy * singleTail.uy;
+        tailPerpendicular = -dx * singleTail.uy + dy * singleTail.ux;
+        projectionStep = m.a * singleTail.ux + m.b * singleTail.uy;
+        perpendicularStep = -m.a * singleTail.uy + m.b * singleTail.ux;
+      }
+      for (let x = startX; x < endX;
+        x++, px += m.a, py += m.b, tailProjection += projectionStep, tailPerpendicular += perpendicularStep) {
         const pixel = y * tw + x;
         const offset = pixel * ch;
         let coverage = state.permanent[pixel]!;
+        if (!hard && this.fastRgbaPaint && this.radius >= 128 && this.settings.opacity === 1
+          && this.blankSaturationDensity !== null && coverage >= this.blankSaturationDensity) {
+          tailBuffer[pixel] = 0;
+          if (state.output[offset] !== this.paintRed || state.output[offset + 1] !== this.paintGreen
+            || state.output[offset + 2] !== this.paintBlue || state.output[offset + 3] !== 255) {
+            state.output[offset] = this.paintRed; state.output[offset + 1] = this.paintGreen;
+            state.output[offset + 2] = this.paintBlue; state.output[offset + 3] = 255; changed = true;
+          }
+          continue;
+        }
         const saturatedBlank = !hard && state.baseIsZero && this.blankSaturationDensity !== null
           && coverage >= this.blankSaturationDensity;
         // BrushStroke composes once from stroke coverage over the immutable base. Once an opaque
@@ -491,7 +595,12 @@ class ContinuousBrushStroke implements Stroke {
                 tailDensity = template.values[ty * template.width + tx]!;
               }
             } else {
-              for (const s of tail) tailDensity += segmentDensityXY(px, py, s, this.radius, this.radiusSquared,
+              if (singleTail) {
+                tailDensity = integralSegmentDensity(tailProjection, Math.abs(tailPerpendicular), singleTail.length,
+                  this.radius, this.radiusSquared, this.radius / this.depositionSpacing * singleTail.pressure,
+                  this.integralDensity!);
+              }
+              else for (const s of tail) tailDensity += segmentDensityXY(px, py, s, this.radius, this.radiusSquared,
                 this.depositionSpacing, this.densityLut!, this.integralDensity!);
             }
             tailBuffer[pixel] = tailDensity;
@@ -639,7 +748,8 @@ function segment(a: Point, b: Point, pressure: number): Segment {
 }
 
 /** Centripetal Catmull-Rom with BrushStroke's 0.2-document-pixel adaptive chords. */
-function continuousCurve(start: Point, end: Point, before: Point, after: Point, startPressure: number, endPressure: number): Segment[] {
+function continuousCurve(start: Point, end: Point, before: Point, after: Point, startPressure: number, endPressure: number,
+  tolerance: number): Segment[] {
   const knot = (t: number, a: Point, b: Point) => t + Math.max(0.0001, Math.sqrt(Math.hypot(b.x - a.x, b.y - a.y)));
   const mix = (a: Point, b: Point, ta: number, tb: number, t: number): Point => {
     const wa = (tb - t) / (tb - ta), wb = (t - ta) / (tb - ta);
@@ -662,7 +772,7 @@ function continuousCurve(start: Point, end: Point, before: Point, after: Point, 
     };
     const mid = (lo + hi) / 2, m = point(mid);
     const deviation = Math.max(error(m), error(point((lo + mid) / 2)), error(point((mid + hi) / 2)));
-    if (deviation <= 0.2 || depth >= 10) {
+    if (deviation <= tolerance || depth >= 10) {
       result.push(segment(a, b, (startPressure * (1 - (lo + hi) / 2) + endPressure * ((lo + hi) / 2))));
       return;
     }
@@ -702,14 +812,17 @@ function segmentDensityXY(px: number, py: number, s: Segment, radius: number, ra
   const dx = px - s.x0, dy = py - s.y0;
   const projection = dx * s.ux + dy * s.uy;
   const perpendicular = Math.abs(-dx * s.uy + dy * s.ux);
-  const perpendicularSquared = perpendicular * perpendicular;
-  if (perpendicularSquared >= radiusSquared) return 0;
-  const normalizedPerpendicular = perpendicular / radius;
+  return integralSegmentDensity(projection, perpendicular, s.length, radius, radiusSquared,
+    radius / spacing * s.pressure, integral);
+}
+
+function integralSegmentDensity(projection: number, perpendicular: number, length: number, radius: number,
+  radiusSquared: number, scale: number, integral: IntegralDensityTable): number {
+  if (perpendicular * perpendicular >= radiusSquared) return 0;
   // The prefix table is zero outside the round tip's support, so integrating the whole segment
   // avoids solving its circle intersections independently for every pixel.
-  const a = -projection / radius, b = (s.length - projection) / radius;
-  return Math.max(0, integralDifference(integral, normalizedPerpendicular, a, b))
-    * radius / spacing * s.pressure;
+  const a = -projection / radius, b = (length - projection) / radius;
+  return Math.max(0, integralDifference(integral, perpendicular / radius, a, b)) * scale;
 }
 
 const DENSITY_LUT_SIZE = 4096;
