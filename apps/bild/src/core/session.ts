@@ -23,7 +23,7 @@ import { uuid } from './ids';
 import { Raster } from './raster';
 import { CanvasViewport } from './viewport';
 import { defaultAdjustment } from './adjustments';
-import { redrawShapeLayer } from './shape';
+import { cancelShape, redrawShapeLayer } from './shape';
 import { cancelGradient, hasPendingGradient, refreshGradientPalette, resolveGradient } from './gradient';
 import { distortLayer, groupDistortTarget, maskBackground, warpMask } from './distort';
 
@@ -780,7 +780,8 @@ export class EditorSession {
 
   selectTool(value: Tool): void {
     if (this.isProjectBusy) return;
-    if (this.tool !== value) { resolveGradient(this); this.commitTransform(); this.cancelCrop(); }
+    // EditorSession.selectTool: switching tools resolves/cancels every in-progress direct manipulation.
+    if (this.tool !== value) { resolveGradient(this); this.commitTransform(); this.cancelCrop(); cancelShape(this); }
     this.tool = value;
     if (value === 'crop' && !this.cropRect && this.document) {
       this.cropRatioChoice = 'Free';
