@@ -192,3 +192,26 @@ test('the color picker is a panel: canvas clicks sample into it, only OK commits
   await expect(picker).toHaveCount(0);
   expect(await palette()).toEqual([255, 136, 0]);
 });
+
+test('Option with the brush samples the foreground color instead of painting', async ({ page }) => {
+  await mountForTest(page);
+  await page.getByTestId('widthInput').fill('100');
+  await page.getByTestId('heightInput').fill('100');
+  await page.getByTestId('createCanvas').click();
+  await importThroughMenu(page, [{ name: 'blue.png', mimeType: 'image/png', buffer: solidPng(100, 100, [20, 40, 220, 255]) }]);
+  await page.getByTestId('tool-brush').click();
+  const at = await canvasMapper(page, 100);
+  const p = at(50, 50);
+  await page.keyboard.down('Alt');
+  await page.mouse.click(p.x, p.y);
+  await page.keyboard.up('Alt');
+  const color = await page.evaluate(() => {
+    const c = (window as any).__editorForTests.session.paletteColor(false);
+    return [c.red, c.green, c.blue].map((v: number) => Math.round(v * 255));
+  });
+  expect(color).toEqual([20, 40, 220]);
+  expect(await page.evaluate(() => (window as any).__editorForTests.session.history.canUndo)).toBe(true);
+  // Only the import is undoable: nothing was painted.
+  await page.getByTestId('compositor-editor').press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  expect((await manifest(page)).layers).toHaveLength(1);
+});

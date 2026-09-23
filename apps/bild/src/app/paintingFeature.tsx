@@ -785,4 +785,9 @@ export function installPainting(controller: EditorController): void {
   controller.panels.push(() => <ColorPickerPanel controller={controller} />);
   const sampler = new PickerSampler(controller);
   controller.canvasInterceptors.push(() => (pickerStore(controller).request ? sampler : null));
+  // Option held with Brush, Spot Healing or Gradient samples the color instead (EditorCanvas.palettePicking).
+  const optionDropper = new EyedropperTool(controller);
+  controller.canvasInterceptors.push((session, modifiers) =>
+    modifiers.option && (session.tool === 'brush' || session.tool === 'spotHealing' || session.tool === 'gradient') && !isBrushStrokeActive(session)
+      ? optionDropper : null);
 }
