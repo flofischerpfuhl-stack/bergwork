@@ -94,6 +94,8 @@ export class EditorSession {
   isMaskSelected = false;
   collapsedGroupIds: ReadonlySet<string> = new Set();
   transformEdit: TransformEdit | null = null;
+  /** Transient tool previews keyed by layer id; never part of document history. */
+  readonly rasterOverrides = new Map<string, Raster>();
   transformDuplicate: { copy: string; source: string } | null = null;
   snapGuides: { xs: number[]; ys: number[] } = { xs: [], ys: [] };
   locksTransformRatio = true;

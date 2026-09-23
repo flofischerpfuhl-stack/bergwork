@@ -1,9 +1,15 @@
 /** Selection commands and selection-clipped pixel edits (Selection.swift / SelectionEdits.swift). */
 
-import { effectiveVisibleIds, layerPixelHeight, layerPixelWidth, maskTransform, newLayer, type CanvasDocument, type Layer } from './document';
-import { apply, boundingBox, invert, pixelToDocument, type LayerTransform, type Point } from './geometry';
+import {
+  effectiveVisibleIds, layerPixelHeight, layerPixelWidth, maskTransform, MAX_PIXELS, MAX_SIDE, newLayer,
+  type CanvasDocument, type Layer,
+} from './document';
+import {
+  apply, boundingBox, integralRect, invert, pixelToDocument, rectIntersection, rectUnion, roundHalfAway, transformsEqual,
+  type Affine, type LayerTransform, type Point, type Rect,
+} from './geometry';
 import { uuid } from './ids';
-import { Raster, TILE } from './raster';
+import { Raster, TILE, alphaBounds, cropRaster } from './raster';
 import type { EditorSession, TransformEdit } from './session';
 import { selectionIsEmpty, type DocumentSelection, type SelectionMode } from './selection';
 import {
@@ -327,7 +333,7 @@ export function canTransformSelection(session: EditorSession): boolean {
     && !selectionIsEmpty(session.selection) && !!session.activeLayer?.raster;
 }
 
-function liftSelection(document: CanvasDocument, layer: Layer): { raster: Raster; origin: Point } | null {
+function liftFloatingSelection(document: CanvasDocument, layer: Layer): { raster: Raster; origin: Point } | null {
   const selection = document.selection, source = layer.raster;
   if (!selection || !source) return null;
   const bounds = selectionBounds(selection);
@@ -446,7 +452,7 @@ function commitFloating(session: EditorSession, edit: TransformEdit): void {
 export function beginSelectionTransform(session: EditorSession): boolean {
   if (!canTransformSelection(session) || !session.document || !session.activeLayer || !session.selection) return false;
   const before = session.document, beforeActive = session.activeLayerId, source = session.activeLayer;
-  const lifted = liftSelection(before, source); if (!lifted) return false;
+  const lifted = liftFloatingSelection(before, source); if (!lifted) return false;
   session.beginEdit('Transform Selection');
   const cleared = before.layers.map((layer) => layer.id === source.id ? clearLayerSelection(layer, before.selection!) : layer);
   const floating = newLayer({ id: uuid(), name: 'Floating Selection', raster: lifted.raster, parentId: source.parentId,
@@ -464,7 +470,252 @@ export function beginSelectionTransform(session: EditorSession): boolean {
   session.notify('document'); return true;
 }
 
+export interface PixelMoveState {
+  readonly layerId: string;
+  readonly duplicate: boolean;
+  readonly origin: DocumentSelection;
+  readonly originalRaster: Raster;
+  readonly originalTransform: LayerTransform;
+  readonly lifted: Raster;
+  /** Lifted pixels in the original layer's pixel coordinates. */
+  readonly liftedRect: Rect;
+  /** Rounded document-pixel offset from the drag start. */
+  readonly offset: Point;
+  readonly preview: Raster | null;
+  readonly previewTransform: LayerTransform | null;
+  /** Preview extent in the original layer's pixel coordinates. */
+  readonly previewBounds: Rect | null;
+}
+
+const pixelMoves = new WeakMap<EditorSession, PixelMoveState>();
+
+/** Current Cmd-drag state; the canvas may use `previewTransform` with `session.rasterOverrides`. */
+export function pixelMoveState(session: EditorSession): Readonly<PixelMoveState> | null {
+  return pixelMoves.get(session) ?? null;
+}
+
+function mappedRectBounds(rect: Rect, transform: Affine): Rect {
+  const points = [
+    apply(transform, { x: rect.x, y: rect.y }), apply(transform, { x: rect.x + rect.width, y: rect.y }),
+    apply(transform, { x: rect.x + rect.width, y: rect.y + rect.height }), apply(transform, { x: rect.x, y: rect.y + rect.height }),
+  ];
+  const x = Math.min(...points.map((p) => p.x)), y = Math.min(...points.map((p) => p.y));
+  return { x, y, width: Math.max(...points.map((p) => p.x)) - x, height: Math.max(...points.map((p) => p.y)) - y };
+}
+
+function transformForPixelBounds(original: LayerTransform, pixelWidth: number, pixelHeight: number, bounds: Rect): LayerTransform {
+  const mapping = pixelToDocument(original, pixelWidth, pixelHeight);
+  const middle = apply(mapping, { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 });
+  const size = { width: bounds.width * original.size.width / pixelWidth, height: bounds.height * original.size.height / pixelHeight };
+  return { ...original, size, origin: { x: middle.x - size.width / 2, y: middle.y - size.height / 2 } };
+}
+
+/** BrushStroke.liftSelection: selected source pixels in the layer's own grid. */
+function liftPixels(document: CanvasDocument, layer: Layer, selection: DocumentSelection): { raster: Raster; rect: Rect } | null {
+  const source = layer.raster, selectionRect = selectionBounds(selection);
+  const selected = selectionRect && rectIntersection(selectionRect, { x: 0, y: 0, width: document.width, height: document.height });
+  if (!source || !selected) return null;
+  const toPixels = invert(pixelToDocument(layer.transform, source.width, source.height));
+  const mapped = integralRect(mappedRectBounds(selected, toPixels));
+  const region = rectIntersection(mapped, { x: 0, y: 0, width: source.width, height: source.height });
+  if (!region) return null;
+  const out = new Uint8Array(region.width * region.height * 4), toDocument = pixelToDocument(layer.transform, source.width, source.height);
+  let any = false;
+  for (let y = 0; y < region.height; y++) for (let x = 0; x < region.width; x++) {
+    const sx = region.x + x, sy = region.y + y, documentPoint = apply(toDocument, { x: sx + 0.5, y: sy + 0.5 });
+    const coverage = selectionSampleAt(selection, documentPoint.x, documentPoint.y), offset = (y * region.width + x) * 4;
+    const alpha = Math.round(rasterByte(source, sx, sy, 3) * coverage / 255);
+    out[offset] = rasterByte(source, sx, sy); out[offset + 1] = rasterByte(source, sx, sy, 1);
+    out[offset + 2] = rasterByte(source, sx, sy, 2); out[offset + 3] = alpha;
+    if (alpha) any = true;
+  }
+  return any ? { raster: Raster.fromPixels(region.width, region.height, 4, out), rect: region } : null;
+}
+
+function sampleLifted(raster: Raster, x: number, y: number, smooth: boolean): [number, number, number, number] {
+  if (!smooth) {
+    const ix = Math.floor(x), iy = Math.floor(y);
+    return [rasterByte(raster, ix, iy), rasterByte(raster, ix, iy, 1), rasterByte(raster, ix, iy, 2), rasterByte(raster, ix, iy, 3)];
+  }
+  const u = x - 0.5, v = y - 0.5, x0 = Math.floor(u), y0 = Math.floor(v), fx = u - x0, fy = v - y0;
+  const weights = [(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy];
+  const xs = [x0, x0 + 1, x0, x0 + 1], ys = [y0, y0, y0 + 1, y0 + 1];
+  let alpha = 0, red = 0, green = 0, blue = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = rasterByte(raster, xs[i]!, ys[i]!, 3) / 255, weight = weights[i]!;
+    alpha += a * weight; red += rasterByte(raster, xs[i]!, ys[i]!) * a * weight;
+    green += rasterByte(raster, xs[i]!, ys[i]!, 1) * a * weight; blue += rasterByte(raster, xs[i]!, ys[i]!, 2) * a * weight;
+  }
+  return alpha > 0 ? [Math.round(red / alpha), Math.round(green / alpha), Math.round(blue / alpha), Math.round(alpha * 255)] : [0, 0, 0, 0];
+}
+
+function renderInPlacePixelMove(state: PixelMoveState, target: Rect, placed: Rect, toDocument: Affine): Raster {
+  const source = state.originalRaster, tiles = source.tiles.slice(), mutable = new Map<number, Uint8Array>();
+  const writable = (x: number, y: number): { tile: Uint8Array; offset: number } => {
+    const col = Math.floor(x / TILE), row = Math.floor(y / TILE), key = row * source.cols + col;
+    let tile = mutable.get(key);
+    if (!tile) {
+      tile = tiles[key]?.slice() ?? new Uint8Array(source.tileWidth(col) * source.tileHeight(row) * 4);
+      mutable.set(key, tile); tiles[key] = tile;
+    }
+    return { tile, offset: ((y - row * TILE) * source.tileWidth(col) + x - col * TILE) * 4 };
+  };
+  if (!state.duplicate) {
+    for (let y = 0; y < state.liftedRect.height; y++) for (let x = 0; x < state.liftedRect.width; x++) {
+      const sx = state.liftedRect.x + x, sy = state.liftedRect.y + y;
+      const point = apply(toDocument, { x: sx + 0.5, y: sy + 0.5 });
+      const coverage = selectionSampleAt(state.origin, point.x, point.y) / 255;
+      if (coverage === 0 || rasterByte(source, sx, sy, 3) === 0) continue;
+      const pixel = writable(sx, sy); pixel.tile[pixel.offset + 3] = Math.round(pixel.tile[pixel.offset + 3]! * (1 - coverage));
+      if (pixel.tile[pixel.offset + 3] === 0) {
+        pixel.tile[pixel.offset] = 0; pixel.tile[pixel.offset + 1] = 0; pixel.tile[pixel.offset + 2] = 0;
+      }
+    }
+  }
+  const draw = integralRect(placed), smooth = !Number.isInteger(target.x) || !Number.isInteger(target.y);
+  for (let y = draw.y; y < draw.y + draw.height; y++) for (let x = draw.x; x < draw.x + draw.width; x++) {
+    const rgba = sampleLifted(state.lifted, x + 0.5 - target.x, y + 0.5 - target.y, smooth);
+    if (rgba[3] === 0) continue;
+    const pixel = writable(x, y);
+    sourceOver(pixel.tile, pixel.offset, rgba[0], rgba[1], rgba[2], rgba[3]);
+  }
+  for (const [key, tile] of mutable) if (!tile.some((value) => value !== 0)) tiles[key] = null;
+  return new Raster(source.width, source.height, 4, tiles);
+}
+
+function renderPixelMove(session: EditorSession, state: PixelMoveState, offset: Point):
+  { raster: Raster; transform: LayerTransform; bounds: Rect } | null {
+  const document = session.document, source = state.originalRaster;
+  if (!document) return null;
+  const toDocument = pixelToDocument(state.originalTransform, source.width, source.height), toPixels = invert(toDocument);
+  const zero = apply(toPixels, { x: 0, y: 0 }), shifted = apply(toPixels, offset);
+  const dx = shifted.x - zero.x, dy = shifted.y - zero.y;
+  const target = { x: state.liftedRect.x + dx, y: state.liftedRect.y + dy,
+    width: state.liftedRect.width, height: state.liftedRect.height };
+  // BrushStroke.makeRasterEdit makes the editable grid cover the canvas, but not space beyond it.
+  const canvasPixels = integralRect(mappedRectBounds({ x: 0, y: 0, width: document.width, height: document.height }, toPixels));
+  const allowed = rectUnion({ x: 0, y: 0, width: source.width, height: source.height }, canvasPixels);
+  const placed = rectIntersection(target, allowed);
+  const bounds = integralRect(placed ? rectUnion({ x: 0, y: 0, width: source.width, height: source.height }, placed)
+    : { x: 0, y: 0, width: source.width, height: source.height });
+  const budget = source.width * source.height + session.remainingPixelBudget();
+  if (bounds.width > MAX_SIDE || bounds.height > MAX_SIDE || bounds.width * bounds.height > Math.min(MAX_PIXELS, budget)) return null;
+  if (placed && bounds.x === 0 && bounds.y === 0 && bounds.width === source.width && bounds.height === source.height) {
+    return { raster: renderInPlacePixelMove(state, target, placed, toDocument), transform: state.originalTransform, bounds };
+  }
+  const out = source.readRegion(bounds.x, bounds.y, bounds.width, bounds.height);
+  if (!state.duplicate) {
+    for (let y = 0; y < state.liftedRect.height; y++) for (let x = 0; x < state.liftedRect.width; x++) {
+      const sx = state.liftedRect.x + x, sy = state.liftedRect.y + y;
+      const documentPoint = apply(toDocument, { x: sx + 0.5, y: sy + 0.5 });
+      const coverage = selectionSampleAt(state.origin, documentPoint.x, documentPoint.y) / 255;
+      if (coverage === 0) continue;
+      const ox = sx - bounds.x, oy = sy - bounds.y;
+      if (ox < 0 || oy < 0 || ox >= bounds.width || oy >= bounds.height) continue;
+      const index = (oy * bounds.width + ox) * 4;
+      out[index + 3] = Math.round(out[index + 3]! * (1 - coverage));
+      if (out[index + 3] === 0) { out[index] = 0; out[index + 1] = 0; out[index + 2] = 0; }
+    }
+  }
+  if (placed) {
+    const draw = integralRect(placed), smooth = !Number.isInteger(target.x) || !Number.isInteger(target.y);
+    for (let sy = draw.y; sy < draw.y + draw.height; sy++) for (let sx = draw.x; sx < draw.x + draw.width; sx++) {
+      const rgba = sampleLifted(state.lifted, sx + 0.5 - target.x, sy + 0.5 - target.y, smooth);
+      const ox = sx - bounds.x, oy = sy - bounds.y;
+      sourceOver(out, (oy * bounds.width + ox) * 4, rgba[0], rgba[1], rgba[2], rgba[3]);
+    }
+  }
+  return { raster: Raster.fromPixels(bounds.width, bounds.height, 4, out),
+    transform: transformForPixelBounds(state.originalTransform, source.width, source.height, bounds), bounds };
+}
+
+/** Starts Cmd-drag (cut) or Option-Cmd-drag (duplicate); the document remains untouched until commit. */
+export function beginPixelMove(session: EditorSession, duplicate = false): boolean {
+  if (pixelMoves.has(session) || session.isMaskSelected || !canEditPixels(session)) return false;
+  const document = session.document, layer = session.activeLayer, selection = session.selection;
+  if (!document || !layer?.raster || !selection || selectionIsEmpty(selection)) return false;
+  const lifted = liftPixels(document, layer, selection); if (!lifted) return false;
+  pixelMoves.set(session, { layerId: layer.id, duplicate, origin: selection, originalRaster: layer.raster,
+    originalTransform: layer.transform, lifted: lifted.raster, liftedRect: lifted.rect, offset: { x: 0, y: 0 },
+    preview: null, previewTransform: null, previewBounds: null });
+  return true;
+}
+
+/** Rebuilds the preview from the original pixels, so repeated pointer moves never accumulate. */
+export function movePixels(session: EditorSession, dx: number, dy: number): boolean {
+  const state = pixelMoves.get(session); if (!state) return false;
+  const offset = { x: roundHalfAway(dx), y: roundHalfAway(dy) }, rendered = renderPixelMove(session, state, offset);
+  if (!rendered) { cancelPixelMove(session); return false; }
+  const next = { ...state, offset, preview: rendered.raster, previewTransform: rendered.transform, previewBounds: rendered.bounds };
+  pixelMoves.set(session, next); session.rasterOverrides.set(state.layerId, rendered.raster); session.notify('document'); return true;
+}
+
+function expandedMoveMask(layer: Layer, source: Raster, bounds: Rect): Layer['mask'] {
+  const mask = layer.mask;
+  if (!mask || mask.placement || (bounds.x === 0 && bounds.y === 0 && bounds.width === source.width && bounds.height === source.height)) return mask;
+  const out = new Uint8Array(bounds.width * bounds.height);
+  const overlap = rectIntersection(bounds, { x: 0, y: 0, width: source.width, height: source.height });
+  if (!overlap) return { ...mask, raster: Raster.fromPixels(bounds.width, bounds.height, 1, out) };
+  if (mask.raster.width === 1 && mask.raster.height === 1) {
+    const value = mask.raster.pixel(0, 0)[0]!;
+    for (let y = 0; y < overlap.height; y++) {
+      const destination = (overlap.y - bounds.y + y) * bounds.width + overlap.x - bounds.x;
+      out.fill(value, destination, destination + overlap.width);
+    }
+  } else {
+    const current = mask.raster.readRegion(overlap.x, overlap.y, overlap.width, overlap.height);
+    for (let y = 0; y < overlap.height; y++) out.set(current.subarray(y * overlap.width, (y + 1) * overlap.width),
+      (overlap.y - bounds.y + y) * bounds.width + overlap.x - bounds.x);
+  }
+  return { ...mask, raster: Raster.fromPixels(bounds.width, bounds.height, 1, out) };
+}
+
+/** Commits pixels and moved outline together as one upstream-named undo entry. */
+export function finishPixelMove(session: EditorSession): boolean {
+  const state = pixelMoves.get(session);
+  if (!state || session.isProjectBusy) return false;
+  if (state.offset.x === 0 && state.offset.y === 0) { cancelPixelMove(session); return false; }
+  const current = session.layer(state.layerId);
+  if (!current || current.raster !== state.originalRaster || !transformsEqual(current.transform, state.originalTransform)) {
+    cancelPixelMove(session); return false;
+  }
+  const rendered = state.preview && state.previewBounds && state.previewTransform
+    ? { raster: state.preview, bounds: state.previewBounds, transform: state.previewTransform }
+    : renderPixelMove(session, state, state.offset);
+  if (!rendered) { cancelPixelMove(session); return false; }
+  const alpha = alphaBounds(rendered.raster);
+  const local = alpha ?? { x: 0, y: 0, width: rendered.raster.width, height: rendered.raster.height };
+  const bounds = { x: rendered.bounds.x + local.x, y: rendered.bounds.y + local.y, width: local.width, height: local.height };
+  const raster = local.x === 0 && local.y === 0 && local.width === rendered.raster.width && local.height === rendered.raster.height
+    ? rendered.raster : cropRaster(rendered.raster, local.x, local.y, local.width, local.height);
+  const transform = transformForPixelBounds(state.originalTransform, state.originalRaster.width, state.originalRaster.height, bounds);
+  const selection = moveSelection(state.origin, state.offset.x, state.offset.y);
+  const mask = expandedMoveMask(current, state.originalRaster, bounds);
+  pixelMoves.delete(session); session.rasterOverrides.delete(state.layerId);
+  session.edit(state.duplicate ? 'Duplicate Pixels' : 'Move Pixels', () => {
+    const document = session.document; if (!document) return;
+    const layers = document.layers.map((layer) => layer.id === state.layerId ? { ...layer, raster, transform, mask } : layer);
+    session.replaceDocument({ ...document, layers, selection });
+  });
+  return true;
+}
+
+/** Drops the transient override; because begin/move never mutate the document this restores it exactly. */
+export function cancelPixelMove(session: EditorSession): void {
+  const state = pixelMoves.get(session); if (!state) return;
+  pixelMoves.delete(session); session.rasterOverrides.delete(state.layerId); session.notify('document');
+}
+
+/** Cmd-arrow helper: one begin/move/finish cycle and therefore one undo step. */
+export function nudgePixels(session: EditorSession, dx: number, dy: number): boolean {
+  if (!beginPixelMove(session, false)) return false;
+  if (!movePixels(session, dx, dy)) return false;
+  return finishPixelMove(session);
+}
+
 export function displayedSelection(session: EditorSession): DocumentSelection | null {
+  const move = pixelMoves.get(session);
+  if (move) return moveSelection(move.origin, move.offset.x, move.offset.y);
   const selection = session.selection, edit = session.transformEdit, document = session.document;
   if (!selection || !edit?.floating || !document) return selection;
   return edit.corners
