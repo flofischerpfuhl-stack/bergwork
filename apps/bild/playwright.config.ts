@@ -15,6 +15,11 @@ export default defineConfig({
   use: { baseURL: `http://127.0.0.1:${port}`, headless: true, trace: 'retain-on-failure' },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /performance\.spec/ },
+    ...(process.env.E2E_BENCHMARKS ? [{
+      name: 'benchmarks',
+      testDir: 'tests/benchmarks',
+      use: { ...devices['Desktop Chrome'] },
+    }] : []),
     // Real-GPU measurements (ANGLE on the host OpenGL driver); run with --project perf-gpu.
     {
       name: 'perf-gpu', testMatch: /performance\.spec/,
