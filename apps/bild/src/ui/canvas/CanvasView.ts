@@ -47,6 +47,7 @@ export class CanvasView implements CanvasHost {
   /** The mouse/pen position over the canvas (view points), for brush cursors; null when away or touching. */
   hoverPoint: Point | null = null;
   private secondary: { drag: SecondaryDrag; pointerId: number; start: Point } | null = null;
+  private autoscroll: { frame: number; event: PointerEvent; point: Point } | null = null;
   private animating = false;
   private destroyed = false;
   failure: string | null = null;
@@ -388,6 +389,7 @@ export class CanvasView implements CanvasHost {
       const samples = events.length ? events : [event];
       for (const sample of samples) this.active.handler.move(this.context(sample, this.localPoint(sample)));
       this.redraw();
+      this.updateAutoscroll(event, point);
       return;
     }
     if (!this.pointers.size) this.updateHoverCursor(event, point);
@@ -409,6 +411,7 @@ export class CanvasView implements CanvasHost {
     }
     if (this.panning?.pointerId === event.pointerId) { this.panning = null; return; }
     if (this.active && this.active.pointerId === event.pointerId) {
+      this.stopAutoscroll();
       const { handler } = this.active;
       this.active = null;
       handler.up(this.context(event, point));
@@ -417,7 +420,43 @@ export class CanvasView implements CanvasHost {
     }
   };
 
+  /** Past 12 points from an edge the document slides at 2 + 0.4 points per frame per point beyond, up to 40. */
+  private autoscrollDelta(point: Point): Point {
+    const rect = this.element.getBoundingClientRect(), margin = 12;
+    const speed = (past: number) => (past <= 0 ? 0 : Math.min(40, 2 + past * 0.4));
+    return {
+      x: speed(margin - point.x) - speed(point.x - (rect.width - margin)),
+      y: speed(margin - point.y) - speed(point.y - (rect.height - margin)),
+    };
+  }
+
+  private updateAutoscroll(event: PointerEvent, point: Point): void {
+    const active = this.active;
+    const delta = this.autoscrollDelta(point);
+    if (!active || !active.handler.autoscrolls?.(active.session) || (delta.x === 0 && delta.y === 0)) { this.stopAutoscroll(); return; }
+    if (this.autoscroll) { this.autoscroll.event = event; this.autoscroll.point = point; return; }
+    const step = () => {
+      const scroll = this.autoscroll, current = this.active;
+      if (!scroll || !current || !current.handler.autoscrolls?.(current.session)) { this.stopAutoscroll(); return; }
+      const d = this.autoscrollDelta(scroll.point);
+      if (d.x === 0 && d.y === 0) { this.stopAutoscroll(); return; }
+      current.session.viewport.translate(d.x, d.y);
+      current.session.notify('view');
+      // The pointer hasn't moved, but the document has under it: the box corner or the moved selection follows.
+      current.handler.move(this.context(scroll.event, scroll.point));
+      this.redraw();
+      scroll.frame = requestAnimationFrame(step);
+    };
+    this.autoscroll = { frame: requestAnimationFrame(step), event, point };
+  }
+
+  private stopAutoscroll(): void {
+    if (this.autoscroll) cancelAnimationFrame(this.autoscroll.frame);
+    this.autoscroll = null;
+  }
+
   private onPointerCancel = (event: PointerEvent): void => {
+    this.stopAutoscroll();
     this.pointers.delete(event.pointerId);
     if (this.secondary?.pointerId === event.pointerId) { this.secondary.drag.end(); this.secondary = null; }
     if (this.pointers.size < 2) this.pinch = null;

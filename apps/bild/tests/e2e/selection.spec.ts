@@ -140,3 +140,28 @@ test('Option-dragging a mask thumbnail onto another layer copies the mask as one
   await page.getByTestId('compositor-editor').press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
   await expect(page.getByTestId('mask-thumb')).toHaveCount(1);
 });
+
+test('dragging a marquee past the canvas edge scrolls the view and keeps growing the box', async ({ page }) => {
+  await mountForTest(page);
+  await page.getByTestId('widthInput').fill('3000');
+  await page.getByTestId('heightInput').fill('1000');
+  await page.getByTestId('createCanvas').click();
+  await page.evaluate(() => (window as any).__editorForTests.session.zoomTo(1));
+  await page.getByTestId('tool-marquee').click();
+  const pane = (await page.getByTestId('canvas-pane').boundingBox())!;
+  const docX = (x: number) => page.evaluate(([vx, vy]) => {
+    const s = (window as any).__editorForTests.session;
+    return s.viewport.documentPoint({ x: vx, y: vy }, s.document).x;
+  }, [x - pane.x, pane.height / 2]);
+  const edgeBefore = await docX(pane.x + pane.width);
+  await page.mouse.move(pane.x + pane.width / 2, pane.y + pane.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(pane.x + pane.width + 30, pane.y + pane.height / 2 + 40, { steps: 5 });
+  await page.waitForTimeout(600);
+  await page.mouse.up();
+  const selection = await page.evaluate(() => {
+    const s = (window as any).__editorForTests.session.selection;
+    return { right: s.x + s.mask.width };
+  });
+  expect(selection.right).toBeGreaterThan(edgeBefore + 100);
+});

@@ -99,6 +99,12 @@ class SelectionTool implements ToolHandler {
   private constrainArmed = true;
   constructor(private readonly controller: EditorController, private readonly marquee: boolean) {}
 
+  /** Drawing a Marquee box or moving a selection scrolls at the canvas edge (stepMarqueeAutoscroll). */
+  autoscrolls(session: EditorSession): boolean {
+    const kind = selectionState(session).draft?.kind;
+    return kind === 'Rectangle' || kind === 'Ellipse' || this.moveStart !== null;
+  }
+
   down(c: ToolContext): void {
     const session = c.session, state = selectionState(session);
     if (!session.document || !canEditSelection(session)) return;

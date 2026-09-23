@@ -42,6 +42,8 @@ export interface ToolHandler {
   cancel(session: EditorSession): void;
   /** Cursor while hovering without a button pressed. */
   hover?(context: ToolContext): string;
+  /** Whether the current gesture scrolls the canvas when the pointer nears its edge (EditorCanvas.updateMarqueeAutoscroll). */
+  autoscrolls?(session: EditorSession): boolean;
 }
 
 // MARK: Transform overlay geometry (TransformOverlay.swift)
