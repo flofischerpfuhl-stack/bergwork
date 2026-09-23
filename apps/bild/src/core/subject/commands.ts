@@ -4,9 +4,11 @@ import { Raster, TILE } from '../raster';
 import type { EditorSession } from '../session';
 import type { DocumentSelection } from '../selection';
 import { DEFAULT_BACKGROUND_SETTINGS, multiplyMasks, normalizedBackgroundSettings,
-  type BackgroundSettings } from './maskProcessing';
-import { subjectInference, type SubjectInferenceClient, type SubjectInferenceResult } from '../../workers/subjectClient';
+  countMaskComponents, type BackgroundSettings } from './maskProcessing';
+import { SubjectInferenceError, subjectInference, type SubjectInferenceClient, type SubjectInferenceResult,
+  type SubjectProgress } from '../../workers/subjectClient';
 import type { SubjectStage, SubjectTiming } from '../../workers/subjectProtocol';
+import type { SubjectModel, SubjectModelUrls } from './models';
 
 export type SubjectRemovalPhase = 'idle' | SubjectStage | 'ready' | 'applying' | 'error';
 export interface SubjectRemovalState {
@@ -16,11 +18,19 @@ export interface SubjectRemovalState {
   settings: BackgroundSettings;
   timing: SubjectTiming | null;
   layerId: string | null;
+  model: SubjectModel;
+  componentCount: number | null;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  downloadResumable: boolean;
 }
 
 export interface RemoveBackgroundOptions {
   readonly action?: 'begin' | 'preview' | 'apply' | 'cancel';
   readonly settings?: Partial<BackgroundSettings>;
+  readonly model?: SubjectModel;
+  readonly modelUrls?: Partial<SubjectModelUrls>;
+  /** @deprecated Use `modelUrls.fast`; retained for the existing host integration. */
   readonly modelUrl?: string;
   readonly inference?: Pick<SubjectInferenceClient, 'infer' | 'refine'>;
   readonly onStateChange?: (state: Readonly<SubjectRemovalState>) => void;
@@ -33,11 +43,13 @@ interface Edit {
   readonly selection: DocumentSelection | null;
   readonly transform: Layer['transform'];
   readonly existingMask: LayerMask | null;
-  readonly modelUrl: string;
+  readonly model: SubjectModel;
+  readonly modelUrls: Partial<SubjectModelUrls>;
   readonly inference: Pick<SubjectInferenceClient, 'infer' | 'refine'>;
   abort: AbortController;
   generation: number;
   preview: Raster | null;
+  componentCount: number | null;
 }
 
 interface Context { readonly state: SubjectRemovalState; edit: Edit | null; notify?: RemoveBackgroundOptions['onStateChange'] }
@@ -47,7 +59,8 @@ function contextFor(session: EditorSession): Context {
   let context = contexts.get(session);
   if (!context) {
     context = { state: { phase: 'idle', progress: 0, error: null, settings: DEFAULT_BACKGROUND_SETTINGS,
-      timing: null, layerId: null }, edit: null };
+      timing: null, layerId: null, model: 'fast', componentCount: null, downloadedBytes: 0, totalBytes: null,
+      downloadResumable: false }, edit: null };
     contexts.set(session, context);
   }
   return context;
@@ -81,12 +94,17 @@ export async function removeBackground(session: EditorSession, options: RemoveBa
     if (!canBegin(session)) return context.state;
     const layer = session.activeLayer!;
     const source = layer.raster!;
+    const model = options.model ?? 'fast';
+    const modelUrls = { ...options.modelUrls };
+    if (options.modelUrl && model === 'fast' && modelUrls.fast === undefined) modelUrls.fast = options.modelUrl;
     context.edit = { layerId: layer.id, source, cacheKey: `${source.id}:${source.serial}`, selection: session.selection,
-      transform: layer.transform, existingMask: layer.mask, modelUrl: options.modelUrl ?? '/models/u2netp.onnx',
-      inference: options.inference ?? subjectInference, abort: new AbortController(), generation: 1, preview: null };
+      transform: layer.transform, existingMask: layer.mask, model, modelUrls,
+      inference: options.inference ?? subjectInference, abort: new AbortController(), generation: 1, preview: null,
+      componentCount: null };
     session.isProjectBusy = true;
     publish(session, context, { settings: normalizedBackgroundSettings(options.settings), phase: 'loading-model',
-      progress: 0, error: null, timing: null, layerId: layer.id });
+      progress: 0, error: null, timing: null, layerId: layer.id, model, componentCount: null,
+      downloadedBytes: 0, totalBytes: null, downloadResumable: false });
     return runPreview(session, context, true);
   }
   const edit = context.edit;
@@ -103,19 +121,23 @@ async function runPreview(session: EditorSession, context: Context, infer: boole
   const generation = ++edit.generation;
   publish(session, context, { phase: infer ? 'loading-model' : 'refining', progress: 0, error: null });
   try {
-    const report = ({ stage, progress }: { stage: SubjectStage; progress: number }): void => {
-      if (context.edit === edit && edit.generation === generation) publish(session, context, { phase: stage, progress });
+    const report = ({ stage, progress, downloadedBytes, totalBytes }: SubjectProgress): void => {
+      if (context.edit === edit && edit.generation === generation) publish(session, context, {
+        phase: stage, progress, downloadedBytes: downloadedBytes ?? context.state.downloadedBytes,
+        totalBytes: totalBytes === undefined ? context.state.totalBytes : totalBytes,
+      });
     };
     const result = infer
       ? await edit.inference.infer(edit.cacheKey, edit.source.toPixels(), edit.source.width, edit.source.height,
-        context.state.settings, 1400, edit.modelUrl, report, edit.abort.signal)
+        context.state.settings, 1400, edit.model, edit.modelUrls, report, edit.abort.signal)
       : await edit.inference.refine(edit.cacheKey, context.state.settings, 1400, report, edit.abort.signal);
     if (context.edit !== edit || edit.generation !== generation) return context.state;
     if (!sourceStillMatches(session, edit)) throw new Error('The source layer changed; run Remove Background again.');
-    const raster = combinedRaster(result, edit);
-    edit.preview = raster;
-    session.maskOverrides.set(edit.layerId, raster);
-    publish(session, context, { phase: 'ready', progress: 1, timing: result.timing }, true);
+    const combined = combinedRaster(result, edit);
+    edit.preview = combined.raster; edit.componentCount = combined.componentCount;
+    session.maskOverrides.set(edit.layerId, combined.raster);
+    publish(session, context, { phase: 'ready', progress: 1, timing: result.timing,
+      componentCount: combined.componentCount }, true);
   } catch (error) {
     if (context.edit !== edit || edit.generation !== generation || isAbort(error)) return context.state;
     fail(session, context, error);
@@ -139,7 +161,8 @@ async function applyResult(session: EditorSession, context: Context): Promise<Re
     }
     if (context.edit !== edit || edit.generation !== generation) return context.state;
     if (!sourceStillMatches(session, edit)) throw new Error('The source layer changed; run Remove Background again.');
-    const raster = result ? combinedRaster(result, edit) : edit.preview;
+    const combined = result ? combinedRaster(result, edit) : { raster: edit.preview, componentCount: edit.componentCount ?? 0 };
+    const raster = combined.raster;
     const document = session.document!;
     const index = document.layers.findIndex((layer) => layer.id === edit.layerId);
     const layer = document.layers[index]!;
@@ -154,7 +177,7 @@ async function applyResult(session: EditorSession, context: Context): Promise<Re
     session.isProjectBusy = false;
     context.edit = null;
     Object.assign(context.state, { phase: 'idle', progress: 0, error: null, layerId: null,
-      timing: result?.timing ?? context.state.timing });
+      timing: result?.timing ?? context.state.timing, componentCount: combined.componentCount });
     session.endEdit();
     context.notify?.(context.state);
     session.notify('document');
@@ -164,7 +187,7 @@ async function applyResult(session: EditorSession, context: Context): Promise<Re
   return context.state;
 }
 
-function combinedRaster(result: SubjectInferenceResult, edit: Edit): Raster {
+function combinedRaster(result: SubjectInferenceResult, edit: Edit): { raster: Raster; componentCount: number } {
   let pixels = result.mask;
   const existing = edit.existingMask;
   let base: Uint8Array = new Uint8Array(pixels.length); base.fill(255);
@@ -178,7 +201,8 @@ function combinedRaster(result: SubjectInferenceResult, edit: Edit): Raster {
     for (let i = 0; i < blended.length; i++) blended[i] = Math.round((pixels[i]! * coverage[i]! + base[i]! * (255 - coverage[i]!)) / 255);
     pixels = blended;
   }
-  return Raster.fromPixels(edit.source.width, edit.source.height, 1, pixels);
+  return { raster: Raster.fromPixels(edit.source.width, edit.source.height, 1, pixels),
+    componentCount: countMaskComponents(pixels, edit.source.width, edit.source.height) };
 }
 
 function selectionOnLayer(selection: DocumentSelection, transform: Layer['transform'], width: number, height: number): Uint8Array {
@@ -214,7 +238,8 @@ function cancel(session: EditorSession, context: Context): void {
   const changed = edit !== null || context.state.phase !== 'idle';
   if (edit) { edit.abort.abort(); session.maskOverrides.delete(edit.layerId); }
   context.edit = null; session.isProjectBusy = false;
-  Object.assign(context.state, { phase: 'idle', progress: 0, error: null, timing: null, layerId: null });
+  Object.assign(context.state, { phase: 'idle', progress: 0, error: null, timing: null, layerId: null,
+    componentCount: null, downloadedBytes: 0, totalBytes: null, downloadResumable: false });
   if (changed) { context.notify?.(context.state); session.notify('document'); }
 }
 
@@ -222,7 +247,11 @@ function fail(session: EditorSession, context: Context, error: unknown): void {
   const edit = context.edit;
   if (edit) session.maskOverrides.delete(edit.layerId);
   context.edit = null; session.isProjectBusy = false;
-  publish(session, context, { phase: 'error', progress: 0, error: error instanceof Error ? error.message : String(error) }, true);
+  const inference = error instanceof SubjectInferenceError ? error : null;
+  publish(session, context, { phase: 'error', progress: 0, error: error instanceof Error ? error.message : String(error),
+    downloadedBytes: inference?.downloadedBytes ?? context.state.downloadedBytes,
+    totalBytes: inference?.totalBytes === undefined ? context.state.totalBytes : inference.totalBytes,
+    downloadResumable: inference?.resumable ?? false }, true);
 }
 
 function isAbort(error: unknown): boolean {

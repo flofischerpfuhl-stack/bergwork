@@ -31,3 +31,13 @@ are in `MODEL_LICENSES.md`.
 Browser inference uses `onnxruntime-web` 1.30.0, copyright Microsoft
 Corporation, under the MIT License. Source and license:
 https://github.com/microsoft/onnxruntime
+
+## BiRefNet_lite model weights
+
+The optional best-quality subject model is BiRefNet_lite by Peng Zheng,
+Dehong Gao, Deng-Ping Fan, Li Liu, Jorma Laaksonen, Wanli Ouyang, and Nicu
+Sebe. The official weights and implementation are MIT licensed. The browser
+artifact is a reproducible static ONNX repackaging of those weights and is
+downloaded on first use rather than shipped in this repository. Full immutable
+provenance, checksums, rationale, and the license text are in
+`MODEL_LICENSES.md` and `public/models/birefnet-lite.LICENSE.txt`.
