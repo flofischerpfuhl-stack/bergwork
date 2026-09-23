@@ -132,7 +132,8 @@ test('right-drag resizes the brush from its size at the press; with Shift it cha
   await page.getByTestId('createCanvas').click();
   await page.getByTestId('tool-brush').click();
   const settings = () => page.evaluate(async () => {
-    const brush: any = await import(/* @vite-ignore */ '/src/core/brush/index.ts');
+    const load = (path: string): Promise<any> => import(/* @vite-ignore */ path);
+    const brush = await load('/src/core/brush/index.ts');
     const s = brush.getBrushSettings((window as any).__editorForTests.session);
     return { diameter: s.diameter, hardness: s.hardness };
   });

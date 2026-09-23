@@ -89,7 +89,11 @@ function BlendPopup({ controller, session, anchor, items, onClose }: {
   return <div ref={ref}><MenuPopup controller={controller} anchor={anchor} items={items} onClose={onClose} /></div>;
 }
 
-interface DragState { ids: string[]; startY: number; moved: boolean; target: { index: number; into: boolean } | null; copy: boolean }
+interface DragState {
+  ids: string[]; startY: number; moved: boolean; target: { index: number; into: boolean } | null; copy: boolean;
+  /** Set while Option-dragging a mask thumbnail: the layer whose mask is copied, and the row it would land on. */
+  maskFrom?: string; maskTarget?: string | null;
+}
 
 function LayerRow({ controller, session, entry, rows, drag, onDragStart, onContext }: {
   controller: EditorController; session: EditorSession; entry: HierarchyEntry; rows: HierarchyEntry[]; drag: DragState | null;
@@ -107,8 +111,8 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
   const renameRequested = controller.renamingLayerId === layer.id;
   useEffect(() => { if (renameRequested) { setRenaming(true); controller.renamingLayerId = null; } }, [renameRequested, controller]);
   const index = rows.findIndex((r) => r.layer.id === layer.id);
-  const dropAbove = drag?.moved && drag.target && !drag.target.into && drag.target.index === index;
-  const dropInto = drag?.moved && drag.target?.into && drag.target.index === index;
+  const dropAbove = drag?.moved && !drag.maskFrom && drag.target && !drag.target.into && drag.target.index === index;
+  const dropInto = drag?.moved && (drag.maskFrom ? drag.maskTarget === layer.id : drag.target?.into && drag.target.index === index);
   const source = layer.maskSourceId ? session.layer(layer.maskSourceId) : null;
   const meta = source ? `${t('Clipped to')} ${source.name}` : layer.adjustment ? t('Adjustment · Double-click to edit') : layer.isGroup ? t('Folder')
     : `${Math.round(layer.transform.size.width).toLocaleString()} × ${Math.round(layer.transform.size.height).toLocaleString()} px`;
@@ -118,6 +122,11 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
     if (event.button !== 0 || renaming) return;
     const target = event.target as HTMLElement;
     if (target.closest('button') && !target.closest('[data-thumb]')) return;
+    // Option-drag from a mask thumbnail carries a copy of the mask to another row (NativeLayerList.dragMaskCopy).
+    if (event.altKey && target.closest('[data-mask-thumb]')) {
+      if (enabled && event.pointerType === 'mouse') onDragStart(event, layer.id);
+      return;
+    }
     // Option-click on the bottom quarter of a row makes or releases a clipping mask.
     const rect = event.currentTarget.getBoundingClientRect();
     if (event.altKey && !(isMac ? event.metaKey : event.ctrlKey) && event.clientY >= rect.bottom - rect.height / 4) {
@@ -202,8 +211,8 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
           ) : <span style={{ width: 5 }} />}
           <div className={styles.maskSlot}>
             <button type="button" data-thumb className={`${styles.thumb} ${active && session.isMaskSelected ? styles.thumbTarget : ''}`}
-              style={fittedSize(canvasSize, 30)} aria-label={`Select mask: ${layer.name}`} data-testid="mask-thumb"
-              title="Select layer mask; Shift-click to enable/disable"
+              style={fittedSize(canvasSize, 30)} aria-label={`Select mask: ${layer.name}`} data-testid="mask-thumb" data-mask-thumb
+              title="Select layer mask; Shift-click to enable/disable; Option-drag onto another layer to copy it"
               onClick={(event) => {
                 if ((isMac ? event.metaKey : event.ctrlKey) && controller.loadSelection) { controller.loadSelection(layer.id, true, event); return; }
                 session.selectLayerTarget(layer.id, true);
@@ -254,6 +263,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
   const [panelWidth, setPanelWidth] = useState(width);
 
   const startDrag = (event: ReactPointerEvent, id: string) => {
+    if (event.altKey && (event.target as HTMLElement).closest('[data-mask-thumb]')) { startMaskDrag(event, id); return; }
     const ids = session.selectedLayerIds.has(id) ? rows.map((r) => r.layer.id).filter((x) => session.selectedLayerIds.has(x)) : [id];
     const carried = new Set(ids.flatMap((x) => [...descendantIds(document!.layers, x)]));
     const state: DragState = { ids: ids.filter((x) => !carried.has(x)), startY: event.clientY, moved: false, target: null, copy: event.altKey };
@@ -309,6 +319,27 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
       }
       if (placed && !state.copy) session.selectLayers(state.ids, state.ids[0] ?? null);
       session.endEdit();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  /** Option-drag of a mask thumbnail: a copy of the mask lands on the row under the pointer (EditorSession.copyMask). */
+  const startMaskDrag = (event: ReactPointerEvent, source: string) => {
+    const state: DragState = { ids: [], startY: event.clientY, moved: false, target: null, copy: true, maskFrom: source, maskTarget: null };
+    const startX = event.clientX;
+    const move = (e: PointerEvent) => {
+      if (!state.moved && (e.clientX - startX) ** 2 + (e.clientY - state.startY) ** 2 < 9) return;
+      state.moved = true;
+      const row = (globalThis.document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-layer-id]') as HTMLElement | null)?.dataset.layerId ?? null;
+      state.maskTarget = row && session.canCopyMask(source, row) ? row : null;
+      setDrag({ ...state });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      setDrag(null);
+      if (state.moved && state.maskTarget) session.copyMask(source, state.maskTarget);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);

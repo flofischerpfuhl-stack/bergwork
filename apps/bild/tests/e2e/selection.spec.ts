@@ -112,3 +112,31 @@ test('Cmd-drag inside the selection moves its pixels as one undo step', async ({
   expect(px(45, 50)).toEqual([0, 0, 255, 255]);
   expect(px(85, 50)[3]).toBe(0);
 });
+
+test('Option-dragging a mask thumbnail onto another layer copies the mask as one undo step', async ({ page }) => {
+  await mountForTest(page);
+  await page.getByTestId('widthInput').fill('40');
+  await page.getByTestId('heightInput').fill('40');
+  await page.getByTestId('createCanvas').click();
+  await importThroughMenu(page, [{ name: 'green.png', mimeType: 'image/png', buffer: solidPng(40, 40, [0, 200, 0, 255]) }]);
+  await expect.poll(async () => (await manifest(page)).layers.length).toBe(2);
+  const rows = page.getByTestId('layer-row');
+  await rows.first().click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Add Black Mask' }).click();
+  await expect(page.getByTestId('mask-thumb')).toHaveCount(1);
+  const thumb = (await page.getByTestId('mask-thumb').boundingBox())!;
+  const target = (await rows.nth(1).boundingBox())!;
+  await page.keyboard.down('Alt');
+  await page.mouse.move(thumb.x + thumb.width / 2, thumb.y + thumb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 6 });
+  await page.mouse.up();
+  await page.keyboard.up('Alt');
+  await expect(page.getByTestId('mask-thumb')).toHaveCount(2);
+  const m = await manifest(page);
+  expect(m.layers[0].mask).toBeTruthy();
+  expect(m.layers[1].mask).toBeTruthy();
+  expect(m.layers).toHaveLength(2);
+  await page.getByTestId('compositor-editor').press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  await expect(page.getByTestId('mask-thumb')).toHaveCount(1);
+});
