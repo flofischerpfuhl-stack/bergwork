@@ -16,10 +16,10 @@ import {
 import {
   ancestorIds, maskTransform as storedMaskTransform, renderLayers, type BlendMode, type CanvasDocument, type Layer,
 } from '../core/document';
-import { concat, invert, pixelToDocument, type Affine, type LayerTransform } from '../core/geometry';
+import { apply, concat, invert, pixelToDocument, type Affine, type LayerTransform, type Rect } from '../core/geometry';
 import { TILE, type Raster } from '../core/raster';
 import {
-  adjustFragment, BLEND_INDEX, COVERAGE_FRAGMENT, IDENTITY_ADJUST, LAYER_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT,
+  adjustFragment, BLEND_INDEX, COVERAGE_FRAGMENT, IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT,
   STACK_FRAGMENT, UNPREMULTIPLY_FRAGMENT, VERTEX,
 } from './shaders';
 
@@ -69,11 +69,25 @@ interface Pass {
 
 interface Slot {
   raster: Raster;
-  source: TextureSource;
-  /** Grid pixels per texture pixel when the raster exceeds the maximum texture size. */
-  reduction: number;
+  chunks: Map<string, TextureChunk>;
   lastUsed: number;
 }
+
+interface TextureChunk {
+  readonly col: number;
+  readonly row: number;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly source: TextureSource;
+  readonly bytes: number;
+}
+
+// A 64 px margin leaves one neighbour texel at the deepest supported sharp halving (level 6).
+// TiledLayerRenderer.support grows its piece margin for the same reason.
+const CHUNK_APRON = 64;
+const TARGET_CHUNK_SIZE = 4096;
 
 const IDENTITY9 = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 
@@ -88,6 +102,7 @@ export class GpuCompositor {
   readonly maxTextureSize: number;
   readonly floatTargets: boolean;
   private readonly mesh: Mesh<MeshGeometry, Shader>;
+  private readonly chunkSize: number;
   private readonly passes = new Map<string, Pass>();
   private readonly slots = new Map<string, Slot>();
   private readonly pool: RenderTexture[] = [];
@@ -105,6 +120,8 @@ export class GpuCompositor {
     this.renderer = renderer;
     this.gl = renderer.gl as WebGL2RenderingContext;
     this.maxTextureSize = this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE) as number;
+    this.chunkSize = Math.max(TILE, Math.min(TARGET_CHUNK_SIZE,
+      Math.floor((this.maxTextureSize - CHUNK_APRON * 2) / TILE) * TILE));
     // Pixi never sets this; 1-channel masks with odd widths need it.
     this.gl.pixelStorei(this.gl.UNPACK_ALIGNMENT, 1);
     this.gl.pixelStorei(this.gl.PACK_ALIGNMENT, 1);
@@ -138,7 +155,7 @@ export class GpuCompositor {
   }
 
   destroy(): void {
-    for (const slot of this.slots.values()) slot.source.destroy();
+    for (const slot of this.slots.values()) for (const chunk of slot.chunks.values()) chunk.source.destroy();
     this.slots.clear();
     for (const rt of this.pool) rt.destroy(true);
     for (const rt of this.inUse) rt.destroy(true);
@@ -146,6 +163,23 @@ export class GpuCompositor {
     this.mesh.destroy();
     this.white.destroy();
     this.renderer.destroy();
+  }
+
+  /** Number of sparse raster/mask chunk textures currently resident. */
+  get textureChunkCount(): number {
+    let count = 0;
+    for (const slot of this.slots.values()) count += slot.chunks.size;
+    return count;
+  }
+
+  /** Interior side length selected for this device (aprons are additional). */
+  get textureChunkSize(): number { return this.chunkSize; }
+
+  /** Estimated bytes of all resident chunk mip levels (render targets and LUTs excluded). */
+  get textureBytes(): number {
+    let bytes = 0;
+    for (const slot of this.slots.values()) for (const chunk of slot.chunks.values()) bytes += chunk.bytes;
+    return bytes;
   }
 
   resize(width: number, height: number): void {
@@ -164,7 +198,13 @@ export class GpuCompositor {
         uDocToLayer: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
         uLayerSize: { value: new Float32Array(2), type: 'vec2<f32>' },
         uLayerEdge: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uChunkOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uChunkSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uTextureSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uApron: { value: CHUNK_APRON, type: 'f32' },
         uSampling: { value: 1, type: 'i32' },
+        uMipLevel: { value: 0, type: 'i32' },
+        uRestrictChunk: { value: 1, type: 'i32' },
         uOpacity: { value: 1, type: 'f32' },
         uMode: { value: 0, type: 'i32' },
         uHasMask: { value: 0, type: 'i32' },
@@ -178,6 +218,22 @@ export class GpuCompositor {
         uSnap: { value: 0, type: 'i32' },
         uReplace: { value: 0, type: 'i32' },
       }, ['uBackdrop', 'uLayer', 'uMask', 'uClip']],
+      mask: [MASK_FRAGMENT, {
+        uHasPrevious: { value: 0, type: 'i32' },
+        uDrawChunk: { value: 0, type: 'i32' },
+        uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+        uDocToMask: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+        uMaskSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uMaskEdge: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uChunkOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uChunkSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uTextureSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uApron: { value: CHUNK_APRON, type: 'f32' },
+        uBackground: { value: 0, type: 'f32' },
+        uSampling: { value: 1, type: 'i32' },
+        uMipLevel: { value: 0, type: 'i32' },
+        uSnap: { value: 0, type: 'i32' },
+      }, ['uPrevious', 'uMask']],
       coverage: [COVERAGE_FRAGMENT, {
         uKind: { value: 0, type: 'i32' },
         uHasPrevious: { value: 0, type: 'i32' },
@@ -224,7 +280,7 @@ export class GpuCompositor {
   }
 
   private run(pass: Pass, target: RenderTexture | null, width: number, height: number, textures: Record<string, TextureSource>,
-    uniforms: Record<string, unknown>): void {
+    uniforms: Record<string, unknown>, rect?: Rect): void {
     for (const [key, value] of Object.entries(uniforms)) {
       const current = pass.uniforms.uniforms[key];
       if (current instanceof Float32Array && value instanceof Float32Array) current.set(value);
@@ -233,7 +289,8 @@ export class GpuCompositor {
     pass.uniforms.update();
     for (const [key, source] of Object.entries(textures)) (pass.shader.resources as Record<string, unknown>)[key] = source;
     this.mesh.shader = pass.shader;
-    this.mesh.scale.set(width, height);
+    this.mesh.position.set(rect?.x ?? 0, rect?.y ?? 0);
+    this.mesh.scale.set(rect?.width ?? width, rect?.height ?? height);
     this.renderer.render({ container: this.mesh, target: target ?? undefined, clear: false });
   }
 
@@ -272,61 +329,124 @@ export class GpuCompositor {
     this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, system._premultiplyAlpha);
   }
 
-  /** The GPU texture for a raster in `slotKey`, uploading only tiles that changed since last time. */
+  /**
+   * Sparse chunk textures for a raster, uploading only changed tiles and neighbouring aprons.
+   * Mirrors TiledLayerRenderer.piece: disjoint interiors sample a surrounding margin so they meet.
+   */
   private texture(slotKey: string, raster: Raster): Slot {
     const gl = this.gl;
     const existing = this.slots.get(slotKey);
-    const reduction = Math.max(1, 2 ** Math.ceil(Math.log2(Math.max(raster.width, raster.height) / this.maxTextureSize)));
     if (existing && existing.raster === raster) { existing.lastUsed = this.frame; return existing; }
-    const width = Math.ceil(raster.width / reduction), height = Math.ceil(raster.height / reduction);
-    const compatible = existing && existing.reduction === reduction && existing.raster.width === raster.width
-      && existing.raster.height === raster.height && existing.raster.channels === raster.channels;
+    const compatible = existing && existing.raster.width === raster.width && existing.raster.height === raster.height
+      && existing.raster.channels === raster.channels;
     let slot: Slot;
     if (compatible) {
       slot = existing!;
     } else {
-      existing?.source.destroy();
-      const mips = Math.floor(Math.log2(Math.max(width, height))) + 1;
-      const source = new TextureSource({
-        width, height, format: raster.channels === 4 ? 'rgba8unorm' : 'r8unorm', mipLevelCount: mips,
-        autoGenerateMipmaps: false, scaleMode: 'linear', mipmapFilter: 'linear', addressMode: 'clamp-to-edge', maxAnisotropy: 1,
-      });
-      slot = { raster, source, reduction, lastUsed: this.frame };
+      if (existing) for (const chunk of existing.chunks.values()) chunk.source.destroy();
+      slot = { raster, chunks: new Map(), lastUsed: this.frame };
       this.slots.set(slotKey, slot);
     }
-    this.renderer.texture.bindSource(slot.source, 0);
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, raster.channels === 4);
-    const format = raster.channels === 4 ? gl.RGBA : gl.RED;
     const previous = compatible ? existing!.raster : null;
-    let changed = false;
-    if (reduction === 1) {
-      for (let row = 0; row < raster.rows; row++) {
-        for (let col = 0; col < raster.cols; col++) {
-          const index = row * raster.cols + col;
-          const tile = raster.tiles[index] ?? null;
-          if (previous && previous.tiles[index] === tile) continue;
-          const tw = raster.tileWidth(col), th = raster.tileHeight(row);
-          const data = tile ?? new Uint8Array(tw * th * raster.channels);
-          gl.texSubImage2D(gl.TEXTURE_2D, 0, col * TILE, row * TILE, tw, th, format, gl.UNSIGNED_BYTE, data);
-          changed = true;
-        }
-      }
-    } else {
-      // Too large for one texture: a box-filtered reduction for display.
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, format, gl.UNSIGNED_BYTE, reduceRaster(raster, reduction));
-      changed = true;
+    const desired = new Set<string>();
+    for (let row = 0; row < raster.rows; row++) for (let col = 0; col < raster.cols; col++) {
+      if (raster.tiles[row * raster.cols + col]) desired.add(chunkKey(Math.floor(col * TILE / this.chunkSize), Math.floor(row * TILE / this.chunkSize)));
     }
-    if (changed || !compatible) gl.generateMipmap(gl.TEXTURE_2D);
+    for (const [key, chunk] of slot.chunks) {
+      if (!desired.has(key)) { chunk.source.destroy(); slot.chunks.delete(key); }
+    }
+
+    const changed: number[] = [];
+    for (let index = 0; index < raster.tiles.length; index++) {
+      if (!previous || previous.tiles[index] !== raster.tiles[index]) changed.push(index);
+    }
+    const created = new Set<string>();
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, raster.channels === 4);
+    for (const key of desired) {
+      if (slot.chunks.has(key)) continue;
+      const [col, row] = parseChunkKey(key);
+      const x = col * this.chunkSize, y = row * this.chunkSize;
+      const width = Math.min(this.chunkSize, raster.width - x), height = Math.min(this.chunkSize, raster.height - y);
+      const textureWidth = width + CHUNK_APRON * 2, textureHeight = height + CHUNK_APRON * 2;
+      const mips = Math.floor(Math.log2(Math.max(textureWidth, textureHeight))) + 1;
+      const source = new TextureSource({
+        width: textureWidth, height: textureHeight, format: raster.channels === 4 ? 'rgba8unorm' : 'r8unorm', mipLevelCount: mips,
+        autoGenerateMipmaps: false, scaleMode: 'linear', mipmapFilter: 'linear', addressMode: 'clamp-to-edge', maxAnisotropy: 1,
+      });
+      const chunk: TextureChunk = { col, row, x, y, width, height, source,
+        bytes: mipBytes(textureWidth, textureHeight, raster.channels) };
+      slot.chunks.set(key, chunk);
+      this.renderer.texture.bindSource(source, 0);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, textureWidth, textureHeight,
+        raster.channels === 4 ? gl.RGBA : gl.RED, gl.UNSIGNED_BYTE,
+        readClamped(raster, x - CHUNK_APRON, y - CHUNK_APRON, textureWidth, textureHeight));
+      gl.generateMipmap(gl.TEXTURE_2D);
+      created.add(key);
+    }
+
+    const affected = new Set<string>();
+    for (const index of changed) {
+      const tileCol = index % raster.cols, tileRow = Math.floor(index / raster.cols);
+      const x = tileCol * TILE, y = tileRow * TILE;
+      const right = x + raster.tileWidth(tileCol), bottom = y + raster.tileHeight(tileRow);
+      const c0 = Math.max(0, Math.floor((x - CHUNK_APRON) / this.chunkSize));
+      const r0 = Math.max(0, Math.floor((y - CHUNK_APRON) / this.chunkSize));
+      const c1 = Math.floor((right + CHUNK_APRON - 1) / this.chunkSize);
+      const r1 = Math.floor((bottom + CHUNK_APRON - 1) / this.chunkSize);
+      for (let row = r0; row <= r1; row++) for (let col = c0; col <= c1; col++) {
+        const key = chunkKey(col, row);
+        if (desired.has(key) && !created.has(key)) affected.add(key);
+      }
+    }
+    const format = raster.channels === 4 ? gl.RGBA : gl.RED;
+    const bulk = changed.length > Math.max(32, affected.size * 12);
+    for (const key of affected) {
+      const chunk = slot.chunks.get(key)!;
+      this.renderer.texture.bindSource(chunk.source, 0);
+      if (bulk) {
+        const tw = chunk.width + CHUNK_APRON * 2, th = chunk.height + CHUNK_APRON * 2;
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, tw, th, format, gl.UNSIGNED_BYTE,
+          readClamped(raster, chunk.x - CHUNK_APRON, chunk.y - CHUNK_APRON, tw, th));
+      } else {
+        for (const index of changed) {
+          const tileCol = index % raster.cols, tileRow = Math.floor(index / raster.cols);
+          const tx = tileCol * TILE, ty = tileRow * TILE;
+          const x0 = Math.max(tx, chunk.x), y0 = Math.max(ty, chunk.y);
+          const x1 = Math.min(tx + raster.tileWidth(tileCol), chunk.x + chunk.width);
+          const y1 = Math.min(ty + raster.tileHeight(tileRow), chunk.y + chunk.height);
+          if (x1 <= x0 || y1 <= y0) continue;
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, x0 - chunk.x + CHUNK_APRON, y0 - chunk.y + CHUNK_APRON, x1 - x0, y1 - y0,
+            format, gl.UNSIGNED_BYTE, raster.readRegion(x0, y0, x1 - x0, y1 - y0));
+        }
+        this.uploadAprons(chunk, raster, format);
+      }
+      gl.generateMipmap(gl.TEXTURE_2D);
+    }
     this.restoreUnpack();
     slot.raster = raster;
     slot.lastUsed = this.frame;
     return slot;
   }
 
+  private uploadAprons(chunk: TextureChunk, raster: Raster, format: number): void {
+    const gl = this.gl, tw = chunk.width + CHUNK_APRON * 2, th = chunk.height + CHUNK_APRON * 2;
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, tw, CHUNK_APRON, format, gl.UNSIGNED_BYTE,
+      readClamped(raster, chunk.x - CHUNK_APRON, chunk.y - CHUNK_APRON, tw, CHUNK_APRON));
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, th - CHUNK_APRON, tw, CHUNK_APRON, format, gl.UNSIGNED_BYTE,
+      readClamped(raster, chunk.x - CHUNK_APRON, chunk.y + chunk.height, tw, CHUNK_APRON));
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, CHUNK_APRON, CHUNK_APRON, chunk.height, format, gl.UNSIGNED_BYTE,
+      readClamped(raster, chunk.x - CHUNK_APRON, chunk.y, CHUNK_APRON, chunk.height));
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, tw - CHUNK_APRON, CHUNK_APRON, CHUNK_APRON, chunk.height, format, gl.UNSIGNED_BYTE,
+      readClamped(raster, chunk.x + chunk.width, chunk.y, CHUNK_APRON, chunk.height));
+  }
+
   /** Drops textures of layers not drawn for a while. */
   private collectTextures(): void {
     for (const [key, slot] of this.slots) {
-      if (this.frame - slot.lastUsed > 120) { slot.source.destroy(); this.slots.delete(key); }
+      if (this.frame - slot.lastUsed > 120) {
+        for (const chunk of slot.chunks.values()) chunk.source.destroy();
+        this.slots.delete(key);
+      }
     }
   }
 
@@ -432,21 +552,36 @@ export class GpuCompositor {
 
   releaseTarget(rt: RenderTexture): void { this.release(rt); }
 
-  private layerUniforms(layer: Layer, raster: Raster, slot: Slot, transform: LayerTransform, view: ViewSpec) {
+  private layerUniforms(raster: Raster, transform: LayerTransform, view: ViewSpec) {
     const docToGrid = invert(pixelToDocument(transform, raster.width, raster.height));
     // Target px per grid px along each local axis, for edge AA and mip choice.
     const gx = Math.hypot(transform.size.width / raster.width, 0) * (view.snap ? 1 : view.scale);
     const gy = Math.hypot(transform.size.height / raster.height, 0) * (view.snap ? 1 : view.scale);
-    const minified = Math.min(gx, gy) < 0.999;
+    const mipLevel = sharpMipLevel(gx);
     const nearest = transform.sampling === 'Nearest';
-    const reduce = slot.reduction > 1 ? concat(docToGrid, { a: 1 / slot.reduction, b: 0, c: 0, d: 1 / slot.reduction, tx: 0, ty: 0 }) : docToGrid;
     return {
-      uDocToLayer: mat3(reduce),
-      uLayerSize: new Float32Array([Math.ceil(raster.width / slot.reduction), Math.ceil(raster.height / slot.reduction)]),
-      uLayerEdge: new Float32Array([gx * slot.reduction, gy * slot.reduction]),
-      uSampling: nearest ? 0 : (minified || slot.reduction > 1 ? 2 : 1),
-      layer,
+      uDocToLayer: mat3(docToGrid),
+      uLayerSize: new Float32Array([raster.width, raster.height]),
+      uLayerEdge: new Float32Array([gx, gy]),
+      uSampling: nearest ? 0 : (mipLevel > 0 ? 2 : 1),
+      uMipLevel: mipLevel,
     };
+  }
+
+  /** Target-pixel bounds of a grid rectangle, expanded for edge antialiasing. */
+  private gridRect(x: number, y: number, width: number, height: number, gridToDoc: Affine, view: ViewSpec): Rect | null {
+    const docToTarget = invert(view.viewToDoc);
+    const points = [
+      apply(docToTarget, apply(gridToDoc, { x, y })),
+      apply(docToTarget, apply(gridToDoc, { x: x + width, y })),
+      apply(docToTarget, apply(gridToDoc, { x: x + width, y: y + height })),
+      apply(docToTarget, apply(gridToDoc, { x, y: y + height })),
+    ];
+    const left = Math.max(0, Math.floor(Math.min(...points.map((p) => p.x))) - 1);
+    const top = Math.max(0, Math.floor(Math.min(...points.map((p) => p.y))) - 1);
+    const right = Math.min(view.width, Math.ceil(Math.max(...points.map((p) => p.x))) + 1);
+    const bottom = Math.min(view.height, Math.ceil(Math.max(...points.map((p) => p.y))) + 1);
+    return right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
   }
 
   /** One layer pass onto `backdrop` → a new target. */
@@ -460,30 +595,38 @@ export class GpuCompositor {
     }
     const transform = hooks.transform(layer);
     const slot = this.texture(`px:${layer.id}`, raster);
-    const u = this.layerUniforms(layer, raster, slot, transform, view);
-    let maskSource: TextureSource = this.white;
-    const maskUniforms: Record<string, unknown> = { uHasMask: 0 };
+    const u = this.layerUniforms(raster, transform, view);
+    if (!slot.chunks.size) { this.copy(backdrop, out, view); return out; }
+    const restricted = slot.chunks.size > 1;
+    if (restricted) this.copy(backdrop, out, view);
+    let maskTarget: RenderTexture | null = null;
     const maskRaster = layer.mask?.enabled ? hooks.maskRaster(layer) : null;
     if (layer.mask && maskRaster) {
       const placement = hooks.maskPlacement(layer);
       const maskPlace = placement ?? transform;
-      const maskSlot = this.texture(`mask:${layer.id}`, maskRaster);
-      const m = this.layerUniforms(layer, maskRaster, maskSlot, maskPlace, view);
-      maskSource = maskSlot.source;
-      Object.assign(maskUniforms, {
-        uHasMask: 1, uDocToMask: m.uDocToLayer, uMaskSize: m.uLayerSize, uMaskEdge: m.uLayerEdge,
-        uMaskSampling: m.uSampling === 0 ? 1 : m.uSampling,
-        uMaskPlaced: placement ? 1 : 0, uMaskBackground: placement ? maskBackground(maskRaster) : 1,
-      });
+      maskTarget = this.renderMask(null, maskRaster, `mask:${layer.id}`, maskPlace, view,
+        placement ? maskBackground(maskRaster) : 0);
     }
-    this.run(this.pass('layer'), out, view.width, view.height, {
-      uBackdrop: backdrop.source, uLayer: slot.source, uMask: maskSource, uClip: clip?.source ?? this.white,
-    }, {
-      uTarget: new Float32Array([view.width, view.height]), uViewToDoc: mat3(view.viewToDoc),
-      uDocToLayer: u.uDocToLayer, uLayerSize: u.uLayerSize, uLayerEdge: u.uLayerEdge, uSampling: u.uSampling,
-      uOpacity: layer.opacity, uMode: BLEND_INDEX[mode] ?? 0, uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0,
-      uReplace: replace ? 1 : 0, ...maskUniforms,
-    });
+    const gridToDoc = pixelToDocument(transform, raster.width, raster.height);
+    for (const chunk of slot.chunks.values()) {
+      const rect = restricted
+        ? this.gridRect(chunk.x, chunk.y, chunk.width, chunk.height, gridToDoc, view)
+        : { x: 0, y: 0, width: view.width, height: view.height };
+      if (!rect) continue;
+      this.run(this.pass('layer'), out, view.width, view.height, {
+        uBackdrop: backdrop.source, uLayer: chunk.source, uMask: maskTarget?.source ?? this.white, uClip: clip?.source ?? this.white,
+      }, {
+        uTarget: new Float32Array([view.width, view.height]), uViewToDoc: mat3(view.viewToDoc),
+        uDocToLayer: u.uDocToLayer, uLayerSize: u.uLayerSize, uLayerEdge: u.uLayerEdge, uSampling: u.uSampling,
+        uChunkOrigin: new Float32Array([chunk.x, chunk.y]), uChunkSize: new Float32Array([chunk.width, chunk.height]),
+        uTextureSize: new Float32Array([chunk.width + CHUNK_APRON * 2, chunk.height + CHUNK_APRON * 2]), uApron: CHUNK_APRON,
+        uMipLevel: u.uMipLevel,
+        uRestrictChunk: restricted ? 1 : 0,
+        uOpacity: layer.opacity, uMode: BLEND_INDEX[mode] ?? 0, uHasMask: maskTarget ? 1 : 0,
+        uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0, uReplace: replace ? 1 : 0,
+      }, rect);
+    }
+    this.release(maskTarget);
     return out;
   }
 
@@ -505,18 +648,42 @@ export class GpuCompositor {
   /** previous × transformed mask (outside the mask rect → 0), as FolderMaskClip does. */
   private multiplyMask(previous: RenderTexture | null, raster: Raster, slotKey: string, placement: LayerTransform, view: ViewSpec,
     temporaries: RenderTexture[]): RenderTexture {
+    const out = this.renderMask(previous, raster, slotKey, placement, view, 0);
+    temporaries.push(out);
+    return out;
+  }
+
+  /** Builds a mask in view space, replacing disjoint chunk interiors over a zero-inside base. */
+  private renderMask(previous: RenderTexture | null, raster: Raster, slotKey: string, placement: LayerTransform, view: ViewSpec,
+    background: number): RenderTexture {
     const slot = this.texture(slotKey, raster);
     const docToGrid = invert(pixelToDocument(placement, raster.width, raster.height));
     const gx = placement.size.width / raster.width * (view.snap ? 1 : view.scale);
     const gy = placement.size.height / raster.height * (view.snap ? 1 : view.scale);
+    const mipLevel = sharpMipLevel(gx);
     const out = this.acquire(view.width, view.height);
-    temporaries.push(out);
-    this.run(this.pass('coverage'), out, view.width, view.height, {
-      uPrevious: previous?.source ?? this.white, uSource: slot.source,
+    const common = {
+      uHasPrevious: previous ? 1 : 0, uViewToDoc: mat3(view.viewToDoc), uDocToMask: mat3(docToGrid),
+      uMaskSize: new Float32Array([raster.width, raster.height]), uMaskEdge: new Float32Array([gx, gy]),
+      uBackground: background, uSampling: mipLevel > 0 ? 2 : 1, uMipLevel: mipLevel, uSnap: view.snap ? 1 : 0,
+    };
+    this.run(this.pass('mask'), out, view.width, view.height, {
+      uPrevious: previous?.source ?? this.white, uMask: this.white,
     }, {
-      uKind: 0, uHasPrevious: previous ? 1 : 0, uViewToDoc: mat3(view.viewToDoc), uDocToMask: mat3(docToGrid),
-      uMaskSize: new Float32Array([raster.width, raster.height]), uMaskEdge: new Float32Array([gx, gy]), uSnap: view.snap ? 1 : 0,
+      ...common, uDrawChunk: 0,
     });
+    const gridToDoc = pixelToDocument(placement, raster.width, raster.height);
+    for (const chunk of slot.chunks.values()) {
+      const rect = this.gridRect(chunk.x, chunk.y, chunk.width, chunk.height, gridToDoc, view);
+      if (!rect) continue;
+      this.run(this.pass('mask'), out, view.width, view.height, {
+        uPrevious: previous?.source ?? this.white, uMask: chunk.source,
+      }, {
+        ...common, uDrawChunk: 1, uChunkOrigin: new Float32Array([chunk.x, chunk.y]),
+        uChunkSize: new Float32Array([chunk.width, chunk.height]),
+        uTextureSize: new Float32Array([chunk.width + CHUNK_APRON * 2, chunk.height + CHUNK_APRON * 2]), uApron: CHUNK_APRON,
+      }, rect);
+    }
     return out;
   }
 
@@ -699,37 +866,48 @@ export function maskBackground(raster: Raster): number {
   return value;
 }
 
-/** Box-filtered reduction of a raster by an integer factor, for layers beyond the texture limit. */
-function reduceRaster(raster: Raster, factor: number): Uint8Array {
+function chunkKey(col: number, row: number): string { return `${col}:${row}`; }
+
+function parseChunkKey(key: string): [number, number] {
+  const separator = key.indexOf(':');
+  return [Number(key.slice(0, separator)), Number(key.slice(separator + 1))];
+}
+
+/** Contiguous pixels with coordinates beyond the raster repeated from its outermost texels. */
+function readClamped(raster: Raster, x: number, y: number, width: number, height: number): Uint8Array {
   const ch = raster.channels;
-  const width = Math.ceil(raster.width / factor), height = Math.ceil(raster.height / factor);
+  const sx0 = Math.max(0, x), sy0 = Math.max(0, y);
+  const sx1 = Math.min(raster.width, x + width), sy1 = Math.min(raster.height, y + height);
+  const sourceWidth = sx1 - sx0, sourceHeight = sy1 - sy0;
+  const source = raster.readRegion(sx0, sy0, sourceWidth, sourceHeight);
   const out = new Uint8Array(width * height * ch);
-  for (let y = 0; y < height; y++) {
-    const band = raster.readRegion(0, y * factor, raster.width, factor);
-    for (let x = 0; x < width; x++) {
-      const sums = new Float64Array(4);
-      let alphaSum = 0, n = 0;
-      for (let dy = 0; dy < factor; dy++) {
-        for (let dx = 0; dx < factor; dx++) {
-          const sx = x * factor + dx;
-          if (sx >= raster.width || y * factor + dy >= raster.height) continue;
-          const i = (dy * raster.width + sx) * ch;
-          if (ch === 4) {
-            const a = band[i + 3]!;
-            sums[0]! += band[i]! * a; sums[1]! += band[i + 1]! * a; sums[2]! += band[i + 2]! * a;
-            alphaSum += a;
-          } else sums[0]! += band[i]!;
-          n++;
-        }
-      }
-      const o = (y * width + x) * ch;
-      if (ch === 4) {
-        if (alphaSum > 0) { out[o] = sums[0]! / alphaSum; out[o + 1] = sums[1]! / alphaSum; out[o + 2] = sums[2]! / alphaSum; }
-        out[o + 3] = Math.round(alphaSum / Math.max(1, n));
-      } else out[o] = Math.round(sums[0]! / Math.max(1, n));
-    }
+  const left = sx0 - x;
+  for (let dy = 0; dy < height; dy++) {
+    const sy = Math.max(0, Math.min(sourceHeight - 1, y + dy - sy0));
+    const src = sy * sourceWidth * ch;
+    const dst = dy * width * ch;
+    out.set(source.subarray(src, src + sourceWidth * ch), dst + left * ch);
+    for (let dx = 0; dx < left; dx++) out.set(source.subarray(src, src + ch), dst + dx * ch);
+    const last = src + (sourceWidth - 1) * ch;
+    for (let dx = left + sourceWidth; dx < width; dx++) out.set(source.subarray(last, last + ch), dst + dx * ch);
   }
   return out;
+}
+
+function mipBytes(width: number, height: number, channels: 1 | 4): number {
+  let bytes = 0;
+  while (true) {
+    bytes += width * height * channels;
+    if (width === 1 && height === 1) return bytes;
+    width = Math.max(1, Math.floor(width / 2));
+    height = Math.max(1, Math.floor(height / 2));
+  }
+}
+
+/** DownsampleCache.level: no halving at half-size or above, at most six below it. */
+function sharpMipLevel(targetPixelsPerGridPixel: number): number {
+  return Number.isFinite(targetPixelsPerGridPixel) && targetPixelsPerGridPixel > 0 && targetPixelsPerGridPixel < 0.5
+    ? Math.min(6, Math.floor(Math.log2(1 / targetPixelsPerGridPixel))) : 0;
 }
 
 export { storedMaskTransform };
