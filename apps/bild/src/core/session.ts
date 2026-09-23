@@ -25,6 +25,7 @@ import { CanvasViewport } from './viewport';
 import { defaultAdjustment } from './adjustments';
 import { redrawShapeLayer } from './shape';
 import { cancelGradient, hasPendingGradient, refreshGradientPalette, resolveGradient } from './gradient';
+import { distortLayer, groupDistortTarget, maskBackground, warpMask } from './distort';
 
 export type Tool =
   | 'move' | 'marquee' | 'lasso' | 'wand' | 'crop' | 'brush' | 'spotHealing' | 'cloneStamp' | 'blur'
@@ -975,7 +976,7 @@ export class EditorSession {
     try {
       if (edit.floating) { this.floatingCommit?.(edit); return; }
       if (edit.mask) { this.commitMaskTransform(edit); return; }
-      if (edit.corners) { void this.commitDistort(edit, edit.corners); return; }
+      if (edit.corners) { this.commitDistort(edit, edit.corners); return; }
       if (edit.group) {
         if (!isValidTransform(edit.draft)) return;
         this.edit('Transform Layers', () => {
@@ -1047,13 +1048,16 @@ export class EditorSession {
     const mask = layer?.mask;
     if (!isValidTransform(edit.draft) || !layer || !mask) return;
     if (edit.corners) {
-      const distort = this.services?.distort;
-      if (!distort) return;
-      void distort(mask.raster, edit.draft, edit.corners).then((moved) => {
+      try {
+        // LayerMask.commitMaskTransform: a mask distorted alone keeps its edge tone outside the quad.
+        const moved = warpMask(mask.raster, edit.draft, edit.corners, maskBackground(mask.raster));
         this.edit('Distort Layer Mask', () => this.updateLayer(layer.id, (l) => ({ ...l,
           mask: { raster: moved.raster, enabled: mask.enabled, linked: mask.linked,
             placement: samePlacement(moved.transform, l.transform) ? null : moved.transform } })));
-      }, (error: Error) => { this.errorMessage = error.message; this.notify('ui'); });
+      } catch (error) {
+        this.errorMessage = (error as Error).message;
+        this.notify('ui');
+      }
       return;
     }
     const placement = samePlacement(edit.draft, layer.transform) ? null : edit.draft;
@@ -1063,38 +1067,26 @@ export class EditorSession {
   }
 
   /** Distort Apply: resamples the layer's pixels into the dragged quadrilateral. */
-  private async commitDistort(edit: TransformEdit, quad: readonly Point[]): Promise<void> {
-    const distort = this.services?.distort;
+  private commitDistort(edit: TransformEdit, quad: readonly Point[]): void {
     const ids = edit.group ? [...edit.group.originals.keys()] : [edit.layerId];
-    if (!distort) return;
-    this.isProjectBusy = true;
-    this.notify('ui');
+    // Distort.commitDistort: one transaction for the whole group; a bad member does not stop the rest.
+    this.beginEdit(edit.group ? 'Distort Layers' : 'Distort');
     try {
-      const results = new Map<string, { raster: Raster; transform: LayerTransform }>();
       for (const id of ids) {
         const layer = this.layer(id);
         if (!layer?.raster) continue;
-        let layerCorners: readonly Point[] = quad;
-        if (edit.group) {
-          // Each member follows the box: map its corners through the box's bilinear quad.
-          const box = edit.group.box;
-          layerCorners = transformCorners(layer.transform).map((p) => bilinearQuadPoint(quad,
-            (p.x - box.origin.x) / box.size.width, (p.y - box.origin.y) / box.size.height));
+        try {
+          // Distort.distortTarget: group members take the box's projective warp, including rotation.
+          const target = edit.group
+            ? groupDistortTarget(edit.group.originals.get(id)!, edit.group.box, edit.draft, quad)
+            : { transform: edit.draft, corners: quad };
+          if (target) this.updateLayer(id, () => distortLayer(layer, target.transform, target.corners));
+        } catch (error) {
+          this.errorMessage = (error as Error).message;
         }
-        results.set(id, await distort(layer.raster, edit.draft, layerCorners));
       }
-      this.isProjectBusy = false;
-      this.edit('Distort', () => {
-        for (const [id, result] of results) {
-          this.updateLayer(id, (l) => ({ ...l, raster: result.raster, shape: null, transform: result.transform,
-            mask: l.mask ? { ...l.mask, placement: l.mask.linked && !l.mask.placement ? null : l.mask.placement ?? l.transform } : null }));
-        }
-      });
-    } catch (error) {
-      this.errorMessage = (error as Error).message;
     } finally {
-      this.isProjectBusy = false;
-      this.notify('document');
+      this.endEdit();
     }
   }
 
