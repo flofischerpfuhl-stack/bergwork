@@ -137,3 +137,122 @@ ps -eo pid,ppid,stat,comm,args | rg 'fernwork-bildeditor|WebKitWebProcess' | rg 
 ```
 
 The normal launch log was empty. The updater is absent by design in Phase 0.
+
+
+## Windows WebView2 153 in Tauri (remote lane, 2026-09-24)
+
+Measured by the Codex agent on the owner's Windows PC from the git bundle of `integration` at `6a9c1a0`.
+Setup: Windows 10 22H2 (19045), AMD Radeon Vega 8 (driver 31.0.21925.1001), WebView2 Runtime 153.0.4234.48, Tauri
+release build (MSVC). The page is the same as for Linux (`tests/webview/matrix.ts`).
+
+| Capability | Result |
+|---|---|
+| WebGL2 / `EXT_color_buffer_float` / `MAX_TEXTURE_SIZE` | yes / yes / 16,384 (ANGLE Direct3D11) |
+| OffscreenCanvas main / worker, module workers | yes / yes, yes |
+| WebGPU / File System Access / Local Font Access | yes / yes / yes |
+| Heap | advertised limit 4192 MB; ≥1024 MiB retained without failure |
+
+| Measured gate | Result | Pro | Lite |
+|---|---:|---:|---:|
+| Open generated 46-MP JPEG | 2777 ms | 🔴 +1277 ms / +85 % | 🟢 |
+| Pan p95 | 2.7 ms | 🟢 | 🟢 |
+| Zoom p95 | 1.1 ms | 🟢 | 🟢 |
+| Pan at 200 % p95 | 0.6 ms | 🟢 | 🟢 |
+| Brush feedback p95, even / irregular | 5.4 / 3.0 ms | 🟢 | 🟢 |
+| First brush sample / background commit | 5.4 ms / 267–289 ms | ⚪ | ⚪ |
+
+**Not verified on Windows.** The lane had no desktop control, so there is no screenshot. The window title, native
+menu, Ctrl+N/Ctrl+W and Close/Quit are therefore unverified. What was verified: build, launch, and no process left
+after a forced end.
+
+**No-network gate failed.** During a 30-second monitor, the WebView2 network-service child opened outbound
+connections to `2620:1ec:33:1::11:443` (Microsoft) and `2a04:4e42:6f::684:80` (CDN). No separate updater or login
+process was seen. See PRODUCT-PLAN "Änderungen nach Messung" M8.
+
+Raw JSON (unchanged, SHA-256 `6704CEF44325EDB187E375926330B4AF223F4E5BE5B55B74BB4C9809B0225CFD`):
+
+```json
+{
+  "timestamp": "2026-09-23T23:29:50.155Z",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 Edg/153.0.0.0",
+  "platform": "Win32",
+  "capabilities": {
+    "webgl2": true,
+    "renderer": "ANGLE (AMD, AMD Radeon(TM) Vega 8 Graphics (0x000015D8) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "extColorBufferFloat": true,
+    "maxTextureSize": 16384,
+    "offscreenCanvas": true,
+    "offscreenCanvasInWorker": true,
+    "moduleWorker": true,
+    "webgpu": true,
+    "fileSystemAccess": true,
+    "localFontAccess": true,
+    "createImageBitmapColorConversion": {
+      "supported": true,
+      "identical": true,
+      "defaultPixel": [
+        133,
+        116,
+        64,
+        255
+      ],
+      "nonePixel": [
+        133,
+        116,
+        64,
+        255
+      ]
+    }
+  },
+  "jpeg46MP": {
+    "width": 10109,
+    "height": 4542,
+    "encodedMB": 0.3518037796020508,
+    "openMs": 2776.899999976158
+  },
+  "performance": {
+    "renderer": "ANGLE (AMD, AMD Radeon(TM) Vega 8 Graphics (0x000015D8) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "panMs": {
+      "p95": 2.699999988079071,
+      "median": 1.100000023841858,
+      "max": 4.299999952316284
+    },
+    "zoomMs": {
+      "p95": 1.0999999642372131,
+      "median": 0.40000003576278687,
+      "max": 1.5999999642372131
+    },
+    "panAt200PercentMs": {
+      "p95": 0.6000000238418579,
+      "median": 0.2999999523162842,
+      "max": 0.699999988079071
+    },
+    "brushFeedbackMs": {
+      "p95": 5.400000035762787,
+      "median": 2.100000023841858,
+      "max": 6.199999988079071
+    },
+    "brushFeedbackIrregularMs": {
+      "p95": 3,
+      "median": 1.9000000357627869,
+      "max": 5.600000023841858
+    },
+    "brushFirstSampleMs": 5.400000035762787,
+    "brushFinishMs": {
+      "even": 0.30000001192092896,
+      "irregular": 0.09999996423721313
+    },
+    "brushCommitMs": {
+      "even": 289.4000000357628,
+      "irregular": 266.89999997615814
+    },
+    "estimatedGpuTextureMB": 853
+  },
+  "heap": {
+    "advertisedLimitMB": 4192,
+    "allocatedMB": 1024,
+    "failed": false,
+    "ceilingMB": 1024
+  }
+}
+```
