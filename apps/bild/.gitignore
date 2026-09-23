@@ -1,0 +1,8 @@
+node_modules
+dist
+test-results
+playwright-report
+artifacts/acceptance-results
+artifacts/e2e-results
+*.log
+.tmp

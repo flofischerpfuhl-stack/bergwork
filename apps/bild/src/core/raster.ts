@@ -1,0 +1,210 @@
+/**
+ * Immutable tiled pixel storage.
+ *
+ * Colour rasters are RGBA8 with straight (non-premultiplied) alpha in sRGB, as the shared contract
+ * requires for CPU interchange. Masks are single-channel 8-bit coverage (255 reveals, 0 hides).
+ *
+ * Upstream keeps immutable CGImages that history snapshots share, and paints into 256 px tiles
+ * (BrushStroke.swift, RasterSnapshot.swift). Here a raster is a grid of 256 px tiles; an edit
+ * produces a new raster that shares every untouched tile, so undo retains only changed tiles and
+ * the GPU uploads only tiles whose identity changed.
+ */
+
+import { uuid } from './ids';
+
+export const TILE = 256;
+
+export type Channels = 1 | 4;
+
+/** The encoded bytes a raster was decoded from, kept while its pixels are unchanged. */
+export interface EncodedSource {
+  readonly bytes: Uint8Array;
+  readonly mime: string;
+  readonly sha256: string;
+}
+
+let nextSerial = 1;
+
+export class Raster {
+  /** Unique per pixel content instance; also the project asset id once saved. */
+  readonly id: string;
+  readonly serial: number;
+  readonly width: number;
+  readonly height: number;
+  readonly channels: Channels;
+  readonly cols: number;
+  readonly rows: number;
+  /** Row-major tiles; null means every byte of the tile is zero. Never mutated after construction. */
+  readonly tiles: ReadonlyArray<Uint8Array | null>;
+  /** Original encoded bytes, when these pixels are exactly the decoded file. */
+  readonly source: EncodedSource | null;
+
+  constructor(width: number, height: number, channels: Channels, tiles: ReadonlyArray<Uint8Array | null>,
+    options: { id?: string; source?: EncodedSource | null } = {}) {
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) {
+      throw new RangeError(`Invalid raster size ${width}×${height}`);
+    }
+    this.width = width;
+    this.height = height;
+    this.channels = channels;
+    this.cols = Math.ceil(width / TILE);
+    this.rows = Math.ceil(height / TILE);
+    if (tiles.length !== this.cols * this.rows) throw new RangeError('Tile count does not match raster size');
+    this.tiles = tiles;
+    this.serial = nextSerial++;
+    this.id = options.id ?? uuid();
+    this.source = options.source ?? null;
+  }
+
+  tileWidth(col: number): number { return Math.min(TILE, this.width - col * TILE); }
+  tileHeight(row: number): number { return Math.min(TILE, this.height - row * TILE); }
+
+  static blank(width: number, height: number, channels: Channels): Raster {
+    return new Raster(width, height, channels, new Array(Math.ceil(width / TILE) * Math.ceil(height / TILE)).fill(null));
+  }
+
+  /** A 1×1 mask, all white (reveal) or black (hide), as LayerMask.solid. */
+  static solidMask(revealing: boolean): Raster {
+    return new Raster(1, 1, 1, [revealing ? new Uint8Array([255]) : null]);
+  }
+
+  /** Builds a raster from contiguous pixels (`width * channels` bytes per row). The data is copied. */
+  static fromPixels(width: number, height: number, channels: Channels, data: ArrayLike<number>,
+    options: { id?: string; source?: EncodedSource | null } = {}): Raster {
+    if (data.length !== width * height * channels) throw new RangeError('Pixel buffer size mismatch');
+    const cols = Math.ceil(width / TILE), rows = Math.ceil(height / TILE);
+    const tiles: (Uint8Array | null)[] = [];
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const tw = Math.min(TILE, width - col * TILE), th = Math.min(TILE, height - row * TILE);
+        const tile = new Uint8Array(tw * th * channels);
+        let any = false;
+        for (let y = 0; y < th; y++) {
+          const src = ((row * TILE + y) * width + col * TILE) * channels;
+          const dst = y * tw * channels;
+          for (let i = 0; i < tw * channels; i++) {
+            const v = data[src + i]!;
+            tile[dst + i] = v;
+            if (v) any = true;
+          }
+        }
+        tiles.push(any ? tile : null);
+      }
+    }
+    return new Raster(width, height, channels, tiles, options);
+  }
+
+  /** Contiguous copy of a region; pixels outside the raster read as zero. */
+  readRegion(x: number, y: number, width: number, height: number): Uint8Array {
+    const ch = this.channels;
+    const out = new Uint8Array(width * height * ch);
+    const x0 = Math.max(0, x), y0 = Math.max(0, y);
+    const x1 = Math.min(this.width, x + width), y1 = Math.min(this.height, y + height);
+    if (x1 <= x0 || y1 <= y0) return out;
+    for (let row = Math.floor(y0 / TILE); row <= Math.floor((y1 - 1) / TILE); row++) {
+      for (let col = Math.floor(x0 / TILE); col <= Math.floor((x1 - 1) / TILE); col++) {
+        const tile = this.tiles[row * this.cols + col];
+        if (!tile) continue;
+        const tw = this.tileWidth(col);
+        const tx0 = Math.max(x0, col * TILE), tx1 = Math.min(x1, col * TILE + tw);
+        const ty0 = Math.max(y0, row * TILE), ty1 = Math.min(y1, row * TILE + this.tileHeight(row));
+        const span = (tx1 - tx0) * ch;
+        for (let py = ty0; py < ty1; py++) {
+          const src = ((py - row * TILE) * tw + (tx0 - col * TILE)) * ch;
+          const dst = ((py - y) * width + (tx0 - x)) * ch;
+          out.set(tile.subarray(src, src + span), dst);
+        }
+      }
+    }
+    return out;
+  }
+
+  toPixels(): Uint8Array { return this.readRegion(0, 0, this.width, this.height); }
+
+  /** Pixel value(s) at integer coordinates; zeros outside. */
+  pixel(x: number, y: number): number[] {
+    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return new Array(this.channels).fill(0);
+    const col = Math.floor(x / TILE), row = Math.floor(y / TILE);
+    const tile = this.tiles[row * this.cols + col];
+    if (!tile) return new Array(this.channels).fill(0);
+    const offset = ((y - row * TILE) * this.tileWidth(col) + (x - col * TILE)) * this.channels;
+    return Array.from(tile.subarray(offset, offset + this.channels));
+  }
+
+  /**
+   * A new raster with `data` (contiguous, `width * channels` bytes per row) written at (x, y).
+   * Only the tiles the region touches are copied; all others are shared.
+   */
+  withRegion(x: number, y: number, width: number, height: number, data: Uint8Array): Raster {
+    const ch = this.channels;
+    const tiles = this.tiles.slice();
+    const x0 = Math.max(0, x), y0 = Math.max(0, y);
+    const x1 = Math.min(this.width, x + width), y1 = Math.min(this.height, y + height);
+    if (x1 <= x0 || y1 <= y0) return this;
+    for (let row = Math.floor(y0 / TILE); row <= Math.floor((y1 - 1) / TILE); row++) {
+      for (let col = Math.floor(x0 / TILE); col <= Math.floor((x1 - 1) / TILE); col++) {
+        const index = row * this.cols + col;
+        const tw = this.tileWidth(col), th = this.tileHeight(row);
+        const tile = tiles[index] ? tiles[index]!.slice() : new Uint8Array(tw * th * ch);
+        const tx0 = Math.max(x0, col * TILE), tx1 = Math.min(x1, col * TILE + tw);
+        const ty0 = Math.max(y0, row * TILE), ty1 = Math.min(y1, row * TILE + th);
+        const span = (tx1 - tx0) * ch;
+        for (let py = ty0; py < ty1; py++) {
+          const dst = ((py - row * TILE) * tw + (tx0 - col * TILE)) * ch;
+          const src = ((py - y) * width + (tx0 - x)) * ch;
+          tile.set(data.subarray(src, src + span), dst);
+        }
+        tiles[index] = isZero(tile) ? null : tile;
+      }
+    }
+    return new Raster(this.width, this.height, ch, tiles);
+  }
+
+  /** Bytes of tile storage (null tiles are free). */
+  get byteSize(): number {
+    let bytes = 0;
+    for (const tile of this.tiles) if (tile) bytes += tile.byteLength;
+    return bytes;
+  }
+
+  /** Whether every pixel is identical (used for 1×1 and uniform masks). */
+  uniformValue(): number | null {
+    if (this.width !== 1 || this.height !== 1) return null;
+    return this.pixel(0, 0)[0]!;
+  }
+}
+
+function isZero(data: Uint8Array): boolean {
+  for (let i = 0; i < data.length; i++) if (data[i]) return false;
+  return true;
+}
+
+/** Tight bounds of pixels with non-zero alpha (BrushPixels.c `brush_alpha_bounds`), or null when empty. */
+export function alphaBounds(raster: Raster): { x: number; y: number; width: number; height: number } | null {
+  if (raster.channels !== 4) return { x: 0, y: 0, width: raster.width, height: raster.height };
+  let left = raster.width, right = 0, top = raster.height, bottom = 0;
+  for (let row = 0; row < raster.rows; row++) {
+    for (let col = 0; col < raster.cols; col++) {
+      const tile = raster.tiles[row * raster.cols + col];
+      if (!tile) continue;
+      const tw = raster.tileWidth(col), th = raster.tileHeight(row);
+      for (let y = 0; y < th; y++) {
+        for (let x = 0; x < tw; x++) {
+          if (tile[(y * tw + x) * 4 + 3]) {
+            const gx = col * TILE + x, gy = row * TILE + y;
+            if (gx < left) left = gx;
+            if (gx + 1 > right) right = gx + 1;
+            if (gy < top) top = gy;
+            if (gy + 1 > bottom) bottom = gy + 1;
+          }
+        }
+      }
+    }
+  }
+  return right > left ? { x: left, y: top, width: right - left, height: bottom - top } : null;
+}
+
+/** A sub-rectangle as its own raster. */
+export function cropRaster(raster: Raster, x: number, y: number, width: number, height: number): Raster {
+  return Raster.fromPixels(width, height, raster.channels, raster.readRegion(x, y, width, height));
+}
