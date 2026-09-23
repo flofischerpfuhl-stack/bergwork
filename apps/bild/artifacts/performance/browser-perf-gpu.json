@@ -1,9 +1,12 @@
 {
   "project": "perf-gpu",
-  "date": "2026-09-23T15:25:51.264Z",
+  "date": "2026-09-23T19:18:49.876Z",
   "targets": {
     "panZoomP95Ms": 33,
-    "brushFeedbackMs": 50
+    "brushFeedbackP95Ms": 16,
+    "brushFirstSampleMs": 50,
+    "brushFinishMainThreadMs": 16,
+    "brushCommitMs": 400
   },
   "renderer": "ANGLE (Intel, Mesa Intel(R) HD Graphics 630 (KBL GT2), OpenGL 4.6)",
   "viewport": {
@@ -13,33 +16,93 @@
   },
   "floatTargets": true,
   "panMs": {
-    "p95": 5.099999999627471,
-    "median": 2.099999999627471,
-    "max": 6.199999999254942
+    "p95": 4.299999997019768,
+    "median": 1.3999999985098839,
+    "max": 5.599999997764826
   },
   "zoomMs": {
-    "p95": 4.800000000745058,
-    "median": 2.199999999254942,
-    "max": 8.899999999441206
+    "p95": 2.199999999254942,
+    "median": 1.0999999977648258,
+    "max": 4.099999997764826
   },
   "panAt200PercentMs": {
-    "p95": 2.3999999994412065,
-    "median": 1.5,
-    "max": 3.400000000372529
+    "p95": 1.4000000022351742,
+    "median": 0.8000000007450581,
+    "max": 1.5999999977648258
   },
   "brushFeedbackMs": {
-    "p95": 51.200000000186265,
-    "median": 38.5,
-    "max": 62.700000000186265
+    "p95": 7.300000000745058,
+    "median": 2.199999999254942,
+    "max": 21.300000000745058
+  },
+  "brushFeedbackIrregularMs": {
+    "p95": 3.899999998509884,
+    "median": 1.699999999254942,
+    "max": 6.199999999254942
   },
   "brushEngineMs": {
-    "p95": 50.799999999813735,
-    "median": 38.200000000186265
+    "p95": 0.5999999977648258,
+    "median": 0.10000000149011612
   },
   "brushRenderMs": {
-    "p95": 0.5,
-    "median": 0.2999999998137355
+    "p95": 7,
+    "median": 2
   },
+  "brushFirstSampleMs": 21.300000000745058,
+  "brushFinishMs": {
+    "even": 0.5,
+    "irregular": 0.19999999925494194
+  },
+  "brushCommitMs": {
+    "even": 293.30000000074506,
+    "irregular": 248.69999999925494
+  },
+  "brushWorkerReadyMs": {
+    "even": 232.69999999925494,
+    "irregular": 197.30000000074506
+  },
+  "brushWorkerTiming": [
+    {
+      "init": 0.5,
+      "settled": 132.39999999850988,
+      "finish": 49
+    },
+    {
+      "init": 1.199999999254942,
+      "settled": 122.49999999627471,
+      "finish": 62.79999999701977
+    },
+    {
+      "init": 0.5,
+      "settled": 145.79999999701977,
+      "finish": 39.30000000074506
+    },
+    {
+      "init": 0.5,
+      "settled": 112.69999999552965,
+      "finish": 81.5
+    },
+    {
+      "init": 0.3999999985098839,
+      "settled": 120.69999999925494,
+      "finish": 86.89999999850988
+    },
+    {
+      "init": 0.5,
+      "settled": 193.1000000052154,
+      "finish": 61.599999997764826
+    },
+    {
+      "init": 0.3999999985098839,
+      "settled": 169.90000000223517,
+      "finish": 103
+    },
+    {
+      "init": 0.4000000022351742,
+      "settled": 297.1000000014901,
+      "finish": 66.89999999850988
+    }
+  ],
   "jsHeapUsedMB": 756,
   "estimatedGpuTextureMB": 853,
   "notes": "Pan/zoom scene built directly (167 Mpx exceeds the upstream 100 Mpx import budget); brush measured with 5 layers (84 Mpx)."
