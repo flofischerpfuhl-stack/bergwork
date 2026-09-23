@@ -83,6 +83,8 @@ const de: Record<string, string> = {
   'No tool selected · Press a tool\'s key to pick one · Space to pan': 'Kein Werkzeug · Taste eines Werkzeugs drücken · Leertaste verschiebt',
   'Unsaved changes will be lost.': 'Ungesicherte Änderungen gehen verloren.', 'Close without saving?': 'Ohne Sichern schließen?',
   'Save a copy?': 'Kopie sichern?', 'Don’t Save': 'Nicht sichern', 'Layer Properties': 'Ebeneneigenschaften', 'More': 'Mehr',
+  'Save a Copy for Compositor for Mac…': 'Kopie für Compositor (Mac) sichern …',
+  'Open Compositor Package Folder…': 'Compositor-Paketordner öffnen …',
   // Remove Background
   'Remove Background': 'Hintergrund entfernen',
   'Loading the subject model…': 'Motivmodell wird geladen …',

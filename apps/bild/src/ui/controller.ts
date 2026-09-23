@@ -16,6 +16,8 @@ import { pixelClipboard, type ClipboardHooks, type PixelClipboardEntry } from '.
 import { failureMessage, ImportQueue } from '../core/importQueue';
 import { ProjectWorkspace, type ProjectTab } from '../core/workspace';
 import { buildManifest, readArchive, ProjectError } from '../io/project';
+import { readCompPackage, readCompZip, writeCompZip } from '../io/compPackage';
+import { unzipSync } from 'fflate';
 import { encodeArchive } from '../workers/archiveClient';
 import { isQuotaError, RecoveryStore } from '../platform/recovery';
 import { browserDecode, decodeImageFile, fileBaseName, ImageImportError } from '../io/imageImport';
@@ -46,6 +48,18 @@ export interface CanvasHost {
   redraw(): void;
   /** Straight-alpha pixels of a document region composited like the canvas. */
   readRegion(document: CanvasDocument, x: number, y: number, width: number, height: number): Uint8Array;
+}
+
+/** Whether a ZIP holds a macOS Compositor package rather than this port's archive (listing names only). */
+function isCompZip(bytes: Uint8Array): boolean {
+  const names: string[] = [];
+  try { unzipSync(bytes, { filter: (file) => { names.push(file.name); return false; } }); } catch { return false; }
+  if (names.some((n) => /(^|\/)[^/]+\.comp\//i.test(n))) return true;
+  if (!names.includes('manifest.json')) return false;
+  try {
+    const manifest = unzipSync(bytes, { filter: (file) => file.name === 'manifest.json' })['manifest.json'];
+    return !!manifest && (JSON.parse(new TextDecoder().decode(manifest)) as { format?: string }).format === 'com.compositor.project';
+  } catch { return false; }
 }
 
 /** Where each project was last saved, for Save without asking again. */
@@ -281,10 +295,69 @@ export class EditorController {
   }
 
   async openArchive(blob: Blob, name?: string): Promise<void> {
-    const loaded = await readArchive(blob, (bytes, mime) => browserDecode(bytes, mime));
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    // A zipped macOS Compositor package (`X.comp/…`, format com.compositor.project) or this port's own archive.
+    if (isCompZip(bytes)) {
+      const loaded = await readCompZip(bytes);
+      this.installLoaded(loaded.document, loaded.activeLayerId, name?.replace(/\.comp$/i, '') ?? loaded.name);
+      return;
+    }
+    const loaded = await readArchive(blob, (data, mime) => browserDecode(data, mime));
     const tab = this.workspace.createTab(name ?? loaded.name);
     tab.session.installProject(loaded.document, loaded.activeLayerId, name ?? loaded.name);
     this.workspace.adopt(tab);
+  }
+
+  private installLoaded(document: CanvasDocument, activeLayerId: string | null, name: string): void {
+    const tab = this.workspace.createTab(name);
+    tab.session.installProject(document, activeLayerId, name);
+    this.workspace.adopt(tab);
+  }
+
+  /** Opens an unzipped `.comp` package directory (the macOS app's own project format) chosen as a folder. */
+  async openCompFolder(files: readonly File[]): Promise<void> {
+    if (!files.length || !this.workspace.canSwitch) return;
+    try {
+      const entries = new Map<string, Uint8Array>();
+      for (const file of files) {
+        const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+        entries.set(path.replace(/^[^/]*\.comp\//i, ''), new Uint8Array(await file.arrayBuffer()));
+      }
+      const root = ((files[0] as File & { webkitRelativePath?: string }).webkitRelativePath ?? '').split('/')[0] ?? '';
+      const loaded = await readCompPackage(entries);
+      this.installLoaded(loaded.document, loaded.activeLayerId, root.replace(/\.comp$/i, '') || loaded.name);
+    } catch (error) { this.reportError(error instanceof ProjectError ? error.code : 'open-failed', error); }
+  }
+
+  async chooseCompFolder(): Promise<void> {
+    if (!this.workspace.canSwitch) return;
+    const files = await new Promise<File[]>((resolve) => {
+      const input = globalThis.document.createElement('input');
+      input.type = 'file';
+      (input as HTMLInputElement & { webkitdirectory: boolean }).webkitdirectory = true;
+      input.style.display = 'none';
+      input.addEventListener('change', () => { resolve([...(input.files ?? [])]); input.remove(); });
+      input.addEventListener('cancel', () => { resolve([]); input.remove(); });
+      globalThis.document.body.append(input);
+      input.click();
+    });
+    await this.openCompFolder(files);
+  }
+
+  /** Saves a copy in the macOS app's format (a zipped `.comp` package, version 7); the project itself stays as it is. */
+  async saveCompCopy(): Promise<void> {
+    const session = this.session;
+    const document = session.document;
+    if (!document) return;
+    try {
+      session.commitTransform();
+      const name = session.projectName ?? this.workspace.current.title;
+      const bytes = await writeCompZip(session.document ?? document, { name, activeLayerId: session.activeLayerId });
+      const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/zip' });
+      const host = this.host as FileTargetHost;
+      if (host.saveFileAs) await host.saveFileAs(blob, `${name}.comp.zip`, 'project');
+      else await this.host.saveFile(blob, `${name}.comp.zip`);
+    } catch (error) { this.reportError('save-failed', error); }
   }
 
   async chooseAndOpen(): Promise<void> {

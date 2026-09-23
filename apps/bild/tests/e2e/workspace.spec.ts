@@ -104,3 +104,27 @@ test('Save asks where once and then overwrites; Save As asks again; a cancelled 
   await editor.press(`${mod}+Shift+s`);
   await expect.poll(async () => (await writes())[3]).toBe('as:Poster.compositor.zip');
 });
+
+test('a copy saved for Compositor for Mac (.comp, v7) reopens with the same layers, masks and adjustments', async ({ page }) => {
+  await mountForTest(page);
+  await page.getByTestId('widthInput').fill('40');
+  await page.getByTestId('heightInput').fill('30');
+  await page.getByTestId('createCanvas').click();
+  await importThroughMenu(page, [{ name: 'green.png', mimeType: 'image/png', buffer: solidPng(20, 20, [0, 200, 0, 255]) }]);
+  await page.getByTestId('layer-row').first().click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Add Black Mask' }).click();
+  await page.evaluate(() => (window as any).__editorForTests.session.addAdjustment('Exposure'));
+  await page.getByTestId('adjustment-ok').click();
+  const before = await manifest(page);
+  await page.getByTestId('menu-File').click();
+  await page.getByTestId('menu-save-comp').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__saved.length)).toBe(1);
+  const saved = await page.evaluate(() => ({ name: (window as any).__saved[0].name }));
+  expect(saved.name).toBe('Untitled.comp.zip');
+  await page.evaluate(() => (window as any).__handle.openProject((window as any).__saved[0].blob));
+  await expect(page.getByRole('tab')).toHaveCount(2);
+  const after = await manifest(page);
+  expect(after.layers.map((l: any) => [l.name, l.kind, !!l.mask, l.parameters?.kind ?? null]))
+    .toEqual(before.layers.map((l: any) => [l.name, l.kind, !!l.mask, l.parameters?.kind ?? null]));
+  expect(after.width).toBe(40);
+});
