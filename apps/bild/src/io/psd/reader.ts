@@ -562,8 +562,8 @@ function rawCompositeFallback(bytes: Uint8Array, parserError: unknown): PsdReadR
     message: `PSD color mode ${raw.colorMode} was opened from its saved composite preview; layers are not editable.`,
     impact: 'editability-only',
   }, {
-    code: 'compatibility-preview',
-    message: 'This PSD uses its saved composite preview because its layer data could not be decoded.',
+    code: 'flattened-composite',
+    message: 'This PSD was opened flattened from its saved composite because its layer data could not be decoded.',
     impact: 'editability-only',
   }];
   if (raw.bitsPerChannel !== 8) unsupported.push({
@@ -576,7 +576,7 @@ function rawCompositeFallback(bytes: Uint8Array, parserError: unknown): PsdReadR
   });
   const document: CanvasDocument = {
     id: 'psd-document', width: raw.width, height: raw.height, resolution: 72, selection: null,
-    layers: [newLayer({ id: 'psd-layer-1', name: 'PSD compatibility preview', kind: 'pixel',
+    layers: [newLayer({ id: 'psd-layer-1', name: 'Photoshop composite (flattened)', kind: 'pixel',
       transform: transform(0, 0, raw.width, raw.height), raster })], resources: [],
   };
   return { document, oracle: raster, unsupported, parserWarnings: [message],
@@ -618,14 +618,16 @@ export function readPsdDocument(bytes: Uint8Array): PsdReadResult {
     impact: 'not-rendered' });
   let documentLayers = layers;
   if (oracle && unsupported.some((feature) => feature.impact === 'not-rendered')) {
-    documentLayers = layers.map((layer) => ({ ...layer, visible: false }));
-    documentLayers.push(newLayer({
-      id: `psd-layer-${state.nextId++}`, name: 'PSD compatibility preview', kind: 'pixel',
+    // The editable layers stay visible: they are the document. Photoshop's saved composite is added on top as a hidden,
+    // locked reference the user can show to compare, never as a cover over layers that would then seem not to react.
+    documentLayers = [...layers, newLayer({
+      id: `psd-layer-${state.nextId++}`, name: 'Photoshop appearance (reference)', kind: 'pixel', visible: false,
+      locks: { transparency: false, pixels: true, position: true, all: true },
       transform: transform(0, 0, psd.width, psd.height), raster: oracle,
-    }));
+    })];
     unsupported.push({
       code: 'compatibility-preview',
-      message: 'Unsupported PSD rendering features use the saved composite preview; source layers remain available but hidden.',
+      message: 'Some PSD features are not rendered natively; a hidden “Photoshop appearance” reference layer shows the saved result.',
       impact: 'editability-only',
     });
   }
@@ -640,7 +642,7 @@ export function readPsdDocument(bytes: Uint8Array): PsdReadResult {
 /** Product open path: apply embedded/default gray or CMYK profiles lazily through the existing Little CMS WASM. */
 export async function readPsdDocumentManaged(bytes: Uint8Array): Promise<PsdReadResult> {
   const imported = readPsdDocument(bytes);
-  if (!imported.unsupported.some((feature) => feature.code === 'compatibility-preview')
+  if (!imported.unsupported.some((feature) => feature.code === 'flattened-composite')
     || (imported.source.colorMode !== 1 && imported.source.colorMode !== 4)) return imported;
   const raw = readRawPsdComposite(bytes);
   if (!raw.managedSamples || (raw.bitsPerChannel !== 8 && raw.bitsPerChannel !== 16)) return imported;
@@ -651,7 +653,7 @@ export async function readPsdDocumentManaged(bytes: Uint8Array): Promise<PsdRead
       : lcms.createGrayProfile([0.3127, 0.329], 2.2));
     const rgba = lcms.transform(profile, raw.managedSamples, model, raw.bitsPerChannel, raw.managedAlpha);
     const raster = Raster.fromPixels(raw.width, raw.height, 4, rgba);
-    const layers = imported.document.layers.map((layer) => layer.kind === 'pixel' && layer.name === 'PSD compatibility preview'
+    const layers = imported.document.layers.map((layer) => layer.kind === 'pixel' && layer.name === 'Photoshop composite (flattened)'
       ? { ...layer, raster } : layer);
     const unsupported = imported.unsupported.map((feature) => feature.code === 'embedded-icc'
       ? { ...feature, message: 'The embedded profile was converted to sRGB through Little CMS.', impact: 'editability-only' as const }

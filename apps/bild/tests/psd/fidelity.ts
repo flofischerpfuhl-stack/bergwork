@@ -107,8 +107,10 @@ export async function measureFile(absolute: string, corpusRoot: string): Promise
       { x: 0, y: 0, width: imported.document.width, height: imported.document.height });
     const expected = imported.oracle.toPixels();
     const metrics = differenceMetrics(rendered, expected);
+    // A file opened flattened from its own saved composite trivially matches the oracle; it is not native rendering.
+    const flattened = imported.unsupported.some((feature) => feature.code === 'flattened-composite');
     return { file, categories, parsed: true, rendered: true,
-      passed: metrics.mean <= threshold.mean && metrics.p99 <= threshold.p99,
+      passed: !flattened && metrics.mean <= threshold.mean && metrics.p99 <= threshold.p99,
       threshold, metrics, unsupported: imported.unsupported, bitsPerChannel: imported.source.bitsPerChannel };
   } catch (error) {
     const threshold = THRESHOLDS[categories[0]!]!;
@@ -128,6 +130,7 @@ interface CategorySummary {
 function failureCause(result: FidelityResult): string {
   if (!result.parsed) return `parse: ${result.error ?? 'unknown error'}`;
   if (!result.rendered) return result.error ?? 'not rendered';
+  if (result.unsupported.some((feature) => feature.code === 'flattened-composite')) return 'opened flattened (layers not decoded)';
   const unsupported = result.unsupported.find((feature) => feature.impact !== 'editability-only');
   return unsupported ? `unsupported: ${unsupported.code}` : 'wrong math/order/colour conversion';
 }
