@@ -104,7 +104,20 @@ export async function benchmark09(page: Page): Promise<void> {
   await importPng(page, 'banner-photo.png', solidPng(160, 90, [55, 85, 135, 255]));
   await page.getByTestId('tool-shape').click();
   await dragInDocument(page, [20, 20], [80, 60], 160, 90);
-  expect((await manifest(page)).layers.some((layer) => layer.kind === 'shape')).toBe(true);
+  expect((await manifest(page)).layers.at(-1)?.kind).toBe('shape');
+  const placed = await exportedPixels(page);
+  const shapeColor = rgbaAt(placed, 30, 40);
+  expect(shapeColor).not.toEqual([55, 85, 135, 255]);
+  expect(rgbaAt(placed, 100, 40)).toEqual([55, 85, 135, 255]);
+  // Phase 1: centre the shape on the layout through Layer › Align (a single layer aligns to the canvas).
+  await alignActiveLayer(page, 'Horizontal Centers');
+  await alignActiveLayer(page, 'Vertical Centers');
+  const centered = (await manifest(page)).layers.at(-1)!;
+  expect(centered.kind).toBe('shape');
+  const aligned = await exportedPixels(page);
+  expect(rgbaAt(aligned, 100, 45)).toEqual(shapeColor);
+  expect(rgbaAt(aligned, 30, 45)).toEqual([55, 85, 135, 255]);
+  expect(rgbaAt(aligned, 80, 22)).toEqual([55, 85, 135, 255]);
   missing('artboards and per-artboard resizing for the five banner formats', task(9));
 }
 
@@ -202,32 +215,74 @@ export async function benchmark19(page: Page): Promise<void> {
 }
 
 export async function benchmark20(page: Page): Promise<void> {
+  const teal = [0, 140, 125, 255], inverted = [255, 115, 130, 255];
   await createCanvas(page, 64, 48);
+  const blank = await manifest(page);
+  const blankPixel = rgbaAt(await exportedPixels(page), 32, 24);
+  expect(blankPixel).not.toEqual(teal);
   await importPng(page, 'recovery-layer.png', solidPng(12, 10, [0, 140, 125, 255]));
+  const imported = await manifest(page);
+  expect(rgbaAt(await exportedPixels(page), 32, 24)).toEqual(teal);
+  // A second, pixel-changing step: undoing it after recovery needs the layer's earlier pixels from the recovered history.
+  await page.getByTestId('menu-Image').click();
+  await page.getByRole('menuitem', { name: /^Invert(?! Mask)/ }).click();
+  await expect.poll(async () => rgbaAt(await exportedPixels(page), 32, 24)).toEqual(inverted);
   const before = await manifest(page);
-  await expect.poll(async () => page.evaluate(async () => {
+  const editedAt = await page.evaluate(() => Date.now());
+  await expect.poll(() => recoveryCopiesSavedAfter(page, editedAt), { timeout: 15_000 }).toBe(1);
+
+  await mountForTest(page);
+  await expect(page.getByRole('alertdialog')).toContainText('Recover an unsaved project?');
+  await page.getByRole('button', { name: 'Recover' }).click();
+  await expect(page.getByTestId('layerCount')).toHaveText('2');
+  expect((await manifest(page)).layers).toEqual(before.layers);
+  expect(rgbaAt(await exportedPixels(page), 32, 24)).toEqual(inverted);
+
+  // Phase 1: the history travels with the recovery copy, so undo continues after the crash.
+  await page.getByTestId('tab-history').click();
+  const steps = page.getByTestId('history-step');
+  const stepCount = await steps.count();
+  expect(stepCount).toBeGreaterThanOrEqual(3);
+  await expect(steps.nth(stepCount - 1)).toHaveAttribute('aria-current', 'step');
+  await page.getByTestId('menu-Edit').click();
+  await expect(page.getByTestId('menu-undo')).toBeEnabled();
+  await page.getByTestId('menu-undo').click();
+  await expect.poll(async () => rgbaAt(await exportedPixels(page), 32, 24)).toEqual(teal);
+  expect((await manifest(page)).layers).toEqual(imported.layers);
+  await expect(steps.nth(stepCount - 2)).toHaveAttribute('aria-current', 'step');
+  // Further back through the History panel to the state before the import.
+  await steps.nth(stepCount - 3).click();
+  await expect.poll(async () => (await manifest(page)).layers).toEqual(blank.layers);
+  expect(rgbaAt(await exportedPixels(page), 32, 24)).toEqual(blankPixel);
+  await expect(page.getByTestId('layerCount')).toHaveText('1');
+  // And forward again: redo restores both recovered steps with their pixels.
+  await steps.nth(stepCount - 1).click();
+  await expect.poll(async () => rgbaAt(await exportedPixels(page), 32, 24)).toEqual(inverted);
+  expect((await manifest(page)).layers).toEqual(before.layers);
+}
+
+async function recoveryCopiesSavedAfter(page: Page, timestamp: number): Promise<number> {
+  return page.evaluate(async (after) => {
     const request = indexedDB.open('fernwork-compositor');
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
     if (!database.objectStoreNames.contains('recovery')) { database.close(); return 0; }
-    const countRequest = database.transaction('recovery').objectStore('recovery').count();
-    const count = await new Promise<number>((resolve, reject) => {
-      countRequest.onsuccess = () => resolve(countRequest.result);
-      countRequest.onerror = () => reject(countRequest.error);
+    const allRequest = database.transaction('recovery').objectStore('recovery').getAll();
+    const records = await new Promise<{ savedAt: number }[]>((resolve, reject) => {
+      allRequest.onsuccess = () => resolve(allRequest.result as { savedAt: number }[]);
+      allRequest.onerror = () => reject(allRequest.error);
     });
     database.close();
-    return count;
-  }), { timeout: 15_000 }).toBe(1);
-  await mountForTest(page);
-  await expect(page.getByRole('alertdialog')).toContainText('Recover an unsaved project?');
-  await page.getByRole('button', { name: 'Recover' }).click();
-  await expect(page.getByTestId('layerCount')).toHaveText('2');
-  expect((await manifest(page)).layers).toEqual(before.layers);
-  await page.getByTestId('menu-Edit').click();
-  await expect(page.getByTestId('menu-undo')).toBeDisabled();
-  missing('persisted undo history that remains available after crash recovery', task(20));
+    return records.length === 1 && records[0]!.savedAt > after ? 1 : 0;
+  }, timestamp);
+}
+
+async function alignActiveLayer(page: Page, edge: string): Promise<void> {
+  await page.getByTestId('menu-Layer').click();
+  await page.getByRole('menuitem', { name: 'Align' }).hover();
+  await page.getByRole('menuitem', { name: edge, exact: true }).click();
 }
 
 async function adobeRgbTiff(page: Page, width: number, height: number): Promise<Buffer> {

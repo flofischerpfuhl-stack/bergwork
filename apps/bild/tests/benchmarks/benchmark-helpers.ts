@@ -27,7 +27,9 @@ export async function createCanvas(page: Page, width = 100, height = 100): Promi
   await page.getByTestId('widthInput').fill(String(width));
   await page.getByTestId('heightInput').fill(String(height));
   await page.getByTestId('createCanvas').click();
-  await expect(page.getByTestId('canvasDimensions')).toContainText(`${width.toLocaleString()} × ${height.toLocaleString()} px`);
+  // The status bar formats with the browser's locale, not the locale of the Node process running the test.
+  const expected = await page.evaluate(([w, h]) => `${w!.toLocaleString()} × ${h!.toLocaleString()} px`, [width, height]);
+  await expect(page.getByTestId('canvasDimensions')).toContainText(expected);
 }
 
 export function patternedPng(
