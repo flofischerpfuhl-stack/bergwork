@@ -38,6 +38,16 @@ fn emit_shortcut(app: &AppHandle, event: &str) {
     }
 }
 
+/// Chromium switches for the WebView2 runtime: keep Tauri's defaults and switch off every background service that
+/// talks to the network on its own (SmartScreen, component updates, safe-browsing/phishing checks, translation,
+/// domain reliability, sync, pings, optimization hints).
+const WEBVIEW2_ARGS: &str = concat!(
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,msEdgeTranslate,msImplicitSignin,",
+    "OptimizationHints,OptimizationHintsFetching,AutofillServerCommunication,MediaRouter,InterestFeedContentSuggestions ",
+    "--disable-background-networking --disable-component-update --disable-client-side-phishing-detection ",
+    "--disable-domain-reliability --disable-sync --no-pings --disable-default-apps --no-first-run"
+);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -57,7 +67,11 @@ pub fn run() {
                 } else {
                     "Fernwork Bildeditor"
                 })
-                .inner_size(1440.0, 900.0);
+                .inner_size(1440.0, 900.0)
+                // Offline and without telemetry (PRODUCT-PLAN P1/P9/E6, finding M8): WebView2 must not phone home.
+                // These replace Tauri's defaults, which are kept in the first --disable-features list. No effect
+                // outside Windows.
+                .additional_browser_args(WEBVIEW2_ARGS);
             if !measuring {
                 window = window.menu(editor_menu(app.handle())?);
             }
