@@ -3,7 +3,6 @@
  * Desktop shells (Tauri/Electron) supply their own adapter with native dialogs.
  */
 
-import type { HostAdapter } from '../../contracts';
 import type { ImageDecoderHost } from './imageDecoder';
 import { sha256Hex } from '../io/sha256';
 import type {
@@ -11,11 +10,18 @@ import type {
   HostCapabilityMap, ModelHost, SystemFont,
 } from './hosts/types';
 import { bindCapabilityRegistry } from './hosts/types';
+import { BrowserScratchHost, OpfsScratchHost } from './opfsScratchHost';
+import type { ScratchHostCapability } from './scratchHost';
 
 export type { HostDecodedImage, ImageDecoderHost } from './imageDecoder';
 
 /** A place a file was saved to, which Save can overwrite later without asking again. */
 export type SaveTarget = FileSaveTarget;
+export interface FileByteSink {
+  write(chunk: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+  abort(): Promise<void>;
+}
 
 export type SaveKind = FileSaveKind;
 
@@ -25,9 +31,10 @@ export type SaveKind = FileSaveKind;
  * Choosing comes first and on its own: a browser only shows its save dialog while it still counts the user's click
  * or key press, so the (possibly slow) encoding must happen afterwards.
  */
-export interface FileTargetHost extends CapabilityHost, ImageDecoderHost {
+export interface FileTargetHost extends CapabilityHost, ImageDecoderHost, Partial<ScratchHostCapability> {
   chooseSaveTarget?(suggestedName: string, kind: SaveKind): Promise<SaveTarget | null>;
   saveFileTo?(target: SaveTarget, blob: Blob): Promise<void>;
+  openFileSink?(target: SaveTarget): Promise<FileByteSink | null>;
 }
 
 const PICKER_TYPES = {
@@ -197,6 +204,19 @@ export function createBrowserHost(): FileTargetHost {
     defaultProfile: 'lite',
     capabilities,
     ...targets,
+    ...(picker ? {
+      async openFileSink(target: SaveTarget): Promise<FileByteSink | null> {
+        if (!('handle' in target)) return null;
+        const writable = await (target as HandleTarget).handle.createWritable();
+        return {
+          async write(chunk) { await writable.write(chunk.slice() as Uint8Array<ArrayBuffer>); },
+          async close() { await writable.close(); },
+          async abort() { await writable.abort(); },
+        };
+      },
+    } : {}),
+    ...(OpfsScratchHost.available() || typeof indexedDB !== 'undefined'
+      ? { scratchHost: new BrowserScratchHost(), editorProfile: 'lite' as const } : {}),
     async chooseImages() {
       return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,image/webp,image/avif,image/gif,image/vnd.adobe.photoshop,.heic,.heif,.tif,.tiff,.webp,.avif,.gif,.psd,.psb', true);
     },

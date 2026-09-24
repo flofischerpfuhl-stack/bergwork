@@ -15,6 +15,7 @@ import {
   addSpotHealingPoints, beginSpotHealing, cancelSpotHealing, currentSpotHealingPreview, finishSpotHealing, getSpotHealingMode,
   setSpotHealingMode, spotHealingState, SPOT_HEALING_MODES, type SpotHealingMode,
 } from '../core/heal';
+import { getBrushSettings } from '../core/brush';
 import {
   applyContentAwareFill, beginContentAwareFill, canContentAwareFill, cancelContentAwareFill, contentFillState,
 } from '../core/contentFill';
@@ -121,6 +122,12 @@ class SpotHealingTool implements ToolHandler {
     cancelSpotHealing(session);
   }
   hover(): string { return 'none'; }
+  hydrationBounds(c: ToolContext): import('../core/geometry').Rect {
+    const diameter = getBrushSettings(c.session).diameter;
+    // BrushStroke.heal searches about three spot widths away (core/heal.ts SpotHealingStroke.heal).
+    const radius = diameter / 2 + (diameter + 32) * 3.2;
+    return { x: c.pixel.x - radius, y: c.pixel.y - radius, width: radius * 2, height: radius * 2 };
+  }
 }
 
 function WandControls({ controller, session }: { controller: EditorController; session: EditorSession }) {

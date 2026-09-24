@@ -1,4 +1,7 @@
-import { MAX_SIDE } from '../core/document';
+import { MAX_PIXELS, MAX_SIDE } from '../core/document';
+
+export interface GifLimits { readonly maxSide: number; readonly maxPixels: number }
+const DEFAULT_LIMITS: GifLimits = { maxSide: MAX_SIDE, maxPixels: MAX_PIXELS };
 
 export class GifError extends Error {
   readonly code: 'not-gif' | 'unreadable' | 'dimensions';
@@ -14,10 +17,10 @@ export function isGif(bytes: Uint8Array): boolean {
 }
 
 /** GIF logical-screen size, read before native decoding allocates the first frame. */
-export function gifDimensions(bytes: Uint8Array): { width: number; height: number } {
+export function gifDimensions(bytes: Uint8Array, limits: GifLimits = DEFAULT_LIMITS): { width: number; height: number } {
   if (!isGif(bytes)) throw new GifError('not-gif');
   const width = u16le(bytes, 6), height = u16le(bytes, 8);
-  validateDimensions(width, height);
+  validateDimensions(width, height, limits);
   if (bytes.length < 13) throw new GifError('unreadable');
   let at = 13;
   if ((bytes[10]! & 0x80) !== 0) at += 3 * (1 << ((bytes[10]! & 7) + 1));
@@ -27,7 +30,7 @@ export function gifDimensions(bytes: Uint8Array): { width: number; height: numbe
       if (at + 9 > bytes.length) throw new GifError('unreadable');
       const left = u16le(bytes, at), top = u16le(bytes, at + 2);
       const frameWidth = u16le(bytes, at + 4), frameHeight = u16le(bytes, at + 6);
-      validateDimensions(frameWidth, frameHeight);
+      validateDimensions(frameWidth, frameHeight, limits);
       if (left + frameWidth > width || top + frameHeight > height) throw new GifError('unreadable');
       return { width, height };
     }
@@ -45,7 +48,7 @@ export function gifDimensions(bytes: Uint8Array): { width: number; height: numbe
   throw new GifError('unreadable');
 }
 
-function validateDimensions(width: number, height: number): void {
-  if (width < 1 || height < 1 || width > MAX_SIDE || height > MAX_SIDE || width * height > 100_000_000) throw new GifError('dimensions');
+function validateDimensions(width: number, height: number, limits: GifLimits): void {
+  if (width < 1 || height < 1 || width > limits.maxSide || height > limits.maxSide || width * height > limits.maxPixels) throw new GifError('dimensions');
 }
 function u16le(bytes: Uint8Array, at: number): number { return bytes[at]! | (bytes[at + 1]! << 8); }

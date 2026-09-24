@@ -23,7 +23,15 @@ const pyramids = new WeakMap<Raster, Level[]>();
 
 function sourceByte(raster: Raster, x: number, y: number, channel: number): number {
   const col = Math.floor(x / TILE), row = Math.floor(y / TILE);
-  const tile = raster.tiles[row * raster.cols + col];
+  const index = row * raster.cols + col;
+  if (raster.tileResidency(index) === 'swapped') {
+    const reduced = raster.reducedCopy;
+    if (!reduced) return 0;
+    const rx = Math.min(reduced.width - 1, Math.floor(x * reduced.width / raster.width));
+    const ry = Math.min(reduced.height - 1, Math.floor(y * reduced.height / raster.height));
+    return sourceByte(reduced, rx, ry, channel);
+  }
+  const tile = raster.tiles[index];
   if (!tile) return 0;
   return tile[((y - row * TILE) * raster.tileWidth(col) + x - col * TILE) * raster.channels + channel]!;
 }

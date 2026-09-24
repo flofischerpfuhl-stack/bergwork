@@ -22,8 +22,10 @@ import type {
 } from '../../contracts-v2';
 import type { HistorySnapshot, PersistedHistoryState } from '../core/history';
 import {
-  BLEND_MODE_SET, documentsEqual, hierarchyRecord, InvalidProjectError, layerPixelHeight, layerPixelWidth, MAX_LAYERS, MAX_PIXELS, MAX_SIDE,
+  BLEND_MODE_SET, documentsEqual, hierarchyRecord, InvalidProjectError, layerPixelHeight, layerPixelWidth, MAX_LAYERS,
+  LITE_DOCUMENT_LIMITS, PRO_DOCUMENT_LIMITS,
   newLayer, validateHierarchy, validateLiveMasks, type Guide, type BlendMode, type CanvasDocument, type Layer, type LayerAdjustment, type LayerShape,
+  type DocumentLimits,
 } from '../core/document';
 import {
   concat, fromMatrix, isValidTransform, makeTransform, pixelToDocument, placing, scaling, toMatrix,
@@ -31,11 +33,14 @@ import {
 } from '../core/geometry';
 import { Raster, TILE } from '../core/raster';
 import { vectorPathsForShape } from '../core/shape';
-import { decodePng, decodePngNativeRGBA, encodePng } from './png';
-import { sha256Hex } from './sha256';
+import { decodePng, decodePngNativeRGBA, encodePng, encodePngRasterStream } from './png';
+import { prepareStreamingSha256, sha256Hex } from './sha256';
 import { normalizeArtboards } from '../core/artboards';
 import { parseCubeLut } from '../core/adjust/cube';
 import { pngNeedsColorConversion } from './imageImport';
+import type { RasterResidency } from '../core/storage';
+import { convertStreamedPng, PngTileStreamDecoder, restoreStreamedPng, type StreamedPngRaster } from './pngStream';
+import { readZipEntries, Zip64StreamWriter } from './zipStream';
 
 export const EXTENSION_KEY = 'org.compositor.port';
 const MANIFEST_LIMIT = 4 * 1024 * 1024;
@@ -140,11 +145,13 @@ export function encodedAsset(raster: Raster): EncodedAsset {
   // V1 has no bit-depth field. RGBA16 is therefore canonicalized to a self-describing PNG16 asset;
   // retaining an original TIFF here would route reload through the legacy external RGBA8 decoder.
   if (raster.format === 'rgba16') {
-    const bytes = encodePng(raster.toPixels16(), raster.width, raster.height, 4, { bitDepth: 16 });
+    const bytes = encodePng(raster.toPixels16(), raster.width, raster.height, 4,
+      { bitDepth: 16, limits: PRO_DOCUMENT_LIMITS });
     asset = { bytes, mime: 'image/png', sha256: sha256Hex(bytes) };
   } else if (raster.source) asset = { bytes: raster.source.bytes, mime: raster.source.mime, sha256: raster.source.sha256 };
   else {
-    const bytes = encodePng(raster.toPixels(), raster.width, raster.height, raster.channels);
+    const bytes = encodePng(raster.toPixels(), raster.width, raster.height, raster.channels,
+      { limits: PRO_DOCUMENT_LIMITS });
     asset = { bytes, mime: 'image/png', sha256: sha256Hex(bytes) };
   }
   encodedCache.set(raster, asset);
@@ -164,7 +171,7 @@ export function buildManifest(document: CanvasDocument, name: string, activeLaye
   const assets = new Map<string, AssetRecord>();
   const addAsset = (raster: Raster): string => {
     if (!assets.has(raster.id)) {
-      const encoded = encodedAsset(raster);
+      const encoded = raster.archivedSource ?? encodedAsset(raster);
       assets.set(raster.id, {
         id: raster.id, path: `assets/${raster.id}.${extensionFor(encoded.mime)}`, mime: encoded.mime,
         width: raster.width, height: raster.height, sha256: encoded.sha256,
@@ -242,7 +249,12 @@ function liveAdjustment(value: AdjustmentRecordV2): LayerAdjustment {
   }
 }
 
-interface V2BuildContext { assets: Map<string, AssetRecordV2>; rasters: Map<string, Raster>; binaryAssets: Map<string, Uint8Array> }
+interface V2BuildContext {
+  assets: Map<string, AssetRecordV2>;
+  rasters: Map<string, Raster>;
+  binaryAssets: Map<string, Uint8Array>;
+  deferEncoding?: boolean;
+}
 
 interface SerializedSelectionV2 {
   readonly assetId: string;
@@ -268,7 +280,10 @@ function addV2Asset(context: V2BuildContext, raster: Raster, role: AssetRecordV2
   const occupied = context.assets.get(raster.id);
   if (occupied && occupied.role !== role) throw new ProjectError('invalid', `Asset ID ${raster.id} is used for incompatible roles.`);
   if (!context.assets.has(raster.id)) {
-    const encoded = encodedAsset(raster);
+    const original = raster.format !== 'rgba16' ? raster.source : null;
+    const encoded = context.deferEncoding
+      ? { mime: original?.mime ?? 'image/png', sha256: original?.sha256 ?? '' }
+      : encodedAsset(raster);
     context.assets.set(raster.id, { id: raster.id, path: `assets/${raster.id}.${extensionFor(encoded.mime)}`,
       mime: encoded.mime, width: raster.width, height: raster.height, channels: raster.channels,
       sha256: encoded.sha256, role });
@@ -382,6 +397,77 @@ export function writeArchive(document: CanvasDocument, name: string, activeLayer
 type SerializedHistoryDocumentV2 = Pick<V2DocumentSource,
   'id' | 'width' | 'height' | 'resolution' | 'globalLightAngle' | 'layers' | 'artboards'> & V2DocumentExtras;
 
+/**
+ * A4 large-document writer: PNG rows and ZIP entries are pushed incrementally. The returned Blob
+ * consists of bounded ZIP chunks; no contiguous raster or archive `Uint8Array` is constructed.
+ */
+export async function writeArchiveStreaming(document: CanvasDocument, name: string, activeLayerId: string | null,
+  residency?: RasterResidency, history?: PersistedHistoryState,
+  emitChunk?: (chunk: Uint8Array) => void | Promise<void>): Promise<{ blob: Blob; manifest: ProjectManifestV2 }> {
+  const context: V2BuildContext = { assets: new Map(), rasters: new Map(), binaryAssets: new Map(), deferEncoding: true };
+  const manifest = manifestV2WithContext(document, name, activeLayerId, context);
+  const extraFiles = new Map<string, Uint8Array>();
+  if (history) manifest.history = writeHistoryStreaming(history, name, context, extraFiles);
+  const zip = new Zip64StreamWriter(emitChunk);
+  const makeHasher = await prepareStreamingSha256();
+  for (const record of [...context.assets.values()]) {
+    const hash = makeHasher();
+    const raster = context.rasters.get(record.id);
+    const binary = context.binaryAssets.get(record.id);
+    await zip.add(record.path, async (input) => {
+      if (raster?.source && raster.format !== 'rgba16') {
+        hash.update(raster.source.bytes); input.push(raster.source.bytes, true);
+      } else if (raster) {
+        await encodePngRasterStream(raster, (chunk) => { hash.update(chunk); input.push(chunk); },
+          { bitDepth: raster.format === 'rgba16' ? 16 : 8, limits: PRO_DOCUMENT_LIMITS, residency,
+            filter: 'none', level: 1, drain: () => zip.drain() });
+        input.push(new Uint8Array(), true);
+      } else if (binary) { hash.update(binary); input.push(binary, true); }
+      else throw new ProjectError('missing-image', `Asset ${record.id} has no bytes.`);
+    });
+    context.assets.set(record.id, { ...record, sha256: hash.digestHex() });
+  }
+  for (const [path, bytes] of extraFiles) {
+    await zip.add(path, (input) => { input.push(bytes, true); });
+  }
+  manifest.assets = [...context.assets.values()];
+  const json = new TextEncoder().encode(JSON.stringify(manifest, null, 2));
+  if (json.byteLength > MANIFEST_LIMIT) throw new ProjectError('too-large', 'The project manifest exceeds 4 MiB.');
+  await zip.add('manifest.json', (input) => { input.push(json, true); });
+  const blob = zip.finish();
+  await zip.drain();
+  return { blob, manifest };
+}
+
+function writeHistoryStreaming(state: PersistedHistoryState, name: string, context: V2BuildContext,
+  files: Map<string, Uint8Array>): ProjectHistoryV2 {
+  if (!state.enabled) return { schemaVersion: 1, enabled: false, retainedByteLimit: state.retainedByteLimit,
+    cursor: 0, commands: [], snapshots: [] };
+  const snapshots: ProjectHistoryV2['snapshots'][number][] = [];
+  const ids = new Map<HistorySnapshot, string>();
+  const snapshotId = (snapshot: HistorySnapshot): string => {
+    const known = ids.get(snapshot);
+    if (known) return known;
+    const id = `snapshot-${ids.size + 1}`, path = `history/snapshots/${id}.json`;
+    ids.set(snapshot, id);
+    const built = snapshot.document ? manifestV2WithContext(snapshot.document, name, snapshot.activeLayerId, context) : null;
+    const value: HistorySnapshotFile = {
+      document: snapshot.document && built ? historyDocument(snapshot.document, built) : null,
+      activeLayerId: snapshot.activeLayerId,
+      revision: snapshot.revision,
+      tileRasters: [],
+    };
+    files.set(path, new TextEncoder().encode(JSON.stringify(value)));
+    snapshots.push({ id, path, activeLayerId: snapshot.activeLayerId, revision: snapshot.revision });
+    return id;
+  };
+  const commands = [...state.past, ...state.future].map((command) => ({
+    name: command.name, before: snapshotId(command.before), after: snapshotId(command.after),
+  }));
+  return { schemaVersion: 1, enabled: true, retainedByteLimit: state.retainedByteLimit,
+    cursor: state.past.length, commands, snapshots };
+}
+
 interface HistorySnapshotFile {
   document: SerializedHistoryDocumentV2 | null;
   activeLayerId: string | null;
@@ -472,20 +558,58 @@ export interface LoadedProject {
   history?: PersistedHistoryState;
 }
 
+interface StreamedArchive {
+  readonly entries: Record<string, Uint8Array>;
+  readonly png: ReadonlyMap<string, StreamedPngRaster>;
+}
+
+async function unzipBlobStreaming(blob: Blob, residency?: RasterResidency,
+  limits: DocumentLimits = LITE_DOCUMENT_LIMITS): Promise<StreamedArchive> {
+  const entries: Record<string, Uint8Array> = {};
+  const png = new Map<string, StreamedPngRaster>();
+  const makeHasher = await prepareStreamingSha256();
+  for await (const file of readZipEntries(blob)) {
+    const decoder = residency && file.name.toLowerCase().endsWith('.png')
+      ? new PngTileStreamDecoder(residency, { maxSide: limits.maxSide, maxPixels: limits.maxPixels }, makeHasher()) : null;
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    const maximum = decoder ? Math.max(ASSET_LIMIT, limits.maxPixels * 8 + 128 * 1024 * 1024) : ASSET_LIMIT;
+    if (file.size > maximum) throw new ProjectError('too-large', 'A file inside the project exceeds the supported size.');
+    for await (const chunk of file.chunks) {
+      length += chunk.byteLength;
+      if (length > maximum) throw new ProjectError('too-large', 'A file inside the project exceeds the supported size.');
+      if (decoder) { decoder.push(chunk); await decoder.idle(); }
+      else chunks.push(chunk.slice());
+    }
+    if (length !== file.size) throw new Error(`${file.name}: ZIP entry size does not match its central directory`);
+    if (decoder) {
+      try { png.set(file.name, await decoder.finish()); }
+      catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        throw new Error(`${file.name}: ${message}`);
+      }
+    } else {
+      const bytes = new Uint8Array(length);
+      let offset = 0;
+      for (const part of chunks) { bytes.set(part, offset); offset += part.byteLength; }
+      entries[file.name] = bytes;
+    }
+  }
+  return { entries, png };
+}
+
 /** Parses, validates and decodes an archive. Nothing is installed until everything succeeded. */
-export async function readArchive(blob: Blob, decodeImage: ImageDecoder): Promise<LoadedProject> {
-  let entries: Record<string, Uint8Array>;
+export async function readArchive(blob: Blob, decodeImage: ImageDecoder, limits: DocumentLimits = LITE_DOCUMENT_LIMITS,
+  residency?: RasterResidency): Promise<LoadedProject> {
+  let archive: StreamedArchive;
   try {
-    entries = unzipSync(new Uint8Array(await blob.arrayBuffer()), {
-      filter: (file) => {
-        if (file.originalSize > ASSET_LIMIT) throw new ProjectError('too-large', 'A file inside the project exceeds 512 MiB.');
-        return true;
-      },
-    });
+    archive = await unzipBlobStreaming(blob, residency, limits);
   } catch (error) {
     if (error instanceof ProjectError) throw error;
-    throw new ProjectError('invalid', 'This file is not a readable project archive.');
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ProjectError('invalid', `This file is not a readable project archive: ${detail}`);
   }
+  const { entries } = archive;
   const manifestBytes = entries['manifest.json'];
   if (!manifestBytes) invalid('manifest.json is missing');
   if (manifestBytes.byteLength > MANIFEST_LIMIT) throw new ProjectError('too-large', 'The project manifest exceeds 4 MiB.');
@@ -494,14 +618,14 @@ export async function readArchive(blob: Blob, decodeImage: ImageDecoder): Promis
   const discriminator = parsed as { format?: unknown; version?: unknown };
   if (discriminator.format === 'fernwork-image') {
     if (discriminator.version !== 2) throw new ProjectError('version', `This project uses format version ${String(discriminator.version)}. This editor supports version 2.`);
-    return readV2Archive(parsed as ProjectManifestV2, entries, decodeImage);
+    return readV2Archive(parsed as ProjectManifestV2, entries, archive.png, decodeImage, limits, residency);
   }
   const manifest = parsed as ProjectManifestV1;
   if (manifest.format !== 'fernwork-compositor') invalid('unknown format');
   if (manifest.version !== 1) throw new ProjectError('version', `This project uses format version ${String(manifest.version)}. This editor supports version 1.`);
   if (manifest.colorSpace !== 'srgb') invalid('colour space');
   if (!Number.isInteger(manifest.width) || !Number.isInteger(manifest.height) || manifest.width < 1 || manifest.height < 1
-    || manifest.width > MAX_SIDE || manifest.height > MAX_SIDE) throw new ProjectError('too-large', 'This project exceeds the supported canvas size.');
+    || manifest.width > limits.maxSide || manifest.height > limits.maxSide || manifest.width * manifest.height > limits.maxPixels) throw new ProjectError('too-large', 'This project exceeds the supported canvas size.');
   if (!Array.isArray(manifest.layers) || !Array.isArray(manifest.assets) || manifest.layers.length > MAX_LAYERS) invalid('layers');
   if (typeof manifest.id !== 'string' || !manifest.id) invalid('id');
   const ext = (manifest.extensions?.[EXTENSION_KEY] ?? null) as PortExtension | null;
@@ -513,7 +637,7 @@ export async function readArchive(blob: Blob, decodeImage: ImageDecoder): Promis
     if (!asset || typeof asset.id !== 'string' || !asset.id || records.has(asset.id)) invalid('asset ids');
     if (!isSafeRelativePath(asset.path)) invalid(`unsafe asset path ${JSON.stringify(asset.path)}`);
     if (!Number.isInteger(asset.width) || !Number.isInteger(asset.height) || asset.width < 1 || asset.height < 1
-      || asset.width > MAX_SIDE || asset.height > MAX_SIDE) throw new ProjectError('too-large', 'An image inside the project exceeds 30,000 pixels per side.');
+      || asset.width > limits.maxSide || asset.height > limits.maxSide) throw new ProjectError('too-large', 'An image inside the project exceeds the current side limit.');
     if (typeof asset.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(asset.sha256)) invalid('asset hash');
     records.set(asset.id, asset);
   }
@@ -523,10 +647,12 @@ export async function readArchive(blob: Blob, decodeImage: ImageDecoder): Promis
     if (layer?.assetId) imageAssetIds.add(layer.assetId);
     if (layer?.mask?.assetId) maskAssetIds.add(layer.mask.assetId);
   }
-  let imagePixels = 0, maskPixels = 0;
-  for (const id of imageAssetIds) { const a = records.get(id); if (a) imagePixels += a.width * a.height; }
-  for (const id of maskAssetIds) { const a = records.get(id); if (a) maskPixels += a.width * a.height; }
-  if (imagePixels > MAX_PIXELS || maskPixels > MAX_PIXELS) throw new ProjectError('too-large', 'This project exceeds the 100-megapixel image limit.');
+  for (const id of [...imageAssetIds, ...maskAssetIds]) {
+    const asset = records.get(id);
+    if (asset && asset.width * asset.height > limits.maxPixels) {
+      throw new ProjectError('too-large', 'An image inside the project exceeds the current pixel limit.');
+    }
+  }
 
   const rasters = new Map<string, Raster>();
   const decode = async (id: string, mask: boolean): Promise<Raster> => {
@@ -537,13 +663,24 @@ export async function readArchive(blob: Blob, decodeImage: ImageDecoder): Promis
     }
     const record = records.get(id);
     if (!record) invalid(`missing asset record ${id}`);
+    const streamed = archive.png.get(record.path);
+    if (streamed) {
+      if (!residency || streamed.sha256 !== record.sha256) throw new ProjectError('missing-image', 'An image inside the project is damaged (checksum mismatch). The current document has not been replaced.');
+      if (streamed.width !== record.width || streamed.height !== record.height) invalid('asset size does not match its record');
+      const converted = await convertStreamedPng(streamed, mask ? 1 : 4, residency);
+      const raster = restoreStreamedPng(converted, id, residency);
+      rasters.set(id, raster);
+      return raster;
+    }
     const bytes = entries[record.path];
     if (!bytes) throw new ProjectError('missing-image', 'An image inside the project is missing or damaged. The current document has not been replaced.');
     const hash = sha256Hex(bytes);
     if (hash !== record.sha256) throw new ProjectError('missing-image', 'An image inside the project is damaged (checksum mismatch). The current document has not been replaced.');
     let pixels: { width: number; height: number; channels: 1 | 4; data: Uint8Array | Uint16Array; bitDepth: 8 | 16 };
     if (record.mime === 'image/png' && (mask || !pngNeedsColorConversion(bytes))) {
-      pixels = mask ? { ...decodePng(bytes), bitDepth: 8 } : { ...decodePngNativeRGBA(bytes), channels: 4 };
+      const codecLimits = { maxSide: limits.maxSide, maxPixels: limits.maxPixels };
+      pixels = mask ? { ...decodePng(bytes, codecLimits), bitDepth: 8 }
+        : { ...decodePngNativeRGBA(bytes, codecLimits), channels: 4 };
     }
     else {
       const image = await decodeImage(bytes, record.mime);
@@ -696,30 +833,28 @@ function validParametricShape(parameters: unknown): LayerShape {
 }
 
 async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string, Uint8Array>,
-  decodeImage: ImageDecoder): Promise<LoadedProject> {
+  streamedPng: ReadonlyMap<string, StreamedPngRaster>, decodeImage: ImageDecoder,
+  limits: DocumentLimits, residency?: RasterResidency): Promise<LoadedProject> {
   if (manifest.format !== 'fernwork-image' || manifest.version !== 2 || manifest.colorSpace !== 'srgb') invalid('v2 header');
   if (!Number.isInteger(manifest.width) || !Number.isInteger(manifest.height) || manifest.width < 1 || manifest.height < 1
-    || manifest.width > MAX_SIDE || manifest.height > MAX_SIDE) throw new ProjectError('too-large', 'This project exceeds the supported canvas size.');
+    || manifest.width > limits.maxSide || manifest.height > limits.maxSide || manifest.width * manifest.height > limits.maxPixels) throw new ProjectError('too-large', 'This project exceeds the supported canvas size.');
   if (!num(manifest.resolution) || manifest.resolution < 1 || manifest.resolution > 9600) invalid('resolution');
   if (typeof manifest.id !== 'string' || !manifest.id || typeof manifest.name !== 'string') invalid('identity');
   if (!Array.isArray(manifest.layers) || !Array.isArray(manifest.assets) || !Array.isArray(manifest.artboards)
     || manifest.layers.length > MAX_LAYERS) invalid('v2 collections');
 
   const records = new Map<string, AssetRecordV2>();
-  let imagePixels = 0, maskPixels = 0;
   for (const asset of manifest.assets) {
     if (!asset || typeof asset.id !== 'string' || !asset.id || records.has(asset.id) || !isSafeRelativePath(asset.path)
       || typeof asset.mime !== 'string' || typeof asset.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(asset.sha256)
       || !['image', 'mask', 'pattern', 'embedded', 'font', 'lut', 'history-tile'].includes(asset.role)) invalid('v2 asset');
-    if (asset.width !== undefined && (!Number.isInteger(asset.width) || asset.width < 1 || asset.width > MAX_SIDE)) invalid('v2 asset width');
-    if (asset.height !== undefined && (!Number.isInteger(asset.height) || asset.height < 1 || asset.height > MAX_SIDE)) invalid('v2 asset height');
-    if (asset.width && asset.height) {
-      if (asset.role === 'mask') maskPixels += asset.width * asset.height;
-      else if (asset.role === 'image') imagePixels += asset.width * asset.height;
+    if (asset.width !== undefined && (!Number.isInteger(asset.width) || asset.width < 1 || asset.width > limits.maxSide)) invalid('v2 asset width');
+    if (asset.height !== undefined && (!Number.isInteger(asset.height) || asset.height < 1 || asset.height > limits.maxSide)) invalid('v2 asset height');
+    if (asset.width && asset.height && asset.width * asset.height > limits.maxPixels) {
+      throw new ProjectError('too-large', 'An image inside the project exceeds the current pixel limit.');
     }
     records.set(asset.id, asset);
   }
-  if (imagePixels > MAX_PIXELS || maskPixels > MAX_PIXELS) throw new ProjectError('too-large', 'This project exceeds the 100-megapixel image limit.');
 
   const rasters = new Map<string, Raster>();
   const resourceValues = new Map<string, NonNullable<CanvasDocument['resources']>[number]>();
@@ -739,12 +874,23 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
     const record = records.get(id);
     if (!record || record.width === undefined || record.height === undefined) invalid(`missing raster record ${id}`);
     if (mask ? record.role !== 'mask' : record.role !== 'image') invalid('raster asset role');
+    const streamed = streamedPng.get(record.path);
+    if (streamed) {
+      if (!residency || streamed.sha256 !== record.sha256) throw new ProjectError('missing-image', 'An image inside the project is missing or damaged.');
+      if (streamed.width !== record.width || streamed.height !== record.height) invalid('asset size does not match its record');
+      const converted = await convertStreamedPng(streamed, mask ? 1 : 4, residency);
+      const raster = restoreStreamedPng(converted, id, residency);
+      rasters.set(id, raster);
+      return raster;
+    }
     const bytes = entries[record.path];
     if (!bytes || sha256Hex(bytes) !== record.sha256) throw new ProjectError('missing-image', 'An image inside the project is missing or damaged.');
     // Image assets keep their depth: PNG16 stays 16-bit (A3); masks and other codecs are 8-bit.
     let decoded: { width: number; height: number; channels: 1 | 4; data: Uint8Array | Uint16Array; bitDepth: 8 | 16 };
     if (record.mime === 'image/png' && (mask || !pngNeedsColorConversion(bytes))) {
-      decoded = mask ? { ...decodePng(bytes), bitDepth: 8 } : { ...decodePngNativeRGBA(bytes), channels: 4 };
+      const codecLimits = { maxSide: limits.maxSide, maxPixels: limits.maxPixels };
+      decoded = mask ? { ...decodePng(bytes, codecLimits), bitDepth: 8 }
+        : { ...decodePngNativeRGBA(bytes, codecLimits), channels: 4 };
     }
     else {
       const image = await decodeImage(bytes, record.mime);
@@ -772,7 +918,8 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
   const selectionValues = new Map<string, NonNullable<CanvasDocument['selection']>>();
   const parseDocument = async (source: V2DocumentSource): Promise<CanvasDocument> => {
     if (typeof source.id !== 'string' || !source.id || !Number.isInteger(source.width) || !Number.isInteger(source.height)
-      || source.width < 1 || source.height < 1 || source.width > MAX_SIDE || source.height > MAX_SIDE
+      || source.width < 1 || source.height < 1 || source.width > limits.maxSide || source.height > limits.maxSide
+      || source.width * source.height > limits.maxPixels
       || !num(source.resolution) || source.resolution < 1 || source.resolution > 9600
       || !Array.isArray(source.layers) || !Array.isArray(source.artboards) || source.layers.length > MAX_LAYERS) invalid('snapshot document');
     const ids = new Set<string>();

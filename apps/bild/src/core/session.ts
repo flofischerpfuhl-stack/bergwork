@@ -13,12 +13,13 @@ import {
   releaseDetachedClipping, renderLayers as renderLayersOf, uniqueName, usedPixels, withLayerRaster,
   ALL_ADJUSTMENT_KINDS, type AdjustmentKind, type LayerAdjustmentKind, type BlendMode, type CanvasDocument, type HierarchyEntry, type Layer, type LayerAdjustment,
   type LayerEffect, type LayerMask, type LiveFilter, BLEND_MODES,
-  type Guide, } from './document';
+  type DocumentLimits, type Guide, LITE_DOCUMENT_LIMITS,
+} from './document';
 import type { ColorLabel, LayerLocks } from './model';
 import type { TextParagraphStyle, TextRunStyle } from './model';
 import {
-  boundingBox, center, corners as transformCorners, following, isValidTransform, makeTransform, mirrored, samePlacement,
-  snapOffset, transformsEqual, type LayerTransform, type Point, type Rect, type Size,
+  apply, boundingBox, center, corners as transformCorners, following, invert, isValidTransform, makeTransform, mirrored,
+  pixelToDocument, samePlacement, snapOffset, transformsEqual, type LayerTransform, type Point, type Rect, type Size,
 } from './geometry';
 import { DocumentHistory, type HistorySnapshot, type PersistedHistoryState } from './history';
 import { uuid } from './ids';
@@ -107,7 +108,16 @@ export interface SessionServices {
   confirmLiveMaskDeletion?(count: number): Promise<'bake' | 'unlink' | 'cancel'>;
   /** Translates generated names ('Layer', 'Folder', adjustment kinds, 'copy', 'Untitled') into the UI language. */
   label?(text: string): string;
+  /** Async storage boundary used before existing synchronous commands touch raster bytes. */
+  residency?: {
+    ensureResident(rasters: Iterable<Raster>, rect?: Rect): Promise<{ release(): void }>;
+    ensureResidentRegions?(regions: Iterable<{ raster: Raster; rect?: Rect }>): Promise<{ release(): void }>;
+  };
+  limits?: DocumentLimits;
 }
+
+export type RasterCommandKind = 'brush' | 'fill' | 'filter' | 'adjustment' | 'transform'
+  | 'clipboard' | 'clipboardMerged' | 'export' | 'save' | 'history';
 
 /** Open edits outside the session (adjustment and filter panels) that make the document read-only meanwhile. */
 export const editBlockers: ((session: EditorSession) => boolean)[] = [];
@@ -207,6 +217,7 @@ export class EditorSession {
   layer(id: string | null | undefined): Layer | null { return id ? this.document?.layers.find((l) => l.id === id) ?? null : null; }
   get isModified(): boolean { return this.history.isModified; }
   get selection() { return this.document?.selection ?? null; }
+  get limits(): DocumentLimits { return this.services?.limits ?? LITE_DOCUMENT_LIMITS; }
 
   get canEditLayers(): boolean {
     return this.document !== null && !editBlockers.some((blocks) => blocks(this)) && !this.isProjectBusy && !this.isImporting && this.renamingLayerId === null
@@ -259,6 +270,102 @@ export class EditorSession {
   edit(name: string, body: () => void): void {
     this.beginEdit(name);
     try { body(); } finally { this.endEdit(); }
+  }
+
+  /** The complete synchronous pixel input set for one command dispatch. */
+  rastersForCommand(kind: RasterCommandKind): Raster[] {
+    const document = this.document;
+    if (!document) return [];
+    const result = new Set<Raster>();
+    const addLayer = (layer: Layer | null | undefined) => {
+      if (!layer) return;
+      if (layer.raster) result.add(layer.raster);
+      const displayed = this.displayedRaster(layer);
+      if (displayed) result.add(displayed);
+      if (layer.mask?.enabled) result.add(layer.mask.raster);
+      const displayedMask = this.displayedMaskRaster(layer);
+      if (layer.mask?.enabled && displayedMask) result.add(displayedMask);
+      if (layer.maskSourceId) {
+        const base = document.layers.find((candidate) => candidate.id === layer.maskSourceId);
+        addLayer(base);
+      }
+    };
+    const addDocument = (value: CanvasDocument | null) => {
+      if (!value) return;
+      for (const layer of value.layers) addLayer(layer);
+      if (value.selection) result.add(value.selection.mask);
+    };
+    if (kind === 'save') {
+      addDocument(document);
+      const history = this.history.exportState();
+      for (const entry of [...history.past, ...history.future]) {
+        addDocument(entry.before.document);
+        addDocument(entry.after.document);
+      }
+    } else if (kind === 'export' || kind === 'clipboardMerged' || kind === 'adjustment') {
+      for (const layer of renderLayersOf(document.layers)) addLayer(layer);
+    } else {
+      const ids = this.selectedLayerIds.size ? this.selectedLayerIds : new Set(this.activeLayerId ? [this.activeLayerId] : []);
+      for (const id of ids) addLayer(document.layers.find((layer) => layer.id === id));
+    }
+    if (kind !== 'save' && document.selection) result.add(document.selection.mask);
+    return [...result];
+  }
+
+  /** Maps a document-space tool bound into each input's own pixel grid. */
+  rasterRegionsForCommand(kind: RasterCommandKind, documentRect: Rect): { raster: Raster; rect: Rect }[] {
+    const document = this.document;
+    if (!document) return [];
+    const wanted = new Set(this.rastersForCommand(kind));
+    const result = new Map<Raster, Rect>();
+    const map = (raster: Raster, transform: LayerTransform) => {
+      if (!wanted.has(raster)) return;
+      const inverse = invert(pixelToDocument(transform, raster.width, raster.height));
+      const points = [
+        apply(inverse, { x: documentRect.x, y: documentRect.y }),
+        apply(inverse, { x: documentRect.x + documentRect.width, y: documentRect.y }),
+        apply(inverse, { x: documentRect.x + documentRect.width, y: documentRect.y + documentRect.height }),
+        apply(inverse, { x: documentRect.x, y: documentRect.y + documentRect.height }),
+      ];
+      const x = Math.floor(Math.min(...points.map((point) => point.x)));
+      const y = Math.floor(Math.min(...points.map((point) => point.y)));
+      const right = Math.ceil(Math.max(...points.map((point) => point.x)));
+      const bottom = Math.ceil(Math.max(...points.map((point) => point.y)));
+      const next = { x, y, width: right - x, height: bottom - y };
+      const old = result.get(raster);
+      result.set(raster, old ? {
+        x: Math.min(old.x, next.x), y: Math.min(old.y, next.y),
+        width: Math.max(old.x + old.width, next.x + next.width) - Math.min(old.x, next.x),
+        height: Math.max(old.y + old.height, next.y + next.height) - Math.min(old.y, next.y),
+      } : next);
+    };
+    for (const layer of document.layers) {
+      if (layer.raster) map(layer.raster, layer.transform);
+      const derived = this.derivedPixels(layer);
+      if (derived) map(derived.raster, derived.transform);
+      const override = this.rasterOverrides.get(layer.id);
+      if (override) map(override, this.transformOverrides.get(layer.id) ?? layer.transform);
+      if (layer.mask) map(layer.mask.raster, maskTransform(layer));
+      const maskOverride = this.maskOverrides.get(layer.id);
+      if (maskOverride) map(maskOverride, maskTransform(layer));
+    }
+    if (document.selection && wanted.has(document.selection.mask)) {
+      result.set(document.selection.mask, {
+        x: documentRect.x - document.selection.x, y: documentRect.y - document.selection.y,
+        width: documentRect.width, height: documentRect.height,
+      });
+    }
+    return [...result].map(([raster, rect]) => ({ raster, rect }));
+  }
+
+  /** Hydrates, pins, executes, then unpins at the one async→sync command boundary. */
+  async runHydrated<T>(kind: RasterCommandKind, body: () => T | Promise<T>, rect?: Rect): Promise<T> {
+    const residency = this.services?.residency;
+    const lease = rect && residency?.ensureResidentRegions
+      ? await residency.ensureResidentRegions(this.rasterRegionsForCommand(kind, rect))
+      : await residency?.ensureResident(this.rastersForCommand(kind), rect);
+    try { return await body(); }
+    finally { lease?.release(); }
   }
 
   private setLayers(layers: readonly Layer[]): void {
@@ -322,7 +429,8 @@ export class EditorSession {
   // MARK: Documents
 
   createDocument(width: number, height: number, emptyLayer = false): void {
-    if (this.isProjectBusy || this.isImporting || !(width >= 1 && width <= MAX_SIDE && height >= 1 && height <= MAX_SIDE)) return;
+    if (this.isProjectBusy || this.isImporting || !(width >= 1 && width <= this.limits.maxSide && height >= 1 && height <= this.limits.maxSide)
+      || width * height > this.limits.maxPixels) return;
     this.commitTransform();
     this.beginEdit('New Canvas');
     const document: CanvasDocument = { id: uuid(), width, height, resolution: 72, layers: [], artboards: [], selection: null };
@@ -394,7 +502,7 @@ export class EditorSession {
     } finally { this.endEdit(); }
   }
 
-  remainingPixelBudget(): number { return MAX_PIXELS - usedPixels(this.document?.layers ?? []); }
+  remainingPixelBudget(): number { return this.limits.maxPixels - usedPixels(this.document?.layers ?? []); }
 
   addBlankLayer(): void {
     const document = this.document;
@@ -1242,8 +1350,10 @@ export class EditorSession {
     if (preview && !preview.mask) return preview.transform;
     const override = this.transformOverrides.get(layer.id);
     if (override) return override;
-    // Text: shaped pixels where the engine has them, else an imported preview at its saved placement.
-    if (layer.kind === 'text') return this.derivedPixels(layer)?.transform ?? (layer.raster && layer.renderedTransform) ?? layer.transform;
+    const derived = this.derivedPixels(layer);
+    if (derived) return derived.transform;
+    // Text: use an imported preview at its saved placement until the shaping engine is ready.
+    if (layer.kind === 'text') return (layer.raster && layer.renderedTransform) ?? layer.transform;
     return layer.transform;
   }
   displayedRaster(layer: Layer): Raster | null {
@@ -1251,7 +1361,8 @@ export class EditorSession {
     if (preview && !preview.mask) return preview.raster;
     const override = this.rasterOverrides.get(layer.id);
     if (override) return override;
-    if (layer.kind === 'text') return this.derivedPixels(layer)?.raster ?? layer.raster ?? null;
+    const derived = this.derivedPixels(layer);
+    if (derived) return derived.raster;
     return layer.raster ?? null;
   }
   private derivedPixels(layer: Layer): DerivedLayerPixels | null {

@@ -13,16 +13,19 @@ const previews = new WeakMap<Raster, { canvas: HTMLCanvasElement | OffscreenCanv
 
 /** A ≤96 px preview of a raster (straight alpha, box-filtered), cached per raster. */
 function preview(raster: Raster): { canvas: HTMLCanvasElement | OffscreenCanvas; edge: number } {
-  const cached = previews.get(raster);
+  // Recovered/swapped full rasters are intentionally never pinned for a list thumbnail.
+  const reduced = raster.reducedCopy ?? raster.tileOverlay?.source.reducedCopy;
+  const sourceRaster = raster.hasSwappedTiles && reduced ? reduced : raster;
+  const cached = previews.get(sourceRaster);
   if (cached) return cached;
-  const factor = Math.min(1, 96 / Math.max(raster.width, raster.height));
-  const width = Math.max(1, Math.round(raster.width * factor)), height = Math.max(1, Math.round(raster.height * factor));
+  const factor = Math.min(1, 96 / Math.max(sourceRaster.width, sourceRaster.height));
+  const width = Math.max(1, Math.round(sourceRaster.width * factor)), height = Math.max(1, Math.round(sourceRaster.height * factor));
   const out = new Uint8ClampedArray(width * height * 4);
-  const stepX = raster.width / width, stepY = raster.height / height;
+  const stepX = sourceRaster.width / width, stepY = sourceRaster.height / height;
   let edgeTotal = 0, edgeCount = 0;
   for (let y = 0; y < height; y++) {
     const y0 = Math.floor(y * stepY), y1 = Math.max(y0 + 1, Math.floor((y + 1) * stepY));
-    const band = raster.readRegion(0, y0, raster.width, y1 - y0);
+    const band = sourceRaster.readRegion(0, y0, sourceRaster.width, y1 - y0);
     for (let x = 0; x < width; x++) {
       const x0 = Math.floor(x * stepX), x1 = Math.max(x0 + 1, Math.floor((x + 1) * stepX));
       let r = 0, g = 0, b = 0, a = 0, n = 0;
@@ -30,8 +33,8 @@ function preview(raster: Raster): { canvas: HTMLCanvasElement | OffscreenCanvas;
       const sx = Math.max(1, Math.floor((x1 - x0) / 4)), sy = Math.max(1, Math.floor((y1 - y0) / 4));
       for (let yy = 0; yy < y1 - y0; yy += sy) {
         for (let xx = x0; xx < x1; xx += sx) {
-          const i = (yy * raster.width + xx) * raster.channels;
-          if (raster.channels === 4) {
+          const i = (yy * sourceRaster.width + xx) * sourceRaster.channels;
+          if (sourceRaster.channels === 4) {
             const alpha = band[i + 3]!;
             r += band[i]! * alpha; g += band[i + 1]! * alpha; b += band[i + 2]! * alpha; a += alpha;
           } else { r += band[i]!; }
@@ -52,7 +55,7 @@ function preview(raster: Raster): { canvas: HTMLCanvasElement | OffscreenCanvas;
   const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(width, height) : Object.assign(document.createElement('canvas'), { width, height });
   (canvas.getContext('2d') as CanvasRenderingContext2D).putImageData(new ImageData(out, width, height), 0, 0);
   const result = { canvas, edge: edgeCount ? edgeTotal / edgeCount / 255 : 1 };
-  previews.set(raster, result);
+  previews.set(sourceRaster, result);
   return result;
 }
 

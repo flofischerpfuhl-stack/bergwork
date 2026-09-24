@@ -14,6 +14,9 @@ import { profileFor } from '../app/profiles';
 import type { CapabilityHost } from '../platform/hosts';
 
 export const mountEditor: MountEditorV2 = async (root, options) => {
+  // Keep lazy-codec and CanvasKit requests observable in development even after
+  // the expanded feature graph exceeds Chromium's default 250-resource buffer.
+  if (import.meta.env.DEV) performance.setResourceTimingBufferSize(1_000);
   const profile = profileFor(options.profile ?? (options.host as CapabilityHost).defaultProfile ?? 'lite');
   const controller = new EditorController(options.host, options.locale ?? 'en', options.theme ?? 'dark', profile);
   installFeatures(controller, profile);
