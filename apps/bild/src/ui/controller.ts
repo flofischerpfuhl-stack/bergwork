@@ -6,10 +6,11 @@
 import type { HostAdapter, LayerId, ProjectManifestV1 } from '../../contracts';
 import type { EditorHandleV2, ProjectManifestV2 } from '../../contracts-v2';
 import { MAX_SIDE, type CanvasDocument } from '../core/document';
+import type { LayerEffect } from '../core/model/types';
 import { Raster, alphaBounds, cropRaster } from '../core/raster';
 import type { EditorSession, SessionServices, Tool } from '../core/session';
 import type { ReactNode } from 'react';
-import { setShortcutLocale, type FeatureRegistry } from './menus';
+import { setShortcutLocale, type FeatureRegistry, type MenuEntry } from './menus';
 import type { IconName } from './icons';
 import type { CanvasView } from './canvas/CanvasView';
 import type { Modifiers, ToolHandler } from './canvas/tools';
@@ -45,6 +46,20 @@ export interface ColorPickRequest {
   preview?(color: { red: number; green: number; blue: number }): void;
   commit(color: { red: number; green: number; blue: number }): void;
   cancel?(): void;
+}
+
+/** Layer styles (drop shadow, stroke, glow, overlays), provided by the layer-styles module. */
+export interface LayerStyleCommands {
+  /** Opens the Layer Style dialog on a layer: on an effect kind (added with defaults when absent), an effect index, or the first effect. */
+  open(layerId: string, target?: LayerEffect['kind'] | number): void;
+  /** Whether the layer can carry a style (pixel, shape, text and embedded layers; not folders or adjustment layers). */
+  styleable(layerId: string): boolean;
+  /** The effect's name in the UI language. */
+  label(kind: LayerEffect['kind']): string;
+  /** Effect kinds in Photoshop's list order (top of the stack first). */
+  readonly kinds: readonly LayerEffect['kind'][];
+  /** The Layer Style submenu for a layer: the effects, then Copy, Paste and Clear Layer Style. */
+  menu(layerId: string): MenuEntry[];
 }
 
 export interface SecondaryDrag {
@@ -101,6 +116,10 @@ export class EditorController {
   openColorPicker: ((background: boolean) => void) | null = null;
   /** Opens the app's color picker panel for any color (palette, Gradient Map ends…), provided by the painting module. */
   pickColor: ((request: ColorPickRequest) => void) | null = null;
+  /** Closes the color picker panel without calling back (its owner finished meanwhile). */
+  closeColorPicker: (() => void) | null = null;
+  /** Layer Style dialog and commands, provided by the layer-styles module. */
+  layerStyles: LayerStyleCommands | null = null;
   /** Called once the canvas view exists, so modules can register tools and overlay painters. */
   canvasSetups: ((view: CanvasView) => void)[] = [];
   /** Extra dialogs by kind (Canvas Size, Image Size, adjustment panels…). */

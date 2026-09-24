@@ -783,6 +783,7 @@ export function installPainting(controller: EditorController): void {
     });
   };
   controller.pickColor = (request) => { controller.colorPickerTarget = null; setPickRequest(controller, request); };
+  controller.closeColorPicker = () => { if (pickerStore(controller).request) setPickRequest(controller, null); };
   controller.panels.push(() => <ColorPickerPanel controller={controller} />);
   const sampler = new PickerSampler(controller);
   controller.canvasInterceptors.push(() => (pickerStore(controller).request ? sampler : null));

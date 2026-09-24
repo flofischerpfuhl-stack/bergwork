@@ -5,19 +5,22 @@ import { useSession, useUi, useWorkspace } from './hooks';
 import { Icon } from './icons';
 import { buildMenus, shortcutLabel, type Menu, type MenuEntry, type MenuItem } from './menus';
 
-export function MenuPopup({ items, anchor, onClose, controller }: {
+export function MenuPopup({ items, anchor, onClose, controller, flipRight }: {
   items: MenuEntry[]; anchor: { x: number; y: number }; onClose: () => void; controller: EditorController;
+  /** For a submenu: where its right edge goes when it does not fit to the right (the parent menu's left edge). */
+  flipRight?: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState(anchor);
-  const [submenu, setSubmenu] = useState<{ items: MenuItem[]; anchor: { x: number; y: number } } | null>(null);
+  const [submenu, setSubmenu] = useState<{ items: MenuEntry[]; anchor: { x: number; y: number }; flipRight: number } | null>(null);
   useLayoutEffect(() => {
     const element = ref.current;
     if (!element) return;
     const rect = element.getBoundingClientRect();
-    setPosition({ x: Math.max(4, Math.min(anchor.x, innerWidth - rect.width - 4)), y: Math.max(4, Math.min(anchor.y, innerHeight - rect.height - 4)) });
+    const x = flipRight !== undefined && anchor.x + rect.width > innerWidth - 4 ? flipRight - rect.width : anchor.x;
+    setPosition({ x: Math.max(4, Math.min(x, innerWidth - rect.width - 4)), y: Math.max(4, Math.min(anchor.y, innerHeight - rect.height - 4)) });
     element.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
-  }, [anchor.x, anchor.y]);
+  }, [anchor.x, anchor.y, flipRight]);
   useEffect(() => {
     const close = (event: PointerEvent) => { if (!ref.current?.contains(event.target as Node) && !(event.target as Element).closest?.('[data-menu-popup]')) onClose(); };
     const key = (event: KeyboardEvent) => {
@@ -44,13 +47,13 @@ export function MenuPopup({ items, anchor, onClose, controller }: {
               onPointerEnter={(event) => {
                 if (item.submenu) {
                   const rect = event.currentTarget.getBoundingClientRect();
-                  setSubmenu({ items: item.submenu, anchor: { x: rect.right - 4, y: rect.top - 5 } });
+                  setSubmenu({ items: item.submenu, anchor: { x: rect.right - 4, y: rect.top - 5 }, flipRight: rect.left + 4 });
                 } else setSubmenu(null);
               }}
               onClick={(event) => {
                 if (item.submenu) {
                   const rect = event.currentTarget.getBoundingClientRect();
-                  setSubmenu({ items: item.submenu, anchor: { x: rect.right - 4, y: rect.top - 5 } });
+                  setSubmenu({ items: item.submenu, anchor: { x: rect.right - 4, y: rect.top - 5 }, flipRight: rect.left + 4 });
                   return;
                 }
                 onClose();
@@ -62,7 +65,7 @@ export function MenuPopup({ items, anchor, onClose, controller }: {
             </button>
           ))}
       </div>
-      {submenu ? <MenuPopup items={submenu.items} anchor={submenu.anchor} controller={controller} onClose={onClose} /> : null}
+      {submenu ? <MenuPopup items={submenu.items} anchor={submenu.anchor} flipRight={submenu.flipRight} controller={controller} onClose={onClose} /> : null}
     </>
   );
 }

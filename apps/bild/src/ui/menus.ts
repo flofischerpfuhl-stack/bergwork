@@ -16,7 +16,7 @@ export interface MenuItem {
   enabled: boolean;
   checked?: boolean;
   run?: () => void;
-  submenu?: MenuItem[];
+  submenu?: MenuEntry[];
   note?: string;
   testId?: string;
 }
@@ -132,6 +132,10 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         'separator',
         { label: layer?.maskSourceId ? t('Release Clipping Mask') : t('Create Clipping Mask'), shortcut: 'mod+alt+g',
           enabled: !!layer && session.canToggleClippingMask(layer.id), run: () => layer && session.toggleClippingMask(layer.id) },
+        controller.layerStyles
+          ? { label: t('Layer Style'), enabled: !!layer && controller.layerStyles.styleable(layer.id), testId: 'menu-layer-style',
+            submenu: layer ? controller.layerStyles.menu(layer.id) : [] }
+          : { label: t('Layer Style'), enabled: false, note: pending },
         'separator',
         { label: t('Group Selected Layers'), shortcut: 'mod+g', enabled: session.canEditLayers && !!document, run: () => session.groupSelectedLayers() },
         { label: t('Move Out of Folder'), enabled: session.canEditLayers && !!layer?.parentId, run: () => session.moveActiveLayerOutOfGroup() },

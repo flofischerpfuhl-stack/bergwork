@@ -425,3 +425,58 @@
 .historyFuture { color: var(--cmp-text-tertiary); }
 .historyOption { display: flex; align-items: center; gap: 6px; padding: 10px 16px; border-top: 1px solid var(--cmp-border); font-size: 12px; color: var(--cmp-text-secondary); }
 .compact .historyRow, .compactLandscape .historyRow { padding: 12px 12px; font-size: 14px; }
+
+/* Layer Style dialog (a floating panel: live canvas preview, never dims the editor) */
+.stylePanel { width: min(620px, calc(100% - 16px)); }
+.stylePanel .panelHeader .dialogTitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.styleLayout { display: flex; gap: 16px; align-items: stretch; flex-wrap: wrap; min-width: 0; }
+.styleList {
+  width: 184px; flex: none; display: flex; flex-direction: column; gap: 2px; padding-right: 14px; border-right: 1px solid var(--cmp-border);
+}
+.styleListTitle { font-size: 11px; color: var(--cmp-text-secondary); padding: 0 8px 4px; }
+.styleItem { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 4px 0 8px; border-radius: 6px; }
+.styleItem:hover { background: var(--cmp-control); }
+.styleItemOn, .styleItemOn:hover { background: var(--cmp-accent-soft); }
+.styleItem input { accent-color: var(--cmp-accent); width: 14px; height: 14px; margin: 0; flex: none; }
+.styleItemName {
+  flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: transparent; color: var(--cmp-text); font: 12px/1 var(--cmp-font);
+  text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.styleDelete { display: inline-flex; align-items: center; justify-content: center; gap: 5px; margin-top: 10px; }
+.styleBody { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.styleHeading { margin: 0; font: 600 13px/1.2 var(--cmp-font); }
+.styleSelect { flex: 1; min-width: 0; }
+.styleUnit { min-width: 12px; }
+.styleRamp { flex: 1; min-width: 0; }
+.angleDial { width: 28px; height: 28px; flex: none; touch-action: none; cursor: pointer; border-radius: 50%; }
+.angleDial circle { fill: var(--cmp-surface); stroke: var(--cmp-border); stroke-width: 1; }
+.angleDial line { stroke: var(--cmp-text); stroke-width: 1.5; stroke-linecap: round; }
+.angleDial .angleDialHub { fill: var(--cmp-text); stroke: none; }
+.angleDial:focus-visible { outline: 2px solid var(--cmp-accent-soft); }
+.gradientStops { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.gradientStop { display: inline-flex; align-items: center; gap: 4px; padding: 3px 5px 3px 3px; border-radius: 8px; background: var(--cmp-control); }
+.gradientStop .colorWell { width: 24px; height: 22px; }
+.styleStopRemove, .styleStopAdd {
+  display: grid; place-items: center; border: 0; padding: 0; background: transparent; color: var(--cmp-text-secondary); flex: none;
+}
+.styleStopRemove { width: 16px; height: 16px; border-radius: 4px; }
+.styleStopAdd { width: 28px; height: 28px; border-radius: 8px; background: var(--cmp-control); }
+.styleStopRemove:hover, .styleStopAdd:hover { color: var(--cmp-text); background: var(--cmp-control-hover); }
+.compact .styleList, .compactLandscape .styleList { width: 100%; border-right: 0; padding-right: 0; }
+
+/* Layer effects in the Layers panel: fx badge, effect rows, fx button */
+.fxBadge {
+  flex: none; display: inline-flex; align-items: center; gap: 1px; height: 20px; padding: 0 3px 0 5px; border: 0; border-radius: 5px;
+  background: transparent; color: var(--cmp-text-secondary);
+}
+.fxBadge:hover:not(:disabled) { background: var(--cmp-control-hover); color: var(--cmp-text); }
+.fxGlyph { font: italic 600 12.5px/1 Georgia, 'Times New Roman', serif; letter-spacing: 0.02em; }
+.fxButtonGlyph { font: italic 600 15px/17px Georgia, 'Times New Roman', serif; width: 17px; text-align: center; }
+.effectRow {
+  display: flex; align-items: center; height: 24px; margin-bottom: 2px; padding-right: 8px; border-bottom: 1px solid var(--cmp-hairline);
+  font-size: 11px; color: var(--cmp-text-secondary); cursor: default;
+}
+.effectRow .eye { height: 22px; }
+.effectRowOff .effectName { opacity: 0.5; text-decoration: line-through; }
+.effectName { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.compact .effectRow, .compactLandscape .effectRow { height: 40px; }

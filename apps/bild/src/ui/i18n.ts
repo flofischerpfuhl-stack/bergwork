@@ -393,6 +393,21 @@ const de: Record<string, string> = {
   'Uniform': 'Gleichmäßig',
   'White': 'Weiß',
   'Yellows': 'Gelbtöne',
+  // Layer styles (Photoshop's German terms)
+  'Layer Style': 'Ebenenstil', 'Drop Shadow': 'Schlagschatten', 'Stroke': 'Kontur', 'Outer Glow': 'Schein nach außen',
+  'Color Overlay': 'Farbüberlagerung', 'Gradient Overlay': 'Verlaufsüberlagerung',
+  'Drop Shadow…': 'Schlagschatten …', 'Stroke…': 'Kontur …', 'Outer Glow…': 'Schein nach außen …',
+  'Color Overlay…': 'Farbüberlagerung …', 'Gradient Overlay…': 'Verlaufsüberlagerung …',
+  'Copy Layer Style': 'Ebenenstil kopieren', 'Paste Layer Style': 'Ebenenstil einfügen', 'Clear Layer Style': 'Ebenenstil löschen',
+  'Blend Mode': 'Füllmethode', 'Use Global Light': 'Globales Licht verwenden', 'Spread': 'Überfüllen',
+  'Layer Knocks Out Drop Shadow': 'Ebene spart Schlagschatten aus', 'Outside': 'Außen', 'Inside': 'Innen', 'Fill Type': 'Füllart',
+  'Color Stop': 'Farbunterbrechung', 'Location': 'Position', 'Add Color Stop': 'Farbunterbrechung hinzufügen',
+  'Delete Color Stop': 'Farbunterbrechung löschen', 'Set color': 'Farbe festlegen', 'Effects': 'Effekte', 'Delete Effect': 'Effekt löschen',
+  'Choose an effect on the left to add it to the layer.': 'Wähle links einen Effekt, um ihn der Ebene hinzuzufügen.',
+  'Layer effects': 'Ebeneneffekte', 'Show layer effects': 'Ebeneneffekte einblenden', 'Hide layer effects': 'Ebeneneffekte ausblenden',
+  'Add a layer style': 'Ebenenstil hinzufügen',
+  'Add Layer Effect': 'Ebeneneffekt hinzufügen', 'Remove Layer Effect': 'Ebeneneffekt entfernen', 'Layer Effect': 'Ebeneneffekt',
+  'Reorder Layer Effect': 'Ebeneneffekt verschieben', 'Global Light': 'Globales Licht',
 };
 
 const isApple = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
