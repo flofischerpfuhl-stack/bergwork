@@ -147,7 +147,7 @@ class BandRenderer {
 
   private ownMask(layer: Layer, x: number, y: number, adjustment = false, documentToOutput?: Affine): number {
     const mask = layer.mask, raster = this.maskRaster(layer);
-    if (!mask?.enabled || !raster || raster.channels !== 1) return 1;
+    if (!(mask?.enabled || layer.vectorMask?.enabled) || !raster || raster.channels !== 1) return 1;
     const layerTransform = this.transform(layer);
     // LiveMaskRenderer.adjust uses FolderMaskClip(mask, layer.transform), not LayerMask.clipImage.
     const candidate = adjustment ? layerTransform : this.maskPlacement(layer);
@@ -177,7 +177,7 @@ class BandRenderer {
     let coverage = 1;
     for (const folder of folders) {
       const mask = folder.mask, raster = this.maskRaster(folder);
-      if (!mask?.enabled || !raster || raster.channels !== 1) continue;
+      if (!(mask?.enabled || folder.vectorMask?.enabled) || !raster || raster.channels !== 1) continue;
       const transform = { ...this.transform(folder), sampling: 'High quality' as const };
       const prepared = this.preparedPlacement(`folder:${folder.id}`, transform, raster.width, raster.height, documentToOutput);
       mapPlacement(prepared, x, y, this.location);
@@ -191,7 +191,9 @@ class BandRenderer {
   private hasFolderMask(layer: Layer): boolean {
     let result = this.folderMaskFlags.get(layer.id);
     if (result !== undefined) return result;
-    result = ancestorIds(this.document.layers, layer.id).some((id) => this.byId.get(id)?.mask?.enabled === true);
+    result = ancestorIds(this.document.layers, layer.id).some((id) => {
+      const folder = this.byId.get(id); return folder?.mask?.enabled === true || folder?.vectorMask?.enabled === true;
+    });
     this.folderMaskFlags.set(layer.id, result);
     return result;
   }
@@ -258,7 +260,7 @@ class BandRenderer {
   private drawLayer(layer: Layer, target: Float32Array, width: number, height: number, originX: number, originY: number,
     includeLive: boolean, includeFolders: boolean, mode = this.blendMode(layer)): void {
     if ((!includeLive || !layer.maskSourceId) && (!includeFolders || !this.hasFolderMask(layer))
-      && (!layer.mask || !layer.mask.enabled)
+      && !layer.mask?.enabled && !layer.vectorMask?.enabled
       && this.drawAlignedOneToOne(layer, target, width, height, originX, originY, mode)) return;
     const sample = new Float32Array(4);
     const visiting = new Set<string>();

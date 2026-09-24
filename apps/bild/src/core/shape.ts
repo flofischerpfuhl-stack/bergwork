@@ -1,5 +1,6 @@
 import { MAX_LAYERS, MAX_PIXELS, newLayer, type Layer, type LayerShape } from './document';
 import type { VectorPath } from './model';
+import { ellipsePath, primitivePaths, rectanglePath } from './vector/primitives';
 import { makeTransform, roundHalfAway, type Point, type Rect } from './geometry';
 import { uuid } from './ids';
 import { Raster, TILE } from './raster';
@@ -198,28 +199,12 @@ export function commitShape(session: EditorSession, color: PaletteColor = sessio
 }
 
 /** A5 consumes these paths directly; A2 keeps the existing raster cache for pixel-identical rendering. */
-export function vectorPathsForShape(kind: ShapeKind, width: number, height: number, cornerRadius: number): readonly VectorPath[] {
-  const point = (x: number, y: number, inX = x, inY = y, outX = x, outY = y) => ({
-    anchor: { x, y }, in: { x: inX, y: inY }, out: { x: outX, y: outY },
-  });
-  if (kind === 'Ellipse') {
-    const cx = width / 2, cy = height / 2, k = 0.5522847498307936;
-    return [{ closed: true, points: [
-      point(cx, 0, cx - cx * k, 0, cx + cx * k, 0),
-      point(width, cy, width, cy - cy * k, width, cy + cy * k),
-      point(cx, height, cx + cx * k, height, cx - cx * k, height),
-      point(0, cy, 0, cy + cy * k, 0, cy - cy * k),
-    ] }];
-  }
-  const radius = Math.min(Math.max(0, cornerRadius), width / 2, height / 2);
-  if (radius === 0) return [{ closed: true, points: [point(0, 0), point(width, 0), point(width, height), point(0, height)] }];
-  const handle = radius * 0.5522847498307936;
-  return [{ closed: true, points: [
-    point(radius, 0, radius - handle, 0), point(width - radius, 0, width - radius, 0, width - radius + handle, 0),
-    point(width, radius, width, radius - handle), point(width, height - radius, width, height - radius, width, height - radius + handle),
-    point(width - radius, height, width - radius + handle, height), point(radius, height, radius, height, radius - handle, height),
-    point(0, height - radius, 0, height - radius + handle), point(0, radius, 0, radius, 0, radius - handle),
-  ] }];
+export function vectorPathsForShape(kind: LayerShape['kind'], width: number, height: number, cornerRadius: number): readonly VectorPath[] {
+  if (kind === 'Ellipse') return [ellipsePath(width, height)];
+  if (kind === 'Polygon') return [primitivePaths({ kind, red: 0, green: 0, blue: 0, cornerRadius, sides: 3 }, width, height)[0]!];
+  if (kind === 'Star') return [primitivePaths({ kind, red: 0, green: 0, blue: 0, cornerRadius, sides: 5, innerRatio: 0.5 }, width, height)[0]!];
+  if (kind === 'Line') return [primitivePaths({ kind, red: 0, green: 0, blue: 0, cornerRadius, lineWidth: 1 }, width, height)[0]!];
+  return [rectanglePath(width, height, cornerRadius)];
 }
 
 export function nextShapeName(layers: readonly Layer[], kind: ShapeKind): string {

@@ -323,6 +323,7 @@ export class CanvasKitTextEngine implements TextEngine {
     const surface = this.makeSurface(width, height);
     const path = this.parsePath(request.svgPath);
     try {
+      path.setFillType(request.fillRule === 'evenodd' ? this.kit.FillType.EvenOdd : this.kit.FillType.Winding);
       const canvas = surface.getCanvas();
       canvas.clear(color(this.kit, request.background ?? { red: 0, green: 0, blue: 0, alpha: 0 }));
       if (request.fill) this.drawFill(canvas, path, request.fill);
@@ -451,6 +452,9 @@ export class CanvasKitTextEngine implements TextEngine {
       paint.setStrokeWidth(stroke.width);
       paint.setStrokeJoin(stroke.join === 'round' ? this.kit.StrokeJoin.Round
         : stroke.join === 'bevel' ? this.kit.StrokeJoin.Bevel : this.kit.StrokeJoin.Miter);
+      if (stroke.miterLimit !== undefined) {
+        positiveFinite(stroke.miterLimit, 'Stroke miter limit'); paint.setStrokeMiter(stroke.miterLimit);
+      }
       paint.setStrokeCap(stroke.cap === 'round' ? this.kit.StrokeCap.Round
         : stroke.cap === 'square' ? this.kit.StrokeCap.Square : this.kit.StrokeCap.Butt);
       if (stroke.dash) {

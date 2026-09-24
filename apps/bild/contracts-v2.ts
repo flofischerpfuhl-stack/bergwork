@@ -84,10 +84,37 @@ export interface LayerCommonV2 {
 }
 
 export interface VectorPathRecordV2 {
+  schemaVersion?: 1;
   closed: boolean;
-  points: readonly { anchor: PointV2; in: PointV2; out: PointV2 }[];
+  fillRule?: 'nonzero' | 'evenodd';
+  points: readonly { anchor: PointV2; in: PointV2; out: PointV2; kind?: 'corner' | 'smooth' }[];
 }
-export interface VectorMaskRecordV2 { enabled: boolean; inverted: boolean; paths: readonly VectorPathRecordV2[] }
+export interface VectorMaskRecordV2 { schemaVersion?: 1; enabled: boolean; inverted: boolean; density?: number; feather?: number; paths: readonly VectorPathRecordV2[] }
+
+export interface VectorStrokeRecordV2 {
+  paint?: FillRecordV2;
+  color: RGBV2;
+  width: number;
+  alignment: 'inside' | 'center' | 'outside';
+  cap?: 'butt' | 'round' | 'square';
+  join?: 'miter' | 'round' | 'bevel';
+  miterLimit?: number;
+  dash?: readonly number[];
+  dashOffset?: number;
+  startMarker?: 'none' | 'arrow' | 'openArrow' | 'circle' | 'square';
+  endMarker?: 'none' | 'arrow' | 'openArrow' | 'circle' | 'square';
+  markerSize?: number;
+}
+
+export interface ParametricShapeRecordV2 {
+  schemaVersion?: 1;
+  kind: 'Rectangle' | 'Ellipse' | 'Polygon' | 'Star' | 'Line';
+  red: number; green: number; blue: number; cornerRadius: number;
+  cornerRadii?: readonly [number, number, number, number];
+  sides?: number;
+  innerRatio?: number;
+  lineWidth?: number;
+}
 
 export type EffectRecordV2 =
   | { kind: 'dropShadow'; schemaVersion: 1; enabled: boolean; opacity: number; angle: number; distance: number; blur: number; color: RGBV2 }
@@ -135,8 +162,8 @@ export type LayerRecordV2 =
   | (LayerCommonV2 & { kind: 'group' })
   | (LayerCommonV2 & { kind: 'adjustment'; adjustment: AdjustmentRecordV2 })
   | (LayerCommonV2 & { kind: 'fill'; fill: FillRecordV2 })
-  | (LayerCommonV2 & { kind: 'vector'; paths: readonly VectorPathRecordV2[]; style: { fill: FillRecordV2 | null; stroke: { color: RGBV2; width: number; alignment: 'inside' | 'center' | 'outside' } | null }; previewAssetId: AssetIdV2 | null;
-      sourceShape: { kind: 'Rectangle' | 'Ellipse'; red: number; green: number; blue: number; cornerRadius: number } | null })
+  | (LayerCommonV2 & { kind: 'vector'; paths: readonly VectorPathRecordV2[]; style: { schemaVersion?: 1; fill: FillRecordV2 | null; stroke: VectorStrokeRecordV2 | null }; previewAssetId: AssetIdV2 | null;
+      sourceShape: ParametricShapeRecordV2 | null })
   | (LayerCommonV2 & { kind: 'text'; textSchemaVersion: 1; text: string; runs: readonly TextRunRecordV2[];
       paragraphs: readonly TextParagraphRecordV2[]; box: { width: number; height: number } | null;
       alignment: 'left' | 'center' | 'right' | 'justify'; previewAssetId: AssetIdV2 | null;
