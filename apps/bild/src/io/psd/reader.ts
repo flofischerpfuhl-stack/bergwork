@@ -40,10 +40,16 @@ export const PSD_BLEND_MODES: readonly AgBlendMode[] = [
 ];
 
 const BLEND_MODES = new Map<AgBlendMode, BlendMode>([
-  ['normal', 'normal'], ['darken', 'darken'], ['multiply', 'multiply'], ['lighten', 'lighten'],
-  ['screen', 'screen'], ['color dodge', 'colorDodge'], ['color burn', 'colorBurn'], ['overlay', 'overlay'],
-  ['difference', 'difference'], ['hue', 'hue'], ['saturation', 'saturation'], ['color', 'color'],
-  ['luminosity', 'luminosity'],
+  ['normal', 'normal'], ['dissolve', 'dissolve'],
+  ['darken', 'darken'], ['multiply', 'multiply'], ['color burn', 'colorBurn'],
+  ['linear burn', 'linearBurn'], ['darker color', 'darkerColor'],
+  ['lighten', 'lighten'], ['screen', 'screen'], ['color dodge', 'colorDodge'],
+  ['linear dodge', 'linearDodge'], ['lighter color', 'lighterColor'],
+  ['overlay', 'overlay'], ['soft light', 'softLight'], ['hard light', 'hardLight'],
+  ['vivid light', 'vividLight'], ['linear light', 'linearLight'], ['pin light', 'pinLight'],
+  ['hard mix', 'hardMix'], ['difference', 'difference'], ['exclusion', 'exclusion'],
+  ['subtract', 'subtract'], ['divide', 'divide'],
+  ['hue', 'hue'], ['saturation', 'saturation'], ['color', 'color'], ['luminosity', 'luminosity'],
 ]);
 
 export const SUPPORTED_PSD_BLEND_MODES: ReadonlySet<AgBlendMode> = new Set(BLEND_MODES.keys());

@@ -18,6 +18,7 @@ import {
 } from '../core/document';
 import { apply, concat, invert, pixelToDocument, type Affine, type LayerTransform, type Rect } from '../core/geometry';
 import { TILE, type Raster } from '../core/raster';
+import { blendSeed } from '../core/blend';
 import type { BrushSegment, GpuBrushPreview } from '../core/brush';
 import {
   adjustFragment, BLEND_INDEX, BRUSH_COVERAGE_FRAGMENT, BRUSH_MASK_FRAGMENT, BRUSH_MAX_FRAGMENT, BRUSH_PAINT_FRAGMENT, COVERAGE_FRAGMENT,
@@ -248,6 +249,7 @@ export class GpuCompositor {
         uDrawSize: { value: new Float32Array(2), type: 'vec2<f32>' },
         uOpacity: { value: 1, type: 'f32' },
         uMode: { value: 0, type: 'i32' },
+        uDissolveSeed: { value: 0, type: 'i32' },
         uHasMask: { value: 0, type: 'i32' },
         uDocToMask: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
         uMaskSize: { value: new Float32Array(2), type: 'vec2<f32>' },
@@ -321,6 +323,8 @@ export class GpuCompositor {
       stack: [STACK_FRAGMENT, {
         uHasClip: { value: 0, type: 'i32' },
         uMode: { value: 0, type: 'i32' },
+        uDissolveSeed: { value: 0, type: 'i32' },
+        uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
       }, ['uBackdrop', 'uSurface', 'uBase', 'uClip']],
       unpremultiply: [UNPREMULTIPLY_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uSource']],
       present: [PRESENT_FRAGMENT, {
@@ -912,7 +916,9 @@ export class GpuCompositor {
           uTextureSize: new Float32Array([chunk.width + CHUNK_APRON * 2, chunk.height + CHUNK_APRON * 2]), uApron: CHUNK_APRON,
           uMipLevel: u.uMipLevel, uRestrictChunk: restricted ? 1 : 0,
           uRestrictBounds: 0,
-          uOpacity: layer.opacity, uMode: BLEND_INDEX[mode] ?? 0, uHasMask: maskTarget ? 1 : 0,
+          uOpacity: layer.opacity, uMode: BLEND_INDEX[mode] ?? 0,
+          uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
+          uHasMask: maskTarget ? 1 : 0,
           uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0, uReplace: replace ? 1 : 0,
         }, rect);
       }
@@ -938,7 +944,9 @@ export class GpuCompositor {
           uMipLevel: u.uMipLevel, uRestrictChunk: 1,
           uRestrictBounds: 1, uDrawOrigin: new Float32Array([bounds.x, bounds.y]),
           uDrawSize: new Float32Array([bounds.width, bounds.height]),
-          uOpacity: layer.opacity, uMode: BLEND_INDEX[mode] ?? 0, uHasMask: maskTarget ? 1 : 0,
+          uOpacity: layer.opacity, uMode: BLEND_INDEX[mode] ?? 0,
+          uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
+          uHasMask: maskTarget ? 1 : 0,
           uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0, uReplace: replace ? 1 : 0,
         }, rect);
       }
@@ -980,7 +988,7 @@ export class GpuCompositor {
   private copy(from: RenderTexture, to: RenderTexture, view: ViewSpec): void {
     this.run(this.pass('stack'), to, view.width, view.height, {
       uBackdrop: from.source, uSurface: this.white, uBase: this.transparentSource(), uClip: this.white,
-    }, { uHasClip: 0, uMode: 0 });
+    }, { uHasClip: 0, uMode: 0, uDissolveSeed: 0, uViewToDoc: mat3(view.viewToDoc) });
   }
 
   private transparent: TextureSource | null = null;
@@ -1109,9 +1117,11 @@ export class GpuCompositor {
       surface = next;
     }
     const out = this.acquire(view.width, view.height);
+    const mode = hooks.blendMode(base);
     this.run(this.pass('stack'), out, view.width, view.height, {
       uBackdrop: backdrop.source, uSurface: surface.source, uBase: baseAlone.source, uClip: clip?.source ?? this.white,
-    }, { uHasClip: clip ? 1 : 0, uMode: BLEND_INDEX[hooks.blendMode(base)] ?? 0 });
+    }, { uHasClip: clip ? 1 : 0, uMode: BLEND_INDEX[mode] ?? 0,
+      uDissolveSeed: mode === 'dissolve' ? blendSeed(base.id) : 0, uViewToDoc: mat3(view.viewToDoc) });
     this.release(surface);
     return out;
   }
