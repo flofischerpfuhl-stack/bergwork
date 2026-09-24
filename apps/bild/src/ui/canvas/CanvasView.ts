@@ -331,11 +331,11 @@ export class CanvasView implements CanvasHost {
     };
   }
 
-  private toolHandler(modifiers: Modifiers): ToolHandler | null {
+  private toolHandler(modifiers: Modifiers, point: Point | null = null): ToolHandler | null {
     const spaceHeld = this.controller.ui.getState().spaceHeld;
     if (spaceHeld) return this.hand;
     for (const intercept of this.controller.canvasInterceptors) {
-      const handler = intercept(this.session, modifiers);
+      const handler = intercept(this.session, modifiers, point);
       if (handler) return handler;
     }
     return this.tools[this.session.tool] ?? null;
@@ -368,7 +368,7 @@ export class CanvasView implements CanvasHost {
       return;
     }
     if (event.button !== 0) return;
-    const handler = this.toolHandler(modifiersOf(event));
+    const handler = this.toolHandler(modifiersOf(event), point);
     if (!handler) return;
     this.element.setPointerCapture(event.pointerId);
     this.active = { handler, pointerId: event.pointerId, session: this.session };
@@ -502,7 +502,7 @@ export class CanvasView implements CanvasHost {
   };
 
   private updateHoverCursor(event: { shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean; pointerType?: string }, point: Point): void {
-    const handler = this.toolHandler(modifiersOf(event));
+    const handler = this.toolHandler(modifiersOf(event), point);
     const session = this.session;
     const document = session.document;
     if (!handler?.hover || !document) { this.element.style.cursor = 'default'; return; }

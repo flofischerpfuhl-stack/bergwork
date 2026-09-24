@@ -20,7 +20,7 @@ import { resolveAdjustment } from '../core/adjustments';
 import type { HistorySnapshot, PersistedHistoryState } from '../core/history';
 import {
   BLEND_MODE_SET, documentsEqual, hierarchyRecord, InvalidProjectError, layerPixelHeight, layerPixelWidth, MAX_LAYERS, MAX_PIXELS, MAX_SIDE,
-  newLayer, validateHierarchy, validateLiveMasks, type BlendMode, type CanvasDocument, type Layer, type LayerAdjustment, type LayerShape,
+  newLayer, validateHierarchy, validateLiveMasks, type Guide, type BlendMode, type CanvasDocument, type Layer, type LayerAdjustment, type LayerShape,
 } from '../core/document';
 import {
   concat, fromMatrix, isValidTransform, makeTransform, pixelToDocument, placing, scaling, toMatrix,
@@ -225,6 +225,7 @@ function manifestV2WithContext(document: CanvasDocument, name: string, activeLay
   const layers = document.layers.map((layer) => v2Layer(layer, context));
   return { format: 'fernwork-image', version: 2, id: document.id, name, width: document.width, height: document.height,
     resolution: document.resolution, colorSpace: 'srgb', activeLayerId, layers, artboards: document.artboards ?? [],
+    ...(document.guides?.length ? { guides: document.guides.map((g) => ({ id: g.id, orientation: g.orientation, position: g.position })) } : {}),
     assets: [...context.assets.values()] };
 }
 
@@ -667,8 +668,12 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
         || !num(artboard.rect?.x) || !num(artboard.rect?.y) || !num(artboard.rect?.width) || !num(artboard.rect?.height)
         || artboard.rect.width < 1 || artboard.rect.height < 1) invalid('artboard');
     }
+    const guides = (source as { guides?: unknown }).guides;
+    if (guides !== undefined && (!Array.isArray(guides) || guides.length > 10_000 || !guides.every((g) => g && typeof g.id === 'string'
+      && (g.orientation === 'horizontal' || g.orientation === 'vertical') && num(g.position) && Math.abs(g.position) <= 1_000_000))) invalid('guides');
     return { id: source.id, width: source.width, height: source.height, resolution: source.resolution,
-      layers, artboards: source.artboards, resources, selection: null };
+      layers, artboards: source.artboards, ...(guides?.length ? { guides: (guides as Guide[]).map((g) => ({ id: g.id, orientation: g.orientation, position: g.position })) } : {}),
+      resources, selection: null };
   };
 
   const document = await parseDocument(manifest);

@@ -188,6 +188,8 @@ export interface LegacyLayer {
 
 export type Layer = ModelLayer | LegacyLayer;
 
+export interface Guide { readonly id: string; readonly orientation: 'horizontal' | 'vertical'; readonly position: number }
+
 export interface Artboard {
   readonly id: string;
   readonly name: string;
@@ -210,6 +212,8 @@ export interface CanvasDocument {
   readonly resolution: number;
   readonly layers: readonly Layer[];
   readonly artboards?: readonly Artboard[];
+  /** Ruler guides in document pixels (PRODUCT-PLAN 6.1). */
+  readonly guides?: readonly Guide[];
   readonly resources?: readonly DocumentResource[];
   readonly selection: DocumentSelection | null;
 }

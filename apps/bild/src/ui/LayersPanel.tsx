@@ -6,8 +6,9 @@
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import styles from './editor.module.css';
+import { HistoryPanel } from './HistoryPanel';
 import type { EditorController } from './controller';
-import { useSession, useWorkspace } from './hooks';
+import { useSession, useUi, useWorkspace } from './hooks';
 import { Icon, type IconName } from './icons';
 import { CanvasThumbnail, fittedSize } from './Thumbnail';
 import { MenuPopup } from './TopBar';
@@ -381,6 +382,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
     ];
   };
 
+  const side = useUi(controller, (state) => state.sidePanel);
   const deleteLabel = session.isMaskSelected ? t('Delete layer mask') : session.selectedLayerIds.size > 1 ? t('Delete selected layers') : t('Delete selected layer');
   const adjustmentsAvailable = !!controller.features.adjustmentLayers;
   return (
@@ -400,10 +402,20 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
             window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
           }} />
       ) : null}
-      <div className={styles.layersHeader}>
-        <span className={styles.layersTitle}>{t('Layers')}</span>
+      <div className={styles.layersHeader} role="tablist" aria-label={t('Panels')}>
+        <span className={styles.panelTabs}>
+          <button type="button" role="tab" aria-selected={side === 'layers'} data-testid="tab-layers"
+            className={`${styles.panelTab} ${side === 'layers' ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: 'layers' })}>
+            {t('Layers')}
+          </button>
+          <button type="button" role="tab" aria-selected={side === 'history'} data-testid="tab-history"
+            className={`${styles.panelTab} ${side === 'history' ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: 'history' })}>
+            {t('History')}
+          </button>
+        </span>
         <span className={styles.layerCount} data-testid="layerCount">{document?.layers.length ?? 0}</span>
       </div>
+      {side === 'history' ? <HistoryPanel controller={controller} /> : (<>
       <Appearance controller={controller} session={session} />
       {document && rows.length ? (
         <div className={styles.layerList} ref={listRef} role="tree" aria-label={t('Layers')} aria-multiselectable data-testid="layers-list">
@@ -437,6 +449,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
         <button type="button" className={styles.footerButton} aria-label={deleteLabel} title={deleteLabel} data-testid="deleteLayer"
           disabled={!session.canEditLayers || !session.activeLayer} onClick={() => void session.deleteLayerOrMask()}><Icon name="trash" size={17} /></button>
       </div>
+      </>)}
       {menu ? <MenuPopup controller={controller} anchor={menu} items={menuItems(menu.id)} onClose={() => setMenu(null)} /> : null}
       {adjustMenu ? (
         <MenuPopup controller={controller} anchor={adjustMenu} onClose={() => setAdjustMenu(null)}

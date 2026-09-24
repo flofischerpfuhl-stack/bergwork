@@ -13,7 +13,7 @@ import type {
   AdjustmentKind, BlendMode, CanvasDocument, Layer, LayerAdjustment, LayerMask, LayerShape,
 } from './model';
 export type {
-  AdjustmentKind, Artboard, BlendMode, CanvasDocument, ColorLabel, CropParameters, DocumentResource, EmbeddedLayer,
+  AdjustmentKind, Artboard, Guide, BlendMode, CanvasDocument, ColorLabel, CropParameters, DocumentResource, EmbeddedLayer,
   FillLayer, FillParameters, GroupLayer, Layer, LayerAdjustment, LayerEffect, LayerLocks, LayerMask, ModelLayer,
   LayerShape, LiveFilter, PixelLayer, TextLayer, VectorLayer, VectorMask, WarpQuad,
 } from './model';
@@ -81,7 +81,7 @@ export function documentsEqual(a: CanvasDocument | null, b: CanvasDocument | nul
   if (a === b) return true;
   if (!a || !b) return false;
   if (a.id !== b.id || a.width !== b.width || a.height !== b.height || a.resolution !== b.resolution
-    || !jsonEqual(a.artboards ?? [], b.artboards ?? []) || !resourcesEqual(a.resources ?? [], b.resources ?? [])) return false;
+    || !jsonEqual(a.artboards ?? [], b.artboards ?? []) || !jsonEqual(a.guides ?? [], b.guides ?? []) || !resourcesEqual(a.resources ?? [], b.resources ?? [])) return false;
   if (a.selection !== b.selection) return false;
   if (a.layers.length !== b.layers.length) return false;
   return a.layers.every((layer, i) => layersEqual(layer, b.layers[i]!));

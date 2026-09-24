@@ -50,6 +50,10 @@ export class DocumentHistory {
   get redoName(): string { return this.future.at(-1)?.name ?? ''; }
   get isModified(): boolean { return this.revision !== this.savedRevision; }
   get undoCount(): number { return this.past.length; }
+  /** Names of the steps that can be undone, oldest first (History panel). */
+  get pastNames(): string[] { return this.past.map((c) => c.name); }
+  /** Names of the steps that can be redone, next first. */
+  get futureNames(): string[] { return this.future.map((c) => c.name).reverse(); }
   get isInTransaction(): boolean { return this.depth > 0; }
   markSaved(): void { this.savedRevision = this.revision; }
   /** Marks the current state as not matching any saved file. */
