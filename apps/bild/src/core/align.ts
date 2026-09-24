@@ -28,7 +28,7 @@ export function alignUnits(document: CanvasDocument, selected: readonly string[]
   for (const id of selected) {
     const layer = byId.get(id);
     if (!layer || covered.has(id)) continue;
-    const members = layer.isGroup ? [...descendantIds(document.layers, id)].map((d) => byId.get(d)!).filter((l) => l && !l.isGroup) : [layer];
+    const members = layer.kind === 'group' ? [...descendantIds(document.layers, id)].map((d) => byId.get(d)!).filter((l) => l && l.kind !== 'group') : [layer];
     const withPixels = members.filter((l) => !!l.raster);
     const rect = unionRect(withPixels.map(box));
     if (!rect) continue;
