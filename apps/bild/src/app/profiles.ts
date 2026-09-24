@@ -2,7 +2,8 @@ import type { Tool } from '../core/session';
 import type { CapabilityName, HostCapabilityMap } from '../platform/hosts';
 
 export type EditorProfileId = 'pro' | 'lite';
-export type FeatureModuleId = 'canvas' | 'selection' | 'painting' | 'retouch' | 'adjustments' | 'subject' | 'guides' | 'styles' | 'artboards';
+export type FeatureModuleId = 'canvas' | 'selection' | 'painting' | 'retouch' | 'adjustments' | 'subject' | 'guides' | 'styles' | 'artboards'
+  | 'text';
 
 export interface EditorProfile {
   readonly id: EditorProfileId;
@@ -19,8 +20,10 @@ export interface EditorProfile {
 const CURRENT_TOOLS: readonly Tool[] = [
   'move', 'artboard', 'marquee', 'lasso', 'wand', 'crop', 'brush', 'spotHealing', 'cloneStamp', 'blur', 'gradient',
   'shape', 'eyedropper', 'hand', 'zoom', 'idle',
+  'text',
 ];
-const CURRENT_MODULES: readonly FeatureModuleId[] = ['canvas', 'selection', 'painting', 'retouch', 'adjustments', 'subject', 'guides', 'styles', 'artboards'];
+const CURRENT_MODULES: readonly FeatureModuleId[] = ['canvas', 'selection', 'painting', 'retouch', 'adjustments', 'subject', 'guides', 'styles', 'artboards',
+  'text'];
 
 /** PRODUCT-PLAN sections 5, 6 and A10: one configuration per product profile, never an engine fork. */
 export const EDITOR_PROFILES: Readonly<Record<EditorProfileId, EditorProfile>> = {

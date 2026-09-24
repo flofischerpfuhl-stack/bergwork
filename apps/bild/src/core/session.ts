@@ -37,16 +37,17 @@ import {
   type LayerEditKind, type LayerLockBlocker,
 } from './locks';
 import { DEFAULT_TEXT_STYLE, defaultTextParagraphs } from './document';
-import { applyParagraphStyle, applyTextStyle, convertTextBox, replaceTextRange,
+import { applyParagraphStyle, applyTextStyle, convertTextBox, replaceTextRange, scaleTextWithTransform,
   type ParagraphStylePatch, type TextStylePatch } from './text/model';
 import { isValidLayerEffect } from './effects/validate';
 
 export type Tool =
   | 'move' | 'artboard' | 'marquee' | 'lasso' | 'wand' | 'crop' | 'brush' | 'spotHealing' | 'cloneStamp' | 'blur'
-  | 'gradient' | 'shape' | 'eyedropper' | 'hand' | 'zoom' | 'idle';
+  | 'gradient' | 'shape' | 'eyedropper' | 'hand' | 'zoom' | 'idle'
+  | 'text';
 
 export const TOOLS: readonly Tool[] = ['move', 'artboard', 'marquee', 'lasso', 'wand', 'crop', 'brush', 'spotHealing', 'cloneStamp',
-  'blur', 'gradient', 'shape', 'eyedropper', 'hand', 'zoom'];
+  'blur', 'gradient', 'text', 'shape', 'eyedropper', 'hand', 'zoom'];
 
 export const TOOL_LABELS: Record<Tool, string> = {
   move: 'Move / Transform (V)', artboard: 'Artboard Tool (Shift-V)', marquee: 'Marquee (M)', lasso: 'Lasso (L)', wand: 'Magic Wand (W)', crop: 'Crop (C)',
@@ -54,6 +55,7 @@ export const TOOL_LABELS: Record<Tool, string> = {
   cloneStamp: 'Clone Stamp (S) · Option-click sets the source', blur: 'Smear (R)', gradient: 'Gradient (G)',
   shape: 'Shape (U) · Shift-U switches Rectangle/Ellipse', eyedropper: 'Eyedropper (I)', hand: 'Hand (H)', zoom: 'Zoom (Z)',
   idle: 'No tool (A)',
+  text: 'Horizontal Type (T)',
 };
 
 export function isBrushTool(tool: Tool): boolean { return tool === 'brush' || tool === 'spotHealing' || tool === 'cloneStamp' || tool === 'blur'; }
@@ -111,6 +113,9 @@ export interface SessionServices {
 export const editBlockers: ((session: EditorSession) => boolean)[] = [];
 /** Pending external edits can consume Undo now and perform it once their transaction lands. */
 export const pendingUndoHandlers: ((session: EditorSession) => boolean)[] = [];
+/** Pixels derived from editable layer content (text shaped by the lazily loaded engine, PRODUCT-PLAN A5). */
+export interface DerivedLayerPixels { readonly raster: Raster; readonly transform: LayerTransform }
+export const derivedLayerSources: ((session: EditorSession, layer: Layer) => DerivedLayerPixels | null)[] = [];
 
 export class EditorSession {
   document: CanvasDocument | null = null;
@@ -1137,7 +1142,7 @@ export class EditorSession {
       return members.length > 0 && !members.some((layer) => this.editBlocker(layer.id, 'position'));
     }
     const layer = this.activeLayer;
-    return !!layer && (!!layer.raster || layer.kind === 'vector') && effectiveVisibleIds(this.document!.layers).has(layer.id)
+    return !!layer && (!!(layer.raster ?? this.displayedRaster(layer)) || layer.kind === 'vector') && effectiveVisibleIds(this.document!.layers).has(layer.id)
       && !this.editBlocker(layer.id, 'position');
   }
 
@@ -1235,12 +1240,26 @@ export class EditorSession {
     if (pending) return pending;
     const preview = this.livePreview(layer.id);
     if (preview && !preview.mask) return preview.transform;
-    return this.transformOverrides.get(layer.id) ?? layer.transform;
+    const override = this.transformOverrides.get(layer.id);
+    if (override) return override;
+    // Text: shaped pixels where the engine has them, else an imported preview at its saved placement.
+    if (layer.kind === 'text') return this.derivedPixels(layer)?.transform ?? (layer.raster && layer.renderedTransform) ?? layer.transform;
+    return layer.transform;
   }
   displayedRaster(layer: Layer): Raster | null {
     const preview = this.livePreview(layer.id);
     if (preview && !preview.mask) return preview.raster;
-    return this.rasterOverrides.get(layer.id) ?? layer.raster ?? null;
+    const override = this.rasterOverrides.get(layer.id);
+    if (override) return override;
+    if (layer.kind === 'text') return this.derivedPixels(layer)?.raster ?? layer.raster ?? null;
+    return layer.raster ?? null;
+  }
+  private derivedPixels(layer: Layer): DerivedLayerPixels | null {
+    for (const source of derivedLayerSources) {
+      const pixels = source(this, layer);
+      if (pixels) return pixels;
+    }
+    return null;
   }
   displayedMaskRaster(layer: Layer): Raster | null {
     const preview = this.livePreview(layer.id);
@@ -1301,8 +1320,8 @@ export class EditorSession {
           for (const [id, original] of edit.group!.originals) {
             const moved = following(original, edit.group!.box, edit.draft);
             if (!isValidTransform(moved)) continue;
-            this.updateLayer(id, (l) => redrawShapeLayer(vectorLayerWithTransform({ ...l,
-              mask: l.mask ? { ...l.mask, placement: maskPlacementMoving(l.mask, original, moved) } : null }, moved)));
+            this.updateLayer(id, (l) => redrawShapeLayer(scaleTextWithTransform(vectorLayerWithTransform({ ...l,
+              mask: l.mask ? { ...l.mask, placement: maskPlacementMoving(l.mask, original, moved) } : null }, moved), original)));
           }
         });
         return;
@@ -1313,8 +1332,8 @@ export class EditorSession {
         || edit.draft.rotation !== layer.transform.rotation || edit.draft.flipX !== layer.transform.flipX
         || edit.draft.flipY !== layer.transform.flipY;
       if (this.refuseLayerEdit(layer.id, 'position') || (resamples && this.refuseLayerEdit(layer.id, 'pixels'))) return;
-      this.edit('Transform Layer', () => this.updateLayer(edit.layerId, (l) => redrawShapeLayer(vectorLayerWithTransform({ ...l,
-        mask: l.mask ? { ...l.mask, placement: maskPlacementMoving(l.mask, l.transform, edit.draft) } : null }, edit.draft))));
+      this.edit('Transform Layer', () => this.updateLayer(edit.layerId, (l) => redrawShapeLayer(scaleTextWithTransform(vectorLayerWithTransform({ ...l,
+        mask: l.mask ? { ...l.mask, placement: maskPlacementMoving(l.mask, l.transform, edit.draft) } : null }, edit.draft), l.transform))));
     } finally {
       if (this.transformDuplicate) { this.transformDuplicate = null; this.endEdit(); }
       this.notify('document');

@@ -11,7 +11,8 @@ type IconName =
   | 'eye' | 'eyeSlash' | 'folder' | 'chevronRight' | 'chevronDown' | 'plusSquare' | 'folderPlus' | 'mask'
   | 'adjustment' | 'trash' | 'link' | 'plus' | 'close' | 'zoomIn' | 'zoomOut' | 'swap' | 'reset' | 'menu'
   | 'layers' | 'sliders' | 'levels' | 'curves' | 'exposure' | 'grain' | 'gradientMap' | 'more'
-  | 'lock' | 'lockTransparency' | 'search' | 'filter' | 'artboard' | 'minus';
+  | 'lock' | 'lockTransparency' | 'search' | 'filter' | 'artboard' | 'minus'
+  | 'text';
 
 const paths: Record<IconName, ReactElement> = {
   move: <path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3" />,
@@ -64,6 +65,7 @@ const paths: Record<IconName, ReactElement> = {
   filter: <path d="M4 5h16l-6 7.5V19l-4-2v-4.5z" />,
   artboard: <><rect x="7" y="7" width="10" height="10" rx="0.5" /><path d="M7 2.5V7H2.5M17 2.5V7h4.5M7 21.5V17H2.5M17 21.5V17h4.5" /></>,
   minus: <path d="M5 12h14" />,
+  text: <path d="M5 7V4.5h14V7M12 4.5v15M9 19.5h6" />,
 };
 
 export function Icon({ name, size = 18, title }: { name: IconName; size?: number; title?: string }) {

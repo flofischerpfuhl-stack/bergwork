@@ -1,7 +1,8 @@
 import {
   DEFAULT_TEXT_STYLE, defaultTextParagraphs, defaultTextParagraphStyle,
-  type LegacyTextRun, type TextLayer, type TextParagraph, type TextParagraphStyle, type TextRun, type TextRunStyle,
+  type Layer, type LegacyTextRun, type TextLayer, type TextParagraph, type TextParagraphStyle, type TextRun, type TextRunStyle,
 } from '../document';
+import type { LayerTransform } from '../geometry';
 
 export type TextStylePatch = Partial<Omit<TextRunStyle, 'schemaVersion'>>;
 export type ParagraphStylePatch = Partial<Omit<TextParagraphStyle, 'schemaVersion'>>;
@@ -134,4 +135,24 @@ export function convertTextBox(layer: TextLayer, box: TextLayer['box']): TextLay
     throw new RangeError('Area text box dimensions must be positive finite numbers');
   }
   return { ...layer, box, raster: null, renderedTransform: null };
+}
+
+/**
+ * Photoshop scales type with its layer: a text layer resized with the Move tool keeps editable text and changes its
+ * type size (and an area text's box) instead of resampling pixels. Non-uniform scaling uses the geometric mean for the
+ * type size because the model has no horizontal/vertical character scale.
+ */
+export function scaleTextWithTransform(layer: Layer, previous: LayerTransform): Layer {
+  if (layer.kind !== 'text') return layer;
+  const sx = layer.transform.size.width / previous.size.width, sy = layer.transform.size.height / previous.size.height;
+  if (!(sx > 0) || !(sy > 0) || !Number.isFinite(sx) || !Number.isFinite(sy) || (Math.abs(sx - 1) < 1e-6 && Math.abs(sy - 1) < 1e-6)) return layer;
+  const factor = Math.sqrt(sx * sy);
+  const size = (points: number) => Math.min(12_000, Math.max(0.01, Math.round(points * factor * 1000) / 1000));
+  const runs = layer.runs.map((run) => ({ ...run, style: { ...run.style, fontSize: size(run.style.fontSize),
+    leading: run.style.leading === null ? null : size(run.style.leading), baselineShift: run.style.baselineShift * factor } }));
+  const paragraphs = layer.paragraphs.map((paragraph) => ({ ...paragraph, style: { ...paragraph.style,
+    firstLineIndent: paragraph.style.firstLineIndent * factor, startIndent: paragraph.style.startIndent * factor,
+    endIndent: paragraph.style.endIndent * factor, spaceBefore: paragraph.style.spaceBefore * factor, spaceAfter: paragraph.style.spaceAfter * factor } }));
+  const box = layer.box ? { width: layer.box.width * sx, height: layer.box.height * sy } : null;
+  return { ...layer, runs, paragraphs, box, raster: null, renderedTransform: null };
 }

@@ -13,6 +13,7 @@ import { installSubject } from './subjectFeature';
 import { installGuides } from './guidesFeature';
 import { installLayerStyles } from './layerStylesFeature';
 import { installArtboards } from './artboardFeature';
+import { installText } from './textFeature';
 import type { EditorProfile } from './profiles';
 
 export function installFeatures(controller: EditorController, profile: EditorProfile = controller.profile): void {
@@ -26,6 +27,7 @@ export function installFeatures(controller: EditorController, profile: EditorPro
   if (enabled.has('guides')) installGuides(controller);
   if (enabled.has('styles')) installLayerStyles(controller);
   if (enabled.has('artboards')) installArtboards(controller);
+  if (enabled.has('text')) installText(controller);
   const tools = new Set(profile.tools);
   for (const tool of controller.availableTools) if (!tools.has(tool)) controller.availableTools.delete(tool);
 }
