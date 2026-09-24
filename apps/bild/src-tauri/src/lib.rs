@@ -71,7 +71,10 @@ pub fn run() {
         let _ = host::display_icc_profile();
     }
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(feature = "a6-spike")]
+    let builder = builder.manage(a6_spike::FrameClockProbe::default());
+    builder
         .manage(host::StartupFiles(Mutex::new(host::file_references(
             env::args().skip(1),
             &env::current_dir().unwrap_or_default(),
@@ -101,9 +104,19 @@ pub fn run() {
             #[cfg(feature = "a6-spike")]
             a6_spike::a6_store_jpeg,
             #[cfg(feature = "a6-spike")]
+            a6_spike::a6_store_capture,
+            #[cfg(feature = "a6-spike")]
             a6_spike::a6_decode_jpeg,
             #[cfg(feature = "a6-spike")]
+            a6_spike::a6_decode_jpeg_batch,
+            #[cfg(feature = "a6-spike")]
             a6_spike::a6_runtime_settings,
+            #[cfg(feature = "a6-spike")]
+            a6_spike::a6_frame_clock_reset,
+            #[cfg(feature = "a6-spike")]
+            a6_spike::a6_frame_clock_take,
+            #[cfg(feature = "a6-spike")]
+            a6_spike::a6_capture_window,
         ])
         .setup(|app| {
             {

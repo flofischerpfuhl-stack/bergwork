@@ -70,6 +70,18 @@ show a memory failure, so this run does not justify attributing the misses to a 
 Per PRODUCT-PLAN A1, the next architecture decision should compare these measured gaps with an A6
 native-compute or native-wgpu spike before selecting either direction.
 
+### A6b follow-up attempt (2026-09-24)
+
+The hardened post-A6b release was queued through the updated three-run matrix harness, but no new
+timing process was allowed to start. A resumed gate and two fresh consecutive 30-minute gates all
+reached their ceilings with the one-minute load above the required maximum of 3 (recorded
+5.23–39.38). The table above is therefore retained as the latest accepted Linux matrix history;
+there is deliberately no replacement timing from a contended machine.
+
+The final release did pass the separate 300 s offline probe: 346 process-tree socket snapshots saw
+zero TCP or connected-UDP remote endpoints. The A6b frame-clock/visual measurements and the reasons
+for not enabling forced SHM are recorded in `artifacts/a6b-webkit.md`.
+
 ## Linux Chromium 153 (`perf-gpu`, WebView2 stand-in)
 
 | Capability | Result |

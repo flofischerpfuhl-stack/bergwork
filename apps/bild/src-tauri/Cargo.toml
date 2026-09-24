@@ -12,7 +12,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = []
-a6-spike = ["tauri/unstable", "dep:webkit2gtk", "dep:wgpu", "dep:zune-jpeg"]
+a6-spike = ["tauri/unstable", "dep:gdk", "dep:gtk", "dep:webkit2gtk", "dep:wgpu", "dep:zune-jpeg"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -29,6 +29,8 @@ wgpu = { version = "30", default-features = false, features = ["std", "vulkan", 
 zune-jpeg = { version = "0.5.15", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+gdk = { version = "0.18", optional = true }
+gtk = { version = "0.18", optional = true }
 webkit2gtk = { version = "2", optional = true }
 
 [target.'cfg(windows)'.dependencies]

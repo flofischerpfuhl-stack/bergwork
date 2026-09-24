@@ -28,6 +28,9 @@ npm run tauri:dev
 npm run tauri:build
 npm run tauri:build -- --no-bundle
 bash scripts/tauri-webview-matrix.sh /tmp/fernwork-webkitgtk-matrix.json
+bash scripts/tauri-build.sh --features a6-spike --no-bundle
+bash scripts/tauri-a6b.sh /tmp/fernwork-a6b-results
+bash scripts/tauri-offline-probe.sh 300
 ```
 
 `npm run tauri:*` goes through `scripts/tauri.mjs`: on Linux it runs `scripts/tauri-{dev,build}.sh` (rootless
@@ -37,6 +40,27 @@ Windows checkout otherwise picks WSL's `bash.exe`). `.gitattributes` keeps `*.sh
 `tauri:build` creates `.deb` and `.rpm` bundles on Linux; `-- --no-bundle` stops after the release binary. The Linux
 binary is `src-tauri/target/release/fernwork-bildeditor`. The scripts source
 `scripts/tauri-env.sh`, so a new login shell is not required after rustup.
+
+`tauri-a6b.sh` is the Linux-only A6 follow-up harness. It records `uptime` before each process,
+waits while the one-minute load average is above 3, runs default and forced-SHM rendering three
+times each (plus an optional `GDK_SCALE=2` resize/DPR visual check), and compares native-window and raw
+WebGL captures. Its full runs also compare the browser JPEG pipeline with a one-response native
+decode for compressible and noisy 46-MP fixtures. Pillow is required only by this measurement
+script, not by the product.
+
+`tauri-offline-probe.sh` launches only the specified release binary and samples the sockets of that
+process tree. It fails on TCP or connected-UDP remote endpoints and terminates only the PID it
+started. Linux `/proc` does not expose unconnected UDP `sendto` destinations; this limitation is
+printed in the probe result.
+
+The release CSP deliberately omits JavaScript `'unsafe-eval'`. The WebGL compositor imports
+`pixi.js/unsafe-eval`; despite that module name, it installs Pixi's static CSP-safe synchronisers
+and does not weaken the policy or enable string evaluation. Without the adapter, Pixi falls back to
+the software compositor in the hardened Tauri build.
+
+The product does not force WebKitGTK's shared-memory renderer. A6b found one forced-SHM run with a
+99.99 ms native after-paint p95 and 53 dropped refresh intervals, so the presentation gate failed
+despite lower `gl.finish` timings. `WEBKIT_DMABUF_RENDERER_FORCE_SHM` remains entirely user-controlled.
 
 ## Rootless Linux setup reproduced on this laptop
 

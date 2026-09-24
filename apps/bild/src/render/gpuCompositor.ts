@@ -115,6 +115,15 @@ interface BrushGpuState {
   applied: number;
   revision: number;
   tailKeys: Set<string>;
+  tail: readonly BrushSegment[];
+  dirty: Rect | null;
+}
+
+interface BrushCompositeCache {
+  readonly document: CanvasDocument;
+  readonly preview: GpuBrushPreview;
+  readonly view: ViewSpec;
+  readonly target: RenderTexture;
 }
 
 // A 64 px margin leaves one neighbour texel at the deepest supported sharp halving (level 6).
@@ -126,6 +135,15 @@ const BRUSH_APRON = CHUNK_APRON;
 
 const IDENTITY9 = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 const UNORM16_TO_HALF = makeUnorm16ToHalf();
+const COPY_FRAGMENT = /* glsl */ `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+in vec2 vPos;
+out vec4 finalColor;
+uniform sampler2D uSource;
+void main() { finalColor = texelFetch(uSource, ivec2(vPos), 0); }
+`;
 
 function mat3(m: Affine): Float32Array {
   // Column-major mat3 for GLSL.
@@ -147,6 +165,8 @@ export class GpuCompositor {
   private readonly white: TextureSource;
   private lutSources = new Map<string, TextureSource>();
   private brushState: BrushGpuState | null = null;
+  private brushCompositeCache: BrushCompositeCache | null = null;
+  private renderClip: Rect | null = null;
   private readonly brushTargetPool: BrushTargets[] = [];
   /** The LUT samples last uploaded per layer, so an unchanged adjustment is not re-uploaded every frame. */
   private lutUploaded = new Map<string, Uint8Array | Float32Array>();
@@ -198,6 +218,7 @@ export class GpuCompositor {
   destroy(): void {
     for (const slot of this.slots.values()) for (const chunk of slot.chunks.values()) chunk.source.destroy();
     this.slots.clear();
+    this.destroyBrushCompositeCache();
     for (const rt of this.pool) rt.destroy(true);
     for (const rt of this.inUse) rt.destroy(true);
     for (const lut of this.lutSources.values()) lut.destroy();
@@ -325,6 +346,7 @@ export class GpuCompositor {
         uApron: { value: BRUSH_APRON, type: 'f32' }, uSampling: { value: 1, type: 'i32' },
         uMipLevel: { value: 0, type: 'i32' }, uSnap: { value: 0, type: 'i32' },
       }, ['uBackdrop', 'uPainted']],
+      copy: [COPY_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uSource']],
       opaque: [OPAQUE_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uSource']],
       stack: [STACK_FRAGMENT, {
         uHasClip: { value: 0, type: 'i32' },
@@ -365,6 +387,10 @@ export class GpuCompositor {
 
   private run(pass: Pass, target: RenderTexture | null, width: number, height: number, textures: Record<string, TextureSource>,
     uniforms: Record<string, unknown>, rect?: Rect): void {
+    const drawRect = this.renderClip
+      ? intersect(rect ?? { x: 0, y: 0, width, height }, this.renderClip)
+      : rect;
+    if (this.renderClip && !drawRect) return;
     for (const [key, value] of Object.entries(uniforms)) {
       const current = pass.uniforms.uniforms[key];
       if (current instanceof Float32Array && value instanceof Float32Array) current.set(value);
@@ -373,8 +399,8 @@ export class GpuCompositor {
     pass.uniforms.update();
     for (const [key, source] of Object.entries(textures)) (pass.shader.resources as Record<string, unknown>)[key] = source;
     this.mesh.shader = pass.shader;
-    this.mesh.position.set(rect?.x ?? 0, rect?.y ?? 0);
-    this.mesh.scale.set(rect?.width ?? width, rect?.height ?? height);
+    this.mesh.position.set(drawRect?.x ?? 0, drawRect?.y ?? 0);
+    this.mesh.scale.set(drawRect?.width ?? width, drawRect?.height ?? height);
     this.renderer.render({ container: this.mesh, target: target ?? undefined, clear: false });
   }
 
@@ -610,6 +636,19 @@ export class GpuCompositor {
     this.brushState = null;
   }
 
+  private destroyBrushCompositeCache(): void {
+    const cache = this.brushCompositeCache;
+    if (!cache) return;
+    for (const pass of this.passes.values()) {
+      const resources = pass.shader.resources as Record<string, unknown>;
+      for (const [key, resource] of Object.entries(resources)) {
+        if (resource === cache.target.source) resources[key] = this.white;
+      }
+    }
+    this.brushCompositeCache = null;
+    this.release(cache.target);
+  }
+
   private brushChunk(state: BrushGpuState, key: string): BrushChunk {
     const existing = state.chunks.get(key);
     if (existing) return existing;
@@ -697,13 +736,15 @@ export class GpuCompositor {
   private prepareBrush(preview: GpuBrushPreview): BrushGpuState {
     if (this.brushState?.preview !== preview) {
       this.destroyBrushState();
-      this.brushState = { preview, chunks: new Map(), applied: 0, revision: -1, tailKeys: new Set() };
+      this.brushState = { preview, chunks: new Map(), applied: 0, revision: -1, tailKeys: new Set(), tail: [], dirty: null };
     }
     const state = this.brushState;
     if (state.revision === preview.revision) return state;
     const changed = new Set<string>();
+    let dirty: Rect | null = null;
     while (state.applied < preview.settled.length) {
       const segment = preview.settled[state.applied++]!;
+      dirty = unionMaybe(dirty, this.brushSegmentPixelRect(preview, segment));
       for (const key of this.brushKeys(preview, segment)) {
         const chunk = this.brushChunk(state, key);
         if (preview.settings.hardness >= 1) this.accumulateHardSegment(preview, chunk, segment);
@@ -712,6 +753,8 @@ export class GpuCompositor {
       }
     }
     const nextTail = new Set<string>();
+    for (const segment of state.tail) dirty = unionMaybe(dirty, this.brushSegmentPixelRect(preview, segment));
+    for (const segment of preview.tail) dirty = unionMaybe(dirty, this.brushSegmentPixelRect(preview, segment));
     for (const segment of preview.tail) for (const key of this.brushKeys(preview, segment)) nextTail.add(key);
     for (const key of new Set([...state.tailKeys, ...nextTail])) {
       const chunk = this.brushChunk(state, key);
@@ -723,9 +766,24 @@ export class GpuCompositor {
         preview.settings.hardness < 1);
     }
     state.tailKeys = nextTail;
+    state.tail = [...preview.tail];
     for (const key of changed) this.paintBrushChunk(preview, this.brushChunk(state, key));
     state.revision = preview.revision;
+    state.dirty = dirty;
     return state;
+  }
+
+  private brushSegmentPixelRect(preview: GpuBrushPreview, segment: BrushSegment): Rect | null {
+    const reach = preview.settings.diameter / 2 + 2;
+    const pixels = affineBounds(invert(preview.mapping), {
+      x: Math.min(segment.x0, segment.x1) - reach, y: Math.min(segment.y0, segment.y1) - reach,
+      width: Math.abs(segment.x1 - segment.x0) + reach * 2,
+      height: Math.abs(segment.y1 - segment.y0) + reach * 2,
+    });
+    return intersect({ x: Math.floor(pixels.x), y: Math.floor(pixels.y),
+      width: Math.ceil(pixels.x + pixels.width) - Math.floor(pixels.x),
+      height: Math.ceil(pixels.y + pixels.height) - Math.floor(pixels.y) },
+    { x: 0, y: 0, width: preview.width, height: preview.height });
   }
 
   private paintBrushChunk(preview: GpuBrushPreview, chunk: BrushChunk): void {
@@ -778,10 +836,34 @@ export class GpuCompositor {
     // whole document into float LUTs so adjustment layers never introduce an 8-bit bottleneck.
     this.highPrecisionLuts = document.layers.some((layer) => hooks.raster(layer)?.format === 'rgba16');
     const { width, height } = view;
+    const activeBrush = hooks.brush ?? null;
+    let brushState: BrushGpuState | null = null;
+    let cache = this.brushCompositeCache;
+    if (activeBrush) {
+      // A6 WebKitGTK measurements showed that re-running every full-viewport layer pass, rather
+      // than MetalBrushCoverage-equivalent stamp generation, dominated feedback. Blend/adjustment
+      // passes are point-local, so retain the completed frame and recompute only old/new tail damage.
+      brushState = this.prepareBrush(activeBrush);
+      if (!cache || cache.document !== document || cache.preview !== activeBrush || !sameView(cache.view, view)) {
+        this.destroyBrushCompositeCache();
+        cache = null;
+      } else if (!brushState.dirty) {
+        return cache.target;
+      } else {
+        const gridToDoc = pixelToDocument(activeBrush.transform, activeBrush.width, activeBrush.height);
+        this.renderClip = this.gridRect(brushState.dirty.x, brushState.dirty.y, brushState.dirty.width,
+          brushState.dirty.height, gridToDoc, view);
+        if (!this.renderClip) {
+          brushState.dirty = null;
+          return cache.target;
+        }
+      }
+    } else {
+      this.destroyBrushCompositeCache();
+    }
     let acc = this.acquire(width, height);
     this.clear(acc);
     const byId = new Map(document.layers.map((l) => [l.id, l]));
-    const activeBrush = hooks.brush ?? null;
     if (!activeBrush) this.destroyBrushState();
     const ids = renderLayers(document.layers).filter((l) => hooks.raster(l) || activeBrush?.layerId === l.id || l.adjustment)
       .map((l) => l.id);
@@ -868,10 +950,23 @@ export class GpuCompositor {
     }
     for (const t of temporaries) this.release(t);
     if (this.frame % 60 === 0) this.collectTextures();
+    if (activeBrush && brushState) {
+      if (cache) {
+        this.run(this.pass('copy'), cache.target, width, height, { uSource: acc.source }, {});
+        this.release(acc);
+        acc = cache.target;
+      } else {
+        this.brushCompositeCache = { document, preview: activeBrush, view: cloneView(view), target: acc };
+      }
+      brushState.dirty = null;
+    }
+    this.renderClip = null;
     return acc;
   }
 
-  releaseTarget(rt: RenderTexture): void { this.release(rt); }
+  releaseTarget(rt: RenderTexture): void {
+    if (rt !== this.brushCompositeCache?.target) this.release(rt);
+  }
 
   private layerUniforms(raster: Pick<Raster, 'width' | 'height'>, transform: LayerTransform, view: ViewSpec) {
     const docToGrid = invert(pixelToDocument(transform, raster.width, raster.height));
@@ -1200,7 +1295,7 @@ export class GpuCompositor {
         const rt = this.composite(document, view, hooks);
         const straight = RenderTexture.create({ width: w, height: h, format: 'rgba8unorm', antialias: false, resolution: 1 });
         this.run(this.pass('unpremultiply'), straight, w, h, { uSource: rt.source }, {});
-        this.release(rt);
+        this.releaseTarget(rt);
         const pixels = this.readPixels(straight, w, h);
         straight.destroy(true);
         for (let row = 0; row < h; row++) {
@@ -1234,7 +1329,7 @@ export class GpuCompositor {
       const rt = this.composite(document, view, hooks);
       const straight = RenderTexture.create({ width: w, height: h, format: 'rgba16float', antialias: false, resolution: 1 });
       this.run(this.pass('unpremultiply'), straight, w, h, { uSource: rt.source }, {});
-      this.release(rt);
+      this.releaseTarget(rt);
       const pixels = this.readFloatPixels(straight, w, h);
       straight.destroy(true);
       for (let row = 0; row < h; row++) {
@@ -1365,6 +1460,21 @@ function intersect(a: Rect, b: Rect): Rect | null {
   const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
   const right = Math.min(a.x + a.width, b.x + b.width), bottom = Math.min(a.y + a.height, b.y + b.height);
   return right > x && bottom > y ? { x, y, width: right - x, height: bottom - y } : null;
+}
+
+function unionMaybe(a: Rect | null, b: Rect | null): Rect | null {
+  return b ? unionRect(a, b) : a;
+}
+
+function sameView(a: ViewSpec, b: ViewSpec): boolean {
+  return a.width === b.width && a.height === b.height && a.scale === b.scale && a.snap === b.snap
+    && a.viewToDoc.a === b.viewToDoc.a && a.viewToDoc.b === b.viewToDoc.b
+    && a.viewToDoc.c === b.viewToDoc.c && a.viewToDoc.d === b.viewToDoc.d
+    && a.viewToDoc.tx === b.viewToDoc.tx && a.viewToDoc.ty === b.viewToDoc.ty;
+}
+
+function cloneView(view: ViewSpec): ViewSpec {
+  return { ...view, viewToDoc: { ...view.viewToDoc } };
 }
 
 function makeUnorm16ToHalf(): Uint16Array {
