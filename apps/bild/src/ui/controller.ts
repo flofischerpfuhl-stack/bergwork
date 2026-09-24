@@ -141,6 +141,10 @@ export class EditorController {
   layerThumbs: ((session: EditorSession, layer: import('../core/document').Layer) => ReactNode)[] = [];
   /** Lazily loaded renderers (text) that must finish shaping before pixels are read for export or merges. */
   renderPreparers: ((session: EditorSession) => Promise<void>)[] = [];
+  /** Feature-owned documents (for example Edit Contents tabs) can consume Save without writing a top-level file. */
+  saveInterceptors: ((session: EditorSession, saveAs: boolean) => Promise<boolean>)[] = [];
+  /** Optional embedded-content drop bridge. Alt-drop places instead of opening/importing. */
+  placeContentFiles: ((files: readonly File[], point: Point | null) => Promise<readonly string[]>) | null = null;
   private async prepareRender(): Promise<void> { for (const prepare of this.renderPreparers) await prepare(this.session); }
 
   /** Tool keys: some keys also switch a tool's mode (E erases, Shift-U switches shapes). */
@@ -637,6 +641,7 @@ export class EditorController {
     const session = this.session;
     if (!session.document || !this.workspace.canSwitch) return;
     try {
+      for (const intercept of this.saveInterceptors) if (await intercept(session, saveAs)) return;
       const name = `${session.projectName ?? this.workspace.current.title}.fwimg`;
       const files = this.capabilities.files;
       let target = saveAs ? undefined : saveTargets.get(session);

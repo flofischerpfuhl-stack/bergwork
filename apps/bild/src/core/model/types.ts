@@ -320,7 +320,13 @@ export interface TextLayer extends LayerCommon, WithoutAdjustment, WithoutSource
 export interface EmbeddedLayer extends LayerCommon, WithoutAdjustment, WithoutSourceShape {
   readonly kind: 'embedded';
   readonly content: { readonly mode: 'embedded' | 'linked'; readonly mediaType: 'image' | 'svg' | 'pdf' | 'project';
-    readonly assetId?: string; readonly uri?: string; readonly sourceName: string };
+    readonly assetId?: string; readonly uri?: string; readonly sourceName: string;
+    /** Original source dimensions. The render cache is deliberately not authoritative. */
+    readonly width?: number; readonly height?: number;
+    /** Zero-based PDF page. Other media omit this field. */
+    readonly page?: number;
+    /** Last observed linked-source identity, used to detect changes without trusting the preview. */
+    readonly sha256?: string; readonly modifiedAt?: number };
   /** Rendered cache for embedded content. */
   readonly raster: Raster | null;
 }

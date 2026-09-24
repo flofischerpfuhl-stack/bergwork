@@ -5,6 +5,7 @@ import { bindCapabilityRegistry } from '../../src/platform/hosts';
 
 interface NativeTarget extends SaveTarget { readonly path: string }
 const IMAGE_FILTER = { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff', 'heic', 'heif', 'psd', 'psb'] };
+const CONTENT_FILTER = { name: 'Placeable content', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff', 'heic', 'heif', 'svg', 'pdf', 'fwimg'] };
 const PROJECT_FILTER = { name: 'Fernwork image project or PSD', extensions: ['fwimg', 'zip', 'psd', 'psb'] };
 const SAVE_FILTERS: Record<'png' | 'jpeg' | 'webp' | 'avif' | 'tiff' | 'zip', { name: string; extensions: string[] }> = {
   png: { name: 'PNG image', extensions: ['png'] }, jpeg: { name: 'JPEG image', extensions: ['jpg', 'jpeg'] },
@@ -25,7 +26,7 @@ function nativeFiles(): FileSystemHost {
     version: 1,
     async chooseFiles(kind) {
       const selected = await window.__TAURI__.dialog.open({ multiple: kind === 'images', directory: false,
-        filters: kind === 'project' ? [PROJECT_FILTER] : [IMAGE_FILTER] });
+        filters: kind === 'project' ? [PROJECT_FILTER] : kind === 'content' ? [CONTENT_FILTER] : [IMAGE_FILTER] });
       const paths = typeof selected === 'string' ? [selected] : selected ?? [];
       return paths.map((id) => ({ id, name: baseName(id) }));
     },
@@ -94,6 +95,10 @@ export function createTauriHost(): FileTargetHost {
     defaultProfile: 'pro', capabilities,
     async chooseImages() {
       const selected = await window.__TAURI__.dialog.open({ multiple: true, directory: false, filters: [IMAGE_FILTER] });
+      return asFiles(typeof selected === 'string' ? [selected] : selected ?? []);
+    },
+    async chooseContent() {
+      const selected = await window.__TAURI__.dialog.open({ multiple: false, directory: false, filters: [CONTENT_FILTER] });
       return asFiles(typeof selected === 'string' ? [selected] : selected ?? []);
     },
     async chooseProject() {

@@ -839,11 +839,16 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
             box: record.box, alignment: record.alignment,
             renderedTransform: 'previewTransform' in record ? record.previewTransform : null })); break;
         case 'embedded': {
-          const content = record.content;
+          const content = record.content as import('../core/model').EmbeddedLayer['content'];
           if (!content || !['embedded', 'linked'].includes(content.mode) || !['image', 'svg', 'pdf', 'project'].includes(content.mediaType)
             || typeof content.sourceName !== 'string' || (content.mode === 'embedded'
               ? typeof content.assetId !== 'string' || records.get(content.assetId)?.role !== 'embedded'
-              : typeof content.uri !== 'string')) invalid('embedded parameters');
+              : typeof content.uri !== 'string')
+            || (content.width !== undefined && (!num(content.width) || content.width < 1 || content.width > MAX_SIDE))
+            || (content.height !== undefined && (!num(content.height) || content.height < 1 || content.height > MAX_SIDE))
+            || (content.page !== undefined && (!Number.isInteger(content.page) || content.page < 0))
+            || (content.sha256 !== undefined && !/^[0-9a-f]{64}$/.test(content.sha256))
+            || (content.modifiedAt !== undefined && !num(content.modifiedAt))) invalid('embedded parameters');
           layers.push(newLayer({ ...common, kind: 'embedded', content })); break;
         }
         case 'pixel': layers.push(newLayer({ ...common, kind: 'pixel' })); break;
