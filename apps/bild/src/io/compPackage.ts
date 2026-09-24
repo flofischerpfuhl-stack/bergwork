@@ -10,7 +10,7 @@
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 import { isValidAdjustment } from '../core/adjustments';
 import {
-  BLEND_MODES, hierarchyRecord, InvalidProjectError, MAX_LAYERS, MAX_PIXELS, MAX_SIDE,
+  BLEND_MODES, hierarchyRecord, InvalidProjectError, MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
   validateHierarchy, validateLiveMasks, type BlendMode, type CanvasDocument, type Layer,
   type LayerAdjustment, type LayerShape,
 } from '../core/document';
@@ -83,6 +83,7 @@ interface ParsedLayer extends CompLayerRecord {
 }
 
 function invalid(_detail: string): never {
+  // Legacy compatibility: upstream tests and callers compare this v1–v7 import error verbatim.
   throw new ProjectError('invalid', 'This is not a valid Compositor project, or its metadata is damaged.');
 }
 
@@ -351,7 +352,7 @@ export async function readCompPackage(input: Map<string, Uint8Array>): Promise<L
         linked: record.maskLinked ?? true,
       };
     }
-    layers.push({
+    layers.push(newLayer({
       id: record.id,
       name: record.name,
       visible: record.isVisible,
@@ -367,7 +368,7 @@ export async function readCompPackage(input: Map<string, Uint8Array>): Promise<L
       adjustment: record.adjustment ?? null,
       // Upstream only restores a live shape when its ordinary raster also exists.
       shape: record.shape && raster ? record.shape : null,
-    });
+    }));
   }
 
   return {
@@ -377,6 +378,7 @@ export async function readCompPackage(input: Map<string, Uint8Array>): Promise<L
       height: manifest.height,
       resolution: manifest.resolution ?? 72,
       layers,
+      artboards: [],
       selection: null,
     },
     name,
