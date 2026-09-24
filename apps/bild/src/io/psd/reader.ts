@@ -1,10 +1,10 @@
 import {
   initializeCanvas, readPsd, type BlendMode as AgBlendMode, type Layer as AgLayer,
-  type PixelData, type Psd,
+  type Color as AgColor, type LayerTextData, type PixelData, type Psd,
 } from 'ag-psd';
 import {
   type BlendMode, type CanvasDocument, type ColorLabel, type Layer, type LayerLocks,
-  MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
+  DEFAULT_TEXT_STYLE, defaultTextParagraphStyle, MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
 } from '../../core/document';
 import { makeTransform, samePlacement, type LayerTransform } from '../../core/geometry';
 import { Raster } from '../../core/raster';
@@ -158,7 +158,8 @@ function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportSta
   if (source.vectorMask) issue(state, 'vector-mask', source.imageData
     ? 'Vector mask uses the layer pixel cache and is not editable.' : 'Vector mask is parsed but not rendered.',
     source.imageData ? 'editability-only' : 'not-rendered', layerPath);
-  if (source.text) issue(state, 'text', 'Text uses its saved pixel cache and is not editable.', 'editability-only', layerPath);
+  if (source.text?.orientation === 'vertical') issue(state, 'vertical-text', 'Vertical PSD text is imported as horizontal text.', 'approximated', layerPath);
+  if (source.text?.warp?.style && source.text.warp.style !== 'none') issue(state, 'text-warp', 'Warped PSD text remains editable but its warp is not rendered.', 'not-rendered', layerPath);
   if (source.vectorFill || source.vectorStroke) issue(state, 'vector-content',
     'Vector content uses its saved pixel cache and is not editable.', 'editability-only', layerPath);
   if (source.placedLayer) issue(state, 'smart-object',
@@ -207,6 +208,76 @@ function importedLocks(source: AgLayer): LayerLocks {
     position: all ? false : position, all };
 }
 
+function psdTextColor(value: AgColor | undefined): { red: number; green: number; blue: number; alpha?: number } {
+  if (!value) return DEFAULT_TEXT_STYLE.color;
+  if ('r' in value) return { red: value.r / 255, green: value.g / 255, blue: value.b / 255,
+    ...('a' in value ? { alpha: value.a / 255 } : {}) };
+  if ('fr' in value) return { red: value.fr, green: value.fg, blue: value.fb };
+  if ('k' in value && !('c' in value)) return { red: 1 - value.k / 100, green: 1 - value.k / 100, blue: 1 - value.k / 100 };
+  return DEFAULT_TEXT_STYLE.color;
+}
+
+function psdTextRuns(data: LayerTextData, text: string) {
+  const runs = data.styleRuns?.length ? data.styleRuns : [{ length: text.length, style: data.style ?? {} }];
+  let from = 0;
+  return runs.map((run) => {
+    const to = Math.min(text.length, from + run.length), style = run.style;
+    const result = { from, to, style: { ...DEFAULT_TEXT_STYLE, fontFamily: style.font?.name ?? DEFAULT_TEXT_STYLE.fontFamily,
+      fontStyle: style.fauxItalic ? 'italic' as const : 'normal' as const,
+      fontWeight: style.fauxBold ? 700 : 400, fontSize: style.fontSize ?? DEFAULT_TEXT_STYLE.fontSize,
+      color: psdTextColor(style.fillColor), tracking: style.tracking ?? 0,
+      kerning: style.autoKerning === false ? 'none' as const : 'metric' as const,
+      leading: style.autoLeading === false && style.leading ? style.leading : null,
+      baselineShift: style.baselineShift ?? 0,
+      features: { liga: style.ligatures !== false, dlig: style.dLigatures === true }, axes: {} } };
+    from = to;
+    return result;
+  }).filter((run) => run.to > run.from);
+}
+
+function psdAlignment(value: string | undefined): 'left' | 'center' | 'right' | 'justify' {
+  if (value === 'right') return 'right';
+  if (value === 'center') return 'center';
+  if (value?.startsWith('justify')) return 'justify';
+  return 'left';
+}
+
+function psdParagraphs(data: LayerTextData, text: string) {
+  const runs = data.paragraphStyleRuns?.length ? data.paragraphStyleRuns
+    : [{ length: text.length, style: data.paragraphStyle ?? {} }];
+  let from = 0;
+  return runs.map((run) => {
+    const to = Math.min(text.length, from + run.length), style = run.style, alignment = psdAlignment(style.justification);
+    const result = { from, to, style: { ...defaultTextParagraphStyle(alignment), firstLineIndent: style.firstLineIndent ?? 0,
+      startIndent: style.startIndent ?? 0, endIndent: style.endIndent ?? 0, spaceBefore: style.spaceBefore ?? 0,
+      spaceAfter: style.spaceAfter ?? 0 } };
+    from = to;
+    return result;
+  });
+}
+
+function psdTextBox(data: LayerTextData, width: number, height: number): { width: number; height: number } | null {
+  if (data.shapeType !== 'box') return null;
+  const bounds = data.boxBounds;
+  return bounds && bounds.length >= 4 ? { width: Math.max(1, Math.abs(bounds[2]! - bounds[0]!)),
+    height: Math.max(1, Math.abs(bounds[3]! - bounds[1]!)) } : { width: Math.max(1, width), height: Math.max(1, height) };
+}
+
+function psdTextTransform(data: LayerTextData, fallback: LayerTransform,
+  box: { width: number; height: number } | null): LayerTransform {
+  const matrix = data.transform;
+  if (!matrix || matrix.length !== 6 || !matrix.every(Number.isFinite)) return fallback;
+  const [a, b, c, d, tx, ty] = matrix as [number, number, number, number, number, number];
+  const localWidth = box?.width ?? Math.max(1, fallback.size.width);
+  const localHeight = box?.height ?? Math.max(1, fallback.size.height);
+  const scaleX = Math.hypot(a, b), scaleY = Math.hypot(c, d);
+  if (!(scaleX > 0) || !(scaleY > 0)) return fallback;
+  return makeTransform({ x: tx + (data.left ?? 0) * a + (data.top ?? 0) * c,
+    y: ty + (data.left ?? 0) * b + (data.top ?? 0) * d },
+  { width: Math.max(1, localWidth * scaleX), height: Math.max(1, localHeight * scaleY) },
+  { rotation: Math.atan2(b, a) * 180 / Math.PI, flipX: a < 0, flipY: d < 0, sampling: 'High quality' });
+}
+
 function importSiblings(sources: readonly AgLayer[], parentId: string | null, parentPath: string,
   state: ImportState): Layer[] {
   const result: Layer[] = [];
@@ -234,12 +305,19 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     reportLayerFeatures(source, isGroup, state, layerPath);
     const opacity = Math.min(1, Math.max(0, source.opacity ?? 1));
     const fillOpacity = Math.min(1, Math.max(0, source.fillOpacity ?? 1));
+    const textData = !isGroup ? source.text : undefined;
+    const editableText = textData?.text.replace(/\r/g, '\n') ?? '';
+    const textBox = textData ? psdTextBox(textData, width, height) : null;
+    const editableTransform = textData ? psdTextTransform(textData, layerTransform, textBox) : layerTransform;
     const imported = newLayer({
-      id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : 'pixel',
+      id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : textData ? 'text' : 'pixel',
       visible: source.hidden !== true, opacity, fillOpacity, blendMode: mappedMode,
-      locks: importedLocks(source), colorLabel: importedColorLabel(source, state, layerPath), transform: layerTransform,
+      locks: importedLocks(source), colorLabel: importedColorLabel(source, state, layerPath), transform: editableTransform,
       raster: image ? Raster.fromPixels(image.width, image.height, 4, pixelDataToRgba8(image)) : null,
-      mask: maskFor(source, layerTransform, state, layerPath),
+      ...(textData ? { text: editableText, runs: psdTextRuns(textData, editableText),
+        paragraphs: psdParagraphs(textData, editableText), box: textBox,
+        alignment: psdAlignment(textData.paragraphStyle?.justification), renderedTransform: layerTransform } : {}),
+      mask: maskFor(source, editableTransform, state, layerPath),
       maskSourceId: source.clipping && !isGroup ? clippingBaseId : null,
     });
     result.push(imported);

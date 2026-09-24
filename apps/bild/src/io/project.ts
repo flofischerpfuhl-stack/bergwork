@@ -251,8 +251,9 @@ function v2Layer(layer: Layer, context: V2BuildContext): LayerRecordV2 {
     }
     case 'text': {
       const value = layer as import('../core/model').TextLayer;
-      return { ...common, kind: 'text', text: value.text, runs: value.runs, box: value.box,
-        alignment: value.alignment, previewAssetId: preview };
+      return { ...common, kind: 'text', textSchemaVersion: 1, text: value.text, runs: value.runs,
+        paragraphs: value.paragraphs, box: value.box,
+        alignment: value.alignment, previewAssetId: preview, previewTransform: value.renderedTransform };
     }
     case 'embedded': {
       const value = layer as import('../core/model').EmbeddedLayer;
@@ -275,7 +276,7 @@ function manifestV2WithContext(document: CanvasDocument, name: string, activeLay
   return { format: 'fernwork-image', version: 2, id: document.id, name, width: document.width, height: document.height,
     resolution: document.resolution, colorSpace: 'srgb', activeLayerId, layers, artboards: document.artboards ?? [],
     ...(document.guides?.length ? { guides: document.guides.map((g) => ({ id: g.id, orientation: g.orientation, position: g.position })) } : {}),
-    assets: [...context.assets.values()] };
+    assets: [...context.assets.values()], ...(document.fonts?.length ? { fonts: document.fonts } : {}) };
 }
 
 /** Native v2 manifest. `buildManifest` remains the v1 compatibility projection for EditorHandle. */
@@ -607,7 +608,7 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
   for (const asset of manifest.assets) {
     if (!asset || typeof asset.id !== 'string' || !asset.id || records.has(asset.id) || !isSafeRelativePath(asset.path)
       || typeof asset.mime !== 'string' || typeof asset.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(asset.sha256)
-      || !['image', 'mask', 'pattern', 'embedded', 'history-tile'].includes(asset.role)) invalid('v2 asset');
+      || !['image', 'mask', 'pattern', 'embedded', 'font', 'history-tile'].includes(asset.role)) invalid('v2 asset');
     if (asset.width !== undefined && (!Number.isInteger(asset.width) || asset.width < 1 || asset.width > MAX_SIDE)) invalid('v2 asset width');
     if (asset.height !== undefined && (!Number.isInteger(asset.height) || asset.height < 1 || asset.height > MAX_SIDE)) invalid('v2 asset height');
     if (asset.width && asset.height) {
@@ -621,7 +622,7 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
   const rasters = new Map<string, Raster>();
   const resources: Array<NonNullable<CanvasDocument['resources']>[number]> = [];
   for (const record of records.values()) {
-    if (record.role !== 'pattern' && record.role !== 'embedded') continue;
+    if (record.role !== 'pattern' && record.role !== 'embedded' && record.role !== 'font') continue;
     const bytes = entries[record.path];
     if (!bytes || sha256Hex(bytes) !== record.sha256) throw new ProjectError('missing-image', 'An embedded project asset is missing or damaged.');
     resources.push({ id: record.id, role: record.role, mime: record.mime, bytes });
@@ -711,9 +712,17 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
             sourceShape: record.sourceShape })); break;
         case 'text':
           if (typeof record.text !== 'string' || !Array.isArray(record.runs)
+            || !record.runs.every((run: unknown) => validTextRun(run, record.text.length))
             || !['left', 'center', 'right', 'justify'].includes(record.alignment)) invalid('text parameters');
+          if ('textSchemaVersion' in record && record.textSchemaVersion !== 1) invalid('text schema');
+          if ('paragraphs' in record && (!Array.isArray(record.paragraphs)
+            || !record.paragraphs.every((paragraph: unknown) => validTextParagraph(paragraph, record.text.length)))) invalid('paragraph parameters');
+          // Files written by the first v2 implementation used flat runs and one alignment.
+          // `newLayer` performs that one-time migration; all new files carry textSchemaVersion 1.
           layers.push(newLayer({ ...common, kind: 'text', text: record.text, runs: record.runs,
-            box: record.box, alignment: record.alignment })); break;
+            paragraphs: 'paragraphs' in record && Array.isArray(record.paragraphs) ? record.paragraphs : undefined,
+            box: record.box, alignment: record.alignment,
+            renderedTransform: 'previewTransform' in record ? record.previewTransform : null })); break;
         case 'embedded': {
           const content = record.content;
           if (!content || !['embedded', 'linked'].includes(content.mode) || !['image', 'svg', 'pdf', 'project'].includes(content.mediaType)
@@ -735,9 +744,15 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
     const guides = (source as { guides?: unknown }).guides;
     if (guides !== undefined && (!Array.isArray(guides) || guides.length > 10_000 || !guides.every((g) => g && typeof g.id === 'string'
       && (g.orientation === 'horizontal' || g.orientation === 'vertical') && num(g.position) && Math.abs(g.position) <= 1_000_000))) invalid('guides');
+    const fontRecords = (manifest as ProjectManifestV2).fonts;
+    if (fontRecords !== undefined && (!Array.isArray(fontRecords) || fontRecords.some((font) => !font
+      || typeof font.id !== 'string' || typeof font.family !== 'string' || typeof font.style !== 'string'
+      || !num(font.weight) || typeof font.embeddingAllowed !== 'boolean'
+      || !['bundled', 'system', 'local', 'embedded'].includes(font.source)
+      || (font.resourceId !== undefined && records.get(font.resourceId)?.role !== 'font')))) invalid('fonts');
     return { id: source.id, width: source.width, height: source.height, resolution: source.resolution,
       layers, artboards: normalizeArtboards(source.artboards), ...(guides?.length ? { guides: (guides as Guide[]).map((g) => ({ id: g.id, orientation: g.orientation, position: g.position })) } : {}),
-      resources, selection: null };
+      resources, ...(fontRecords?.length ? { fonts: fontRecords } : {}), selection: null };
   };
 
   const document = await parseDocument(manifest);
@@ -757,6 +772,33 @@ function validLocks(value: LayerCommonV2['locks']): boolean {
 
 function validRgb(value: { red: number; green: number; blue: number } | null | undefined): boolean {
   return !!value && [value.red, value.green, value.blue].every((part) => num(part) && part >= 0 && part <= 1);
+}
+
+function validTextRun(value: unknown, length: number): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const run = value as Record<string, unknown>;
+  if (!Number.isInteger(run.from) || !Number.isInteger(run.to) || (run.from as number) < 0
+    || (run.to as number) <= (run.from as number) || (run.to as number) > length) return false;
+  if (!('style' in run)) return typeof run.fontFamily === 'string' && num(run.fontSize)
+    && validRgb(run.color as { red: number; green: number; blue: number });
+  const style = run.style as Record<string, unknown>;
+  if (!style || style.schemaVersion !== 1 || typeof style.fontFamily !== 'string' || !style.fontFamily.trim()
+    || !['normal', 'italic', 'oblique'].includes(String(style.fontStyle)) || !num(style.fontWeight)
+    || !num(style.fontSize) || (style.fontSize as number) <= 0 || !validRgb(style.color as { red: number; green: number; blue: number })
+    || !num(style.tracking) || !['metric', 'optical', 'none'].includes(String(style.kerning))
+    || !(style.leading === null || (num(style.leading) && style.leading > 0)) || !num(style.baselineShift)
+    || !style.features || typeof style.features !== 'object' || !style.axes || typeof style.axes !== 'object') return false;
+  return Object.entries(style.axes as Record<string, unknown>).every(([axis, value]) => axis.length === 4 && num(value));
+}
+
+function validTextParagraph(value: unknown, length: number): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const paragraph = value as Record<string, unknown>, style = paragraph.style as Record<string, unknown> | undefined;
+  return Number.isInteger(paragraph.from) && Number.isInteger(paragraph.to) && (paragraph.from as number) >= 0
+    && (paragraph.to as number) >= (paragraph.from as number) && (paragraph.to as number) <= length
+    && !!style && style.schemaVersion === 1 && ['left', 'center', 'right', 'justify'].includes(String(style.alignment))
+    && ['auto', 'ltr', 'rtl'].includes(String(style.direction))
+    && ['firstLineIndent', 'startIndent', 'endIndent', 'spaceBefore', 'spaceAfter'].every((key) => num(style[key]));
 }
 
 function validVectorPath(value: import('../../contracts-v2').VectorPathRecordV2): boolean {

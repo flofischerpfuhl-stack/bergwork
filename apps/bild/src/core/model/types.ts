@@ -157,13 +157,59 @@ export interface VectorLayer extends LayerCommon, WithoutAdjustment {
   /** Editable primitive metadata; paths/style remain the canonical vector representation. */
   readonly sourceShape: LayerShape | null;
 }
-export interface TextRun { readonly from: number; readonly to: number; readonly fontFamily: string; readonly fontSize: number; readonly color: RGB }
+export type TextKerning = 'metric' | 'optical' | 'none';
+export type TextOpenTypeFeature = 'liga' | 'dlig' | 'tnum' | 'lnum' | 'onum' | 'smcp';
+export interface TextRunStyle {
+  readonly schemaVersion: 1;
+  /** The requested family is retained even when rendering uses a substitute (PRODUCT-PLAN P11). */
+  readonly fontFamily: string;
+  readonly fontStyle: 'normal' | 'italic' | 'oblique';
+  readonly fontWeight: number;
+  /** Typographic points, converted with the document resolution at layout time. */
+  readonly fontSize: number;
+  readonly color: RGB & { readonly alpha?: number };
+  /** Thousandths of an em, matching Photoshop's tracking unit. */
+  readonly tracking: number;
+  readonly kerning: TextKerning;
+  /** Explicit line height in points, or null for the font's normal leading. */
+  readonly leading: number | null;
+  readonly baselineShift: number;
+  readonly features: Readonly<Partial<Record<TextOpenTypeFeature, boolean>>>;
+  readonly axes: Readonly<Record<string, number>>;
+}
+export interface TextRun {
+  readonly from: number;
+  readonly to: number;
+  readonly style: TextRunStyle;
+}
+export interface LegacyTextRun {
+  readonly from: number;
+  readonly to: number;
+  readonly fontFamily: string;
+  readonly fontSize: number;
+  readonly color: RGB;
+}
+export interface TextParagraphStyle {
+  readonly schemaVersion: 1;
+  readonly alignment: 'left' | 'center' | 'right' | 'justify';
+  readonly direction: 'auto' | 'ltr' | 'rtl';
+  readonly firstLineIndent: number;
+  readonly startIndent: number;
+  readonly endIndent: number;
+  readonly spaceBefore: number;
+  readonly spaceAfter: number;
+}
+export interface TextParagraph { readonly from: number; readonly to: number; readonly style: TextParagraphStyle }
 export interface TextLayer extends LayerCommon, WithoutAdjustment, WithoutSourceShape {
   readonly kind: 'text'; readonly text: string; readonly runs: readonly TextRun[];
+  readonly paragraphs: readonly TextParagraph[];
   readonly box: { readonly width: number; readonly height: number } | null;
+  /** Compatibility projection for pre-P2 callers; paragraphs are authoritative. */
   readonly alignment: 'left' | 'center' | 'right' | 'justify';
   /** Rendered cache while font/vector rendering is loaded lazily. */
   readonly raster: Raster | null;
+  /** Placement of an imported/saved preview; null means the editable transform. */
+  readonly renderedTransform: LayerTransform | null;
 }
 export interface EmbeddedLayer extends LayerCommon, WithoutAdjustment, WithoutSourceShape {
   readonly kind: 'embedded';
@@ -188,9 +234,21 @@ export interface Artboard {
 
 export interface DocumentResource {
   readonly id: string;
-  readonly role: 'pattern' | 'embedded';
+  readonly role: 'pattern' | 'embedded' | 'font';
   readonly mime: string;
   readonly bytes: Uint8Array;
+}
+
+export interface DocumentFont {
+  readonly id: string;
+  readonly family: string;
+  readonly style: string;
+  readonly weight: number;
+  readonly source: 'bundled' | 'system' | 'local' | 'embedded';
+  readonly postscriptName?: string;
+  /** Present only when the licence permits embedding and the bytes are a document resource. */
+  readonly resourceId?: string;
+  readonly embeddingAllowed: boolean;
 }
 
 export interface CanvasDocument {
@@ -203,6 +261,7 @@ export interface CanvasDocument {
   /** Ruler guides in document pixels (PRODUCT-PLAN 6.1). */
   readonly guides?: readonly Guide[];
   readonly resources?: readonly DocumentResource[];
+  readonly fonts?: readonly DocumentFont[];
   readonly selection: DocumentSelection | null;
 }
 

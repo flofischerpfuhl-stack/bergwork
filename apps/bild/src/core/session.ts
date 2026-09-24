@@ -15,6 +15,7 @@ import {
   type LayerMask, BLEND_MODES,
   type Guide, } from './document';
 import type { ColorLabel, LayerLocks } from './model';
+import type { TextParagraphStyle, TextRunStyle } from './model';
 import {
   boundingBox, center, corners as transformCorners, following, isValidTransform, makeTransform, mirrored, samePlacement,
   snapOffset, transformsEqual, type LayerTransform, type Point, type Rect, type Size,
@@ -34,6 +35,9 @@ import {
   effectiveLayerLocks, layerLockBlocker, preserveLayerTransparency,
   type LayerEditKind, type LayerLockBlocker,
 } from './locks';
+import { DEFAULT_TEXT_STYLE, defaultTextParagraphs } from './document';
+import { applyParagraphStyle, applyTextStyle, convertTextBox, replaceTextRange,
+  type ParagraphStylePatch, type TextStylePatch } from './text/model';
 
 export type Tool =
   | 'move' | 'marquee' | 'lasso' | 'wand' | 'crop' | 'brush' | 'spotHealing' | 'cloneStamp' | 'blur'
@@ -425,6 +429,78 @@ export class EditorSession {
       this.setActiveLayer(group.id);
       if (group.parentId) this.expand(group.parentId);
     });
+  }
+
+  // MARK: Text layers (PRODUCT-PLAN A5)
+
+  private insertTextLayer(text: string, transform: LayerTransform, box: { width: number; height: number } | null,
+    style: TextRunStyle): string | null {
+    const document = this.document;
+    if (!this.canEditLayers || !document || document.layers.length >= MAX_LAYERS) return null;
+    const active = this.activeLayer;
+    const layer = newLayer({ id: uuid(), name: uniqueName(document.layers, this.label('Text')), kind: 'text', text,
+      runs: text.length ? [{ from: 0, to: text.length, style }] : [], paragraphs: defaultTextParagraphs(text), box,
+      transform, parentId: active?.kind === 'group' ? active.id : active?.parentId ?? null });
+    const index = document.layers.findIndex((value) => value.id === this.activeLayerId);
+    this.edit(box ? 'New Area Text' : 'New Point Text', () => {
+      const layers = document.layers.slice();
+      layers.splice(index >= 0 ? index + 1 : layers.length, 0, layer);
+      this.setLayers(layers); this.setActiveLayer(layer.id);
+      if (layer.parentId) this.expand(layer.parentId);
+    });
+    return layer.id;
+  }
+
+  createPointText(position: Point, text = '', style: TextRunStyle = DEFAULT_TEXT_STYLE): string | null {
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) throw new RangeError('Text position must be finite');
+    const resolution = this.document?.resolution ?? 72;
+    const pixels = style.fontSize * resolution / 72;
+    const width = Math.max(1, text.length * pixels * 0.6), height = Math.max(1, (style.leading ?? style.fontSize * 1.2) * resolution / 72);
+    return this.insertTextLayer(text, makeTransform(position, { width, height }), null, style);
+  }
+
+  createAreaText(rect: Rect, text = '', style: TextRunStyle = DEFAULT_TEXT_STYLE): string | null {
+    if (!(rect.width > 0) || !(rect.height > 0) || ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite)) {
+      throw new RangeError('Area text rectangle must have positive finite dimensions');
+    }
+    return this.insertTextLayer(text, makeTransform({ x: rect.x, y: rect.y }, { width: rect.width, height: rect.height }),
+      { width: rect.width, height: rect.height }, style);
+  }
+
+  replaceText(id: string, from: number, to: number, replacement: string): void {
+    const layer = this.layer(id);
+    if (layer?.kind !== 'text' || this.refuseLayerEdit(id, 'pixels')) return;
+    const next = replaceTextRange(layer, from, to, replacement);
+    this.edit('Edit Text', () => this.updateLayer(id, () => next));
+  }
+
+  applyTextStyle(id: string, from: number, to: number, patch: TextStylePatch): void {
+    const layer = this.layer(id);
+    if (layer?.kind !== 'text' || this.refuseLayerEdit(id, 'pixels')) return;
+    const next = applyTextStyle(layer, from, to, patch);
+    if (next === layer) return;
+    this.edit('Format Text', () => this.updateLayer(id, () => next));
+  }
+
+  changeParagraphSettings(id: string, from: number, to: number,
+    patch: ParagraphStylePatch | Partial<TextParagraphStyle>): void {
+    const layer = this.layer(id);
+    if (layer?.kind !== 'text' || this.refuseLayerEdit(id, 'pixels')) return;
+    const next = applyParagraphStyle(layer, from, to, patch);
+    this.edit('Format Paragraph', () => this.updateLayer(id, () => next));
+  }
+
+  convertTextKind(id: string, box: { width: number; height: number } | null): void {
+    const layer = this.layer(id);
+    if (layer?.kind !== 'text' || this.refuseLayerEdit(id, 'pixels')) return;
+    const next = convertTextBox(layer, box);
+    this.edit(box ? 'Convert to Area Text' : 'Convert to Point Text', () => this.updateLayer(id, () => next));
+  }
+
+  rasterizeTextLayer(id: string, raster: Raster, transform?: LayerTransform): void {
+    const layer = this.layer(id);
+    if (layer?.kind !== 'text' || this.refuseLayerEdit(id, 'pixels')) return;
+    this.edit('Rasterize Text', () => this.updateLayer(id, (value) => withLayerRaster(value, raster, transform ?? value.transform)));
   }
 
   /** Wraps the selected layers (a selected folder brings its subtree) in a new folder (groupSelectedLayers). */

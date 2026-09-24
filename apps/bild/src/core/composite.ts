@@ -80,7 +80,8 @@ class BandRenderer {
 
   private transform(layer: Layer): LayerTransform {
     let result = this.transforms.get(layer.id);
-    if (!result) { result = this.options.transform?.(layer) ?? layer.transform; this.transforms.set(layer.id, result); }
+    if (!result) { result = this.options.transform?.(layer)
+      ?? (layer.kind === 'text' ? layer.renderedTransform ?? layer.transform : layer.transform); this.transforms.set(layer.id, result); }
     return result;
   }
   private blendMode(layer: Layer): BlendMode { return this.options.blendMode?.(layer) ?? layer.blendMode; }

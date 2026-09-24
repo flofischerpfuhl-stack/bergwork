@@ -20,6 +20,35 @@ export interface FontVariation {
   readonly value: number;
 }
 
+export interface ParagraphSpan {
+  /** UTF-16 offsets, matching JavaScript strings and CanvasKit Paragraph. */
+  readonly from: number;
+  readonly to: number;
+  readonly fontFamilies: readonly string[];
+  readonly fontSize: number;
+  readonly color?: RgbaColor;
+  readonly fontStyle?: 'normal' | 'italic' | 'oblique';
+  readonly fontWeight?: number;
+  readonly letterSpacing?: number;
+  readonly heightMultiplier?: number;
+  readonly fontFeatures?: readonly FontFeature[];
+  readonly fontVariations?: readonly FontVariation[];
+}
+
+export interface ParagraphBlock {
+  readonly from: number;
+  readonly to: number;
+  readonly alignment?: TextAlignment;
+  readonly direction?: TextDirection;
+  readonly firstLineIndent?: number;
+  readonly startIndent?: number;
+  readonly endIndent?: number;
+  readonly spaceBefore?: number;
+  readonly spaceAfter?: number;
+}
+
+export interface TextRect { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
+
 export interface FontRegistration {
   readonly id: string;
   readonly family: string;
@@ -48,6 +77,10 @@ export interface ParagraphRequest {
   readonly maxLines?: number;
   readonly fontFeatures?: readonly FontFeature[];
   readonly fontVariations?: readonly FontVariation[];
+  readonly spans?: readonly ParagraphSpan[];
+  readonly paragraphs?: readonly ParagraphBlock[];
+  /** Point text uses its intrinsic width; area text uses the requested width. */
+  readonly pointText?: boolean;
 }
 
 export interface ParagraphMetrics {
@@ -63,6 +96,9 @@ export interface ParagraphMetrics {
 /** A layout owns a small CanvasKit paragraph allocation until `dispose()` is called. */
 export interface ParagraphLayout extends ParagraphMetrics {
   readonly request: ParagraphRequest;
+  caretIndexAt(x: number, y: number): number;
+  selectionRects(from: number, to: number): readonly TextRect[];
+  caretRect(index: number): TextRect;
   dispose(): void;
 }
 
@@ -129,4 +165,3 @@ export interface LoadTextEngineOptions {
   /** Overrides the emitted Vite asset URL; useful for Node tests and non-Vite hosts. */
   readonly wasmUrl?: string;
 }
-
