@@ -1227,6 +1227,9 @@ export class EditorSession {
     if (this.transformTargetsMask) return null;
     if (this.transformEdit?.floating) return this.transformEdit.floating.pixelSize;
     const layer = this.activeLayer, raster = layer?.raster;
+    if (layer?.kind === 'embedded' && layer.content.width && layer.content.height) {
+      return { width: layer.content.width, height: layer.content.height };
+    }
     return raster ? { width: raster.width, height: raster.height } : layer?.kind === 'vector' ? layer.transform.size : null;
   }
 
@@ -1264,7 +1267,7 @@ export class EditorSession {
     if (preview && !preview.mask) return preview.raster;
     const override = this.rasterOverrides.get(layer.id);
     if (override) return override;
-    if (layer.kind === 'text' || layer.kind === 'vector') return this.derivedPixels(layer)?.raster ?? layer.raster ?? null;
+    if (layer.kind === 'text' || layer.kind === 'vector' || layer.kind === 'embedded') return this.derivedPixels(layer)?.raster ?? layer.raster ?? null;
     return layer.raster ?? null;
   }
   private derivedPixels(layer: Layer): DerivedLayerPixels | null {

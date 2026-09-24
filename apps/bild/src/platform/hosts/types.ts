@@ -1,4 +1,5 @@
 import type { HostAdapter } from '../../../contracts';
+import type { PdfPlacementHost } from '../../io/pdf';
 
 export interface VersionedCapability { readonly version: number }
 
@@ -15,7 +16,7 @@ export type FileSaveKind = 'project' | 'png' | 'jpeg' | 'webp' | 'avif' | 'tiff'
 /** Fallback: HostAdapter pickers/downloads remain usable when this capability is absent. */
 export interface FileSystemHost extends VersionedCapability {
   readonly version: 1;
-  chooseFiles(kind: 'images' | 'project'): Promise<readonly HostFileReference[]>;
+  chooseFiles(kind: 'images' | 'project' | 'content'): Promise<readonly HostFileReference[]>;
   chooseSaveTarget(suggestedName: string, kind: FileSaveKind): Promise<FileSaveTarget | null>;
   writeFile(target: FileSaveTarget, blob: Blob): Promise<void>;
   recentFiles(): Promise<readonly HostFileReference[]>;
@@ -94,6 +95,8 @@ export interface HostCapabilityMap {
   readonly models?: ModelHost;
   readonly color?: ColorHost;
   readonly scratch?: ScratchCapability;
+  /** Optional lazy PDFium adapter; absent hosts expose PDF placement as unavailable. */
+  readonly pdf?: PdfPlacementHost;
 }
 
 export interface CapabilityHost extends HostAdapter {

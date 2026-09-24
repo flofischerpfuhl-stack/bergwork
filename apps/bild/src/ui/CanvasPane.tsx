@@ -43,13 +43,17 @@ export function CanvasPane({ controller }: { controller: EditorController }) {
         event.preventDefault();
         setDropping(false);
         const files = [...event.dataTransfer.files];
+        const rect = host.current!.getBoundingClientRect();
+        const doc = controller.session.document;
+        const point = doc ? controller.session.viewport.documentPoint({ x: event.clientX - rect.left, y: event.clientY - rect.top }, doc) : null;
+        if (event.altKey && controller.placeContentFiles) {
+          void controller.placeContentFiles(files, point);
+          return;
+        }
         const archives = files.filter((f) => isProjectFile(f.name));
         const images = files.filter((f) => !isProjectFile(f.name));
         for (const archive of archives) void controller.openArchive(archive).catch((error) => controller.reportError('open-failed', error));
         if (images.length) {
-          const rect = host.current!.getBoundingClientRect();
-          const doc = controller.session.document;
-          const point = doc ? controller.session.viewport.documentPoint({ x: event.clientX - rect.left, y: event.clientY - rect.top }, doc) : null;
           void controller.importFiles(images, controller.workspace.current, point);
         }
       }}>

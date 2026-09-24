@@ -1,6 +1,6 @@
 import {
   initializeCanvas, readPsd, type BlendMode as AgBlendMode, type Layer as AgLayer,
-  type BezierPath, type Color as AgColor, type EffectSolidGradient, type LayerEffectsInfo, type LayerTextData, type PixelData, type Psd,
+  type BezierPath, type Color as AgColor, type EffectSolidGradient, type LayerEffectsInfo, type LayerTextData, type LinkedFile, type PixelData, type Psd,
   type UnitsValue, type VectorContent,
 } from 'ag-psd';
 import {
@@ -18,6 +18,8 @@ import { parseCubeLut } from '../../core/adjust/cube';
 import { readRawPsdComposite } from './composite';
 import { decodePsdLayerChannels } from './layerChannels';
 import type { LittleCms } from '../../wasm/lcms';
+import { sha256Hex } from '../sha256';
+import { decodePngNativeRGBA } from '../png';
 
 export type PsdUnsupportedImpact = 'not-rendered' | 'approximated' | 'editability-only';
 
@@ -121,6 +123,7 @@ interface ImportState {
   readonly resolution: number;
   readonly unsupported: PsdUnsupportedFeature[];
   readonly resources: NonNullable<CanvasDocument['resources']>[number][];
+  readonly linkedFiles: ReadonlyMap<string, LinkedFile>;
 }
 
 function issue(state: ImportState, code: string, message: string, impact: PsdUnsupportedImpact, layerPath?: string): void {
@@ -261,8 +264,8 @@ function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportS
 function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportState, layerPath: string): void {
   if (source.text?.orientation === 'vertical') issue(state, 'vertical-text', 'Vertical PSD text is imported as horizontal text.', 'approximated', layerPath);
   if (source.text?.warp?.style && source.text.warp.style !== 'none') issue(state, 'text-warp', 'Warped PSD text remains editable but its warp is not rendered.', 'not-rendered', layerPath);
-  if (source.placedLayer) issue(state, 'smart-object',
-    'Smart object uses its saved pixel cache and is not editable.', 'editability-only', layerPath);
+  if (source.placedLayer?.filter) issue(state, 'smart-filter',
+    'Smart-object filters remain in the PSD preview; their editable parameters are not imported.', 'editability-only', layerPath);
   if (source.realMask) issue(state, 'real-mask', 'The real/vector-derived mask channel is not rendered.', 'not-rendered', layerPath);
   if (source.filterEffectsMasks) issue(state, 'smart-filter', 'Smart filters and their masks are not rendered.', 'not-rendered', layerPath);
   if (source.knockout) issue(state, 'knockout', 'Knockout is rendered from the layer shape; its boundary is inferred from group nesting.',
@@ -283,6 +286,69 @@ function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportSta
   if (source.protected?.artboards) issue(state, 'lock-artboards',
     'The PSD artboard lock has no layer-lock equivalent.', 'editability-only', layerPath);
   // Non-pass-through group isolation and group opacity are carried by PSD-specific group metadata below.
+}
+
+function placedMedia(file: LinkedFile | undefined): 'image' | 'svg' | 'pdf' | 'project' {
+  const name = file?.name ?? file?.linkedFile?.name ?? '';
+  if (/\.svg$/i.test(name)) return 'svg';
+  if (/\.pdf$/i.test(name)) return 'pdf';
+  if (/\.fwimg$/i.test(name)) return 'project';
+  return 'image';
+}
+
+function placedTransform(source: AgLayer, fallback: LayerTransform): { transform: LayerTransform; warp: import('../../core/model').WarpQuad | null } {
+  const values = source.placedLayer?.transform;
+  if (!values || values.length < 8 || !values.slice(0, 8).every(Number.isFinite)) return { transform: fallback, warp: null };
+  const corners = [0, 1, 2, 3].map((index) => ({ x: values[index * 2]!, y: values[index * 2 + 1]! })) as
+    [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }, { x: number; y: number }];
+  const centre = { x: corners.reduce((sum, value) => sum + value.x, 0) / 4, y: corners.reduce((sum, value) => sum + value.y, 0) / 4 };
+  const width = Math.hypot(corners[1].x - corners[0].x, corners[1].y - corners[0].y);
+  const height = Math.hypot(corners[3].x - corners[0].x, corners[3].y - corners[0].y);
+  if (!(width >= 1 && height >= 1)) return { transform: fallback, warp: null };
+  const cross = (corners[1].x - corners[0].x) * (corners[3].y - corners[0].y)
+    - (corners[1].y - corners[0].y) * (corners[3].x - corners[0].x);
+  const affineX = corners[1].x + corners[3].x - corners[0].x, affineY = corners[1].y + corners[3].y - corners[0].y;
+  const nonAffine = Math.hypot(corners[2].x - affineX, corners[2].y - affineY) > 0.01;
+  return { transform: makeTransform({ x: centre.x - width / 2, y: centre.y - height / 2 }, { width, height }, {
+    rotation: Math.atan2(corners[1].y - corners[0].y, corners[1].x - corners[0].x) * 180 / Math.PI,
+    flipY: cross < 0, sampling: 'High quality',
+  }), warp: nonAffine ? { kind: 'quad', schemaVersion: 1, corners } : null };
+}
+
+function placedContent(source: AgLayer, state: ImportState): import('../../core/model').EmbeddedLayer['content'] | null {
+  const placed = source.placedLayer;
+  if (!placed) return null;
+  const file = state.linkedFiles.get(placed.id) ?? (placed.placed ? state.linkedFiles.get(placed.placed) : undefined);
+  const sourceName = file?.name || file?.linkedFile?.name || source.name || 'Placed Content';
+  const size = { width: placed.width, height: placed.height };
+  if (file?.data?.length) {
+    const hash = sha256Hex(file.data), assetId = `embedded-${hash}`;
+    if (!state.resources.some((resource) => resource.id === assetId)) state.resources.push({
+      id: assetId, role: 'embedded', mime: placedMedia(file) === 'svg' ? 'image/svg+xml'
+        : placedMedia(file) === 'pdf' ? 'application/pdf' : 'application/octet-stream', bytes: file.data.slice(),
+    });
+    return { mode: 'embedded', mediaType: placedMedia(file), assetId, sourceName, sha256: hash,
+      ...(size.width ? { width: size.width } : {}), ...(size.height ? { height: size.height } : {}),
+      ...(placedMedia(file) === 'pdf' ? { page: Math.max(0, (placed.pageNumber ?? 1) - 1) } : {}) };
+  }
+  const uri = file?.linkedFile?.fullPath || file?.linkedFile?.originalPath || file?.linkedFile?.relativePath;
+  if (!uri) return null;
+  return { mode: 'linked', mediaType: placedMedia(file), uri, sourceName,
+    ...(size.width ? { width: size.width } : {}), ...(size.height ? { height: size.height } : {}),
+    ...(file?.time ? { modifiedAt: Date.parse(file.time) } : {}),
+    ...(placedMedia(file) === 'pdf' ? { page: Math.max(0, (placed.pageNumber ?? 1) - 1) } : {}) };
+}
+
+function placedRaster(source: AgLayer, state: ImportState): Raster | null {
+  const placed = source.placedLayer;
+  if (!placed) return null;
+  const file = state.linkedFiles.get(placed.id) ?? (placed.placed ? state.linkedFiles.get(placed.placed) : undefined);
+  if (!file?.data || file.data.length < 8 || file.data[0] !== 0x89 || file.data[1] !== 0x50) return null;
+  try {
+    const png = decodePngNativeRGBA(file.data);
+    return Raster.fromPixels(png.width, png.height, 4, png.data, { format: png.bitDepth === 16 ? 'rgba16' : 'rgba8',
+      source: { bytes: file.data, mime: 'image/png', sha256: sha256Hex(file.data) } });
+  } catch { return null; }
 }
 
 function rgbColor(value: unknown, fallback: RGB = { red: 1, green: 1, blue: 1 }): RGB {
@@ -584,16 +650,23 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const editableTransform = textData ? psdTextTransform(textData, layerTransform, textBox) : layerTransform;
     const vectorContent = !isGroup && !textData && !!(source.vectorFill || source.vectorStroke) && !!source.vectorMask?.paths.length;
     const vectorPaths = vectorContent ? psdVectorPaths(source.vectorMask!.paths, editableTransform.origin) : [];
+    const placed = !isGroup ? placedContent(source, state) : null;
+    const placedPixels = placed ? placedRaster(source, state) : null;
+    // When ag-psd exposes only Photoshop's already-transformed cache, keep its pixel placement until the source
+    // runtime resolves. Decodable embedded PNGs use their true original grid and the PlLd/SoLd transform directly.
+    const placement = placed && placedPixels ? placedTransform(source, layerTransform) : { transform: editableTransform, warp: null };
     let imported: Layer = newLayer({
-      id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : textData ? 'text' : vectorContent ? 'vector' : adjustment ? 'adjustment' : 'pixel',
+      id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : placed ? 'embedded' : textData ? 'text' : vectorContent ? 'vector' : adjustment ? 'adjustment' : 'pixel',
       visible: source.hidden !== true, opacity, fillOpacity, blendMode: mappedMode,
-      locks: importedLocks(source), colorLabel: importedColorLabel(source, state, layerPath), transform: editableTransform,
-      raster: image ? rasterFromPixelData(image) : null,
+      locks: importedLocks(source), colorLabel: importedColorLabel(source, state, layerPath), transform: placement.transform,
+      warp: placement.warp,
+      raster: placedPixels ?? (image ? rasterFromPixelData(image) : null),
+      ...(placed ? { content: placed } : {}),
       ...(textData ? { text: editableText, runs: psdTextRuns(textData, editableText),
         paragraphs: psdParagraphs(textData, editableText), box: textBox,
         alignment: psdAlignment(textData.paragraphStyle?.justification), renderedTransform: layerTransform } : {}),
       ...(vectorContent ? { paths: vectorPaths, style: psdVectorStyle(source, state.resolution, state, layerPath), sourceShape: null } : {}),
-      mask: maskFor(source, editableTransform, state, layerPath),
+      mask: maskFor(source, placement.transform, state, layerPath),
       vectorMask: vectorContent ? null : psdVectorMask(source, editableTransform.origin),
       maskSourceId: source.clipping && !isGroup ? clippingBaseId : null,
       effects: importEffects(source, state, layerPath),
@@ -688,7 +761,7 @@ function readRawLayerPsd(bytes: Uint8Array, raw: ReturnType<typeof readRawPsdCom
   const parseBytes = [4, 7, 8, 9].includes(raw.colorMode) ? bytes.slice() : bytes;
   if (parseBytes !== bytes) { parseBytes[24] = 0; parseBytes[25] = 3; }
   const psd = readPsd(parseBytes, {
-    useRawData: true, skipCompositeImageData: true, skipThumbnail: true, skipLinkedFilesData: true,
+    useRawData: true, skipCompositeImageData: true, skipThumbnail: true, skipLinkedFilesData: false,
     logMissingFeatures: true, log: (...values: unknown[]) => parserWarnings.push(values.map(String).join(' ')),
   });
   const context = { colorMode: raw.colorMode, bitsPerChannel: raw.bitsPerChannel, isPsb: raw.isPsb,
@@ -711,7 +784,7 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
       oracleOverride = colorManagedComposite(raw, lcms);
     } else {
       psd = readPsd(bytes, {
-        useImageData: true, skipThumbnail: true, skipLinkedFilesData: true, logMissingFeatures: true,
+        useImageData: true, skipThumbnail: true, skipLinkedFilesData: false, logMissingFeatures: true,
         log: (...values: unknown[]) => parserWarnings.push(values.map(String).join(' ')),
       });
     }
@@ -739,7 +812,7 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
   if (psd.artboards) unsupported.push({ code: 'artboards', message: 'Artboard metadata is not represented.', impact: 'not-rendered' });
   const documentResolution = resolution(psd);
   const state: ImportState = { nextId: 1, documentWidth: psd.width, documentHeight: psd.height, resolution: documentResolution,
-    unsupported, resources: [] };
+    unsupported, resources: [], linkedFiles: new Map((psd.linkedFiles ?? []).map((file) => [file.id, file])) };
   const layers = importSiblings(psd.children ?? [], null, '', state);
   if (layers.length > MAX_LAYERS) throw new RangeError(`PSD has ${layers.length} layers; the document limit is ${MAX_LAYERS}`);
   const oracle = oracleOverride ?? (psd.imageData ? rasterFromPixelData(psd.imageData) : null);

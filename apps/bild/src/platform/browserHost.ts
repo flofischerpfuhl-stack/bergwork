@@ -26,6 +26,7 @@ export type SaveKind = FileSaveKind;
  * or key press, so the (possibly slow) encoding must happen afterwards.
  */
 export interface FileTargetHost extends CapabilityHost, ImageDecoderHost {
+  chooseContent?(): Promise<File[]>;
   chooseSaveTarget?(suggestedName: string, kind: SaveKind): Promise<SaveTarget | null>;
   saveFileTo?(target: SaveTarget, blob: Blob): Promise<void>;
 }
@@ -168,8 +169,11 @@ export function createBrowserHost(): FileTargetHost {
     async chooseFiles(kind) {
       let handles: FileSystemFileHandle[];
       try {
-        handles = await openFunction({ multiple: kind === 'images', types: kind === 'project'
-          ? [PICKER_TYPES.project] : [{ description: 'Images', accept: { 'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.avif', '.gif', '.tif', '.tiff', '.heic', '.heif'],
+        handles = await openFunction({ multiple: kind === 'images', types: kind === 'project' ? [PICKER_TYPES.project]
+          : kind === 'content' ? [{ description: 'Placeable content', accept: {
+            'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.avif', '.gif', '.tif', '.tiff', '.heic', '.heif', '.svg'],
+            'application/pdf': ['.pdf'], 'application/zip': ['.fwimg'],
+          } }] : [{ description: 'Images', accept: { 'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.avif', '.gif', '.tif', '.tiff', '.heic', '.heif'],
             'image/vnd.adobe.photoshop': ['.psd', '.psb'] } }] });
       } catch (error) { if ((error as DOMException).name === 'AbortError') return []; throw error; }
       return handles.map((handle) => { const id = `browser-handle-${nextHandle++}`; openHandles.set(id, handle); return { id, name: handle.name }; });
@@ -199,6 +203,9 @@ export function createBrowserHost(): FileTargetHost {
     ...targets,
     async chooseImages() {
       return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,image/webp,image/avif,image/gif,image/vnd.adobe.photoshop,.heic,.heif,.tif,.tiff,.webp,.avif,.gif,.psd,.psb', true);
+    },
+    async chooseContent() {
+      return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,image/webp,image/avif,image/gif,image/svg+xml,application/pdf,application/zip,.heic,.heif,.tif,.tiff,.webp,.avif,.gif,.svg,.pdf,.fwimg', false);
     },
     async chooseProject() { return (await pick('.fwimg,.zip,.comp,.psd,.psb,application/zip,image/vnd.adobe.photoshop', false))[0] ?? null; },
     async saveFile(blob, suggestedName) {

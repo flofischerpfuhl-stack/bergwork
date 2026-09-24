@@ -15,9 +15,11 @@ import { installLayerStyles } from './layerStylesFeature';
 import { installArtboards } from './artboardFeature';
 import { installText } from './textFeature';
 import { installVector } from './vectorFeature';
+import { installEmbedded } from './embeddedFeature';
 import type { EditorProfile } from './profiles';
 
 export function installFeatures(controller: EditorController, profile: EditorProfile = controller.profile): void {
+  installEmbedded(controller);
   const enabled = new Set(profile.modules);
   if (enabled.has('canvas')) installCanvasOps(controller);
   if (enabled.has('selection')) installSelection(controller);
