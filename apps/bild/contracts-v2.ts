@@ -5,6 +5,13 @@ export type LayerIdV2 = string;
 export type PointV2 = Readonly<{ x: number; y: number }>;
 export type RectV2 = Readonly<{ x: number; y: number; width: number; height: number }>;
 export type RGBV2 = Readonly<{ red: number; green: number; blue: number }>;
+export interface EffectGradientV2 {
+  stops: readonly { offset: number; color: RGBV2; opacity: number }[];
+  reverse?: boolean;
+}
+export type EffectFillV2 =
+  | { kind: 'color'; color: RGBV2 }
+  | { kind: 'gradient'; gradient: EffectGradientV2; angle: number; scale: number };
 
 export interface AssetRecordV2 {
   id: AssetIdV2;
@@ -90,9 +97,15 @@ export interface VectorPathRecordV2 {
 export interface VectorMaskRecordV2 { enabled: boolean; inverted: boolean; paths: readonly VectorPathRecordV2[] }
 
 export type EffectRecordV2 =
-  | { kind: 'dropShadow'; schemaVersion: 1; enabled: boolean; opacity: number; angle: number; distance: number; blur: number; color: RGBV2 }
-  | { kind: 'stroke'; schemaVersion: 1; enabled: boolean; width: number; position: 'inside' | 'center' | 'outside'; color: RGBV2 }
-  | { kind: 'colorOverlay'; schemaVersion: 1; enabled: boolean; opacity: number; color: RGBV2 };
+  | { kind: 'dropShadow'; schemaVersion: 1; enabled: boolean; opacity: number; angle: number; distance: number; blur: number;
+      color: RGBV2; blendMode?: string; useGlobalLight?: boolean; spread?: number; size?: number; contour?: 'linear'; noise?: 0; knockout?: boolean }
+  | { kind: 'stroke'; schemaVersion: 1; enabled: boolean; width: number; position: 'inside' | 'center' | 'outside';
+      color?: RGBV2; fill?: EffectFillV2; opacity?: number; blendMode?: string }
+  | { kind: 'outerGlow'; schemaVersion: 1; enabled: boolean; opacity: number; color: RGBV2; blendMode: string;
+      spread: number; size: number; contour: 'linear'; noise: 0 }
+  | { kind: 'colorOverlay'; schemaVersion: 1; enabled: boolean; opacity: number; color: RGBV2; blendMode?: string }
+  | { kind: 'gradientOverlay'; schemaVersion: 1; enabled: boolean; opacity: number; blendMode: string; angle: number;
+      scale: number; gradient: EffectGradientV2 };
 
 export type FilterRecordV2 =
   | { kind: 'gaussianBlur'; schemaVersion: 1; enabled: boolean; radius: number }
@@ -175,6 +188,8 @@ export interface ProjectManifestV2 {
   width: number;
   height: number;
   resolution: number;
+  /** Shared Photoshop-style lighting angle, clockwise in document coordinates. */
+  globalLightAngle?: number;
   colorSpace: 'srgb';
   activeLayerId: LayerIdV2 | null;
   layers: readonly LayerRecordV2[];

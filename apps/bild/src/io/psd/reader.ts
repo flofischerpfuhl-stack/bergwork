@@ -1,9 +1,9 @@
 import {
   initializeCanvas, readPsd, type BlendMode as AgBlendMode, type Layer as AgLayer,
-  type Color as AgColor, type LayerTextData, type PixelData, type Psd,
+  type Color as AgColor, type EffectSolidGradient, type LayerEffectsInfo, type LayerTextData, type PixelData, type Psd, type UnitsValue,
 } from 'ag-psd';
 import {
-  type BlendMode, type CanvasDocument, type ColorLabel, type Layer, type LayerLocks,
+  type BlendMode, type CanvasDocument, type ColorLabel, type Layer, type LayerEffect, type LayerLocks,
   DEFAULT_TEXT_STYLE, defaultTextParagraphStyle, MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
 } from '../../core/document';
 import { makeTransform, samePlacement, type LayerTransform } from '../../core/geometry';
@@ -108,6 +108,94 @@ function issue(state: ImportState, code: string, message: string, impact: PsdUns
   state.unsupported.push({ code, message, impact, ...(layerPath ? { layerPath } : {}) });
 }
 
+function units(value: UnitsValue | undefined, fallback = 0): number {
+  return value && Number.isFinite(value.value) ? value.value : fallback;
+}
+
+function rgb(color: AgColor | undefined, fallback = { red: 0, green: 0, blue: 0 }): { red: number; green: number; blue: number } {
+  if (!color) return fallback;
+  if ('r' in color) return { red: color.r / 255, green: color.g / 255, blue: color.b / 255 };
+  if ('fr' in color) return { red: color.fr, green: color.fg, blue: color.fb };
+  if ('k' in color && !('c' in color)) return { red: 1 - color.k / 100, green: 1 - color.k / 100, blue: 1 - color.k / 100 };
+  if ('c' in color) return { red: (1 - color.c / 100) * (1 - color.k / 100),
+    green: (1 - color.m / 100) * (1 - color.k / 100), blue: (1 - color.y / 100) * (1 - color.k / 100) };
+  return fallback;
+}
+
+function effectBlend(mode: string | undefined, fallback: BlendMode): BlendMode {
+  return BLEND_MODES.get(mode as AgBlendMode) ?? fallback;
+}
+
+function gradient(value: EffectSolidGradient | undefined): import('../../core/model').EffectGradient {
+  if (!value || value.type !== 'solid' || value.colorStops.length < 2) return { stops: [
+    { offset: 0, color: { red: 0, green: 0, blue: 0 }, opacity: 1 },
+    { offset: 1, color: { red: 1, green: 1, blue: 1 }, opacity: 1 },
+  ] };
+  const opacityAt = (location: number): number => {
+    const stops = value.opacityStops.length ? value.opacityStops : [{ location: 0, opacity: 1, midpoint: 0.5 }];
+    let left = stops[0]!, right = stops[stops.length - 1]!;
+    for (let i = 1; i < stops.length; i++) if (location <= stops[i]!.location) { left = stops[i - 1]!; right = stops[i]!; break; }
+    const amount = right.location === left.location ? 0 : (location - left.location) / (right.location - left.location);
+    return left.opacity + (right.opacity - left.opacity) * Math.min(1, Math.max(0, amount));
+  };
+  // ag-psd normalizes descriptor locations to 0...1 in parseGradient().
+  return { stops: value.colorStops.map((stop) => ({ offset: Math.min(1, Math.max(0, stop.location)),
+    color: rgb(stop.color), opacity: opacityAt(stop.location) })) };
+}
+
+function importEffects(source: AgLayer, state: ImportState, layerPath: string): readonly LayerEffect[] {
+  const info: LayerEffectsInfo | undefined = source.effects;
+  if (!info || info.disabled) return [];
+  const rendered = (effect: { present?: boolean; enabled?: boolean } | undefined): boolean =>
+    !!effect && effect.present !== false && effect.enabled !== false;
+  // Effect dimensions are already final pixels. The list-wide Scl metadata is not a render-time
+  // multiplier (psd-tools test_second_stroke_traces_the_layer pins 1 px strokes with Scl 208%).
+  const result: LayerEffect[] = [];
+  for (const shadow of info.dropShadow ?? []) if (shadow.present !== false) result.push({
+    kind: 'dropShadow', schemaVersion: 1, enabled: shadow.enabled !== false, opacity: shadow.opacity ?? 1,
+    angle: shadow.angle ?? 120, useGlobalLight: shadow.useGlobalLight ?? false, distance: units(shadow.distance),
+    blur: units(shadow.size), size: units(shadow.size), spread: units(shadow.choke), color: rgb(shadow.color),
+    blendMode: effectBlend(shadow.blendMode, 'multiply'), contour: 'linear', noise: 0, knockout: shadow.layerConceals !== false,
+  });
+  const glow = info.outerGlow;
+  if (glow?.present !== false && glow) result.push({ kind: 'outerGlow', schemaVersion: 1, enabled: glow.enabled !== false,
+    opacity: glow.opacity ?? 1, color: rgb(glow.color), blendMode: effectBlend(glow.blendMode, 'screen'),
+    spread: units(glow.choke), size: units(glow.size), contour: 'linear', noise: 0 });
+  for (const fill of info.solidFill ?? []) if (fill.present !== false) result.push({
+    kind: 'colorOverlay', schemaVersion: 1, enabled: fill.enabled !== false, opacity: fill.opacity ?? 1,
+    color: rgb(fill.color), blendMode: effectBlend(fill.blendMode, 'normal'),
+  });
+  for (const overlay of info.gradientOverlay ?? []) if (overlay.present !== false) {
+    if (overlay.enabled !== false && (overlay.gradient?.type !== 'solid' || (overlay.type && overlay.type !== 'linear'))) {
+      issue(state, 'gradient-overlay', 'A noise or non-linear gradient overlay was approximated as a linear gradient.',
+        'approximated', layerPath);
+    }
+    result.push({ kind: 'gradientOverlay', schemaVersion: 1, enabled: overlay.enabled !== false,
+      opacity: overlay.opacity ?? 1, blendMode: effectBlend(overlay.blendMode, 'normal'), angle: overlay.angle ?? 90,
+      scale: (overlay.scale ?? 1) * 100, gradient: { ...gradient(overlay.gradient?.type === 'solid' ? overlay.gradient : undefined),
+        reverse: overlay.reverse ?? false } });
+  }
+  for (const stroke of info.stroke ?? []) if (stroke.present !== false) {
+    if (stroke.fillType === 'pattern') {
+      if (stroke.enabled !== false) issue(state, 'stroke-pattern', 'Pattern stroke is not a live Phase-2 effect.', 'not-rendered', layerPath);
+      continue;
+    }
+    const fill = stroke.fillType === 'gradient'
+      ? { kind: 'gradient' as const, gradient: gradient(stroke.gradient?.type === 'solid' ? stroke.gradient : undefined),
+        angle: stroke.gradient?.angle ?? 90, scale: (stroke.gradient?.scale ?? 1) * 100 }
+      : { kind: 'color' as const, color: rgb(stroke.color) };
+    result.push({ kind: 'stroke', schemaVersion: 1, enabled: stroke.enabled !== false, width: units(stroke.size),
+      position: stroke.position ?? 'outside', fill, opacity: stroke.opacity ?? 1,
+      blendMode: effectBlend(stroke.blendMode, 'normal') });
+  }
+  if (info.innerShadow?.some(rendered)) issue(state, 'inner-shadow', 'Inner shadow needs a Phase-3 rasterised effect pass.', 'not-rendered', layerPath);
+  if (rendered(info.innerGlow)) issue(state, 'inner-glow', 'Inner glow needs a Phase-3 rasterised effect pass.', 'not-rendered', layerPath);
+  if (rendered(info.bevel)) issue(state, 'bevel', 'Bevel/emboss needs a rasterised effect pass.', 'not-rendered', layerPath);
+  if (rendered(info.satin)) issue(state, 'satin', 'Satin needs a rasterised effect pass.', 'not-rendered', layerPath);
+  if (rendered(info.patternOverlay)) issue(state, 'pattern-overlay', 'Pattern overlay needs a rasterised effect pass.', 'not-rendered', layerPath);
+  return result;
+}
+
 function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportState,
   layerPath: string): Layer['mask'] {
   const mask = source.mask;
@@ -154,7 +242,6 @@ function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportS
 function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportState, layerPath: string): void {
   if (source.adjustment) issue(state, `adjustment:${source.adjustment.type}`,
     `Adjustment layer “${source.adjustment.type}” is preserved only as an empty layer.`, 'not-rendered', layerPath);
-  if (source.effects) issue(state, 'layer-effects', 'Layer effects are parsed but not rendered.', 'not-rendered', layerPath);
   if (source.vectorMask) issue(state, 'vector-mask', source.imageData
     ? 'Vector mask uses the layer pixel cache and is not editable.' : 'Vector mask is parsed but not rendered.',
     source.imageData ? 'editability-only' : 'not-rendered', layerPath);
@@ -319,6 +406,7 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
         alignment: psdAlignment(textData.paragraphStyle?.justification), renderedTransform: layerTransform } : {}),
       mask: maskFor(source, editableTransform, state, layerPath),
       maskSourceId: source.clipping && !isGroup ? clippingBaseId : null,
+      effects: importEffects(source, state, layerPath),
     });
     result.push(imported);
     if (isGroup) {
@@ -361,7 +449,8 @@ export function readPsdDocument(bytes: Uint8Array): PsdReadResult {
   const layers = importSiblings(psd.children ?? [], null, '', state);
   if (layers.length > MAX_LAYERS) throw new RangeError(`PSD has ${layers.length} layers; the document limit is ${MAX_LAYERS}`);
   const document: CanvasDocument = {
-    id: 'psd-document', width: psd.width, height: psd.height, resolution: resolution(psd), layers, selection: null,
+    id: 'psd-document', width: psd.width, height: psd.height, resolution: resolution(psd),
+    globalLightAngle: psd.imageResources?.globalAngle ?? 120, layers, selection: null,
   };
   const oracle = psd.imageData
     ? Raster.fromPixels(psd.imageData.width, psd.imageData.height, 4, pixelDataToRgba8(psd.imageData)) : null;

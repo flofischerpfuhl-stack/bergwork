@@ -274,7 +274,8 @@ function manifestV2WithContext(document: CanvasDocument, name: string, activeLay
   }
   const layers = document.layers.map((layer) => v2Layer(layer, context));
   return { format: 'fernwork-image', version: 2, id: document.id, name, width: document.width, height: document.height,
-    resolution: document.resolution, colorSpace: 'srgb', activeLayerId, layers, artboards: document.artboards ?? [],
+    resolution: document.resolution, globalLightAngle: document.globalLightAngle ?? 120,
+    colorSpace: 'srgb', activeLayerId, layers, artboards: document.artboards ?? [],
     ...(document.guides?.length ? { guides: document.guides.map((g) => ({ id: g.id, orientation: g.orientation, position: g.position })) } : {}),
     assets: [...context.assets.values()], ...(document.fonts?.length ? { fonts: document.fonts } : {}) };
 }
@@ -350,7 +351,8 @@ function writeHistory(state: PersistedHistoryState, name: string, context: V2Bui
     }
     const value: HistorySnapshotFile = { document: built ? {
       id: built.id, width: built.width, height: built.height, resolution: built.resolution, colorSpace: built.colorSpace,
-      activeLayerId: built.activeLayerId, layers: built.layers, artboards: built.artboards, extensions: built.extensions,
+      globalLightAngle: built.globalLightAngle, activeLayerId: built.activeLayerId, layers: built.layers,
+      artboards: built.artboards, extensions: built.extensions,
     } : null, activeLayerId: snapshot.activeLayerId, revision: snapshot.revision, tileRasters };
     files[path] = [new TextEncoder().encode(JSON.stringify(value)), { level: 6 }];
     snapshots.push({ id, path, activeLayerId: snapshot.activeLayerId, revision: snapshot.revision });
@@ -661,7 +663,7 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
     return raster;
   };
 
-  const parseDocument = async (source: Pick<ProjectManifestV2, 'id' | 'width' | 'height' | 'resolution' | 'layers' | 'artboards'>): Promise<CanvasDocument> => {
+  const parseDocument = async (source: Pick<ProjectManifestV2, 'id' | 'width' | 'height' | 'resolution' | 'globalLightAngle' | 'layers' | 'artboards'>): Promise<CanvasDocument> => {
     if (typeof source.id !== 'string' || !source.id || !Number.isInteger(source.width) || !Number.isInteger(source.height)
       || source.width < 1 || source.height < 1 || source.width > MAX_SIDE || source.height > MAX_SIDE
       || !num(source.resolution) || source.resolution < 1 || source.resolution > 9600
@@ -750,7 +752,9 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
       || !num(font.weight) || typeof font.embeddingAllowed !== 'boolean'
       || !['bundled', 'system', 'local', 'embedded'].includes(font.source)
       || (font.resourceId !== undefined && records.get(font.resourceId)?.role !== 'font')))) invalid('fonts');
+    if (source.globalLightAngle !== undefined && (!num(source.globalLightAngle) || Math.abs(source.globalLightAngle) > 360_000)) invalid('global light');
     return { id: source.id, width: source.width, height: source.height, resolution: source.resolution,
+      globalLightAngle: source.globalLightAngle ?? 120,
       layers, artboards: normalizeArtboards(source.artboards), ...(guides?.length ? { guides: (guides as Guide[]).map((g) => ({ id: g.id, orientation: g.orientation, position: g.position })) } : {}),
       resources, ...(fontRecords?.length ? { fonts: fontRecords } : {}), selection: null };
   };
@@ -819,10 +823,39 @@ function validFill(value: import('../../contracts-v2').FillRecordV2, assets: Rea
 function validEffect(value: import('../../contracts-v2').EffectRecordV2): boolean {
   if (!value || value.schemaVersion !== 1 || typeof value.enabled !== 'boolean') return false;
   if (value.kind === 'dropShadow') return validRgb(value.color)
-    && [value.opacity, value.angle, value.distance, value.blur].every(num);
-  if (value.kind === 'stroke') return validRgb(value.color) && num(value.width)
-    && ['inside', 'center', 'outside'].includes(value.position);
-  return value.kind === 'colorOverlay' && validRgb(value.color) && num(value.opacity);
+    && unit(value.opacity) && num(value.angle) && range(value.distance, 0, 10_000) && range(value.blur, 0, 10_000)
+    && (value.blendMode === undefined || BLEND_MODE_SET.has(value.blendMode))
+    && (value.useGlobalLight === undefined || typeof value.useGlobalLight === 'boolean')
+    && (value.spread === undefined || range(value.spread, 0, 100)) && (value.size === undefined || range(value.size, 0, 10_000))
+    && (value.contour === undefined || value.contour === 'linear') && (value.noise === undefined || value.noise === 0)
+    && (value.knockout === undefined || typeof value.knockout === 'boolean');
+  if (value.kind === 'stroke') return (value.color !== undefined && validRgb(value.color) || value.fill !== undefined && validEffectFill(value.fill))
+    && range(value.width, 0, 10_000) && ['inside', 'center', 'outside'].includes(value.position)
+    && (value.opacity === undefined || unit(value.opacity)) && (value.blendMode === undefined || BLEND_MODE_SET.has(value.blendMode));
+  if (value.kind === 'outerGlow') return validRgb(value.color) && unit(value.opacity) && range(value.spread, 0, 100)
+    && range(value.size, 0, 10_000)
+    && BLEND_MODE_SET.has(value.blendMode) && value.contour === 'linear' && value.noise === 0;
+  if (value.kind === 'gradientOverlay') return unit(value.opacity) && num(value.angle) && range(value.scale, 1, 10_000)
+    && BLEND_MODE_SET.has(value.blendMode) && validEffectGradient(value.gradient);
+  return value.kind === 'colorOverlay' && validRgb(value.color) && unit(value.opacity)
+    && (value.blendMode === undefined || BLEND_MODE_SET.has(value.blendMode));
+}
+
+function range(value: unknown, minimum: number, maximum: number): value is number {
+  return num(value) && value >= minimum && value <= maximum;
+}
+function unit(value: unknown): value is number { return range(value, 0, 1); }
+
+function validEffectGradient(value: import('../../contracts-v2').EffectGradientV2): boolean {
+  return !!value && Array.isArray(value.stops) && value.stops.length >= 2
+    && value.stops.every((stop) => num(stop.offset) && stop.offset >= 0 && stop.offset <= 1
+      && validRgb(stop.color) && num(stop.opacity) && stop.opacity >= 0 && stop.opacity <= 1)
+    && (value.reverse === undefined || typeof value.reverse === 'boolean');
+}
+
+function validEffectFill(value: import('../../contracts-v2').EffectFillV2): boolean {
+  return value.kind === 'color' ? validRgb(value.color)
+    : value.kind === 'gradient' && num(value.angle) && range(value.scale, 1, 10_000) && validEffectGradient(value.gradient);
 }
 
 function validLiveFilter(value: import('../../contracts-v2').FilterRecordV2): boolean {
@@ -834,7 +867,7 @@ function validLiveFilter(value: import('../../contracts-v2').FilterRecordV2): bo
 }
 
 async function readHistory(history: ProjectHistoryV2, entries: Record<string, Uint8Array>, records: ReadonlyMap<string, AssetRecordV2>,
-  parseDocument: (source: Pick<ProjectManifestV2, 'id' | 'width' | 'height' | 'resolution' | 'layers' | 'artboards'>) => Promise<CanvasDocument>): Promise<PersistedHistoryState | undefined> {
+  parseDocument: (source: Pick<ProjectManifestV2, 'id' | 'width' | 'height' | 'resolution' | 'globalLightAngle' | 'layers' | 'artboards'>) => Promise<CanvasDocument>): Promise<PersistedHistoryState | undefined> {
   if (history.schemaVersion !== 1 || !Number.isInteger(history.cursor) || history.cursor < 0 || history.cursor > history.commands.length
     || !num(history.retainedByteLimit) || history.retainedByteLimit < 0) invalid('history header');
   if (!history.enabled) return { schemaVersion: 1, enabled: false, retainedByteLimit: history.retainedByteLimit, past: [], future: [] };
@@ -857,7 +890,7 @@ async function readHistory(history: ProjectHistoryV2, entries: Record<string, Ui
         if (!asset || asset.role !== 'history-tile' || !tile || sha256Hex(tile) !== asset.sha256) invalid('history tile asset');
       }
     }
-    const document = raw.document ? await parseDocument(raw.document as Pick<ProjectManifestV2, 'id' | 'width' | 'height' | 'resolution' | 'layers' | 'artboards'>) : null;
+    const document = raw.document ? await parseDocument(raw.document as Pick<ProjectManifestV2, 'id' | 'width' | 'height' | 'resolution' | 'globalLightAngle' | 'layers' | 'artboards'>) : null;
     snapshots.set(record.id, { document, activeLayerId: raw.activeLayerId, revision: raw.revision });
   }
   const commands = history.commands.map((record) => {

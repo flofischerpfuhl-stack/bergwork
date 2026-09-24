@@ -23,6 +23,7 @@ import { TILE, type Raster } from '../core/raster';
 import { blendSeed } from '../core/blend';
 import { floatToRgba16, makePixelArray, type PixelArray } from '../core/pixel/format';
 import type { BrushSegment, GpuBrushPreview } from '../core/brush';
+import { documentWithLayerEffects } from '../core/effects';
 import {
   adjustFragment, BLEND_INDEX, BRUSH_COVERAGE_FRAGMENT, BRUSH_MASK_FRAGMENT, BRUSH_MAX_FRAGMENT, BRUSH_PAINT_FRAGMENT, COVERAGE_FRAGMENT,
   IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT, STACK_FRAGMENT,
@@ -830,6 +831,7 @@ export class GpuCompositor {
    * with `releaseTarget`.
    */
   composite(document: CanvasDocument, view: ViewSpec, hooks: CompositeHooks = DEFAULT_HOOKS): RenderTexture {
+    document = documentWithLayerEffects(document, hooks);
     this.frame++;
     this.skippedAdjustments = 0;
     // Preserve the byte-exact legacy LUT path for RGBA8-only documents. A 16-bit source opts the
