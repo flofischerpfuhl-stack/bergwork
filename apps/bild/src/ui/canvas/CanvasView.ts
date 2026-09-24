@@ -8,7 +8,7 @@
  */
 
 import type { CanvasDocument } from '../../core/document';
-import { rectUnion, type Point } from '../../core/geometry';
+import { rectUnion, type Affine, type Point } from '../../core/geometry';
 import type { EditorSession, Tool } from '../../core/session';
 import { currentBrushPreview, currentGpuBrushPreview } from '../../core/brush';
 import { GpuCompositor, type CompositeHooks, type ViewSpec } from '../../render/gpuCompositor';
@@ -310,6 +310,23 @@ export class CanvasView implements CanvasHost {
   readRegion(document: CanvasDocument, x: number, y: number, width: number, height: number): Uint8Array {
     if (!this.gpu) throw new Error(this.failure ?? 'The canvas renderer is not ready.');
     const pixels = this.gpu.readRegion(document, x, y, width, height, this.hooks(this.session));
+    this.redraw();
+    return pixels;
+  }
+
+  /** Export rendering (io/exportPipeline `ExportRenderer`): any scale, composited like the canvas. */
+  readView(document: CanvasDocument, width: number, height: number, viewToDoc: Affine, scale: number): Uint8Array {
+    if (!this.gpu) throw new Error(this.failure ?? 'The canvas renderer is not ready.');
+    const pixels = this.gpu.readView(document, width, height, viewToDoc, scale, this.hooks(this.session));
+    this.redraw();
+    return pixels;
+  }
+
+  /** Float export rendering for 16-bit files; null when WebGL has no float render targets. */
+  readViewFloat(document: CanvasDocument, width: number, height: number, viewToDoc: Affine, scale: number): Float32Array | null {
+    if (!this.gpu) throw new Error(this.failure ?? 'The canvas renderer is not ready.');
+    if (!this.software && !this.gpu.floatTargets) return null;
+    const pixels = this.gpu.readViewFloat(document, width, height, viewToDoc, scale, this.hooks(this.session));
     this.redraw();
     return pixels;
   }

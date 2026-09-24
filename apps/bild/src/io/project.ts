@@ -32,6 +32,7 @@ import { Raster, TILE } from '../core/raster';
 import { vectorPathsForShape } from '../core/shape';
 import { decodePng, decodePngNativeRGBA, encodePng } from './png';
 import { sha256Hex } from './sha256';
+import { normalizeArtboards } from '../core/artboards';
 
 export const EXTENSION_KEY = 'org.compositor.port';
 const MANIFEST_LIMIT = 4 * 1024 * 1024;
@@ -735,7 +736,7 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
     if (guides !== undefined && (!Array.isArray(guides) || guides.length > 10_000 || !guides.every((g) => g && typeof g.id === 'string'
       && (g.orientation === 'horizontal' || g.orientation === 'vertical') && num(g.position) && Math.abs(g.position) <= 1_000_000))) invalid('guides');
     return { id: source.id, width: source.width, height: source.height, resolution: source.resolution,
-      layers, artboards: source.artboards, ...(guides?.length ? { guides: (guides as Guide[]).map((g) => ({ id: g.id, orientation: g.orientation, position: g.position })) } : {}),
+      layers, artboards: normalizeArtboards(source.artboards), ...(guides?.length ? { guides: (guides as Guide[]).map((g) => ({ id: g.id, orientation: g.orientation, position: g.position })) } : {}),
       resources, selection: null };
   };
 
