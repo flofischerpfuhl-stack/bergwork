@@ -146,7 +146,18 @@ export function createBrowserHost(): FileTargetHost {
   const recent: { name: string; id: string }[] = [];
   const openHandles = new Map<string, FileSystemFileHandle>();
   let nextHandle = 1;
-  const files: FileSystemHost | undefined = picker && openFunction ? {
+  const saveTargets = picker ? {
+    async chooseSaveTarget(suggestedName: string, kind: SaveKind): Promise<SaveTarget | null> {
+      let handle: FileSystemFileHandle;
+      try { handle = await picker({ suggestedName, types: [PICKER_TYPES[kind]] }); } catch (error) {
+        if ((error as DOMException).name === 'AbortError') return null;
+        throw error;
+      }
+      return { name: handle.name, handle } as HandleTarget;
+    },
+    async saveFileTo(target: SaveTarget, blob: Blob): Promise<void> { await writeHandle((target as HandleTarget).handle, blob); },
+  } : null;
+  const files: FileSystemHost | undefined = saveTargets && openFunction ? {
     version: 1,
     async chooseFiles(kind) {
       let handles: FileSystemFileHandle[];
@@ -156,15 +167,8 @@ export function createBrowserHost(): FileTargetHost {
       } catch (error) { if ((error as DOMException).name === 'AbortError') return []; throw error; }
       return handles.map((handle) => { const id = `browser-handle-${nextHandle++}`; openHandles.set(id, handle); return { id, name: handle.name }; });
     },
-    async chooseSaveTarget(suggestedName: string, kind: SaveKind): Promise<SaveTarget | null> {
-      let handle: FileSystemFileHandle;
-      try { handle = await picker({ suggestedName, types: [PICKER_TYPES[kind]] }); } catch (error) {
-        if ((error as DOMException).name === 'AbortError') return null;
-        throw error;
-      }
-      return { name: handle.name, handle } as HandleTarget;
-    },
-    async writeFile(target: SaveTarget, blob: Blob): Promise<void> { await writeHandle((target as HandleTarget).handle, blob); },
+    chooseSaveTarget: saveTargets.chooseSaveTarget,
+    writeFile: saveTargets.saveFileTo,
     async recentFiles() { return recent.slice(); },
     async recordRecentFile(file) { const index = recent.findIndex((item) => item.id === file.id); if (index >= 0) recent.splice(index, 1); recent.unshift(file); recent.splice(20); },
     onOpenFiles(listener) { listeners.add(listener); return () => listeners.delete(listener); },
@@ -180,10 +184,8 @@ export function createBrowserHost(): FileTargetHost {
     models: browserModels(),
     color: { version: 1, async displayProfile() { return { name: 'sRGB', bytes: null, assumed: true }; } },
   };
-  const targets = files ? {
-    chooseSaveTarget: files.chooseSaveTarget.bind(files),
-    saveFileTo: files.writeFile.bind(files),
-  } : {};
+  // Choosing a save destination needs only the save picker (B1); the full FileSystemHost also needs the open picker.
+  const targets = saveTargets ?? {};
   const host: FileTargetHost = {
     defaultProfile: 'lite',
     capabilities,
