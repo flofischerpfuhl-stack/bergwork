@@ -4,7 +4,7 @@
  * with folders, masks, clipping indentation, and the footer buttons.
  */
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import styles from './editor.module.css';
 import { HistoryPanel } from './HistoryPanel';
 import type { EditorController } from './controller';
@@ -154,11 +154,13 @@ interface DragState {
   maskFrom?: string; maskTarget?: string | null;
 }
 
-function LayerRow({ controller, session, entry, rows, drag, onDragStart, onContext, context = false }: {
+function LayerRow({ controller, session, entry, rows, drag, onDragStart, onContext, context = false, effectsOpen = false, onToggleEffects }: {
   controller: EditorController; session: EditorSession; entry: HierarchyEntry; rows: HierarchyEntry[]; drag: DragState | null;
   onDragStart: ((event: ReactPointerEvent, id: string) => void) | null; onContext: (id: string, x: number, y: number) => void;
   /** Shown only as the folder of a search match, not as a match itself. */
   context?: boolean;
+  /** Whether the layer's effects are listed below it (the fx disclosure). */
+  effectsOpen?: boolean; onToggleEffects?: (id: string) => void;
 }) {
   const t = controller.t;
   const layer = entry.layer;
@@ -221,6 +223,9 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
         if ((event.target as HTMLElement).closest('button:not([data-thumb])')) return;
         if (!session.canEditLayers) return;
         if (layer.adjustment && controller.features.editAdjustment) { session.selectLayer(layer.id); controller.features.editAdjustment.run(); return; }
+        // Photoshop: a double-click on the name renames, elsewhere on the row it opens Layer Style.
+        const commands = controller.layerStyles;
+        if (commands?.styleable(layer.id) && !(event.target as HTMLElement).closest('[data-layer-name], input')) { commands.open(layer.id); return; }
         session.selectLayer(layer.id);
         setRenaming(true);
       }}
@@ -299,10 +304,18 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
             }}
             onBlur={(event) => { session.renameLayer(layer.id, event.currentTarget.value); setRenaming(false); }} />
         ) : (
-          <span className={styles.layerName}>{(layer.maskSourceId ? '↳ ' : '') + layer.name}</span>
+          <span className={styles.layerName} data-layer-name>{(layer.maskSourceId ? '↳ ' : '') + layer.name}</span>
         )}
         <span className={styles.layerMeta} title={source ? `Clipping mask based on ${source.name}. Option-click the bottom of its row to release.` : undefined}>{meta}</span>
       </div>
+      {layer.effects.length ? (
+        <button type="button" className={styles.fxBadge} aria-expanded={effectsOpen} data-testid="fx-badge"
+          aria-label={`${t(effectsOpen ? 'Hide layer effects' : 'Show layer effects')}: ${layer.name}`} title={t('Layer effects')}
+          onClick={() => onToggleEffects?.(layer.id)}>
+          <span className={styles.fxGlyph}>fx</span>
+          <Icon name={effectsOpen ? 'chevronDown' : 'chevronRight'} size={10} />
+        </button>
+      ) : null}
       {lockedAll || lockedSome ? (
         <span className={`${styles.layerLock} ${lockedAll ? '' : styles.layerLockPartial}`} data-testid="layer-lock"
           title={t(lockedAll ? 'Locked' : 'Partially locked')}><Icon name="lock" size={12} /></span>
@@ -311,6 +324,40 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
         onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); onContext(layer.id, r.left, r.bottom); }}>
         <Icon name="more" size={16} />
       </button>
+    </div>
+  );
+}
+
+/** The layer's effects under its row, each with an eye (Photoshop's expanded fx list); double-click opens Layer Style on it. */
+function EffectRows({ controller, session, entry }: { controller: EditorController; session: EditorSession; entry: HierarchyEntry }) {
+  const t = controller.t;
+  const layer = entry.layer;
+  const commands = controller.layerStyles;
+  const order = commands?.kinds ?? [];
+  const indices = [...layer.effects.keys()].sort((a, b) => order.indexOf(layer.effects[a]!.kind) - order.indexOf(layer.effects[b]!.kind) || a - b);
+  const indent = Math.min(entry.depth, 8) * 24 + (layer.maskSourceId ? 24 : 0) + 16 + 36 + 6;
+  return (
+    <div role="group" aria-label={`${t('Layer effects')}: ${layer.name}`} data-testid="effect-rows">
+      {indices.map((index) => {
+        const effect = layer.effects[index]!;
+        const name = commands?.label(effect.kind) ?? effect.kind;
+        return (
+          <div key={index} className={`${styles.effectRow} ${effect.enabled ? '' : styles.effectRowOff} ${entry.visible ? '' : styles.layerRowDim}`}
+            role="treeitem" aria-level={entry.depth + 2} data-testid="effect-row" data-effect-kind={effect.kind}
+            onDoubleClick={(event) => {
+              if ((event.target as HTMLElement).closest('button')) return;
+              commands?.open(layer.id, index);
+            }}>
+            <button type="button" className={styles.eye} disabled={!session.canEditLayers} data-testid="effect-eye" aria-pressed={effect.enabled}
+              aria-label={`${t(effect.enabled ? 'Hide' : 'Show')} ${name}`}
+              onClick={() => session.setLayerEffectEnabled(layer.id, index, !effect.enabled)}>
+              <Icon name={effect.enabled ? 'eye' : 'eyeSlash'} size={14} />
+            </button>
+            <span style={{ width: indent, flex: 'none' }} />
+            <span className={styles.effectName}>{name}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -333,6 +380,10 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
   const [drag, setDrag] = useState<DragState | null>(null);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [adjustMenu, setAdjustMenu] = useState<{ x: number; y: number } | null>(null);
+  const [fxMenu, setFxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [effectsOpen, setEffectsOpen] = useState<ReadonlySet<string>>(new Set());
+  const toggleEffects = (id: string) => setEffectsOpen((open) => { const next = new Set(open); if (!next.delete(id)) next.add(id); return next; });
+  const layerStyles = controller.layerStyles;
   const width = controller.ui.getState().layersWidth;
   const [panelWidth, setPanelWidth] = useState(width);
 
@@ -446,6 +497,8 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
       { label: t('Enable/Disable Mask'), enabled: session.canEditLayers && !!layer.mask, run: () => { select(); session.toggleLayerMask(); } },
       { label: t('Delete Mask'), enabled: session.canEditLayers && !!layer.mask, run: () => { select(); session.deleteLayerMask(); } },
       'separator',
+      { label: t('Layer Style'), enabled: !!controller.layerStyles?.styleable(id), testId: 'context-layer-style', submenu: controller.layerStyles?.menu(id) ?? [] },
+      'separator',
       { label: layer.maskSourceId ? t('Release Clipping Mask') : t('Create Clipping Mask'), enabled: session.canToggleClippingMask(id), run: () => session.toggleClippingMask(id) },
       { label: t('Move Layer Up'), enabled: session.canEditLayers, run: () => { session.selectLayer(id); session.moveActiveLayer(1); } },
       { label: t('Move Layer Down'), enabled: session.canEditLayers, run: () => { session.selectLayer(id); session.moveActiveLayer(-1); } },
@@ -512,11 +565,17 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
       ) : null}
       {document && (rows.length || filtering) ? (
         <div className={styles.layerList} ref={listRef} role="tree" aria-label={t('Layers')} aria-multiselectable data-testid="layers-list">
-          {rows.map((entry) => (
-            <LayerRow key={entry.layer.id} controller={controller} session={session} entry={entry} rows={rows} drag={drag}
-              onDragStart={found ? null : startDrag} onContext={(id, x, y) => setMenu({ id, x, y })}
-              context={!!found && !found.matchingIds.has(entry.layer.id)} />
-          ))}
+          {rows.map((entry) => {
+            const open = effectsOpen.has(entry.layer.id) && entry.layer.effects.length > 0;
+            return (
+              <Fragment key={entry.layer.id}>
+                <LayerRow controller={controller} session={session} entry={entry} rows={rows} drag={drag}
+                  onDragStart={found ? null : startDrag} onContext={(id, x, y) => setMenu({ id, x, y })}
+                  context={!!found && !found.matchingIds.has(entry.layer.id)} effectsOpen={open} onToggleEffects={toggleEffects} />
+                {open ? <EffectRows controller={controller} session={session} entry={entry} /> : null}
+              </Fragment>
+            );
+          })}
           {found && !found.matchingIds.size ? <div className={styles.panelNote} data-testid="layer-search-empty">{t('No matching layers')}</div> : null}
           {drag?.moved && drag.target?.index === rows.length ? <div style={{ height: 2, background: 'var(--cmp-accent)' }} /> : null}
         </div>
@@ -540,6 +599,13 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
           onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setAdjustMenu({ x: r.left, y: r.top - 8 - 6 * 26 }); }}>
           <Icon name="adjustment" size={17} />
         </button>
+        {layerStyles ? (
+          <button type="button" className={styles.footerButton} aria-label={t('Add a layer style')} title={t('Add a layer style')} aria-haspopup="menu"
+            disabled={!session.canEditLayers || !session.activeLayer || !layerStyles.styleable(session.activeLayer.id)} data-testid="fx-button"
+            onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setFxMenu({ x: r.left, y: r.top - 8 - 9 * 26 }); }}>
+            <span className={styles.fxButtonGlyph} aria-hidden>fx</span>
+          </button>
+        ) : null}
         <span className={styles.spacer} />
         <button type="button" className={styles.footerButton} aria-label={deleteLabel} title={deleteLabel} data-testid="deleteLayer"
           disabled={!session.canEditLayers || !session.activeLayer} onClick={() => void session.deleteLayerOrMask()}><Icon name="trash" size={17} /></button>
@@ -547,6 +613,9 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
       </>)}
       {filterMenu ? <MenuPopup controller={controller} anchor={filterMenu} items={filterItems(t, query, setQuery)} onClose={() => setFilterMenu(null)} /> : null}
       {menu ? <MenuPopup controller={controller} anchor={menu} items={menuItems(menu.id)} onClose={() => setMenu(null)} /> : null}
+      {fxMenu && layerStyles && session.activeLayer ? (
+        <MenuPopup controller={controller} anchor={fxMenu} onClose={() => setFxMenu(null)} items={layerStyles.menu(session.activeLayer.id)} />
+      ) : null}
       {adjustMenu ? (
         <MenuPopup controller={controller} anchor={adjustMenu} onClose={() => setAdjustMenu(null)}
           items={ADJUSTMENT_KINDS.map((kind) => ({ label: t(kind), enabled: true, run: () => session.addAdjustment(kind) }))} />
