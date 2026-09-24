@@ -19,7 +19,7 @@ import { Check, FloatingPanel, Segmented, SliderRow } from './adjustmentsFeature
 const resolvedUrls = new WeakMap<object, Partial<Record<SubjectModel, string>>>();
 
 /** A0/E6: model bytes are resolved and cached by ModelHost; workers only see its local blob URL. */
-function modelInference(controller: EditorController): Pick<SubjectInferenceClient, 'infer' | 'refine'> {
+export function modelInference(controller: EditorController): Pick<SubjectInferenceClient, 'infer' | 'refine'> {
   const host = controller.capabilities.models;
   return {
     async infer(cacheKey, rgba, width, height, settings, refinementLimit, model, _modelUrls, progress, signal) {

@@ -18,7 +18,7 @@ export interface EditorProfile {
 }
 
 const CURRENT_TOOLS: readonly Tool[] = [
-  'move', 'artboard', 'marquee', 'lasso', 'wand', 'crop', 'brush', 'spotHealing', 'cloneStamp', 'blur', 'gradient',
+  'move', 'artboard', 'marquee', 'lasso', 'wand', 'objectSelect', 'crop', 'brush', 'spotHealing', 'cloneStamp', 'blur', 'gradient',
   'shape', 'eyedropper', 'hand', 'zoom', 'idle',
   'text', 'pen', 'directSelect',
 ];

@@ -6,7 +6,7 @@
 import type { ReactElement } from 'react';
 
 type IconName =
-  | 'move' | 'marquee' | 'marqueeEllipse' | 'lasso' | 'polygonalLasso' | 'wand' | 'crop' | 'brush' | 'eraser'
+  | 'move' | 'marquee' | 'marqueeEllipse' | 'lasso' | 'polygonalLasso' | 'wand' | 'objectSelect' | 'crop' | 'brush' | 'eraser'
   | 'spotHealing' | 'cloneStamp' | 'blur' | 'gradient' | 'shape' | 'eyedropper' | 'hand' | 'zoom' | 'idle'
   | 'eye' | 'eyeSlash' | 'folder' | 'chevronRight' | 'chevronDown' | 'plusSquare' | 'folderPlus' | 'mask'
   | 'adjustment' | 'trash' | 'link' | 'plus' | 'close' | 'zoomIn' | 'zoomOut' | 'swap' | 'reset' | 'menu'
@@ -21,6 +21,7 @@ const paths: Record<IconName, ReactElement> = {
   lasso: <><path d="M5.5 13.5C3.6 10.4 6.4 5.5 12.4 5.1c5.4-.3 8.6 2.6 7.9 5.7-.7 3.3-6 5.2-10.8 4.1" /><path d="M9.6 14.9c-1.8.8-2.1 2.9-.4 3.6 1.2.5 2.6-.4 2.1-1.8" /></>,
   polygonalLasso: <><path d="M5 15 7 5l11 2 2 8-8.5 1" /><path d="M11.5 16c-1.7.7-2 2.8-.4 3.4 1.2.5 2.5-.4 2-1.7" /></>,
   wand: <><path d="M4 20 15 9" /><path d="M16 3v3M16 12v-1.5M19 6h2M11 6h2M18.5 3.5 17.5 4.5M13.5 8.5l1-1M18.5 8.5l-1-1" /></>,
+  objectSelect: <><path d="M13 3.5H4.5a1 1 0 0 0-1 1V14" strokeDasharray="2.6 2" /><path d="M9.5 9.5l10 4.2-4.3 1.5-1.5 4.3z" /></>,
   crop: <><path d="M6 2v16h16" /><path d="M2 6h16v16" /></>,
   brush: <><path d="M20 3 10 13" /><path d="M10 13c-2.6-.6-5.2 1-5.2 4.3 0 1.2-.7 2.1-1.8 2.7 3.7 1 7.8-.4 8.4-4.1z" /></>,
   eraser: <><path d="m4 15 9-9 7 7-6 6H8z" /><path d="M9 10l7 7M8 19h13" /></>,

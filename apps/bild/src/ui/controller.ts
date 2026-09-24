@@ -180,6 +180,10 @@ export class EditorController {
     cancel(session: EditorSession): void;
     nudge(session: EditorSession, dx: number, dy: number): void;
   } | null = null;
+  /** Object Selection options in the selection header, provided by the object-selection module. */
+  objectSelectControls: ((session: EditorSession) => ReactNode) | null = null;
+  /** Whether a module draws the selection itself right now (Quick Mask, Refine Edge), so the ants stay hidden. */
+  selectionOverlayHidden: ((session: EditorSession) => boolean)[] = [];
   /** Magic Wand options in the selection header, provided by the wand module. */
   wandControls: ((session: EditorSession) => ReactNode) | null = null;
   /** While the Color Picker is open, the Eyedropper samples into it. */
