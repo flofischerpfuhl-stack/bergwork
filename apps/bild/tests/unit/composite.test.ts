@@ -31,9 +31,9 @@ function alphas(bytes: Uint8Array): number[] {
 }
 
 describe('blend modes (LayerAppearanceTests.blendModesAndOpacityMatchKnownPixels)', () => {
-  const modes: readonly BlendMode[] = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'difference',
-    'colorDodge', 'colorBurn', 'hue', 'saturation', 'color', 'luminosity'];
-  const expected: Record<BlendMode, readonly number[]> = {
+  const modes = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'difference',
+    'colorDodge', 'colorBurn', 'hue', 'saturation', 'color', 'luminosity'] as const satisfies readonly BlendMode[];
+  const expected: Record<(typeof modes)[number], readonly number[]> = {
     normal: [149, 85, 149, 192], multiply: [101, 75, 139, 192], screen: [155, 117, 181, 192],
     overlay: [117, 86, 171, 192], darken: [107, 85, 149, 192], lighten: [149, 107, 171, 192],
     difference: [128, 85, 128, 192], colorDodge: [171, 121, 192, 192], colorBurn: [86, 64, 150, 192],

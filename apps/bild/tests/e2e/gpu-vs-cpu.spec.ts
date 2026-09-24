@@ -14,7 +14,7 @@ test('GPU export matches the CPU reference compositor', async ({ page }) => {
     const { Raster } = await load('/src/core/raster.ts');
     const { newLayer, BLEND_MODES } = await load('/src/core/document.ts');
     const { makeTransform } = await load('/src/core/geometry.ts');
-    const W = 96, H = 72;
+    const W = 128, H = 112;
     let seed = 11;
     const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32; };
     const pattern = (w: number, h: number, alpha: (x: number, y: number) => number) => {
@@ -38,7 +38,7 @@ test('GPU export matches the CPU reference compositor', async ({ page }) => {
     BLEND_MODES.forEach((b: { mode: string }, i: number) => {
       layers.push(newLayer({ id: `b${i}`, name: b.mode, blendMode: b.mode, opacity: 0.55 + (i % 4) * 0.1,
         raster: pattern(24, 20, (x: number, y: number) => 90 + ((x * 7 + y * 11) % 160)),
-        transform: makeTransform({ x: (i * 13) % (W - 24), y: Math.floor(i / 7) * 26 + 4 }, { width: 24, height: 20 }) }));
+        transform: makeTransform({ x: (i % 7) * 17, y: Math.floor(i / 7) * 24 + 4 }, { width: 24, height: 20 }) }));
     });
     // Masked layer (full-resolution mask), and a layer with a placed mask elsewhere on the canvas.
     layers.push(newLayer({ id: 'm1', name: 'masked', raster: pattern(30, 30, () => 255),
@@ -71,10 +71,11 @@ test('GPU export matches the CPU reference compositor', async ({ page }) => {
       if (d > 3) over3++;
     }
     gpu.destroy();
-    return { maxDiff, meanDiff: sumDiff / fromGpu.length, over3, total: fromGpu.length, worst,
+    return { modeCount: BLEND_MODES.length, maxDiff, meanDiff: sumDiff / fromGpu.length, over3, total: fromGpu.length, worst,
       worstGpu: Array.from(fromGpu.slice(worst - (worst % 4), worst - (worst % 4) + 4)), worstCpu: Array.from(fromCpu.slice(worst - (worst % 4), worst - (worst % 4) + 4)) };
   });
   console.log('GPU vs CPU', JSON.stringify(result));
+  expect(result.modeCount).toBe(27);
   // Agreement is statistical: where two non-separable modes stack (hue over saturation here), SetSat
   // is discontinuous at tied channels, so sub-1/255 differences of the lower result can flip a channel
   // ordering and produce isolated large differences. Everything else agrees to rounding.

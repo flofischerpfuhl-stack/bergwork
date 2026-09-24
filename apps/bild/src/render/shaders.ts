@@ -3,7 +3,8 @@
  * fragment centre in target pixels (origin top-left). Colour targets hold premultiplied sRGB.
  *
  * Semantics follow Compositor's CoreGraphics/CoreImage pipeline (LayerRenderer.swift,
- * LiveMaskRenderer.swift, SeparableBlend.swift): PDF blend formulas on 8-bit sRGB values.
+ * LiveMaskRenderer.swift, SeparableBlend.swift): PDF/Photoshop formulas on sRGB values. Formula
+ * sources and endpoint decisions are documented beside the CPU reference in core/blend.ts.
  */
 
 export const VERTEX = /* glsl */ `#version 300 es
@@ -22,10 +23,14 @@ void main() {
 }
 `;
 
-/** Blend-mode indices, in LayerBlendMode.allCases order. */
+/** Blend-mode indices in Photoshop menu-group order, shared by every compositor pass. */
 export const BLEND_INDEX: Record<string, number> = {
-  normal: 0, multiply: 1, screen: 2, overlay: 3, darken: 4, lighten: 5, difference: 6, colorDodge: 7,
-  colorBurn: 8, hue: 9, saturation: 10, color: 11, luminosity: 12,
+  normal: 0, dissolve: 1,
+  darken: 2, multiply: 3, colorBurn: 4, linearBurn: 5, darkerColor: 6,
+  lighten: 7, screen: 8, colorDodge: 9, linearDodge: 10, lighterColor: 11,
+  overlay: 12, softLight: 13, hardLight: 14, vividLight: 15, linearLight: 16, pinLight: 17, hardMix: 18,
+  difference: 19, exclusion: 20, subtract: 21, divide: 22,
+  hue: 23, saturation: 24, color: 25, luminosity: 26,
 };
 
 const COMMON = /* glsl */ `#version 300 es
@@ -52,20 +57,53 @@ vec3 setSat(vec3 c, float s) {
 float dodge(float b, float s) { return b <= 0.0 ? 0.0 : (s >= 1.0 ? 1.0 : min(1.0, b / (1.0 - s))); }
 float burn(float b, float s) { return b >= 1.0 ? 1.0 : (s <= 0.0 ? 0.0 : 1.0 - min(1.0, (1.0 - b) / s)); }
 float hardLight(float b, float s) { return s <= 0.5 ? b * 2.0 * s : b + (2.0 * s - 1.0) - b * (2.0 * s - 1.0); }
+float softLight(float b, float s) {
+  if (s <= 0.5) return b - (1.0 - 2.0 * s) * b * (1.0 - b);
+  float d = b <= 0.25 ? ((16.0 * b - 12.0) * b + 4.0) * b : sqrt(b);
+  return b + (2.0 * s - 1.0) * (d - b);
+}
+float vividLight(float b, float s) {
+  if (s <= 0.5) {
+    float scaled = 2.0 * s;
+    return scaled <= 0.0 ? 0.0 : (b >= 1.0 ? 1.0 : 1.0 - min(1.0, (1.0 - b) / scaled));
+  }
+  float scaled = 2.0 * s - 1.0;
+  return scaled >= 1.0 ? 1.0 : (b <= 0.0 ? 0.0 : min(1.0, b / (1.0 - scaled)));
+}
+float hardMix(float b, float s) {
+  float sum = b + s;
+  return sum < 1.0 ? 0.0 : (sum > 1.0 ? 1.0 : (s < 0.5 ? 1.0 : 0.0));
+}
+float divideBlend(float b, float s) { return b <= 0.0 ? 0.0 : (s <= 0.0 ? 1.0 : min(1.0, b / s)); }
 
 vec3 blendColor(int mode, vec3 b, vec3 s) {
-  if (mode == 1) return b * s;
-  if (mode == 2) return b + s - b * s;
-  if (mode == 3) return vec3(hardLight(s.r, b.r), hardLight(s.g, b.g), hardLight(s.b, b.b));
-  if (mode == 4) return min(b, s);
-  if (mode == 5) return max(b, s);
-  if (mode == 6) return abs(b - s);
-  if (mode == 7) return vec3(dodge(b.r, s.r), dodge(b.g, s.g), dodge(b.b, s.b));
-  if (mode == 8) return vec3(burn(b.r, s.r), burn(b.g, s.g), burn(b.b, s.b));
-  if (mode == 9) return setLum(setSat(s, sat(b)), lum(b));
-  if (mode == 10) return setLum(setSat(b, sat(s)), lum(b));
-  if (mode == 11) return setLum(s, lum(b));
-  if (mode == 12) return setLum(b, lum(s));
+  if (mode == 2) return min(b, s);
+  if (mode == 3) return b * s;
+  if (mode == 4) return vec3(burn(b.r, s.r), burn(b.g, s.g), burn(b.b, s.b));
+  if (mode == 5) return max(vec3(0.0), b + s - 1.0);
+  if (mode == 6) return lum(s) < lum(b) ? s : b;
+  if (mode == 7) return max(b, s);
+  if (mode == 8) return b + s - b * s;
+  if (mode == 9) return vec3(dodge(b.r, s.r), dodge(b.g, s.g), dodge(b.b, s.b));
+  if (mode == 10) return min(vec3(1.0), b + s);
+  if (mode == 11) return lum(s) > lum(b) ? s : b;
+  if (mode == 12) return vec3(hardLight(s.r, b.r), hardLight(s.g, b.g), hardLight(s.b, b.b));
+  if (mode == 13) return vec3(softLight(b.r, s.r), softLight(b.g, s.g), softLight(b.b, s.b));
+  if (mode == 14) return vec3(hardLight(b.r, s.r), hardLight(b.g, s.g), hardLight(b.b, s.b));
+  if (mode == 15) return vec3(vividLight(b.r, s.r), vividLight(b.g, s.g), vividLight(b.b, s.b));
+  if (mode == 16) return clamp(b + 2.0 * s - 1.0, 0.0, 1.0);
+  if (mode == 17) return mix(min(b, 2.0 * s), max(b, 2.0 * s - 1.0), step(vec3(0.5), s));
+  if (mode == 18) {
+    return vec3(hardMix(b.r, s.r), hardMix(b.g, s.g), hardMix(b.b, s.b));
+  }
+  if (mode == 19) return abs(b - s);
+  if (mode == 20) return b + s - 2.0 * b * s;
+  if (mode == 21) return max(vec3(0.0), b - s);
+  if (mode == 22) return vec3(divideBlend(b.r, s.r), divideBlend(b.g, s.g), divideBlend(b.b, s.b));
+  if (mode == 23) return setLum(setSat(s, sat(b)), lum(b));
+  if (mode == 24) return setLum(setSat(b, sat(s)), lum(b));
+  if (mode == 25) return setLum(s, lum(b));
+  if (mode == 26) return setLum(b, lum(s));
   return s;
 }
 
@@ -73,9 +111,26 @@ vec3 toLinear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)
 vec3 toSRGB(vec3 c) { c = clamp(c, 0.0, 1.0); return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
 
 /** Source-over style compositing of premultiplied src onto premultiplied dst with a PDF blend mode. */
-vec4 composite(int mode, vec4 dst, vec4 src) {
+uint dissolveNoise(ivec2 p, int seed) {
+  uint hash = uint(p.x) * 0x1f123bb5u ^ uint(p.y) * 0x5f356495u ^ uint(seed);
+  hash ^= hash >> 16;
+  hash *= 0x7feb352du;
+  hash ^= hash >> 15;
+  hash *= 0x846ca68bu;
+  hash ^= hash >> 16;
+  return hash % 255u;
+}
+
+vec4 composite(int mode, vec4 dst, vec4 src, ivec2 documentPixel, int seed) {
   float ab = dst.a, as_ = src.a;
   if (as_ <= 0.0) return dst;
+  if (mode == 1) {
+    uint alpha8 = uint(floor(clamp(as_, 0.0, 1.0) * 255.0 + 0.5));
+    if (alpha8 <= dissolveNoise(documentPixel, seed)) return dst;
+    src = vec4(src.rgb / as_, 1.0);
+    as_ = 1.0;
+    mode = 0;
+  }
   vec3 cb = ab > 0.0 ? dst.rgb / ab : vec3(0.0);
   vec3 cs = src.rgb / as_;
   float ao = as_ + ab - as_ * ab;
@@ -139,6 +194,7 @@ uniform vec2 uDrawOrigin;
 uniform vec2 uDrawSize;
 uniform float uOpacity;
 uniform int uMode;
+uniform int uDissolveSeed;
 uniform int uHasMask;
 uniform mat3 uDocToMask;
 uniform vec2 uMaskSize;
@@ -170,7 +226,7 @@ void main() {
     src *= texelFetch(uMask, ivec2(vPos), 0).r;
   }
   if (uHasClip == 1) src *= texelFetch(uClip, ivec2(vPos), 0).r;
-  finalColor = uReplace == 1 ? src : composite(uMode, dst, src);
+  finalColor = uReplace == 1 ? src : composite(uMode, dst, src, ivec2(floor(doc)), uDissolveSeed);
 }
 `;
 
@@ -444,13 +500,16 @@ uniform sampler2D uBase;
 uniform sampler2D uClip;
 uniform int uHasClip;
 uniform int uMode;
+uniform int uDissolveSeed;
+uniform mat3 uViewToDoc;
 void main() {
   ivec2 p = ivec2(vPos);
   vec4 dst = texelFetch(uBackdrop, p, 0);
   float a = texelFetch(uBase, p, 0).a;
   vec4 src = vec4(texelFetch(uSurface, p, 0).rgb * a, a);
   if (uHasClip == 1) src *= texelFetch(uClip, p, 0).r;
-  finalColor = composite(uMode, dst, src);
+  ivec2 documentPixel = ivec2(floor((uViewToDoc * vec3(vPos, 1.0)).xy));
+  finalColor = composite(uMode, dst, src, documentPixel, uDissolveSeed);
 }
 `;
 

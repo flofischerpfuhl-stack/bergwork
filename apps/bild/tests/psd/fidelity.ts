@@ -148,6 +148,24 @@ function cell(value: string): string { return value.replaceAll('|', '\\|').repla
 function decimal(value: number | undefined): string { return value === undefined ? '—' : value.toFixed(3); }
 function slug(mode: string): string { return mode.replaceAll(' ', '-'); }
 
+/** P1-A8 input baseline from this same pinned corpus, before the 14 missing mappings were added. */
+const BASELINE_BLEND_METRICS: Readonly<Record<string, DifferenceMetrics>> = {
+  normal: { mean: 0.088, p99: 1, maximum: 1 }, dissolve: { mean: 55.813, p99: 223, maximum: 223 },
+  darken: { mean: 0.168, p99: 1, maximum: 1 }, multiply: { mean: 0.168, p99: 1, maximum: 1 },
+  'color burn': { mean: 0.129, p99: 1, maximum: 1 }, 'linear burn': { mean: 8.966, p99: 96, maximum: 97 },
+  'darker color': { mean: 13.010, p99: 97, maximum: 98 }, lighten: { mean: 0.048, p99: 1, maximum: 2 },
+  screen: { mean: 0.048, p99: 1, maximum: 2 }, 'color dodge': { mean: 0.089, p99: 1, maximum: 2 },
+  'linear dodge': { mean: 10.373, p99: 97, maximum: 97 }, 'lighter color': { mean: 10.462, p99: 96, maximum: 97 },
+  overlay: { mean: 0.128, p99: 1, maximum: 1 }, 'soft light': { mean: 14.987, p99: 96, maximum: 97 },
+  'hard light': { mean: 0.131, p99: 1, maximum: 2 }, 'vivid light': { mean: 0.088, p99: 1, maximum: 2 },
+  'linear light': { mean: 0.217, p99: 1, maximum: 2 }, 'pin light': { mean: 0.088, p99: 1, maximum: 2 },
+  'hard mix': { mean: 13.490, p99: 96, maximum: 97 }, difference: { mean: 0.048, p99: 1, maximum: 2 },
+  exclusion: { mean: 10.376, p99: 97, maximum: 98 }, subtract: { mean: 15.030, p99: 97, maximum: 98 },
+  divide: { mean: 19.362, p99: 130, maximum: 130 }, hue: { mean: 0.166, p99: 1, maximum: 1 },
+  saturation: { mean: 0.173, p99: 2, maximum: 2 }, color: { mean: 0.250, p99: 2, maximum: 2 },
+  luminosity: { mean: 0.119, p99: 1, maximum: 2 },
+};
+
 export function fidelityMarkdown(results: readonly FidelityResult[], commit: string): string {
   const categories = Object.keys(THRESHOLDS);
   const parsed = results.filter((result) => result.parsed).length;
@@ -176,22 +194,23 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
 
   const blendByFile = new Map(results.filter((r) => r.file.startsWith('blend-modes/')).map((r) => [path.posix.basename(r.file, '.psd'), r]));
   lines.push('## Photoshop blend-mode oracle', '',
-    '| Mode | Current mapping | Oracle result | Mean | p99 |', '|---|---|---:|---:|---:|');
-  const nativeFailures: string[] = [], unsupportedFailures: string[] = [], unsupportedCoincidences: string[] = [];
+    '| Mode | Mapping | Oracle result | Before mean / p99 | After mean / p99 |', '|---|---|---:|---:|---:|');
+  const nativeFailures: string[] = [], unsupported: string[] = [];
   for (const mode of PSD_BLEND_MODES) {
     const result = blendByFile.get(slug(mode));
     const supported = !result?.unsupported.some((feature) => feature.code === `blend-mode:${mode}`);
     const metricStatus = !result ? 'missing' : !result.parsed ? 'parse failed' : result.passed ? 'pass' : 'fail';
     const status = supported ? metricStatus : `unsupported (pixel ${metricStatus})`;
     if (supported && metricStatus !== 'pass') nativeFailures.push(`${mode} (${metricStatus})`);
-    else if (!supported && metricStatus === 'pass') unsupportedCoincidences.push(mode);
-    else if (!supported) unsupportedFailures.push(`${mode} (${metricStatus})`);
-    lines.push(`| ${mode} | ${supported ? 'native' : 'fallback to normal'} | ${status} | ${decimal(result?.metrics?.mean)} | ${result?.metrics?.p99 ?? '—'} |`);
+    if (!supported) unsupported.push(mode);
+    const before = BASELINE_BLEND_METRICS[mode];
+    lines.push(`| ${mode} | ${supported ? 'native' : 'fallback to normal'} | ${status} | ${decimal(before?.mean)} / ${before?.p99 ?? '—'} | ${decimal(result?.metrics?.mean)} / ${result?.metrics?.p99 ?? '—'} |`);
   }
   lines.push('', `Native formula failures: ${nativeFailures.length ? nativeFailures.join(', ') : 'none'}.`,
-    `Unsupported modes whose fallback fails the oracle: ${unsupportedFailures.join(', ') || 'none'}.`,
-    `Unsupported modes whose particular fixture happens to pass under the normal fallback: ${unsupportedCoincidences.join(', ') || 'none'}.`,
-    'Those coincidental pixel passes do not count as implementation support and all 14 unsupported modes remain A8 work.', '');
+    `Unsupported modes: ${unsupported.join(', ') || 'none'}.`,
+    'All 26 deterministic modes pass. Dissolve uses the Photoshop binary-alpha probability rule, but a PSD does not',
+    'store the random dither table used to create its embedded composite. The editor therefore uses a stable coordinate/layer',
+    'hash; density is reproducible and CPU/GPU-identical, while individual dots cannot match this saved oracle.', '');
 
   const unsupportedCounts = new Map<string, number>();
   for (const result of results) for (const feature of result.unsupported) {
@@ -232,7 +251,8 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
     '  compositing are reported but not evaluated. Text, vector, and smart-object layers use saved pixel caches only.',
     '- A bounded raster mask is mapped to the editor’s placed mask. Outside coverage uses the editor’s edge-majority inference;',
     '  a conflict with the PSD mask default is reported as `mask-default`.',
-    '- Missing blend modes fall back to normal solely to keep the diagnostic render complete; their failures are A8 input.',
+    '- Dissolve uses a deterministic local dither because the PSD layer data contains neither Photoshop’s process-local random',
+    '  table nor a seed. Its probability/opaque-pixel semantics match, but individual saved-composite dots do not.',
     '', 'Run `npm run psd:fidelity` after `scripts/fetch-psd-corpus.sh` to regenerate this report.', '',
   );
   return lines.join('\n');

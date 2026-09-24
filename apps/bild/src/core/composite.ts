@@ -1,5 +1,5 @@
 /** CPU reference for LiveMaskRenderer, LayerRenderer, FolderMaskClip, AdjustmentSurface and ImageExporter.render. */
-import { blendRgbInto, clamp01, compositePremultiplied } from './blend';
+import { blendRgbInto, blendSeed as seedForBlend, clamp01, compositePremultiplied, dissolveNoise } from './blend';
 import { ancestorIds, renderLayers, type BlendMode, type CanvasDocument, type Layer, type LayerAdjustment } from './document';
 import type { Affine, LayerSampling, LayerTransform, Rect } from './geometry';
 import { concat, invert, pixelToDocument, samePlacement } from './geometry';
@@ -49,6 +49,7 @@ class BandRenderer {
   private readonly location = new Float64Array(3);
   private readonly liveSample = new Float32Array(4);
   private readonly blendScratch = new Float64Array(6);
+  private readonly blendSeeds = new Map<string, number>();
   private readonly documentToOutput: Affine | undefined;
   skippedAdjustment = false;
 
@@ -79,6 +80,11 @@ class BandRenderer {
     return result;
   }
   private blendMode(layer: Layer): BlendMode { return this.options.blendMode?.(layer) ?? layer.blendMode; }
+  private blendSeed(layer: Layer): number {
+    let seed = this.blendSeeds.get(layer.id);
+    if (seed === undefined) { seed = seedForBlend(layer.id); this.blendSeeds.set(layer.id, seed); }
+    return seed;
+  }
   private raster(layer: Layer): Raster | null { return this.options.raster?.(layer) ?? layer.raster; }
   private maskRaster(layer: Layer): Raster | null { return this.options.maskRaster?.(layer) ?? layer.mask?.raster ?? null; }
   private sampler(raster: Raster, sampling: LayerSampling, drawnWidth: number): RasterSampler {
@@ -193,6 +199,7 @@ class BandRenderer {
       || transform.size.width !== raster.width || transform.size.height !== raster.height
       || !Number.isInteger(transform.origin.x) || !Number.isInteger(transform.origin.y)) return false;
     const opacity = clamp01(layer.opacity);
+    const seed = mode === 'dissolve' ? this.blendSeed(layer) : 0;
     for (let py = 0; py < height; py++) {
       const sy = originY + py - transform.origin.y;
       if (sy < 0 || sy >= raster.height || originY + py < 0 || originY + py >= this.document.height) continue;
@@ -214,7 +221,8 @@ class BandRenderer {
           target[offset + 1] = sg + target[offset + 1]! * inverse;
           target[offset + 2] = sb + target[offset + 2]! * inverse;
           target[offset + 3] = alpha + target[offset + 3]! * inverse;
-        } else compositePremultiplied(target, offset, sr, sg, sb, alpha, mode, false, this.blendScratch);
+        } else compositePremultiplied(target, offset, sr, sg, sb, alpha, mode, false, this.blendScratch,
+          mode === 'dissolve' ? dissolveNoise(originX + px, originY + py, seed) : 0);
       }
     }
     return true;
@@ -254,6 +262,7 @@ class BandRenderer {
     const sample = new Float32Array(4);
     const visiting = new Set<string>();
     const map = this.outputToDocument;
+    const seed = mode === 'dissolve' ? this.blendSeed(layer) : 0;
     for (let py = 0; py < height; py++) {
       for (let px = 0; px < width; px++) {
         const ox = originX + px + 0.5, oy = originY + py + 0.5;
@@ -272,7 +281,8 @@ class BandRenderer {
         if (coverage <= 0) continue;
         const offset = (py * width + px) * 4;
         compositePremultiplied(target, offset, sample[0]! * coverage, sample[1]! * coverage,
-          sample[2]! * coverage, sample[3]! * coverage, mode, false, this.blendScratch);
+          sample[2]! * coverage, sample[3]! * coverage, mode, false, this.blendScratch,
+          mode === 'dissolve' ? dissolveNoise(Math.floor(x), Math.floor(y), seed) : 0);
       }
     }
   }
@@ -405,6 +415,7 @@ class BandRenderer {
     }
     this.stackRoundTrip(group, alpha, true);
     const mode = this.blendMode(stack.base);
+    const seed = mode === 'dissolve' ? this.blendSeed(stack.base) : 0;
     for (let py = 0; py < height; py++) for (let px = 0; px < width; px++) {
       const offset = (py * width + px) * 4;
       const ox = originX + px + 0.5, oy = originY + py + 0.5, map = this.outputToDocument;
@@ -413,7 +424,8 @@ class BandRenderer {
       const folder = this.folderCoverage(stack.base, x, y);
       if (folder <= 0) continue;
       compositePremultiplied(target, offset, group[offset]! * folder, group[offset + 1]! * folder,
-        group[offset + 2]! * folder, group[offset + 3]! * folder, mode, false, this.blendScratch);
+        group[offset + 2]! * folder, group[offset + 3]! * folder, mode, false, this.blendScratch,
+        mode === 'dissolve' ? dissolveNoise(Math.floor(x), Math.floor(y), seed) : 0);
     }
   }
 

@@ -7,14 +7,14 @@ alpha (so undefined straight RGB below transparency is ignored): mean over all c
 percentile. A file passes only when both limits for its primary feature folder pass.
 The runner is a measurement baseline: fidelity failures are reported but do not make the command itself fail.
 
-Overall: 276/300 parsed, 276/300 rendered, 130/300 passed (43.3%).
+Overall: 276/300 parsed, 276/300 rendered, 141/300 passed (47.0%).
 The Product Plan A7 acceptance target of at least 90% is **not met** by this baseline.
 
 ## Thresholds and feature summary
 
 | Feature | Limits (mean / p99) | Files | Parsed | Rendered | Passed | Pass rate | Top failure causes |
 |---|---:|---:|---:|---:|---:|---:|---|
-| blend-modes | ≤ 2 / ≤ 8 | 32 | 31 | 31 | 19 | 59.4% | parse: Error: Color mode not supported: CMYK (1); unsupported: artboards (1); unsupported: blend-mode:darker color (1) |
+| blend-modes | ≤ 2 / ≤ 8 | 32 | 31 | 31 | 30 | 93.8% | parse: Error: Color mode not supported: CMYK (1); wrong math/order/colour conversion (1) |
 | adjustments | ≤ 8 / ≤ 64 | 39 | 31 | 31 | 1 | 2.6% | unsupported: ag-psd-parser (27); parse: Error: Color mode not supported: CMYK (8); unsupported: adjustment:brightness/contrast (1) |
 | layers | ≤ 2 / ≤ 16 | 36 | 36 | 36 | 29 | 80.6% | unsupported: mask-pixels (3); wrong math/order/colour conversion (3); unsupported: vector-mask (1) |
 | effects | ≤ 8 / ≤ 64 | 15 | 15 | 15 | 2 | 13.3% | unsupported: ag-psd-parser (7); unsupported: layer-effects (6) |
@@ -28,46 +28,47 @@ The Product Plan A7 acceptance target of at least 90% is **not met** by this bas
 | descriptors | ≤ 2 / ≤ 16 | 6 | 4 | 4 | 4 | 66.7% | parse: Error: Color mode not supported: lab (2) |
 | 16/32-bit | ≤ 3 / ≤ 24 | 29 | 25 | 25 | 6 | 20.7% | unsupported: bit-depth:32 (11); unsupported: ag-psd-parser (6); parse: Error: Color mode not supported: CMYK (2) |
 | PSB | ≤ 2 / ≤ 16 | 37 | 37 | 37 | 24 | 64.9% | wrong math/order/colour conversion (5); unsupported: bit-depth:32 (4); unsupported: layer-effects (2) |
-| root | ≤ 2 / ≤ 16 | 120 | 116 | 116 | 57 | 47.5% | unsupported: ag-psd-parser (22); wrong math/order/colour conversion (12); unsupported: bit-depth:32 (9) |
+| root | ≤ 2 / ≤ 16 | 120 | 116 | 116 | 57 | 47.5% | unsupported: ag-psd-parser (22); wrong math/order/colour conversion (13); unsupported: bit-depth:32 (9) |
 
 Files in the `16/32-bit` and `PSB` rows are also counted in their feature/root row.
 
 ## Photoshop blend-mode oracle
 
-| Mode | Current mapping | Oracle result | Mean | p99 |
+| Mode | Mapping | Oracle result | Before mean / p99 | After mean / p99 |
 |---|---|---:|---:|---:|
-| normal | native | pass | 0.088 | 1 |
-| dissolve | fallback to normal | unsupported (pixel fail) | 55.813 | 223 |
-| darken | native | pass | 0.168 | 1 |
-| multiply | native | pass | 0.168 | 1 |
-| color burn | native | pass | 0.129 | 1 |
-| linear burn | fallback to normal | unsupported (pixel fail) | 8.966 | 96 |
-| darker color | fallback to normal | unsupported (pixel fail) | 13.010 | 97 |
-| lighten | native | pass | 0.048 | 1 |
-| screen | native | pass | 0.048 | 1 |
-| color dodge | native | pass | 0.089 | 1 |
-| linear dodge | fallback to normal | unsupported (pixel fail) | 10.373 | 97 |
-| lighter color | fallback to normal | unsupported (pixel fail) | 10.462 | 96 |
-| overlay | native | pass | 0.128 | 1 |
-| soft light | fallback to normal | unsupported (pixel fail) | 14.987 | 96 |
-| hard light | fallback to normal | unsupported (pixel pass) | 0.131 | 1 |
-| vivid light | fallback to normal | unsupported (pixel pass) | 0.088 | 1 |
-| linear light | fallback to normal | unsupported (pixel pass) | 0.217 | 1 |
-| pin light | fallback to normal | unsupported (pixel pass) | 0.088 | 1 |
-| hard mix | fallback to normal | unsupported (pixel fail) | 13.490 | 96 |
-| difference | native | pass | 0.048 | 1 |
-| exclusion | fallback to normal | unsupported (pixel fail) | 10.376 | 97 |
-| subtract | fallback to normal | unsupported (pixel fail) | 15.030 | 97 |
-| divide | fallback to normal | unsupported (pixel fail) | 19.362 | 130 |
-| hue | native | pass | 0.166 | 1 |
-| saturation | native | pass | 0.173 | 2 |
-| color | native | pass | 0.250 | 2 |
-| luminosity | native | pass | 0.119 | 1 |
+| normal | native | pass | 0.088 / 1 | 0.088 / 1 |
+| dissolve | native | fail | 55.813 / 223 | 56.095 / 255 |
+| darken | native | pass | 0.168 / 1 | 0.168 / 1 |
+| multiply | native | pass | 0.168 / 1 | 0.168 / 1 |
+| color burn | native | pass | 0.129 / 1 | 0.129 / 1 |
+| linear burn | native | pass | 8.966 / 96 | 0.168 / 1 |
+| darker color | native | pass | 13.010 / 97 | 0.087 / 1 |
+| lighten | native | pass | 0.048 / 1 | 0.048 / 1 |
+| screen | native | pass | 0.048 / 1 | 0.048 / 1 |
+| color dodge | native | pass | 0.089 / 1 | 0.089 / 1 |
+| linear dodge | native | pass | 10.373 / 97 | 0.048 / 1 |
+| lighter color | native | pass | 10.462 / 96 | 0.088 / 1 |
+| overlay | native | pass | 0.128 / 1 | 0.128 / 1 |
+| soft light | native | pass | 14.987 / 96 | 0.129 / 1 |
+| hard light | native | pass | 0.131 / 1 | 0.131 / 1 |
+| vivid light | native | pass | 0.088 / 1 | 0.088 / 1 |
+| linear light | native | pass | 0.217 / 1 | 0.217 / 1 |
+| pin light | native | pass | 0.088 / 1 | 0.088 / 1 |
+| hard mix | native | pass | 13.490 / 96 | 0.129 / 1 |
+| difference | native | pass | 0.048 / 1 | 0.048 / 1 |
+| exclusion | native | pass | 10.376 / 97 | 0.048 / 1 |
+| subtract | native | pass | 15.030 / 97 | 0.087 / 1 |
+| divide | native | pass | 19.362 / 130 | 0.130 / 1 |
+| hue | native | pass | 0.166 / 1 | 0.166 / 1 |
+| saturation | native | pass | 0.173 / 2 | 0.173 / 2 |
+| color | native | pass | 0.250 / 2 | 0.250 / 2 |
+| luminosity | native | pass | 0.119 / 1 | 0.119 / 1 |
 
-Native formula failures: none.
-Unsupported modes whose fallback fails the oracle: dissolve (fail), linear burn (fail), darker color (fail), linear dodge (fail), lighter color (fail), soft light (fail), hard mix (fail), exclusion (fail), subtract (fail), divide (fail).
-Unsupported modes whose particular fixture happens to pass under the normal fallback: hard light, vivid light, linear light, pin light.
-Those coincidental pixel passes do not count as implementation support and all 14 unsupported modes remain A8 work.
+Native formula failures: dissolve (fail).
+Unsupported modes: none.
+All 26 deterministic modes pass. Dissolve uses the Photoshop binary-alpha probability rule, but a PSD does not
+store the random dither table used to create its embedded composite. The editor therefore uses a stable coordinate/layer
+hash; density is reproducible and CPU/GPU-identical, while individual dots cannot match this saved oracle.
 
 ## Unsupported and approximated features
 
@@ -100,24 +101,10 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | not-rendered: adjustment:brightness/contrast | 14 |
 | approximated: mask-density | 11 |
 | not-rendered: adjustment:levels | 10 |
-| not-rendered: blend-mode:linear dodge | 10 |
-| not-rendered: blend-mode:exclusion | 9 |
 | approximated: bit-depth:16 | 8 |
-| not-rendered: blend-mode:dissolve | 7 |
-| not-rendered: blend-mode:divide | 7 |
-| not-rendered: blend-mode:hard light | 7 |
-| not-rendered: blend-mode:hard mix | 7 |
-| not-rendered: blend-mode:lighter color | 7 |
-| not-rendered: blend-mode:linear burn | 7 |
-| not-rendered: blend-mode:linear light | 7 |
-| not-rendered: blend-mode:pin light | 7 |
-| not-rendered: blend-mode:soft light | 7 |
-| not-rendered: blend-mode:subtract | 7 |
-| not-rendered: blend-mode:vivid light | 7 |
 | not-rendered: mask-feather | 6 |
 | not-rendered: adjustment:gradient map | 5 |
 | not-rendered: artboards | 5 |
-| not-rendered: blend-mode:darker color | 5 |
 | not-rendered: orphan-clipping | 5 |
 | not-rendered: adjustment:invert | 4 |
 | approximated: bit-depth:1 | 3 |
@@ -221,33 +208,33 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | blend-modes/color-dodge.psd | blend-modes | yes | yes | yes | 0.089 | 1 | 2 | — |
 | blend-modes/color.psd | blend-modes | yes | yes | yes | 0.250 | 2 | 2 | — |
 | blend-modes/darken.psd | blend-modes | yes | yes | yes | 0.168 | 1 | 1 | — |
-| blend-modes/darker-color.psd | blend-modes | yes | yes | no | 13.010 | 97 | 98 | blend-mode:darker color, blend-mode:darker color, blend-mode:darker color |
+| blend-modes/darker-color.psd | blend-modes | yes | yes | yes | 0.087 | 1 | 1 | — |
 | blend-modes/difference.psd | blend-modes | yes | yes | yes | 0.048 | 1 | 2 | — |
-| blend-modes/dissolve.psd | blend-modes | yes | yes | no | 55.813 | 223 | 223 | blend-mode:dissolve, blend-mode:dissolve, blend-mode:dissolve |
-| blend-modes/divide.psd | blend-modes | yes | yes | no | 19.362 | 130 | 130 | blend-mode:divide, blend-mode:divide, blend-mode:divide |
-| blend-modes/exclusion.psd | blend-modes | yes | yes | no | 10.376 | 97 | 98 | blend-mode:exclusion, blend-mode:exclusion, blend-mode:exclusion |
-| blend-modes/gray-blend-modes.psd | blend-modes | yes | yes | no | 9.626 | 181 | 255 | color-mode:1, artboards, isolated-group, blend-mode:hard light, blend-mode:soft light, blend-mode:exclusion, blend-mode:subtract, blend-mode:linear dodge, blend-mode:linear burn, blend-mode:vivid light, blend-mode:linear light, blend-mode:pin light, blend-mode:hard mix, blend-mode:divide, blend-mode:dissolve, isolated-group, blend-mode:hard light, blend-mode:soft light, blend-mode:exclusion, blend-mode:subtract, blend-mode:linear dodge, blend-mode:linear burn, blend-mode:vivid light, blend-mode:linear light, blend-mode:pin light, blend-mode:hard mix, blend-mode:divide, blend-mode:dissolve |
+| blend-modes/dissolve.psd | blend-modes | yes | yes | no | 56.095 | 255 | 255 | — |
+| blend-modes/divide.psd | blend-modes | yes | yes | yes | 0.130 | 1 | 2 | — |
+| blend-modes/exclusion.psd | blend-modes | yes | yes | yes | 0.048 | 1 | 2 | — |
+| blend-modes/gray-blend-modes.psd | blend-modes | yes | yes | yes | 0.186 | 1 | 255 | color-mode:1, artboards, isolated-group, isolated-group |
 | blend-modes/group-divider-blend-mode.psd | blend-modes | yes | yes | yes | 0.000 | 0 | 0 | — |
-| blend-modes/hard-light.psd | blend-modes | yes | yes | yes | 0.131 | 1 | 2 | blend-mode:hard light, blend-mode:hard light, blend-mode:hard light |
-| blend-modes/hard-mix.psd | blend-modes | yes | yes | no | 13.490 | 96 | 97 | blend-mode:hard mix, blend-mode:hard mix, blend-mode:hard mix |
+| blend-modes/hard-light.psd | blend-modes | yes | yes | yes | 0.131 | 1 | 2 | — |
+| blend-modes/hard-mix.psd | blend-modes | yes | yes | yes | 0.129 | 1 | 1 | — |
 | blend-modes/hue.psd | blend-modes | yes | yes | yes | 0.166 | 1 | 1 | — |
 | blend-modes/lighten.psd | blend-modes | yes | yes | yes | 0.048 | 1 | 2 | — |
-| blend-modes/lighter-color.psd | blend-modes | yes | yes | no | 10.462 | 96 | 97 | blend-mode:lighter color, blend-mode:lighter color, blend-mode:lighter color |
-| blend-modes/linear-burn.psd | blend-modes | yes | yes | no | 8.966 | 96 | 97 | blend-mode:linear burn, blend-mode:linear burn, blend-mode:linear burn |
-| blend-modes/linear-dodge.psd | blend-modes | yes | yes | no | 10.373 | 97 | 97 | blend-mode:linear dodge, blend-mode:linear dodge, blend-mode:linear dodge |
-| blend-modes/linear-light.psd | blend-modes | yes | yes | yes | 0.217 | 1 | 2 | blend-mode:linear light, blend-mode:linear light, blend-mode:linear light |
+| blend-modes/lighter-color.psd | blend-modes | yes | yes | yes | 0.088 | 1 | 2 | — |
+| blend-modes/linear-burn.psd | blend-modes | yes | yes | yes | 0.168 | 1 | 1 | — |
+| blend-modes/linear-dodge.psd | blend-modes | yes | yes | yes | 0.048 | 1 | 2 | — |
+| blend-modes/linear-light.psd | blend-modes | yes | yes | yes | 0.217 | 1 | 2 | — |
 | blend-modes/luminosity.psd | blend-modes | yes | yes | yes | 0.119 | 1 | 2 | — |
 | blend-modes/multiply.psd | blend-modes | yes | yes | yes | 0.168 | 1 | 1 | — |
 | blend-modes/normal.psd | blend-modes | yes | yes | yes | 0.088 | 1 | 1 | — |
 | blend-modes/overlay.psd | blend-modes | yes | yes | yes | 0.128 | 1 | 1 | — |
 | blend-modes/pass-through.psd | blend-modes | yes | yes | yes | 0.088 | 1 | 1 | — |
-| blend-modes/pin-light.psd | blend-modes | yes | yes | yes | 0.088 | 1 | 2 | blend-mode:pin light, blend-mode:pin light, blend-mode:pin light |
-| blend-modes/rgb-blend-modes.psd | blend-modes | yes | yes | no | 13.395 | 254 | 255 | artboards, isolated-group, blend-mode:hard light, blend-mode:soft light, blend-mode:exclusion, blend-mode:subtract, blend-mode:linear dodge, blend-mode:linear burn, blend-mode:vivid light, blend-mode:linear light, blend-mode:pin light, blend-mode:hard mix, blend-mode:divide, blend-mode:darker color, blend-mode:lighter color, blend-mode:dissolve, isolated-group, blend-mode:hard light, blend-mode:soft light, blend-mode:exclusion, blend-mode:subtract, blend-mode:linear dodge, blend-mode:linear burn, blend-mode:vivid light, blend-mode:linear light, blend-mode:pin light, blend-mode:hard mix, blend-mode:divide, blend-mode:darker color, blend-mode:lighter color, blend-mode:dissolve |
+| blend-modes/pin-light.psd | blend-modes | yes | yes | yes | 0.088 | 1 | 2 | — |
+| blend-modes/rgb-blend-modes.psd | blend-modes | yes | yes | yes | 0.121 | 1 | 255 | artboards, isolated-group, isolated-group |
 | blend-modes/saturation.psd | blend-modes | yes | yes | yes | 0.173 | 2 | 2 | — |
 | blend-modes/screen.psd | blend-modes | yes | yes | yes | 0.048 | 1 | 2 | — |
-| blend-modes/soft-light.psd | blend-modes | yes | yes | no | 14.987 | 96 | 97 | blend-mode:soft light, blend-mode:soft light, blend-mode:soft light |
-| blend-modes/subtract.psd | blend-modes | yes | yes | no | 15.030 | 97 | 98 | blend-mode:subtract, blend-mode:subtract, blend-mode:subtract |
-| blend-modes/vivid-light.psd | blend-modes | yes | yes | yes | 0.088 | 1 | 1 | blend-mode:vivid light, blend-mode:vivid light, blend-mode:vivid light |
+| blend-modes/soft-light.psd | blend-modes | yes | yes | yes | 0.129 | 1 | 1 | — |
+| blend-modes/subtract.psd | blend-modes | yes | yes | yes | 0.087 | 1 | 1 | — |
+| blend-modes/vivid-light.psd | blend-modes | yes | yes | yes | 0.088 | 1 | 1 | — |
 | broken-groups.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | broken-groups.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | clip-adjustment.psd | root | yes | yes | no | 3.217 | 160 | 255 | adjustment:hue/saturation, mask-pixels |
@@ -255,8 +242,8 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | clipping-mask.psd | root | yes | yes | yes | 0.000 | 0 | 1 | — |
 | clipping-mask2.psd | root | yes | yes | no | 18.500 | 80 | 86 | layer-effects, advanced-blending, mask-pixels, real-mask, mask-feather, adjustment:brightness/contrast, mask-pixels, adjustment:color balance, mask-pixels |
 | clipping-mask3.psd | root | yes | yes | no | 39.221 | 255 | 255 | orphan-clipping |
-| clipping-mask4.psd | root | yes | yes | no | 43.828 | 255 | 255 | ag-psd-parser, ag-psd-parser, ag-psd-parser, blend-mode:exclusion, blend-mode:lighter color, orphan-clipping |
-| clipping-mask5.psd | root | yes | yes | no | 24.148 | 255 | 255 | ag-psd-parser, ag-psd-parser, ag-psd-parser, mask-default, blend-mode:exclusion, orphan-clipping |
+| clipping-mask4.psd | root | yes | yes | no | 6.848 | 255 | 255 | ag-psd-parser, ag-psd-parser, ag-psd-parser, orphan-clipping |
+| clipping-mask5.psd | root | yes | yes | no | 24.148 | 255 | 255 | ag-psd-parser, ag-psd-parser, ag-psd-parser, mask-default, orphan-clipping |
 | cmyk-alpha-spot.psd | root | no | no | no | — | — | — | Error: Color mode not supported: CMYK |
 | cmyk-gray-ramp.psd | root | no | no | no | — | — | — | Error: Color mode not supported: CMYK |
 | cmyk-spot.psd | root | no | no | no | — | — | — | Error: Color mode not supported: CMYK |
@@ -332,7 +319,7 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | layer_mask_data.psd | root | yes | yes | no | 20.661 | 94 | 147 | mask-density, mask-feather, real-mask, mask-density, mask-feather |
 | layer_params.psb | root | yes | yes | no | 5.525 | 182 | 245 | layer-effects, advanced-blending, layer-effects, advanced-blending |
 | layer_params.psd | root | yes | yes | no | 5.525 | 182 | 245 | layer-effects, advanced-blending, layer-effects, advanced-blending |
-| layer-name-emoji.psd | root | yes | yes | no | 223.000 | 255 | 255 | blend-mode:linear dodge |
+| layer-name-emoji.psd | root | yes | yes | no | 223.000 | 255 | 255 | — |
 | layers/black-and-white.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | adjustment:black & white, mask-pixels |
 | layers/brightness-contrast.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | adjustment:brightness/contrast, mask-pixels |
 | layers/channel-mixer.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | adjustment:channel mixer, mask-pixels |
@@ -394,9 +381,9 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | passthrough_blendmodes2.psd | root | yes | yes | no | 40.850 | 246 | 255 | ag-psd-parser, ag-psd-parser, ag-psd-parser, mask-pixels, mask-default, mask-default, mask-default, mask-default |
 | passthrough_blendmodes3.psd | root | yes | yes | no | 16.119 | 149 | 251 | ag-psd-parser, ag-psd-parser, ag-psd-parser, mask-default, mask-default, mask-default, mask-default |
 | passthrough_clipping_mask_adjustment.psd | root | yes | yes | no | 29.729 | 140 | 169 | ag-psd-parser, ag-psd-parser, ag-psd-parser, mask-pixels, mask-default, adjustment:exposure, mask-pixels, mask-default, adjustment:exposure, mask-pixels, orphan-clipping |
-| passthrough_clipping_mask_blendmode.psd | root | yes | yes | no | 20.541 | 124 | 125 | ag-psd-parser, ag-psd-parser, ag-psd-parser, mask-pixels, mask-default, blend-mode:linear dodge, mask-default, blend-mode:linear dodge, orphan-clipping |
+| passthrough_clipping_mask_blendmode.psd | root | yes | yes | no | 3.004 | 32 | 33 | ag-psd-parser, ag-psd-parser, ag-psd-parser, mask-pixels, mask-default, mask-default, orphan-clipping |
 | passthrough_fill_adjustment.psd | root | yes | yes | no | 9.261 | 127 | 152 | ag-psd-parser, ag-psd-parser, ag-psd-parser, mask-default, fill-opacity, mask-default, adjustment:exposure, mask-pixels |
-| passthrough_fill_blendmode.psd | root | yes | yes | no | 14.650 | 120 | 134 | ag-psd-parser, ag-psd-parser, ag-psd-parser, fill-opacity, blend-mode:lighter color |
+| passthrough_fill_blendmode.psd | root | yes | yes | no | 10.260 | 120 | 134 | ag-psd-parser, ag-psd-parser, ag-psd-parser, fill-opacity |
 | passthrough_opacity.psd | root | yes | yes | no | 55.165 | 90 | 125 | ag-psd-parser, ag-psd-parser, ag-psd-parser, mask-default, group-opacity, mask-default, adjustment:exposure, mask-pixels |
 | passthrough_vector_mask.psd | root | yes | yes | no | 16.993 | 107 | 194 | ag-psd-parser, ag-psd-parser, ag-psd-parser, mask-pixels, vector-mask, adjustment:exposure, mask-pixels |
 | path-operations/combine-group.psd | path-operations | yes | yes | yes | 0.000 | 0 | 0 | — |
@@ -461,6 +448,7 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
   compositing are reported but not evaluated. Text, vector, and smart-object layers use saved pixel caches only.
 - A bounded raster mask is mapped to the editor’s placed mask. Outside coverage uses the editor’s edge-majority inference;
   a conflict with the PSD mask default is reported as `mask-default`.
-- Missing blend modes fall back to normal solely to keep the diagnostic render complete; their failures are A8 input.
+- Dissolve uses a deterministic local dither because the PSD layer data contains neither Photoshop’s process-local random
+  table nor a seed. Its probability/opaque-pixel semantics match, but individual saved-composite dots do not.
 
 Run `npm run psd:fidelity` after `scripts/fetch-psd-corpus.sh` to regenerate this report.

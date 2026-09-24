@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { writePsdUint8Array, type Layer as AgLayer, type Psd } from 'ag-psd';
 import { compositeRegion } from '../../src/core/composite';
-import { pixelDataToRgba8, readPsdDocument } from '../../src/io/psd';
+import { PSD_BLEND_MODES, pixelDataToRgba8, readPsdDocument, SUPPORTED_PSD_BLEND_MODES } from '../../src/io/psd';
 import { differenceMetrics } from './fidelity';
 
 function pixels(values: readonly number[]): { width: number; height: number; data: Uint8ClampedArray } {
@@ -9,6 +9,11 @@ function pixels(values: readonly number[]): { width: number; height: number; dat
 }
 
 describe('PSD reader adapter', () => {
+  it('maps all 27 Photoshop blend modes', () => {
+    expect(PSD_BLEND_MODES).toHaveLength(27);
+    expect([...SUPPORTED_PSD_BLEND_MODES]).toEqual([...PSD_BLEND_MODES]);
+  });
+
   it('maps ag-psd compositing order to document pixels and clipping', () => {
     const base: AgLayer = { name: 'Base', top: 0, left: 0, bottom: 1, right: 2,
       imageData: pixels([255, 0, 0, 255, 255, 0, 0, 128]) };

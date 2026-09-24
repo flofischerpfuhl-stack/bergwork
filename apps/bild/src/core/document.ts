@@ -13,15 +13,29 @@ import type { Raster } from './raster';
 import type { DocumentSelection } from './selection';
 
 export type BlendMode =
-  | 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten' | 'difference'
-  | 'colorDodge' | 'colorBurn' | 'hue' | 'saturation' | 'color' | 'luminosity';
+  | 'normal' | 'dissolve'
+  | 'darken' | 'multiply' | 'colorBurn' | 'linearBurn' | 'darkerColor'
+  | 'lighten' | 'screen' | 'colorDodge' | 'linearDodge' | 'lighterColor'
+  | 'overlay' | 'softLight' | 'hardLight' | 'vividLight' | 'linearLight' | 'pinLight' | 'hardMix'
+  | 'difference' | 'exclusion' | 'subtract' | 'divide'
+  | 'hue' | 'saturation' | 'color' | 'luminosity';
 
-/** Blend menu order (LayerBlendMode.allCases) with upstream raw values as labels. */
+/** Photoshop menu groups; the first 13 modes came from upstream LayerBlendMode.allCases. */
 export const BLEND_MODES: readonly { mode: BlendMode; label: string }[] = [
-  { mode: 'normal', label: 'Normal' }, { mode: 'multiply', label: 'Multiply' }, { mode: 'screen', label: 'Screen' },
-  { mode: 'overlay', label: 'Overlay' }, { mode: 'darken', label: 'Darken' }, { mode: 'lighten', label: 'Lighten' },
-  { mode: 'difference', label: 'Difference' }, { mode: 'colorDodge', label: 'Color Dodge' },
-  { mode: 'colorBurn', label: 'Color Burn' }, { mode: 'hue', label: 'Hue' }, { mode: 'saturation', label: 'Saturation' },
+  { mode: 'normal', label: 'Normal' }, { mode: 'dissolve', label: 'Dissolve' },
+  { mode: 'darken', label: 'Darken' }, { mode: 'multiply', label: 'Multiply' },
+  { mode: 'colorBurn', label: 'Color Burn' }, { mode: 'linearBurn', label: 'Linear Burn' },
+  { mode: 'darkerColor', label: 'Darker Color' },
+  { mode: 'lighten', label: 'Lighten' }, { mode: 'screen', label: 'Screen' },
+  { mode: 'colorDodge', label: 'Color Dodge' }, { mode: 'linearDodge', label: 'Linear Dodge (Add)' },
+  { mode: 'lighterColor', label: 'Lighter Color' },
+  { mode: 'overlay', label: 'Overlay' }, { mode: 'softLight', label: 'Soft Light' },
+  { mode: 'hardLight', label: 'Hard Light' }, { mode: 'vividLight', label: 'Vivid Light' },
+  { mode: 'linearLight', label: 'Linear Light' }, { mode: 'pinLight', label: 'Pin Light' },
+  { mode: 'hardMix', label: 'Hard Mix' },
+  { mode: 'difference', label: 'Difference' }, { mode: 'exclusion', label: 'Exclusion' },
+  { mode: 'subtract', label: 'Subtract' }, { mode: 'divide', label: 'Divide' },
+  { mode: 'hue', label: 'Hue' }, { mode: 'saturation', label: 'Saturation' },
   { mode: 'color', label: 'Color' }, { mode: 'luminosity', label: 'Luminosity' },
 ];
 export const BLEND_MODE_SET: ReadonlySet<string> = new Set(BLEND_MODES.map((b) => b.mode));
