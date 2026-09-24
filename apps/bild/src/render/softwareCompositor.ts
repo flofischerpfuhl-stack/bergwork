@@ -1,11 +1,13 @@
 /** CPU canvas fallback for LayerRenderer, DownsampleCache and ImageExporter.render. */
 import { applyAdjustment } from '../core/adjust/apply';
 import {
-  compositeRegion, compositeView, type AdjustmentApplier, type CompositeOptions,
+  compositeRegion, compositeRegionFloat, compositeView, compositeViewFloat,
+  type AdjustmentApplier, type CompositeOptions,
 } from '../core/composite';
 import { renderLayers, type CanvasDocument } from '../core/document';
 import { concat, invert, pixelToDocument, type Affine, type LayerSampling } from '../core/geometry';
 import type { Raster } from '../core/raster';
+import { floatToRgba16, rgba16To8 } from '../core/pixel/format';
 import { downsampleLevel, prepareSampler, type RasterSampler } from '../core/resample';
 import { DEFAULT_HOOKS, type CompositeHooks, type ViewSpec } from './gpuCompositor';
 
@@ -129,7 +131,9 @@ export class SoftwareCompositor {
     const existing = variants.get(key); if (existing) return existing;
     const canvas = new OffscreenCanvas(sampler.width, sampler.height), context = canvas.getContext('2d');
     if (!context) throw new Error('Canvas 2D is unavailable for a software mip level.');
-    const source = sampler.reduced?.bytes ?? raster.toPixels(), straight = new Uint8ClampedArray(source.length);
+    const native = sampler.reduced?.bytes ?? raster.toPixelsNative();
+    const source = native instanceof Uint16Array ? rgba16To8(native) : native;
+    const straight = new Uint8ClampedArray(source.length);
     if (!sampler.reduced) straight.set(source);
     else {
       // DownsampleCache stores colour levels premultiplied so transparent edges cannot glow.
@@ -229,6 +233,19 @@ export class SoftwareCompositor {
     return result.rgba;
   }
 
+  /** Straight-alpha float output used by 16-bit export and precision tests. */
+  readRegionFloat(document: CanvasDocument, x: number, y: number, width: number, height: number,
+    hooks: CompositeHooks = DEFAULT_HOOKS): Float32Array {
+    const result = compositeRegionFloat(document, { x, y, width, height }, this.options(hooks));
+    this.skippedAdjustments = result.adjustmentsApplied ? 0 : 1;
+    return result.rgba;
+  }
+
+  readRegion16(document: CanvasDocument, x: number, y: number, width: number, height: number,
+    hooks: CompositeHooks = DEFAULT_HOOKS): Uint16Array {
+    return floatToRgba16(this.readRegionFloat(document, x, y, width, height, hooks));
+  }
+
   readView(document: CanvasDocument, width: number, height: number, viewToDoc: Affine, _scale: number,
     hooks: CompositeHooks = DEFAULT_HOOKS): Uint8Array {
     const out = new Uint8Array(width * height * 4), step = 2048;
@@ -241,5 +258,12 @@ export class SoftwareCompositor {
       }
     }
     return out;
+  }
+
+  readViewFloat(document: CanvasDocument, width: number, height: number, viewToDoc: Affine, _scale: number,
+    hooks: CompositeHooks = DEFAULT_HOOKS): Float32Array {
+    const result = compositeViewFloat(document, width, height, viewToDoc, this.options(hooks));
+    this.skippedAdjustments = result.adjustmentsApplied ? 0 : 1;
+    return result.rgba;
   }
 }

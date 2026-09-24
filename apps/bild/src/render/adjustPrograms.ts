@@ -8,12 +8,12 @@ import { hueCube } from '../core/adjust/apply';
 import type { AdjustmentProgram } from './gpuCompositor';
 
 function params(values: readonly number[] = []): Float32Array { const out = new Float32Array(32); out.set(values.slice(0, 32)); return out; }
-function tableTexture(tables: Float32Array): { data: Uint8Array; width: number; height: number } {
-  const data = new Uint8Array(256 * 4);
+function tableTexture(tables: Float32Array): { data: Float32Array; width: number; height: number } {
+  const data = new Float32Array(256 * 4);
   for (let i = 0; i < 256; i++) {
-    data[i * 4] = Math.round(Math.min(1, Math.max(0, tables[i]!)) * 255);
-    data[i * 4 + 1] = Math.round(Math.min(1, Math.max(0, tables[256 + i]!)) * 255);
-    data[i * 4 + 2] = Math.round(Math.min(1, Math.max(0, tables[512 + i]!)) * 255); data[i * 4 + 3] = 255;
+    data[i * 4] = Math.min(1, Math.max(0, tables[i]!));
+    data[i * 4 + 1] = Math.min(1, Math.max(0, tables[256 + i]!));
+    data[i * 4 + 2] = Math.min(1, Math.max(0, tables[512 + i]!)); data[i * 4 + 3] = 1;
   }
   return { data, width: 256, height: 1 };
 }

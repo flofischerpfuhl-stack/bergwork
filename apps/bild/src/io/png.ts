@@ -58,6 +58,24 @@ export interface PngColorSamples {
   gamma: number | null;
   chromaticities: Chromaticities | null;
   srgb: boolean;
+  dpi: { x: number; y: number } | null;
+  colorInfo: PngResult['colorInfo'];
+}
+
+export interface PngNativeRgba {
+  width: number;
+  height: number;
+  data: Uint8Array | Uint16Array;
+  bitDepth: 8 | 16;
+  dpi: { x: number; y: number } | null;
+  colorInfo: PngResult['colorInfo'];
+}
+
+export interface PngEncodeOptions {
+  dpi?: number;
+  level?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+  /** Emits PNG16 and requires a Uint16Array. Defaults to the legacy PNG8 path. */
+  bitDepth?: 8 | 16;
 }
 
 /**
@@ -166,7 +184,30 @@ export function decodePngColorSamples(bytes: Uint8Array): PngColorSamples {
     if (offset !== inflated.length) throw new PngError('data', 'Unexpected trailing interlaced image data');
   }
   return { width: h.width, height: h.height, model, bits, colors, alpha, iccProfile: parsed.iccProfile,
-    gamma: parsed.colorInfo.gama, chromaticities: parsed.chromaticities, srgb: parsed.colorInfo.srgb };
+    gamma: parsed.colorInfo.gama, chromaticities: parsed.chromaticities, srgb: parsed.colorInfo.srgb,
+    dpi: parsed.dpi, colorInfo: parsed.colorInfo };
+}
+
+/** Decodes color channels without the legacy RGBA8 quantization step. */
+export function decodePngNativeRGBA(bytes: Uint8Array): PngNativeRgba {
+  const samples = decodePngColorSamples(bytes), count = samples.width * samples.height;
+  const data = samples.bits === 16 ? new Uint16Array(count * 4) : new Uint8Array(count * 4);
+  const maximum = samples.bits === 16 ? 65535 : 255;
+  for (let pixel = 0; pixel < count; pixel++) {
+    const target = pixel * 4;
+    if (samples.model === 'gray') {
+      const value = samples.colors[pixel]!;
+      data[target] = value; data[target + 1] = value; data[target + 2] = value;
+    } else {
+      const source = pixel * 3;
+      data[target] = samples.colors[source]!;
+      data[target + 1] = samples.colors[source + 1]!;
+      data[target + 2] = samples.colors[source + 2]!;
+    }
+    data[target + 3] = samples.alpha?.[pixel] ?? maximum;
+  }
+  return { width: samples.width, height: samples.height, data, bitDepth: samples.bits,
+    dpi: samples.dpi, colorInfo: samples.colorInfo };
 }
 
 /**
@@ -174,38 +215,51 @@ export function decodePngColorSamples(bytes: Uint8Array): PngColorSamples {
  * ImageExporter.pngData (Compositor/IO/ImageExporter.swift).
  */
 export function encodePng(
-  data: Uint8Array,
+  data: Uint8Array | Uint16Array,
   width: number,
   height: number,
   channels: 1 | 4,
-  options: { dpi?: number; level?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 } = {},
+  options: PngEncodeOptions = {},
 ): Uint8Array {
   validateDimensions(width, height);
   if (channels !== 1 && channels !== 4) throw new PngError('pixels', 'PNG channels must be 1 or 4');
+  const bitDepth = options.bitDepth ?? 8;
   const expected = width * height * channels;
   if (data.length !== expected) throw new PngError('pixels', `Pixel buffer has length ${data.length}, expected ${expected}`);
+  if ((bitDepth === 16) !== (data instanceof Uint16Array)) {
+    throw new PngError('pixels', `PNG${bitDepth} requires a ${bitDepth === 16 ? 'Uint16Array' : 'Uint8Array'}`);
+  }
   const level = options.level ?? 6;
   if (!Number.isInteger(level) || level < 0 || level > 9) throw new PngError('option', 'PNG compression level must be 0…9');
   if (options.dpi !== undefined && (!Number.isFinite(options.dpi) || options.dpi <= 0)) {
     throw new PngError('option', 'PNG DPI must be a positive finite number');
   }
 
-  const stride = width * channels;
+  let raw: Uint8Array;
+  if (data instanceof Uint16Array) {
+    raw = new Uint8Array(data.length * 2);
+    for (let i = 0; i < data.length; i++) {
+      const value = data[i]!;
+      raw[i * 2] = value >>> 8; raw[i * 2 + 1] = value & 255;
+    }
+  } else raw = data;
+  const bytesPerSample = bitDepth / 8;
+  const stride = width * channels * bytesPerSample;
   const filtered = new Uint8Array((stride + 1) * height);
   let previous = 0;
   for (let y = 0; y < height; y++) {
     const row = y * stride;
     const target = y * (stride + 1);
-    const filter = chooseFilter(data, row, previous, stride, channels, y !== 0);
+    const filter = chooseFilter(raw, row, previous, stride, channels * bytesPerSample, y !== 0);
     filtered[target] = filter;
-    writeFiltered(data, row, previous, stride, channels, y !== 0, filter, filtered, target + 1);
+    writeFiltered(raw, row, previous, stride, channels * bytesPerSample, y !== 0, filter, filtered, target + 1);
     previous = row;
   }
 
   const ihdr = new Uint8Array(13);
   writeU32(ihdr, 0, width);
   writeU32(ihdr, 4, height);
-  ihdr[8] = 8;
+  ihdr[8] = bitDepth;
   ihdr[9] = channels === 1 ? 0 : 6;
   const chunks = [SIGNATURE, makeChunk('IHDR', ihdr)];
   if (channels === 4) chunks.push(makeChunk('sRGB', new Uint8Array([0])));

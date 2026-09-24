@@ -5,6 +5,7 @@
  */
 
 import { documentsEqual, type CanvasDocument } from './document';
+import type { PixelArray } from './pixel/format';
 
 export interface HistorySnapshot {
   readonly document: CanvasDocument | null;
@@ -103,7 +104,7 @@ export class DocumentHistory {
 
   /** Bytes of raster tiles retained only by history, excluding tiles in the live document. */
   retainedBytes(current: CanvasDocument | null): number {
-    const seen = new Set<Uint8Array>();
+    const seen = new Set<PixelArray>();
     const visit = (document: CanvasDocument | null, count: boolean): number => {
       let bytes = 0;
       if (!document) return 0;

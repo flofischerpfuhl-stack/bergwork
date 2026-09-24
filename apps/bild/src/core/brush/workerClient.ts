@@ -35,6 +35,7 @@ interface WorkerGeometry {
 
 function rasterTransfer(raster: Raster, pixels = true): RasterTransfer {
   return { id: raster.id, width: raster.width, height: raster.height, channels: raster.channels,
+    format: raster.format,
     tiles: pixels ? raster.tiles.slice() : new Array(raster.tiles.length).fill(null), source: null };
 }
 

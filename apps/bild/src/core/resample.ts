@@ -1,9 +1,13 @@
 import type { Affine, LayerSampling, LayerTransform } from './geometry';
 import { concat, invert, pixelToDocument } from './geometry';
 import { Raster, TILE, type Channels } from './raster';
+import { makePixelArray, type PixelArray, type RasterFormat } from './pixel/format';
 
-/** Premultiplied RGBA8 (or gray) pyramid level; see Rendering/DownsampleCache.swift. */
-interface Level { readonly width: number; readonly height: number; readonly channels: Channels; readonly bytes: Uint8Array }
+/** Premultiplied native-depth RGBA (or gray) pyramid level; see Rendering/DownsampleCache.swift. */
+interface Level {
+  readonly width: number; readonly height: number; readonly channels: Channels;
+  readonly format: RasterFormat; readonly bytes: PixelArray;
+}
 
 export interface RasterSampler {
   readonly raster: Raster;
@@ -37,7 +41,7 @@ function byteAt(sampler: RasterSampler, x: number, y: number, channel: number): 
 function makeHalf(raster: Raster, previous: Level | null): Level {
   const sw = previous?.width ?? raster.width, sh = previous?.height ?? raster.height;
   const channels = raster.channels, width = Math.ceil(sw / 2), height = Math.ceil(sh / 2);
-  const bytes = new Uint8Array(width * height * channels);
+  const bytes = makePixelArray(raster.format, width * height * channels), maximum = raster.maximum;
   const get = (x: number, y: number, c: number): number => {
     if (channels === 1) {
       const xx = Math.min(sw - 1, x), yy = Math.min(sh - 1, y);
@@ -46,7 +50,7 @@ function makeHalf(raster: Raster, previous: Level | null): Level {
     if (x >= sw || y >= sh) return 0;
     if (previous) return levelByte(previous, x, y, c);
     const value = sourceByte(raster, x, y, c);
-    return c === 3 ? value : Math.round(value * sourceByte(raster, x, y, 3) / 255);
+    return c === 3 ? value : Math.round(value * sourceByte(raster, x, y, 3) / maximum);
   };
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
@@ -67,7 +71,7 @@ function makeHalf(raster: Raster, previous: Level | null): Level {
       }
     }
   }
-  return { width, height, channels, bytes };
+  return { width, height, channels, format: raster.format, bytes };
 }
 
 /** DownsampleCache.level: at most six sharp halvings, and none from half-size upward. */
@@ -91,13 +95,13 @@ export function prepareSampler(raster: Raster, sampling: LayerSampling, drawnWid
 
 /** Samples colour as premultiplied sRGB floats. */
 export function sampleRgba(sampler: RasterSampler, x: number, y: number, out: Float32Array): void {
-  const scale = 2 ** sampler.level, rx = x / scale, ry = y / scale;
+  const scale = 2 ** sampler.level, rx = x / scale, ry = y / scale, maximum = sampler.raster.maximum;
   if (sampler.sampling === 'Nearest') {
-    const ix = Math.floor(rx), iy = Math.floor(ry), a = byteAt(sampler, ix, iy, 3) / 255;
+    const ix = Math.floor(rx), iy = Math.floor(ry), a = byteAt(sampler, ix, iy, 3) / maximum;
     out[3] = a;
-    out[0] = byteAt(sampler, ix, iy, 0) / 255 * a;
-    out[1] = byteAt(sampler, ix, iy, 1) / 255 * a;
-    out[2] = byteAt(sampler, ix, iy, 2) / 255 * a;
+    out[0] = byteAt(sampler, ix, iy, 0) / maximum * a;
+    out[1] = byteAt(sampler, ix, iy, 1) / maximum * a;
+    out[2] = byteAt(sampler, ix, iy, 2) / maximum * a;
     return;
   }
   const px = rx - 0.5, py = ry - 0.5, x0 = Math.floor(px), y0 = Math.floor(py);
@@ -105,12 +109,12 @@ export function sampleRgba(sampler: RasterSampler, x: number, y: number, out: Fl
   out.fill(0);
   for (let oy = 0; oy < 2; oy++) for (let ox = 0; ox < 2; ox++) {
     const weight = (ox ? fx : 1 - fx) * (oy ? fy : 1 - fy);
-    const a = byteAt(sampler, x0 + ox, y0 + oy, 3) / 255;
+    const a = byteAt(sampler, x0 + ox, y0 + oy, 3) / maximum;
     out[3]! += a * weight;
     const premultiplied = sampler.reduced !== null;
-    out[0]! += byteAt(sampler, x0 + ox, y0 + oy, 0) / 255 * (premultiplied ? 1 : a) * weight;
-    out[1]! += byteAt(sampler, x0 + ox, y0 + oy, 1) / 255 * (premultiplied ? 1 : a) * weight;
-    out[2]! += byteAt(sampler, x0 + ox, y0 + oy, 2) / 255 * (premultiplied ? 1 : a) * weight;
+    out[0]! += byteAt(sampler, x0 + ox, y0 + oy, 0) / maximum * (premultiplied ? 1 : a) * weight;
+    out[1]! += byteAt(sampler, x0 + ox, y0 + oy, 1) / maximum * (premultiplied ? 1 : a) * weight;
+    out[2]! += byteAt(sampler, x0 + ox, y0 + oy, 2) / maximum * (premultiplied ? 1 : a) * weight;
   }
 }
 

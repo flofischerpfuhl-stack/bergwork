@@ -15,7 +15,7 @@ self.onmessage = (event: MessageEvent<{ id: number; document: DocumentTransfer; 
     const assets: Record<string, { mime: string; sha256: string; bytes: Uint8Array }> = {};
     for (const layer of document.layers) {
       for (const raster of [layer.raster, layer.mask?.raster]) {
-        if (raster && !raster.source && !assets[raster.id]) assets[raster.id] = encodedAsset(raster);
+        if (raster && (!raster.source || raster.format === 'rgba16') && !assets[raster.id]) assets[raster.id] = encodedAsset(raster);
       }
     }
     (self as unknown as Worker).postMessage({ id, ok: true, blob, assets });

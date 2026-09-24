@@ -29,6 +29,11 @@ export interface TiffResult {
   hasIcc: boolean;
 }
 
+export interface TiffNativeResult extends Omit<TiffResult, 'data'> {
+  data: Uint8Array | Uint16Array;
+  bitDepth: 8 | 16;
+}
+
 export interface TiffProbe {
   width: number;
   height: number;
@@ -111,6 +116,27 @@ export async function decodeTiff(bytes: Uint8Array): Promise<TiffResult> {
   for (const segment of segments) decodeSegment(parsed, layout, segment, output);
   if (layout.planar === 2) finishPlanar(layout, output);
   return { width: parsed.width, height: parsed.height, data: output, dpi: parsed.dpi, hasIcc: parsed.hasIcc };
+}
+
+/** Decodes 16-bit integer TIFF samples without quantizing untagged RGB/gray data. */
+export async function decodeTiffNative(bytes: Uint8Array): Promise<TiffNativeResult> {
+  const parsed = parse(bytes), layout = readLayout(parsed);
+  if (layout.bits !== 16 || layout.compression === 7) {
+    return { ...await decodeTiff(bytes), bitDepth: 8 };
+  }
+  if (parsed.iccProfile && [0, 1, 2, 3, 5].includes(layout.photometric)) {
+    // M6 requires deterministic profile handling. The committed lcms bridge currently emits RGB8;
+    // expand that result rather than bypassing the profile (the precision deviation is reported).
+    const managed = await decodeTiff(bytes), expanded = new Uint16Array(managed.data.length);
+    for (let i = 0; i < managed.data.length; i++) expanded[i] = managed.data[i]! * 257;
+    return { ...managed, data: expanded, bitDepth: 16 };
+  }
+  const output = new Uint16Array(parsed.width * parsed.height * 4);
+  for (let i = 3; i < output.length; i += 4) output[i] = 65535;
+  for (const segment of readSegments(parsed, layout)) decodeSegment16(parsed, layout, segment, output);
+  if (layout.planar === 2) finishPlanar16(layout, output);
+  return { width: parsed.width, height: parsed.height, data: output, dpi: parsed.dpi,
+    hasIcc: parsed.hasIcc, bitDepth: 16 };
 }
 
 function parse(bytes: Uint8Array): Parsed {
@@ -358,6 +384,85 @@ function decodeSegment(parsed: Parsed, layout: DecodeLayout, segment: SegmentGeo
         writePlanarSample(output, dst, segment.plane, value, max, layout);
       } else {
         writeChunkyPixel(output, dst, raw, rowStart, col, max, layout, parsed.little);
+      }
+    }
+  }
+}
+
+function decodeSegment16(parsed: Parsed, layout: DecodeLayout, segment: SegmentGeometry, output: Uint16Array): void {
+  const segmentSamples = layout.planar === 1 ? layout.samples : 1;
+  const rowBytes = segment.storedWidth * segmentSamples * 2;
+  const expected = checkedMultiply(rowBytes, segment.storedHeight, 'decoded segment size');
+  const compressed = parsed.bytes.subarray(segment.offset, segment.offset + segment.count);
+  const raw = decompress(compressed, layout.compression, expected);
+  if (layout.predictor === 2) undoHorizontalPredictor(raw, rowBytes, segment.storedWidth,
+    segmentSamples, 16, parsed.little);
+  for (let row = 0; row < segment.copyHeight; row++) {
+    const rowStart = row * rowBytes;
+    for (let col = 0; col < segment.copyWidth; col++) {
+      const dst = orientedOffset(parsed, segment.x + col, segment.y + row);
+      if (layout.planar === 2) {
+        writePlanarSample16(output, dst, segment.plane, sample(raw, rowStart, col, 16, parsed.little), layout);
+      } else writeChunkyPixel16(output, dst, raw, rowStart, col, layout, parsed.little);
+    }
+  }
+}
+
+function writeChunkyPixel16(output: Uint16Array, dst: number, raw: Uint8Array, row: number, x: number,
+  layout: DecodeLayout, little: boolean): void {
+  const base = x * layout.samples;
+  let r = 0, g = 0, b = 0;
+  if (layout.photometric === 0 || layout.photometric === 1) {
+    const value = sample(raw, row, base, 16, little);
+    r = g = b = layout.photometric === 0 ? 65535 - value : value;
+  } else if (layout.photometric === 2) {
+    r = sample(raw, row, base, 16, little); g = sample(raw, row, base + 1, 16, little);
+    b = sample(raw, row, base + 2, 16, little);
+  } else if (layout.photometric === 3) {
+    const index = sample(raw, row, base, 16, little), palette = layout.palette!;
+    r = palette[index]!; g = palette[index + 65536]!; b = palette[index + 131072]!;
+  } else if (layout.photometric === 5) {
+    const c = sample(raw, row, base, 16, little) / 65535;
+    const m = sample(raw, row, base + 1, 16, little) / 65535;
+    const y = sample(raw, row, base + 2, 16, little) / 65535;
+    const k = sample(raw, row, base + 3, 16, little) / 65535;
+    r = Math.round(65535 * (1 - c) * (1 - k));
+    g = Math.round(65535 * (1 - m) * (1 - k));
+    b = Math.round(65535 * (1 - y) * (1 - k));
+  }
+  const alpha = layout.alphaSample >= 0 ? sample(raw, row, base + layout.alphaSample, 16, little) : 65535;
+  if (layout.associatedAlpha) {
+    if (alpha === 0) r = g = b = 0;
+    else { r = unpremultiply16(r, alpha); g = unpremultiply16(g, alpha); b = unpremultiply16(b, alpha); }
+  }
+  output[dst] = r; output[dst + 1] = g; output[dst + 2] = b; output[dst + 3] = alpha;
+}
+
+function writePlanarSample16(output: Uint16Array, dst: number, plane: number, value: number,
+  layout: DecodeLayout): void {
+  if (plane === layout.alphaSample) { output[dst + 3] = value; return; }
+  if (plane >= layout.colorSamples) return;
+  if (layout.photometric === 0) output[dst] = 65535 - value;
+  else output[dst + plane] = value;
+}
+
+function finishPlanar16(layout: DecodeLayout, output: Uint16Array): void {
+  for (let i = 0; i < output.length; i += 4) {
+    if (layout.photometric === 0 || layout.photometric === 1) output[i + 1] = output[i + 2] = output[i]!;
+    else if (layout.photometric === 5) {
+      const inverseK = 1 - output[i + 3]! / 65535;
+      output[i] = Math.round((65535 - output[i]!) * inverseK);
+      output[i + 1] = Math.round((65535 - output[i + 1]!) * inverseK);
+      output[i + 2] = Math.round((65535 - output[i + 2]!) * inverseK);
+      output[i + 3] = 65535;
+    }
+    if (layout.associatedAlpha) {
+      const alpha = output[i + 3]!;
+      if (alpha === 0) output[i] = output[i + 1] = output[i + 2] = 0;
+      else {
+        output[i] = unpremultiply16(output[i]!, alpha);
+        output[i + 1] = unpremultiply16(output[i + 1]!, alpha);
+        output[i + 2] = unpremultiply16(output[i + 2]!, alpha);
       }
     }
   }
@@ -725,5 +830,8 @@ function validateDimensions(width: number, height: number): void {
 function toByte(value: number, max: number): number { return Math.floor((value * 255 + Math.floor(max / 2)) / max); }
 function colorMapByte(value: number): number { return Math.floor((value + 128) / 257); }
 function unpremultiply(value: number, alpha: number): number { return Math.min(255, Math.floor((value * 255 + Math.floor(alpha / 2)) / alpha)); }
+function unpremultiply16(value: number, alpha: number): number {
+  return Math.min(65535, Math.floor((value * 65535 + Math.floor(alpha / 2)) / alpha));
+}
 function clampByte(value: number): number { return value <= 0 ? 0 : value >= 255 ? 255 : Math.round(value); }
 function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }

@@ -10,6 +10,7 @@ import {
 } from './geometry';
 import { uuid } from './ids';
 import { Raster, TILE, alphaBounds, cropRaster } from './raster';
+import { makePixelArray, type PixelArray } from './pixel/format';
 import type { EditorSession, TransformEdit } from './session';
 import { selectionIsEmpty, type DocumentSelection, type SelectionMode } from './selection';
 import {
@@ -121,20 +122,21 @@ function editRaster(raster: Raster, transform: LayerTransform, selection: Docume
   if (selection && selectionIsEmpty(selection)) return raster;
   const tiles = raster.tiles.slice();
   const map = pixelToDocument(transform, raster.width, raster.height), ch = raster.channels;
+  const maximum = raster.maximum, colorScale = maximum / 255;
   let changed = false;
   for (let row = 0; row < raster.rows; row++) for (let col = 0; col < raster.cols; col++) {
     const tw = raster.tileWidth(col), th = raster.tileHeight(row), old = raster.tiles[row * raster.cols + col];
-    let tile: Uint8Array | null = null;
+    let tile: PixelArray | null = null;
     for (let py = 0; py < th; py++) for (let px = 0; px < tw; px++) {
       const gx = col * TILE + px, gy = row * TILE + py;
       const p = apply(map, { x: gx + 0.5, y: gy + 0.5 });
       const coverage = sampleMask(selection, p.x, p.y);
       if (coverage === 0) continue;
-      if (!tile) tile = old ? old.slice() : new Uint8Array(tw * th * ch);
+      if (!tile) tile = old ? old.slice() : makePixelArray(raster.format, tw * th * ch);
       const offset = (py * tw + px) * ch, f = coverage / 255;
       if (ch === 1) {
         const before = tile[offset]!;
-        const target = operation === 'invert' ? 255 - before : color[0] ?? 0;
+        const target = operation === 'invert' ? maximum - before : (color[0] ?? 0) * colorScale;
         tile[offset] = Math.round(before + (target - before) * f);
       } else if (operation === 'clear') {
         const oldA = tile[offset + 3]!;
@@ -143,19 +145,20 @@ function editRaster(raster: Raster, transform: LayerTransform, selection: Docume
         tile[offset + 3] = nextA;
       } else if (operation === 'invert') {
         for (let c = 0; c < 3; c++) {
-          const before = tile[offset + c]!; tile[offset + c] = Math.round(before + (255 - before * 2) * f);
+          const before = tile[offset + c]!; tile[offset + c] = Math.round(before + (maximum - before * 2) * f);
         }
       } else {
-        const oldA = tile[offset + 3]! / 255, outA = f + oldA * (1 - f);
+        const oldA = tile[offset + 3]! / maximum, outA = f + oldA * (1 - f);
         for (let c = 0; c < 3; c++) {
-          tile[offset + c] = outA === 0 ? 0 : Math.round(((color[c] ?? 0) * f + tile[offset + c]! * oldA * (1 - f)) / outA);
+          const paint = (color[c] ?? 0) * colorScale;
+          tile[offset + c] = outA === 0 ? 0 : Math.round((paint * f + tile[offset + c]! * oldA * (1 - f)) / outA);
         }
-        tile[offset + 3] = Math.round(outA * 255);
+        tile[offset + 3] = Math.round(outA * maximum);
       }
     }
     if (tile) { tiles[row * raster.cols + col] = tile.some((v) => v !== 0) ? tile : null; changed = true; }
   }
-  return changed ? new Raster(raster.width, raster.height, raster.channels, tiles) : raster;
+  return changed ? new Raster(raster.width, raster.height, raster.channels, tiles, { format: raster.format }) : raster;
 }
 
 function targetRaster(session: EditorSession): { layer: Layer; raster: Raster; transform: LayerTransform; mask: boolean } | null {
@@ -550,13 +553,16 @@ function sampleLifted(raster: Raster, x: number, y: number, smooth: boolean): [n
 }
 
 function renderInPlacePixelMove(state: PixelMoveState, target: Rect, placed: Rect, toDocument: Affine): Raster {
-  const source = state.originalRaster, tiles = source.tiles.slice(), mutable = new Map<number, Uint8Array>();
+  const source = state.originalRaster;
+  if (source.format === 'rgba16') throw new Error('The existing pixel-move kernel cannot edit rgba16 layers yet.');
+  const tiles = source.tiles as ReadonlyArray<Uint8Array | null>, mutable = new Map<number, Uint8Array>();
+  const outputTiles = tiles.slice();
   const writable = (x: number, y: number): { tile: Uint8Array; offset: number } => {
     const col = Math.floor(x / TILE), row = Math.floor(y / TILE), key = row * source.cols + col;
     let tile = mutable.get(key);
     if (!tile) {
-      tile = tiles[key]?.slice() ?? new Uint8Array(source.tileWidth(col) * source.tileHeight(row) * 4);
-      mutable.set(key, tile); tiles[key] = tile;
+      tile = outputTiles[key]?.slice() ?? new Uint8Array(source.tileWidth(col) * source.tileHeight(row) * 4);
+      mutable.set(key, tile); outputTiles[key] = tile;
     }
     return { tile, offset: ((y - row * TILE) * source.tileWidth(col) + x - col * TILE) * 4 };
   };
@@ -579,8 +585,8 @@ function renderInPlacePixelMove(state: PixelMoveState, target: Rect, placed: Rec
     const pixel = writable(x, y);
     sourceOver(pixel.tile, pixel.offset, rgba[0], rgba[1], rgba[2], rgba[3]);
   }
-  for (const [key, tile] of mutable) if (!tile.some((value) => value !== 0)) tiles[key] = null;
-  return new Raster(source.width, source.height, 4, tiles);
+  for (const [key, tile] of mutable) if (!tile.some((value) => value !== 0)) outputTiles[key] = null;
+  return new Raster(source.width, source.height, 4, outputTiles);
 }
 
 function renderPixelMove(session: EditorSession, state: PixelMoveState, offset: Point):
@@ -633,7 +639,7 @@ function renderPixelMove(session: EditorSession, state: PixelMoveState, offset: 
 export function beginPixelMove(session: EditorSession, duplicate = false): boolean {
   if (pixelMoves.has(session) || session.isMaskSelected || !canEditPixels(session)) return false;
   const document = session.document, layer = session.activeLayer, selection = session.selection;
-  if (!document || !layer?.raster || !selection || selectionIsEmpty(selection)) return false;
+  if (!document || !layer?.raster || layer.raster.format === 'rgba16' || !selection || selectionIsEmpty(selection)) return false;
   const lifted = liftPixels(document, layer, selection); if (!lifted) return false;
   pixelMoves.set(session, { layerId: layer.id, duplicate, origin: selection, originalRaster: layer.raster,
     originalTransform: layer.transform, lifted: lifted.raster, liftedRect: lifted.rect, offset: { x: 0, y: 0 },
