@@ -27,6 +27,15 @@ export interface EncodedSource {
   readonly sha256: string;
 }
 
+/** Storage indirection kept synchronous for existing kernels; swapped stores hydrate before use. */
+export interface RasterTileStorage {
+  readonly tiles: ReadonlyArray<PixelArray | null>;
+}
+
+export class ResidentTileStorage implements RasterTileStorage {
+  constructor(readonly tiles: ReadonlyArray<PixelArray | null>) {}
+}
+
 let nextSerial = 1;
 
 export class Raster {
@@ -40,12 +49,13 @@ export class Raster {
   readonly maximum: 255 | 65535;
   readonly cols: number;
   readonly rows: number;
+  private readonly tileStorage: RasterTileStorage;
   /** Row-major sample arrays; null means every sample of the tile is zero. Never mutated after construction. */
-  readonly tiles: ReadonlyArray<PixelArray | null>;
+  get tiles(): ReadonlyArray<PixelArray | null> { return this.tileStorage.tiles; }
   /** Original encoded bytes, when these pixels are exactly the decoded file. */
   readonly source: EncodedSource | null;
 
-  constructor(width: number, height: number, channels: Channels, tiles: ReadonlyArray<PixelArray | null>,
+  constructor(width: number, height: number, channels: Channels, tiles: ReadonlyArray<PixelArray | null> | RasterTileStorage,
     options: { id?: string; source?: EncodedSource | null; format?: RasterFormat } = {}) {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) {
       throw new RangeError(`Invalid raster size ${width}×${height}`);
@@ -57,14 +67,14 @@ export class Raster {
     this.maximum = maximumFor(this.format);
     this.cols = Math.ceil(width / TILE);
     this.rows = Math.ceil(height / TILE);
-    if (tiles.length !== this.cols * this.rows) throw new RangeError('Tile count does not match raster size');
+    this.tileStorage = Array.isArray(tiles) ? new ResidentTileStorage(tiles) : tiles as RasterTileStorage;
+    if (this.tiles.length !== this.cols * this.rows) throw new RangeError('Tile count does not match raster size');
     const sixteen = this.format === 'rgba16';
-    for (const tile of tiles) {
+    for (const tile of this.tiles) {
       if (tile && sixteen !== (tile instanceof Uint16Array)) {
         throw new RangeError(`Pixel format ${this.format} uses the wrong tile array type`);
       }
     }
-    this.tiles = tiles;
     this.serial = nextSerial++;
     this.id = options.id ?? uuid();
     this.source = options.source ?? null;

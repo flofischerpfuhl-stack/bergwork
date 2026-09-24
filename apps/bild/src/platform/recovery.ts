@@ -1,10 +1,7 @@
-/**
- * Crash and reload recovery in IndexedDB (idb). Each open, modified project tab keeps its latest
- * archive; on the next start the editor offers to reopen them. Quota errors pause copies for that
- * project and are reported once instead of failing silently.
- */
-
-import { openDB, type IDBPDatabase } from 'idb';
+/** Crash recovery backed by append-only ScratchHost journals (PRODUCT-PLAN A4/P7). */
+import { CrashJournal } from './journal';
+import { OpfsScratchHost } from './opfsScratchHost';
+import type { ScratchHost } from './scratchHost';
 
 export interface RecoveryRecord {
   id: string;
@@ -14,44 +11,86 @@ export interface RecoveryRecord {
   archive: Blob;
   /** The page load that wrote it; records from the current load are not offered back. */
   instance: string;
+  command?: string;
 }
 
-const DB_NAME = 'fernwork-compositor';
-const STORE = 'recovery';
+const PREFIX = 'recovery/';
+const SUFFIX = '.fwj';
+const LEGACY_DB = 'fernwork-compositor';
+const LEGACY_STORE = 'recovery';
+
+function randomInstance(): string {
+  const values = new Uint32Array(2);
+  if (typeof crypto !== 'undefined') crypto.getRandomValues(values);
+  else { values[0] = Math.random() * 0xffff_ffff; values[1] = Date.now(); }
+  return values.join('-');
+}
 
 export class RecoveryStore {
-  private db: Promise<IDBPDatabase> | null = null;
-  readonly instance = crypto.getRandomValues(new Uint32Array(2)).join('-');
+  private ownedHost: ScratchHost | null = null;
+  private hostPromise: Promise<ScratchHost> | null;
+  readonly instance = randomInstance();
 
-  private open(): Promise<IDBPDatabase> {
-    this.db ??= openDB(DB_NAME, 1, {
-      upgrade(db) { if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' }); },
-    });
-    return this.db;
+  constructor(host?: ScratchHost) { this.hostPromise = host ? Promise.resolve(host) : null; }
+
+  private async host(): Promise<ScratchHost> {
+    if (!this.hostPromise) this.hostPromise = OpfsScratchHost.create().then((host) => (this.ownedHost = host));
+    return this.hostPromise;
   }
 
-  static available(): boolean { return typeof indexedDB !== 'undefined'; }
+  static available(host?: ScratchHost): boolean { return !!host || OpfsScratchHost.available(); }
+
+  /** Metadata-only compatibility index; recovery archive bytes live exclusively in ScratchHost. */
+  private legacyIndex(action: (store: IDBObjectStore) => IDBRequest): Promise<void> {
+    if (typeof indexedDB === 'undefined') return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      // Version 2 reserves this store as metadata-only. Opening at v2 also repairs a v1 database
+      // that another tab created before the recovery controller initialized.
+      const request = indexedDB.open(LEGACY_DB, 2);
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(LEGACY_STORE)) request.result.createObjectStore(LEGACY_STORE, { keyPath: 'id' });
+      };
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        const db = request.result;
+        let operation: IDBRequest;
+        try { operation = action(db.transaction(LEGACY_STORE, 'readwrite').objectStore(LEGACY_STORE)); }
+        catch (error) { db.close(); reject(error); return; }
+        operation.onerror = () => { db.close(); reject(operation.error); };
+        operation.onsuccess = () => { db.close(); resolve(); };
+      };
+    });
+  }
 
   async put(record: Omit<RecoveryRecord, 'instance'>): Promise<void> {
-    // Stored as bytes, not a Blob: WebKit refuses Blobs in IndexedDB in some configurations
-    // ("Error preparing Blob/File data to be stored in object store").
-    const bytes = await record.archive.arrayBuffer();
-    const db = await this.open();
-    const { archive, ...rest } = record;
-    await db.put(STORE, { ...rest, bytes, type: archive.type, instance: this.instance });
+    const bytes = new Uint8Array(await record.archive.arrayBuffer());
+    await new CrashJournal(await this.host(), `${PREFIX}${record.id}${SUFFIX}`).append(bytes, {
+      name: record.name, time: record.savedAt, instance: this.instance, command: record.command,
+    });
+    await this.legacyIndex((store) => store.put({ id: record.id, name: record.name, savedAt: record.savedAt,
+      size: record.size, instance: this.instance }));
   }
   async remove(id: string): Promise<void> {
-    const db = await this.open();
-    await db.delete(STORE, id);
+    await (await this.host()).remove(`${PREFIX}${id}${SUFFIX}`);
+    await this.legacyIndex((store) => store.delete(id));
   }
-  /** Records left behind by earlier page loads. */
+
+  /** Latest committed state from each journal left by an earlier page/app instance. */
   async previous(): Promise<RecoveryRecord[]> {
-    const db = await this.open();
-    const all = (await db.getAll(STORE)) as (Omit<RecoveryRecord, 'archive'> & { archive?: Blob; bytes?: ArrayBuffer; type?: string })[];
-    return all.filter((record) => record.instance !== this.instance).sort((a, b) => a.savedAt - b.savedAt)
-      .map(({ bytes, type, archive, ...rest }) => ({ ...rest, archive: archive ?? new Blob([bytes ?? new ArrayBuffer(0)], { type: type ?? 'application/zip' }) }));
+    const host = await this.host();
+    const result: RecoveryRecord[] = [];
+    for (const key of await host.list(PREFIX)) {
+      if (!key.endsWith(SUFFIX)) continue;
+      const latest = await new CrashJournal(host, key).latest(this.instance);
+      if (!latest) continue;
+      result.push({ id: key.slice(PREFIX.length, -SUFFIX.length), name: latest.commit.name,
+        savedAt: latest.commit.time, size: latest.commit.size,
+        archive: new Blob([latest.bytes as BlobPart], { type: 'application/zip' }), instance: latest.commit.instance,
+        ...(latest.commit.command ? { command: latest.commit.command } : {}) });
+    }
+    return result.sort((a, b) => a.savedAt - b.savedAt);
   }
-  close(): void { void this.db?.then((db) => db.close()); this.db = null; }
+  close(): void { if (this.ownedHost) void this.ownedHost.close(); }
 }
 
 export function isQuotaError(error: unknown): boolean {

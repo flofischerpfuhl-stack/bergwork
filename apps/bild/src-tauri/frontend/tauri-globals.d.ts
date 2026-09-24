@@ -5,7 +5,7 @@ interface TauriDialogFilter {
 
 interface TauriGlobals {
   core: {
-    invoke<T>(command: string, args?: Record<string, unknown> | Uint8Array): Promise<T>;
+    invoke<T>(command: string, args?: Record<string, unknown> | Uint8Array | ArrayBuffer): Promise<T>;
     Channel: new <T>() => { onmessage: (message: T) => void };
   };
   dialog: {
