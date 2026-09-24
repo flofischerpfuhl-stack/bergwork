@@ -8,8 +8,13 @@ import { EditorSession, type RasterCommandKind } from '../../src/core/session';
 import { makeTransform } from '../../src/core/geometry';
 import { newLayer, PRO_DOCUMENT_LIMITS, LITE_DOCUMENT_LIMITS } from '../../src/core/document';
 import { decodeImageFile, ImageImportError } from '../../src/io/imageImport';
-import { readArchive, ProjectError } from '../../src/io/project';
-import { zipSync } from 'fflate';
+import { readArchive, writeArchive, writeArchiveStreaming, ProjectError } from '../../src/io/project';
+import { unzipSync, zipSync } from 'fflate';
+import { beginBrushStroke, cancelBrushStroke } from '../../src/core/brush';
+import { encodePngBandStream } from '../../src/io/png';
+import { PngTileStreamDecoder, restoreStreamedPng } from '../../src/io/pngStream';
+import { prepareStreamingSha256 } from '../../src/io/sha256';
+import { readZipEntries, Zip64StreamWriter } from '../../src/io/zipStream';
 
 describe('scratch tile storage', () => {
   it('evicts the least-recently-used immutable tile and reloads its exact bytes', async () => {
@@ -22,6 +27,21 @@ describe('scratch tile storage', () => {
     expect(await cache.load(first)).toEqual(new Uint8Array([1, 2, 3, 4]));
     expect(await host.read(second.key)).toEqual(new Uint8Array([5, 6, 7, 8]));
     expect(cache.residentBytes).toBe(4);
+  });
+
+  it('registers a sparse brush overlay without hydrating untouched source tiles', async () => {
+    const source = Raster.fromPixels(512, 256, 4, new Uint8Array(512 * 256 * 4).fill(17));
+    const residency = new RasterResidency(new TileCache(new MemoryScratchHost(), 0));
+    await residency.manage(source);
+    expect(source.tileResidency(0)).toBe('swapped');
+    const changed = new Uint8Array(256 * 256 * 4).fill(91);
+    const overlay = source.withTileUpdates([{ index: 1, tile: changed }]);
+    await residency.manage(overlay);
+    expect(overlay.tileResidency(0)).toBe('swapped');
+    expect(overlay.tileResidency(1)).toBe('resident');
+    const lease = await residency.ensureResident([overlay], { x: 256, y: 0, width: 1, height: 1 });
+    expect(overlay.pixel(256, 0)).toEqual([91, 91, 91, 91]);
+    lease.release();
   });
 
   it('round-trips an rgba16 tiled raster without flattening it', async () => {
@@ -46,6 +66,32 @@ describe('scratch tile storage', () => {
     lease.release();
     await residency.cache.trim();
     expect(() => raster.tiles[0]).toThrow(/ensureResident/);
+  });
+
+  it('keeps committed tiles readable while residency registration overlaps a rapid successor stroke', async () => {
+    let unblock!: () => void;
+    const gate = new Promise<void>((resolve) => { unblock = resolve; });
+    class DelayedScratchHost extends MemoryScratchHost {
+      override async write(key: string, bytes: Uint8Array, options?: { append?: boolean }): Promise<void> {
+        await gate;
+        await super.write(key, bytes, options);
+      }
+    }
+    const raster = Raster.fromPixels(2, 1, 4, new Uint8Array([9, 8, 7, 255, 6, 5, 4, 255]));
+    const residency = new RasterResidency(new TileCache(new DelayedScratchHost(), 0));
+    const first = residency.manage(raster);
+    const second = residency.manage(raster);
+    await Promise.resolve();
+    expect(residency.isManaged(raster)).toBe(false);
+    expect(raster.pixel(0, 0)).toEqual([9, 8, 7, 255]);
+    unblock();
+    await Promise.all([first, second]);
+    expect(residency.isManaged(raster)).toBe(true);
+    expect(() => raster.pixel(0, 0)).toThrow(TileNotResidentError);
+    const lease = await residency.ensureResident([raster]);
+    expect(raster.toPixels()).toEqual(new Uint8Array([9, 8, 7, 255, 6, 5, 4, 255]));
+    expect(raster.tiles.slice()[0]).toEqual(new Uint8Array([9, 8, 7, 255, 6, 5, 4, 255]));
+    lease.release();
   });
 
   it('evicts history before hidden and visible tiles regardless of recency', async () => {
@@ -113,6 +159,24 @@ describe('append-only crash journal', () => {
     expect(new Uint8Array(await records[0]!.archive.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
   });
 
+  it('garbage-collects only content-addressed files with no journal or live reference', async () => {
+    const host = new MemoryScratchHost();
+    const journalKey = `tiles/rgba8-${'1'.repeat(64)}.bin`;
+    const liveKey = `tiles/gray8-${'2'.repeat(64)}.bin`;
+    const orphanKey = `assets/${'3'.repeat(64)}.bin`;
+    await host.write(journalKey, new Uint8Array([1]));
+    await host.write(liveKey, new Uint8Array([2]));
+    await host.write(orphanKey, new Uint8Array([3]));
+    await new CrashJournal(host, 'recovery/keep.fwj').appendState(
+      new TextEncoder().encode(JSON.stringify({ tile: journalKey })),
+      { name: 'Keep', time: 1, instance: 'old' });
+    const store = new RecoveryStore(host);
+    expect(await store.collectGarbage([liveKey])).toBe(1);
+    expect(await host.read(journalKey)).toEqual(new Uint8Array([1]));
+    expect(await host.read(liveKey)).toEqual(new Uint8Array([2]));
+    expect(await host.read(orphanKey)).toBeNull();
+  });
+
   it('replays granular tile/state commits with undo after a torn tail', async () => {
     const host = new MemoryScratchHost();
     const cache = new TileCache(host, 0);
@@ -156,6 +220,15 @@ describe('document limit profiles', () => {
     expect(pro.document).toBeNull();
   });
 
+  it('starts a brush stroke on a 200 MP Pro canvas without charging the other layers', () => {
+    const pro = new EditorSession({ flatten: async () => Raster.blank(1, 1, 4), bakeLiveMask: async () => null,
+      limits: PRO_DOCUMENT_LIMITS }, { enabled: false });
+    pro.createNewProject(20_000, 10_000);
+    pro.tool = 'brush';
+    expect(beginBrushStroke(pro, { x: 9_000, y: 4_500 })).not.toBeNull();
+    expect(cancelBrushStroke(pro)).toBe(true);
+  });
+
   it('applies the selected profile to image imports and project archives', async () => {
     const gif = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x40, 0x9c, 0x01, 0x00, 0, 0, 0,
       0x2c, 0, 0, 0, 0, 0x40, 0x9c, 0x01, 0x00, 0]); // 40,000 × 1, minimal image descriptor
@@ -172,5 +245,107 @@ describe('document limit profiles', () => {
     const noDecode = async () => { throw new Error('unexpected decode'); };
     await expect(readArchive(archive, noDecode, LITE_DOCUMENT_LIMITS)).rejects.toBeInstanceOf(ProjectError);
     expect((await readArchive(archive, noDecode, PRO_DOCUMENT_LIMITS)).document.width).toBe(20_000);
+  });
+
+  it('applies the pixel ceiling per canvas and asset, not to the sum of streamed layers', async () => {
+    const first = Raster.fromPixels(8, 8, 4, new Uint8Array(8 * 8 * 4).fill(31), { id: 'limit-first' });
+    const second = Raster.fromPixels(8, 8, 4, new Uint8Array(8 * 8 * 4).fill(79), { id: 'limit-second' });
+    const layers = [first, second].map((raster, index) => newLayer({ id: `limit-layer-${index}`, name: `Layer ${index}`,
+      raster, transform: makeTransform({ x: 0, y: 0 }, { width: 8, height: 8 }) }));
+    const document = { id: 'layer-limit-document', width: 10, height: 10, resolution: 72,
+      layers, artboards: [], selection: null };
+    const archive = writeArchive(document, 'Layer limits', layers[0]!.id).blob;
+    const loaded = await readArchive(archive, async () => { throw new Error('unexpected external decoder'); },
+      { maxSide: 10, maxPixels: 100 });
+    expect(loaded.document.layers).toHaveLength(2);
+    expect(loaded.document.layers[1]!.raster!.pixel(0, 0)).toEqual([79, 79, 79, 79]);
+  });
+});
+
+describe('streaming project archive', () => {
+  it('does not mistake a ZIP data-descriptor signature inside a stored asset for its end', async () => {
+    const payload = new Uint8Array(1024);
+    for (let index = 0; index < payload.length; index++) payload[index] = (index * 73 + 19) & 255;
+    payload.set([0x50, 0x4b, 0x07, 0x08], 317);
+    const writer = new Zip64StreamWriter();
+    await writer.add('assets/signature.bin', (input) => input.push(payload, true));
+    const archive = writer.finish();
+    const restored: Uint8Array[] = [];
+    for await (const entry of readZipEntries(archive)) {
+      for await (const chunk of entry.chunks) restored.push(chunk);
+    }
+    const length = restored.reduce((sum, chunk) => sum + chunk.byteLength, 0), joined = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of restored) { joined.set(chunk, offset); offset += chunk.byteLength; }
+    expect(joined).toEqual(payload);
+  });
+
+  it('decodes an incompressible PNG split at 4 MiB boundaries without truncating rows', async () => {
+    const width = 2_048, height = 1_024, chunks: Uint8Array[] = [];
+    await encodePngBandStream(width, height, 4, async (top, rows) => {
+      const pixels = new Uint8Array(width * rows * 4), start = top * width * 4;
+      for (let index = 0; index < pixels.length; index++) pixels[index] = ((start + index) * 29 + 17) & 255;
+      return pixels;
+    }, (chunk) => chunks.push(chunk.slice()), { filter: 'none', level: 1, limits: PRO_DOCUMENT_LIMITS });
+    const length = chunks.reduce((total, chunk) => total + chunk.byteLength, 0), png = new Uint8Array(length);
+    let at = 0;
+    for (const chunk of chunks) { png.set(chunk, at); at += chunk.byteLength; }
+    const residency = new RasterResidency(new TileCache(new MemoryScratchHost(), 64 * 1024 * 1024));
+    const makeHasher = await prepareStreamingSha256();
+    const decoder = new PngTileStreamDecoder(residency, PRO_DOCUMENT_LIMITS, makeHasher());
+    for (let offset = 0; offset < png.byteLength; offset += 4 * 1024 * 1024) {
+      decoder.push(png.subarray(offset, offset + 4 * 1024 * 1024));
+      await decoder.idle();
+    }
+    const record = await decoder.finish(), raster = restoreStreamedPng(record, 'split-png', residency);
+    const x = 1_500, y = 700, lease = await residency.ensureResident([raster], { x, y, width: 1, height: 1 });
+    const start = (y * width + x) * 4;
+    expect(raster.pixel(x, y)).toEqual([0, 1, 2, 3].map((channel) => ((start + channel) * 29 + 17) & 255));
+    lease.release();
+  }, 30_000);
+
+  it('keeps the v2 format compatible in both synchronous and tile-band writer directions', async () => {
+    const pixels = new Uint8Array(257 * 257 * 4);
+    for (let index = 0; index < pixels.length; index++) pixels[index] = (index * 29 + 17) & 255;
+    const raster = Raster.fromPixels(257, 257, 4, pixels, { id: 'streamed-raster' });
+    const layer = newLayer({ id: 'streamed-layer', name: 'Streamed', raster,
+      transform: makeTransform({ x: 0, y: 0 }, { width: 257, height: 257 }) });
+    const document = { id: 'streamed-document', width: 257, height: 257, resolution: 144,
+      layers: [layer], artboards: [], selection: null };
+    const oldArchive = writeArchive(document, 'Compatibility', layer.id).blob;
+    const residency = new RasterResidency(new TileCache(new MemoryScratchHost(), 256 * 256 * 4));
+    await residency.manage(raster);
+    const streamed = await writeArchiveStreaming(document, 'Compatibility', layer.id, residency);
+    const decoder = async () => { throw new Error('PNG assets must use the built-in decoder'); };
+    const [oldLoaded, streamedLoaded] = await Promise.all([
+      readArchive(oldArchive, decoder), readArchive(streamed.blob, decoder),
+    ]);
+    expect(oldLoaded.document.layers[0]!.raster!.toPixels()).toEqual(pixels);
+    expect(streamedLoaded.document.layers[0]!.raster!.toPixels()).toEqual(pixels);
+    const files = unzipSync(new Uint8Array(await streamed.blob.arrayBuffer()));
+    expect(JSON.parse(new TextDecoder().decode(files['manifest.json'])).format).toBe('fernwork-image');
+  });
+
+  it('opens old and streamed PNG entries directly into swapped tiles without a contiguous pixel buffer', async () => {
+    const pixels = new Uint8Array(513 * 300 * 4);
+    for (let i = 0; i < pixels.length; i++) pixels[i] = (i * 73 + (i >>> 9) * 19) & 255;
+    const raster = Raster.fromPixels(513, 300, 4, pixels, { id: 'open-stream' });
+    const layer = newLayer({ id: 'open-layer', name: 'Open', raster,
+      transform: makeTransform({ x: 0, y: 0 }, { width: 513, height: 300 }) });
+    const document = { id: 'open-document', width: 513, height: 300, resolution: 72,
+      layers: [layer], artboards: [], selection: null };
+    const archives = [writeArchive(document, 'Old', layer.id).blob,
+      (await writeArchiveStreaming(document, 'New', layer.id)).blob];
+    for (const archive of archives) {
+      const residency = new RasterResidency(new TileCache(new MemoryScratchHost(), 0));
+      const loaded = await readArchive(archive, async () => { throw new Error('unexpected external decoder'); },
+        LITE_DOCUMENT_LIMITS, residency);
+      const restored = loaded.document.layers[0]!.raster!;
+      expect(restored.hasSwappedTiles).toBe(true);
+      expect(restored.reducedCopy).not.toBeNull();
+      const lease = await residency.ensureResident([restored]);
+      expect(restored.toPixels()).toEqual(pixels);
+      lease.release();
+    }
   });
 });

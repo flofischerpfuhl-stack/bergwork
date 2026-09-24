@@ -42,8 +42,9 @@ export class SoftwareDownsampleCache {
 
   sampler(raster: Raster, sampling: LayerSampling, drawnWidth: number,
     requestHydration?: (raster: Raster) => void): RasterSampler {
-    const source = raster.hasSwappedTiles ? raster.reducedCopy ?? raster : raster;
-    if (source !== raster && drawnWidth > source.width) requestHydration?.(raster);
+    const reduced = raster.hasSwappedTiles ? raster.reducedCopy : null;
+    if (reduced && drawnWidth > reduced.width) requestHydration?.(raster);
+    const source = raster;
     const level = sampling === 'Nearest' ? 0 : this.level(drawnWidth / Math.max(1, source.width));
     const key = `${sampling}:${level}`;
     let variants = this.entries.get(raster);
@@ -110,6 +111,9 @@ export class SoftwareCompositor {
   private simpleComposite(document: CanvasDocument, view: ViewSpec, hooks: CompositeHooks): SoftwareSurface | null {
     if (typeof OffscreenCanvas === 'undefined') return null;
     const layers = renderLayers(document.layers);
+    // The exact CPU sampler resolves resident tiles over the navigation copy per pixel; Canvas2D
+    // surfaces require a contiguous full raster and therefore cannot represent this mixed state.
+    if (layers.some((layer) => hooks.raster(layer)?.hasSwappedTiles || hooks.maskRaster(layer)?.hasSwappedTiles)) return null;
     if (document.layers.some((layer) => layer.kind === 'group' && layer.mask?.enabled)
       || layers.some((layer) => layer.adjustment || layer.maskSourceId || layer.mask?.enabled
       || hooks.blendMode(layer) !== 'normal')) return null;

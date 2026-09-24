@@ -17,20 +17,20 @@ import type { Point } from '../core/geometry';
 import { pixelClipboard, type ClipboardHooks, type PixelClipboardEntry } from '../core/clipboard';
 import { failureMessage, ImportQueue } from '../core/importQueue';
 import { ProjectWorkspace, type ProjectTab } from '../core/workspace';
-import { buildManifest, buildManifestV2, readArchive, writeArchive, ProjectError } from '../io/project';
+import { buildManifest, buildManifestV2, readArchive, writeArchiveStreaming, ProjectError } from '../io/project';
 import { readCompPackage, readCompZip, writeCompZip } from '../io/compPackage';
 import { unzipSync } from 'fflate';
-import { encodeArchive } from '../workers/archiveClient';
 import { isQuotaError, RecoveryStore } from '../platform/recovery';
 import { browserDecode, decodeImageFile, fileBaseName, ImageImportError } from '../io/imageImport';
-import { DEFAULT_JPEG, jpegBlob, pngBlob, type JpegOptions } from '../io/export';
-import { encodePng } from '../io/png';
+import { DEFAULT_JPEG, jpegBlob, type JpegOptions } from '../io/export';
+import { encodePng, encodePngBandStream } from '../io/png';
 import { sha256Hex } from '../io/sha256';
 import type { GpuCompositor } from '../render/gpuCompositor';
 import type { FileTargetHost, SaveTarget } from '../platform/browserHost';
 import type { ImageDecoderHost } from '../platform/imageDecoder';
 import { LITE_TILE_BUDGET, PRO_TILE_BUDGET, type ScratchHostCapability } from '../platform/scratchHost';
 import { RasterResidency, TileCache } from '../core/storage';
+import { waitForBrushStroke } from '../core/brush';
 import { translator, type Locale } from './i18n';
 import { createUiStore, type Dialog, type UiStore } from './store';
 import { describeError, isCancellation } from './errors';
@@ -162,6 +162,9 @@ export class EditorController {
   readonly gpuTextureBudgetBytes: number;
   readonly limits: DocumentLimits;
   private readonly hydrationPending = new WeakSet<Raster>();
+  private suppressCompositorHydration = 0;
+  private pendingResolutionCount = 0;
+  private resolutionWaiters: (() => void)[] = [];
 
   constructor(host: HostAdapter, locale: Locale, theme: 'dark' | 'light') {
     this.host = host;
@@ -191,6 +194,7 @@ export class EditorController {
       limits: this.limits,
     };
     this.workspace = new ProjectWorkspace(services);
+    (host as HostAdapter & { controllerReady?(controller: EditorController): void }).controllerReady?.(this);
   }
 
   /** Uses optional capabilities carried by the mount host without widening contracts.ts. */
@@ -204,7 +208,7 @@ export class EditorController {
     this.canvas = canvas;
     if (canvas) {
       canvas.gpu?.configureResidency({ textureByteBudget: this.gpuTextureBudgetBytes,
-        requestHydration: (raster) => this.requestRasterHydration(raster) });
+        requestHydration: (raster, rect) => this.requestRasterHydration(raster, rect) });
       for (const waiter of this.canvasWaiters.splice(0)) waiter();
     }
   }
@@ -227,7 +231,8 @@ export class EditorController {
         if (typeof property !== 'string' || !value) return Reflect.set(registry, property, value);
         const original = value;
         return Reflect.set(registry, property, { ...original, run: () => {
-          void this.session.runHydrated(this.commandKind(property), () => original.run()).catch((error) => this.reportError('hydrate-failed', error));
+          void this.trackResolution(this.session.runHydrated(this.commandKind(property), () => original.run()))
+            .catch((error) => this.reportError('hydrate-failed', error));
         } });
       },
     });
@@ -247,53 +252,100 @@ export class EditorController {
     });
   }
 
-  /** Pointer samples are queued from down through up while the target rasters hydrate. */
+  get isFullyResolved(): boolean { return this.pendingResolutionCount === 0; }
+  whenFullyResolved(): Promise<void> {
+    return this.isFullyResolved ? Promise.resolve() : new Promise((resolve) => this.resolutionWaiters.push(resolve));
+  }
+  private trackResolution<T>(work: Promise<T>): Promise<T> {
+    this.pendingResolutionCount++;
+    return work.finally(() => {
+      this.pendingResolutionCount--;
+      if (!this.pendingResolutionCount) for (const resolve of this.resolutionWaiters.splice(0)) resolve();
+    });
+  }
+
+  /** Pointer samples hydrate and pin only their growing dab/kernel tile regions. */
   private hydratingTool(handler: ToolHandler, kind: RasterCommandKind): ToolHandler {
-    let queue: (() => void)[] = [];
-    let ready = false;
-    let finish: (() => void) | null = null;
+    let chain = Promise.resolve();
+    let pendingDispatches = 0;
+    let leases: { release(): void }[] = [];
     let failed = false;
-    const enqueue = (action: () => void) => { if (ready) action(); else if (!failed) queue.push(action); };
+    let previousBounds: import('../core/geometry').Rect | null = null;
+    const release = () => { for (const lease of leases.splice(0)) lease.release(); };
+    const enqueue = (context: ToolContext, action: () => void | Promise<void>) => {
+      if (failed) return;
+      const dab = handler.hydrationBounds?.(context);
+      const rect = dab && previousBounds ? {
+        x: Math.min(dab.x, previousBounds.x), y: Math.min(dab.y, previousBounds.y),
+        width: Math.max(dab.x + dab.width, previousBounds.x + previousBounds.width) - Math.min(dab.x, previousBounds.x),
+        height: Math.max(dab.y + dab.height, previousBounds.y + previousBounds.height) - Math.min(dab.y, previousBounds.y),
+      } : dab;
+      if (dab) previousBounds = dab;
+      const regions: { raster: Raster; rect?: import('../core/geometry').Rect }[] = rect ? context.session.rasterRegionsForCommand(kind, rect)
+        : context.session.rastersForCommand(kind).map((raster) => ({ raster }));
+      if (!pendingDispatches && !regions.some((item) => item.raster.hasSwappedTilesIn(item.rect))) {
+        try {
+          const result = action();
+          if (result) {
+            pendingDispatches++;
+            chain = this.trackResolution(Promise.resolve(result)).catch((error) => {
+              failed = true; release(); this.reportError('hydrate-failed', error);
+            }).finally(() => { pendingDispatches--; });
+          }
+        } catch (error) { failed = true; release(); this.reportError('hydrate-failed', error); }
+        return;
+      }
+      pendingDispatches++;
+      const work = chain.then(async () => {
+        if (failed) return;
+        const lease = rect && this.residency
+          ? await this.residency.ensureResidentRegions(regions)
+          : await context.session.services?.residency?.ensureResident(context.session.rastersForCommand(kind));
+        if (lease) leases.push(lease);
+        await action();
+      });
+      chain = this.trackResolution(work).catch((error) => {
+        failed = true; release(); this.reportError('hydrate-failed', error);
+      }).finally(() => { pendingDispatches--; });
+    };
     return {
       down: (context: ToolContext) => {
-        queue = [() => handler.down(context)]; ready = false; failed = false;
+        failed = false; previousBounds = null;
         let busy = false;
         const timer = setTimeout(() => { busy = true; context.session.isProjectBusy = true; context.session.notify('ui'); }, 150);
-        void context.session.runHydrated(kind, () => new Promise<void>((resolve) => {
+        enqueue(context, () => {
           clearTimeout(timer);
           if (busy) { context.session.isProjectBusy = false; context.session.notify('ui'); }
-          ready = true;
-          for (const action of queue.splice(0)) action();
-          finish = resolve;
-        })).catch((error) => {
-          clearTimeout(timer); failed = true; queue = [];
-          if (busy) { context.session.isProjectBusy = false; context.session.notify('ui'); }
-          this.reportError('hydrate-failed', error);
+          handler.down(context);
+        });
+        void chain.finally(() => {
+          clearTimeout(timer);
+          if (busy && failed) { context.session.isProjectBusy = false; context.session.notify('ui'); }
         });
       },
-      move: (context) => enqueue(() => handler.move(context)),
-      up: (context) => enqueue(() => {
+      move: (context) => enqueue(context, () => handler.move(context)),
+      up: (context) => enqueue(context, async () => {
         handler.up(context);
-        const resolve = finish; finish = null; ready = false;
-        if (!resolve) return;
-        if (!context.session.history.isInTransaction) { resolve(); return; }
-        let off: (() => void) | null = null;
-        off = context.session.subscribe(() => {
-          if (context.session.history.isInTransaction) return;
-          off?.(); resolve();
-        });
+        // Recorded brush work commits after pointer-up. Serializing the next gesture here avoids
+        // starting it against the preceding stroke's stale source raster.
+        await waitForBrushStroke(context.session);
+        release();
       }),
-      cancel: (session) => enqueue(() => { handler.cancel(session); finish?.(); finish = null; ready = false; }),
+      cancel: (session) => {
+        failed = true;
+        void chain.finally(() => { handler.cancel(session); release(); });
+      },
+      ...(handler.hydrationBounds ? { hydrationBounds: (context: ToolContext) => handler.hydrationBounds!(context) } : {}),
       ...(handler.hover ? { hover: (context: ToolContext) => handler.hover!(context) } : {}),
       ...(handler.overlayOnly ? { overlayOnly: (session: EditorSession) => handler.overlayOnly!(session) } : {}),
       ...(handler.autoscrolls ? { autoscrolls: (session: EditorSession) => handler.autoscrolls!(session) } : {}),
     };
   }
 
-  private requestRasterHydration(raster: Raster): void {
-    if (!this.residency || this.hydrationPending.has(raster)) return;
+  private requestRasterHydration(raster: Raster, rect: import('../core/geometry').Rect): void {
+    if (!this.residency || this.suppressCompositorHydration || this.hydrationPending.has(raster)) return;
     this.hydrationPending.add(raster);
-    void this.residency.ensureResident([raster]).then((lease) => {
+    void this.trackResolution(this.residency.ensureResident([raster], rect)).then((lease) => {
       this.canvas?.redraw();
       const release = () => { lease.release(); this.hydrationPending.delete(raster); };
       if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => requestAnimationFrame(release));
@@ -431,14 +483,26 @@ export class EditorController {
   }
 
   async openArchive(blob: Blob, name?: string): Promise<void> {
-    const bytes = new Uint8Array(await blob.arrayBuffer());
     // A zipped macOS Compositor package (`X.comp/…`, format com.compositor.project) or this port's own archive.
-    if (isCompZip(bytes)) {
+    if (/\.comp$/i.test(name ?? '')) {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
       const loaded = await readCompZip(bytes);
       this.installLoaded(loaded.document, loaded.activeLayerId, name?.replace(/\.comp$/i, '') ?? loaded.name);
       return;
     }
-    const loaded = await readArchive(blob, (data, mime) => browserDecode(data, mime), this.limits);
+    let loaded: Awaited<ReturnType<typeof readArchive>>;
+    try {
+      loaded = await readArchive(blob, (data, mime) => browserDecode(data, mime), this.limits, this.residency ?? undefined);
+    } catch (error) {
+      // Ambiguous legacy `.zip` files have no useful extension. Only pay for a contiguous copy
+      // after the streaming Fernwork reader has established that this is not its format.
+      if (!(error instanceof ProjectError) || error.code !== 'invalid' || /\.fwimg$/i.test(name ?? '')) throw error;
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      if (!isCompZip(bytes)) throw error;
+      const legacy = await readCompZip(bytes);
+      this.installLoaded(legacy.document, legacy.activeLayerId, name ?? legacy.name);
+      return;
+    }
     const tab = this.workspace.createTab(name ?? loaded.name);
     tab.session.installProject(loaded.document, loaded.activeLayerId, name ?? loaded.name, loaded.history);
     this.workspace.adopt(tab);
@@ -501,7 +565,9 @@ export class EditorController {
     if (!this.workspace.canSwitch) return;
     try {
       const blob = await this.host.chooseProject();
-      if (blob) await this.openArchive(blob, blob instanceof File ? fileBaseName(blob.name) : undefined);
+      const sourceName = blob && typeof (blob as Blob & { name?: unknown }).name === 'string'
+        ? fileBaseName((blob as Blob & { name: string }).name) : undefined;
+      if (blob) await this.openArchive(blob, sourceName);
     } catch (error) { this.reportError(error instanceof ProjectError ? error.code : 'open-failed', error); }
   }
 
@@ -528,16 +594,19 @@ export class EditorController {
   }
 
   async archive(session: EditorSession = this.session): Promise<Blob> {
+    return (await this.archiveResult(session)).blob;
+  }
+
+  private async archiveResult(session: EditorSession,
+    emitChunk?: (chunk: Uint8Array) => void | Promise<void>): Promise<{ blob: Blob; manifest: ProjectManifestV2 }> {
     const document = session.document;
     if (!document) throw new ProjectError('no-document', 'There is no canvas to save.');
+    await this.whenFullyResolved();
     session.commitTransform();
     const final = session.document ?? document;
     const name = session.projectName ?? this.workspace.current.title;
-    return session.runHydrated('save', async () => {
-      // The worker populates the encoded-raster cache; the cheap second pass adds the command/tile history.
-      await encodeArchive(final, name, session.activeLayerId);
-      return writeArchive(final, name, session.activeLayerId, this.saveHistoryWithProject ? session.history.exportState() : undefined).blob;
-    });
+    return writeArchiveStreaming(final, name, session.activeLayerId, this.residency ?? undefined,
+      this.saveHistoryWithProject ? session.history.exportState() : undefined, emitChunk);
   }
 
   // MARK: Crash journal recovery (ScratchHost / OPFS)
@@ -553,6 +622,7 @@ export class EditorController {
     if (!RecoveryStore.available(scratch)) return;
     this.recovery = new RecoveryStore(scratch);
     try {
+      await this.recovery.collectGarbage(this.liveScratchKeys());
       const previous = await this.recovery.previous();
       if (previous.length) {
         const answer = await this.confirm(this.t(previous.length === 1 ? 'Recover an unsaved project?' : 'Recover unsaved projects?'),
@@ -600,28 +670,36 @@ export class EditorController {
     for (const tab of this.workspace.tabs) {
       if (this.recoveryWatchers.has(tab.id)) continue;
       this.recoveryWatchers.set(tab.id, tab.session.subscribe((kind) => {
-        if (kind === 'document') { this.trackDocumentResidency(tab); this.scheduleRecoveryCopy(tab); }
+        if (kind === 'document') {
+          this.startDocumentResidency(tab);
+          this.scheduleRecoveryCopy(tab);
+        }
       }));
-      this.trackDocumentResidency(tab);
+      this.startDocumentResidency(tab);
     }
   }
 
-  private trackDocumentResidency(tab: ProjectTab): void {
+  private startDocumentResidency(tab: ProjectTab): void {
+    void this.trackResolution(this.trackDocumentResidency(tab)).catch((error) => {
+      this.host.reportError({ code: 'scratch-write-failed', message: (error as Error).message });
+    });
+  }
+
+  private async trackDocumentResidency(tab: ProjectTab): Promise<void> {
     if (!this.residency) return;
     const session = tab.session;
-    const historyDocuments = session.history.exportState().past.flatMap((entry) => [entry.before.document, entry.after.document]);
+    const state = session.history.exportState();
+    const historyDocuments = [...state.past, ...state.future].flatMap((entry) => [entry.before.document, entry.after.document]);
     const current = session.document;
-    void (async () => {
-      for (const document of historyDocuments) for (const raster of documentRasters(document)) {
-        await this.residency!.manage(raster, 'history');
+    for (const document of historyDocuments) for (const raster of documentRasters(document)) {
+      await this.residency.manage(raster, 'history');
+    }
+    if (current) for (const layer of current.layers) {
+      for (const raster of [layer.raster, layer.mask?.raster ?? null]) if (raster) {
+        await this.residency.manage(raster, layer.visible ? 'offscreen' : 'hidden');
       }
-      if (current) for (const layer of current.layers) {
-        for (const raster of [layer.raster, layer.mask?.raster ?? null]) if (raster) {
-          await this.residency!.manage(raster, layer.visible ? 'offscreen' : 'hidden');
-        }
-      }
-      if (current?.selection) await this.residency!.manage(current.selection.mask, 'visible');
-    })().catch((error) => this.host.reportError({ code: 'scratch-write-failed', message: (error as Error).message }));
+    }
+    if (current?.selection) await this.residency.manage(current.selection.mask, 'visible');
   }
 
   private scheduleRecoveryCopy(tab: ProjectTab): void {
@@ -642,8 +720,8 @@ export class EditorController {
         activeLayerId: session.activeLayerId, history: session.history.exportState(),
         ...(session.history.undoName ? { command: session.history.undoName } : {}) }, this.residency);
       else {
-        await encodeArchive(session.document, name, session.activeLayerId);
-        const archive = writeArchive(session.document, name, session.activeLayerId, session.history.exportState()).blob;
+        const archive = (await writeArchiveStreaming(session.document, name, session.activeLayerId, undefined,
+          session.history.exportState())).blob;
         await store.put({ id: tab.id, name, savedAt: Date.now(), size: archive.size, archive,
           ...(session.history.undoName ? { command: session.history.undoName } : {}) });
       }
@@ -673,31 +751,57 @@ export class EditorController {
         if (!chosen) return;
         target = chosen;
       }
-      const blob = await this.archive(session);
-      if (target && host.saveFileTo) {
-        await host.saveFileTo(target, blob);
+      const sink = target && host.openFileSink ? await host.openFileSink(target) : null;
+      if (target && sink) {
+        try { await this.archiveResult(session, (chunk) => sink.write(chunk)); await sink.close(); }
+        catch (error) { await sink.abort().catch(() => {}); throw error; }
         saveTargets.set(session, target);
         session.projectName = target.name.replace(/(\.fwimg|\.compositor\.zip|\.zip)$/i, '');
-      } else await this.host.saveFile(blob, name);
+      } else {
+        const blob = await this.archive(session);
+        if (target && host.saveFileTo) {
+          await host.saveFileTo(target, blob);
+          saveTargets.set(session, target);
+          session.projectName = target.name.replace(/(\.fwimg|\.compositor\.zip|\.zip)$/i, '');
+        } else await this.host.saveFile(blob, name);
+      }
       session.projectName ??= this.workspace.current.title;
       session.history.markSaved();
       this.recoveryPaused.delete(this.workspace.current.id);
-      void this.recovery?.remove(this.workspace.current.id);
+      if (this.recovery) {
+        await this.recovery.remove(this.workspace.current.id);
+        await this.recovery.collectGarbage(this.liveScratchKeys());
+      }
       session.notify('ui');
     } catch (error) { this.reportError('save-failed', error); }
   }
 
   async exportBlob(format: 'png' | 'jpeg', options: Partial<JpegOptions> = {}, session: EditorSession = this.session): Promise<Blob> {
+    if (!session.document) throw new ProjectError('no-document', 'There is no canvas to export.');
+    await this.whenFullyResolved();
+    session.commitTransform();
     const document = session.document;
     if (!document) throw new ProjectError('no-document', 'There is no canvas to export.');
     if (document.width * document.height > this.limits.maxPixels || document.width > this.limits.maxSide || document.height > this.limits.maxSide) {
       throw new ProjectError('too-large', 'Image export exceeds this editor profile’s document limit.');
     }
-    return session.runHydrated('export', async () => {
-      session.commitTransform();
-      const canvas = await this.readyCanvas();
+    const canvas = await this.readyCanvas();
+    if (format === 'png') {
+      const chunks: BlobPart[] = [];
+      this.suppressCompositorHydration++;
+      try {
+        await encodePngBandStream(document.width, document.height, 4, async (top, height) => {
+          const margin = 4, y = Math.max(0, top - margin), bottom = Math.min(document.height, top + height + margin);
+          return session.runHydrated('export', () => canvas.readRegion(document, 0, top, document.width, height),
+            { x: 0, y, width: document.width, height: bottom - y });
+        }, (chunk) => chunks.push(chunk.slice() as BlobPart), {
+          dpi: document.resolution, limits: this.limits, filter: 'none', level: 1,
+        });
+      } finally { this.suppressCompositorHydration--; }
+      return new Blob(chunks, { type: 'image/png' });
+    }
+    return session.runHydrated('export', () => {
       const pixels = canvas.readRegion(document, 0, 0, document.width, document.height);
-      if (format === 'png') return pngBlob(pixels, document.width, document.height, document.resolution);
       return jpegBlob(pixels, document.width, document.height, document.resolution, { ...this.jpegOptions, ...options });
     });
   }
@@ -796,9 +900,23 @@ export class EditorController {
     const recovery = this.recovery;
     if (recovery) {
       const ids = [...this.recoveryWatchers.keys()];
-      void Promise.allSettled(ids.map((id) => recovery.remove(id))).then(() => recovery.close());
+      void Promise.allSettled(ids.map((id) => recovery.remove(id)))
+        .then(() => recovery.collectGarbage()).finally(() => recovery.close());
     }
     this.workspace.destroy();
+  }
+
+  private liveScratchKeys(): Set<string> {
+    if (!this.residency) return new Set();
+    const rasters: Raster[] = [];
+    for (const tab of this.workspace.tabs) {
+      rasters.push(...documentRasters(tab.session.document));
+      const state = tab.session.history.exportState();
+      for (const command of [...state.past, ...state.future]) {
+        rasters.push(...documentRasters(command.before.document), ...documentRasters(command.after.document));
+      }
+    }
+    return this.residency.referencedKeys(rasters);
   }
 }
 

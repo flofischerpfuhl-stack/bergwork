@@ -122,6 +122,10 @@ class BrushTool implements ToolHandler {
   hover(c: ToolContext): string {
     return c.session.tool === 'cloneStamp' && c.modifiers.option ? 'crosshair' : 'none';
   }
+  hydrationBounds(c: ToolContext): import('../core/geometry').Rect {
+    const radius = getBrushSettings(c.session).diameter / 2 + 2;
+    return { x: c.pixel.x - radius, y: c.pixel.y - radius, width: radius * 2, height: radius * 2 };
+  }
 }
 
 // MARK: Smear (Blur, Smudge, Liquify)
@@ -152,6 +156,12 @@ class SmearTool implements ToolHandler {
     if (cancelRetouch(session)) syncPreview(session);
   }
   hover(): string { return 'none'; }
+  hydrationBounds(c: ToolContext): import('../core/geometry').Rect {
+    const settings = paintState(c.session).smear;
+    const blurMargin = paintState(c.session).smearMode === 'blur' ? Math.min(90, Math.max(5, settings.diameter * 0.3)) : 1;
+    const radius = settings.diameter / 2 + blurMargin;
+    return { x: c.pixel.x - radius, y: c.pixel.y - radius, width: radius * 2, height: radius * 2 };
+  }
 }
 
 // MARK: Gradient

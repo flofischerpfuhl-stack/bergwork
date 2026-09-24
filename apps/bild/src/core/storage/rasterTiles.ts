@@ -1,4 +1,4 @@
-import { Raster, TILE, TileNotResidentError, type RasterTileStorage } from '../raster';
+import { Raster, TILE, TileNotResidentError, type ArchivedSource, type RasterTileStorage } from '../raster';
 import type { Rect } from '../geometry';
 import type { PixelArray, RasterFormat } from '../pixel/format';
 import { TileCache, type TileAsset, type TileEvictionClass } from './tileCache';
@@ -15,6 +15,12 @@ export interface StoredRasterTiles {
 export interface ResidentLease {
   readonly rasters: readonly Raster[];
   release(): void;
+}
+
+export interface RasterRegion {
+  readonly raster: Raster;
+  /** Raster-local pixel coordinates. Omit to hydrate the complete raster. */
+  readonly rect?: Rect;
 }
 
 interface ManagedSlot {
@@ -52,6 +58,10 @@ class ManagedRasterTileStorage implements RasterTileStorage {
         if (slot.asset && !slot.value) throw new TileNotResidentError(index);
         return slot.value;
       },
+      has: (object, property) => {
+        const index = arrayIndex(property);
+        return index === null ? Reflect.has(object, property) : index < this.slots.length;
+      },
       set: () => { throw new TypeError('Raster tiles are immutable'); },
     }) as unknown as ReadonlyArray<PixelArray | null>;
     this.tiles = proxy;
@@ -85,6 +95,7 @@ function tileIndices(raster: Raster, rect?: Rect): number[] {
 /** Owns the asynchronous boundary between synchronous kernels and ScratchHost-backed rasters. */
 export class RasterResidency {
   private readonly managed = new WeakMap<Raster, ManagedRasterTileStorage>();
+  private readonly pending = new WeakMap<Raster, Promise<StoredRasterTiles>>();
 
   constructor(readonly cache: TileCache) {}
 
@@ -94,13 +105,26 @@ export class RasterResidency {
       this.setEvictionClass(raster, evictionClass);
       return this.describe(raster);
     }
+    const pending = this.pending.get(raster);
+    if (pending) {
+      const stored = await pending;
+      this.setEvictionClass(raster, evictionClass);
+      return stored;
+    }
+    const work = this.register(raster, evictionClass);
+    this.pending.set(raster, work);
+    try { return await work; }
+    finally { this.pending.delete(raster); }
+  }
+
+  private async register(raster: Raster, evictionClass: TileEvictionClass): Promise<StoredRasterTiles> {
+    const overlay = raster.tileOverlay;
+    if (overlay) return this.registerOverlay(raster, overlay.source, overlay.updates, evictionClass);
     // The preview must be complete before any registration can trigger an eviction.
     raster.makeReducedCopy();
     const source = raster.tiles.slice();
     const slots: ManagedSlot[] = source.map((value) => ({ asset: null, value, owner: {} }));
     const storage = new ManagedRasterTileStorage(slots, raster.format);
-    this.managed.set(raster, storage);
-    raster.adoptTileStorage(storage);
     for (let index = 0; index < slots.length; index++) {
       const slot = slots[index]!;
       const tile = source[index];
@@ -109,15 +133,45 @@ export class RasterResidency {
         owner: slot.owner, evictionClass, evicted: () => { slot.value = null; },
       });
     }
+    // Keep the immutable source tile array visible until every content-addressed reference exists.
+    // A document observer may start this work while the brush queue is capturing the next stroke's
+    // base tiles; exposing half-registered storage there loses the preceding committed stroke.
+    this.managed.set(raster, storage);
+    raster.adoptTileStorage(storage);
+    return this.describe(raster);
+  }
+
+  private async registerOverlay(raster: Raster, source: Raster, updates: ReadonlyMap<number, PixelArray | null>,
+    evictionClass: TileEvictionClass): Promise<StoredRasterTiles> {
+    await this.manage(source, evictionClass);
+    const sourceStorage = this.managed.get(source)!;
+    if (source.reducedCopy) raster.installReducedCopy(source.reducedCopy);
+    const slots: ManagedSlot[] = sourceStorage.slots.map((slot) => ({ asset: slot.asset, value: slot.value, owner: {} }));
+    for (let index = 0; index < slots.length; index++) {
+      if (updates.has(index)) continue;
+      const slot = slots[index]!;
+      if (slot.asset) this.cache.bind(slot.asset, { owner: slot.owner, evictionClass,
+        evicted: () => { slot.value = null; } });
+    }
+    for (const [index, tile] of updates) {
+      const slot = slots[index]!;
+      slot.asset = tile ? await this.cache.store(tile, raster.format, {
+        owner: slot.owner, evictionClass, evicted: () => { slot.value = null; },
+      }) : null;
+      slot.value = tile;
+    }
+    const storage = new ManagedRasterTileStorage(slots, raster.format);
+    this.managed.set(raster, storage);
+    raster.adoptTileStorage(storage);
     return this.describe(raster);
   }
 
   /** Rebuilds a lazy raster from durable tile references; no full-resolution bytes are read. */
-  restore(stored: StoredRasterTiles, reduced?: Raster): Raster {
+  restore(stored: StoredRasterTiles, reduced?: Raster, archivedSource?: ArchivedSource): Raster {
     const slots: ManagedSlot[] = stored.tiles.map((asset) => ({ asset, value: null, owner: {} }));
     const storage = new ManagedRasterTileStorage(slots, stored.format);
     const raster = new Raster(stored.width, stored.height, stored.channels, storage,
-      { id: stored.id, format: stored.format });
+      { id: stored.id, format: stored.format, archivedSource });
     if (reduced) raster.installReducedCopy(reduced);
     this.managed.set(raster, storage);
     for (const slot of slots) if (slot.asset) {
@@ -127,6 +181,16 @@ export class RasterResidency {
   }
 
   isManaged(raster: Raster): boolean { return this.managed.has(raster); }
+
+  /** Durable content keys referenced by the supplied live/history rasters. */
+  referencedKeys(rasters: Iterable<Raster>): Set<string> {
+    const keys = new Set<string>();
+    for (const raster of rasters) {
+      const storage = this.managed.get(raster);
+      if (storage) for (const slot of storage.slots) if (slot.asset) keys.add(slot.asset.key);
+    }
+    return keys;
+  }
 
   describe(raster: Raster): StoredRasterTiles {
     const storage = this.managed.get(raster);
@@ -143,13 +207,25 @@ export class RasterResidency {
 
   /** Hydrates and pins only the requested tile rectangle until the synchronous operation finishes. */
   async ensureResident(rasters: Iterable<Raster>, rect?: Rect): Promise<ResidentLease> {
-    const unique = [...new Set(rasters)];
+    return this.ensureResidentRegions([...new Set(rasters)].map((raster) => ({ raster, ...(rect ? { rect } : {}) })));
+  }
+
+  /** Hydrates independently transformed raster-local regions and pins their union for the lease. */
+  async ensureResidentRegions(regions: Iterable<RasterRegion>): Promise<ResidentLease> {
+    const requested = [...regions];
+    const unique = [...new Set(requested.map((item) => item.raster))];
+    const indices = new Map<Raster, Set<number>>();
+    for (const item of requested) {
+      let set = indices.get(item.raster);
+      if (!set) { set = new Set(); indices.set(item.raster, set); }
+      for (const index of tileIndices(item.raster, item.rect)) set.add(index);
+    }
     const releases: (() => void)[] = [];
     try {
       for (const raster of unique) {
         if (!this.managed.has(raster)) await this.manage(raster, 'visible');
         const storage = this.managed.get(raster)!;
-        for (const index of tileIndices(raster, rect)) {
+        for (const index of indices.get(raster) ?? []) {
           const slot = storage.slots[index]!;
           if (!slot.asset) continue;
           const lease = await this.cache.pin(slot.asset);

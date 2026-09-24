@@ -15,8 +15,8 @@ import {
   type LayerMask, BLEND_MODES,
 type Guide, type DocumentLimits, LITE_DOCUMENT_LIMITS, } from './document';
 import {
-  boundingBox, center, corners as transformCorners, following, isValidTransform, makeTransform, mirrored, samePlacement,
-  snapOffset, transformsEqual, type LayerTransform, type Point, type Rect, type Size,
+  apply, boundingBox, center, corners as transformCorners, following, invert, isValidTransform, makeTransform, mirrored,
+  pixelToDocument, samePlacement, snapOffset, transformsEqual, type LayerTransform, type Point, type Rect, type Size,
 } from './geometry';
 import { DocumentHistory, type HistorySnapshot, type PersistedHistoryState } from './history';
 import { uuid } from './ids';
@@ -97,6 +97,7 @@ export interface SessionServices {
   /** Async storage boundary used before existing synchronous commands touch raster bytes. */
   residency?: {
     ensureResident(rasters: Iterable<Raster>, rect?: Rect): Promise<{ release(): void }>;
+    ensureResidentRegions?(regions: Iterable<{ raster: Raster; rect?: Rect }>): Promise<{ release(): void }>;
   };
   limits?: DocumentLimits;
 }
@@ -265,9 +266,52 @@ export class EditorSession {
     return [...result];
   }
 
+  /** Maps a document-space tool bound into each input's own pixel grid. */
+  rasterRegionsForCommand(kind: RasterCommandKind, documentRect: Rect): { raster: Raster; rect: Rect }[] {
+    const document = this.document;
+    if (!document) return [];
+    const wanted = new Set(this.rastersForCommand(kind));
+    const result = new Map<Raster, Rect>();
+    const map = (raster: Raster, transform: LayerTransform) => {
+      if (!wanted.has(raster)) return;
+      const inverse = invert(pixelToDocument(transform, raster.width, raster.height));
+      const points = [
+        apply(inverse, { x: documentRect.x, y: documentRect.y }),
+        apply(inverse, { x: documentRect.x + documentRect.width, y: documentRect.y }),
+        apply(inverse, { x: documentRect.x + documentRect.width, y: documentRect.y + documentRect.height }),
+        apply(inverse, { x: documentRect.x, y: documentRect.y + documentRect.height }),
+      ];
+      const x = Math.floor(Math.min(...points.map((point) => point.x)));
+      const y = Math.floor(Math.min(...points.map((point) => point.y)));
+      const right = Math.ceil(Math.max(...points.map((point) => point.x)));
+      const bottom = Math.ceil(Math.max(...points.map((point) => point.y)));
+      const next = { x, y, width: right - x, height: bottom - y };
+      const old = result.get(raster);
+      result.set(raster, old ? {
+        x: Math.min(old.x, next.x), y: Math.min(old.y, next.y),
+        width: Math.max(old.x + old.width, next.x + next.width) - Math.min(old.x, next.x),
+        height: Math.max(old.y + old.height, next.y + next.height) - Math.min(old.y, next.y),
+      } : next);
+    };
+    for (const layer of document.layers) {
+      if (layer.raster) map(layer.raster, layer.transform);
+      if (layer.mask) map(layer.mask.raster, maskTransform(layer));
+    }
+    if (document.selection && wanted.has(document.selection.mask)) {
+      result.set(document.selection.mask, {
+        x: documentRect.x - document.selection.x, y: documentRect.y - document.selection.y,
+        width: documentRect.width, height: documentRect.height,
+      });
+    }
+    return [...result].map(([raster, rect]) => ({ raster, rect }));
+  }
+
   /** Hydrates, pins, executes, then unpins at the one async→sync command boundary. */
   async runHydrated<T>(kind: RasterCommandKind, body: () => T | Promise<T>, rect?: Rect): Promise<T> {
-    const lease = await this.services?.residency?.ensureResident(this.rastersForCommand(kind), rect);
+    const residency = this.services?.residency;
+    const lease = rect && residency?.ensureResidentRegions
+      ? await residency.ensureResidentRegions(this.rasterRegionsForCommand(kind, rect))
+      : await residency?.ensureResident(this.rastersForCommand(kind), rect);
     try { return await body(); }
     finally { lease?.release(); }
   }

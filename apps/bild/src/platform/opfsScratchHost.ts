@@ -97,7 +97,7 @@ export class OpfsScratchHost implements ScratchHost {
 }
 
 /** Persistent fallback for engines without OPFS (notably older Firefox/WebKit builds). */
-class IndexedDbScratchHost implements ScratchHost {
+export class IndexedDbScratchHost implements ScratchHost {
   readonly kind = 'indexeddb' as const;
   private constructor(private readonly db: IDBDatabase) {}
 

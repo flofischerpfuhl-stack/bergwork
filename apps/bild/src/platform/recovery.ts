@@ -239,6 +239,26 @@ export class RecoveryStore {
     if (record.kind !== 'state') throw new Error('Legacy recovery records must be opened as project archives');
     return decodeRecoveryState(new Uint8Array(await record.archive.arrayBuffer()), residency, await this.host());
   }
+
+  /** Removes content-addressed payloads referenced by neither a journal nor a live document. */
+  async collectGarbage(liveKeys: Iterable<string> = []): Promise<number> {
+    const host = await this.host(), retained = new Set(liveKeys);
+    for (const journal of await host.list(PREFIX)) {
+      if (!journal.endsWith(SUFFIX)) continue;
+      const bytes = await host.read(journal);
+      if (!bytes) continue;
+      const text = new TextDecoder().decode(bytes);
+      for (const match of text.matchAll(/(?:tiles\/(?:rgba8|rgba16|gray8)-[a-f0-9]{64}|assets\/[a-f0-9]{64})\.bin/g)) {
+        retained.add(match[0]);
+      }
+    }
+    let removed = 0;
+    for (const prefix of ['tiles/', 'assets/']) for (const key of await host.list(prefix)) {
+      if (!retained.has(key)) { await host.remove(key); removed++; }
+    }
+    if (removed) await host.flush();
+    return removed;
+  }
   close(): void { if (this.ownedHost) void this.ownedHost.close(); }
 }
 

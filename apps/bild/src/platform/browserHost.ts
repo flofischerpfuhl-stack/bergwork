@@ -12,6 +12,11 @@ export type { HostDecodedImage, ImageDecoderHost } from './imageDecoder';
 
 /** A place a file was saved to, which Save can overwrite later without asking again. */
 export interface SaveTarget { readonly name: string }
+export interface FileByteSink {
+  write(chunk: Uint8Array): Promise<void>;
+  close(): Promise<void>;
+  abort(): Promise<void>;
+}
 
 export type SaveKind = 'project' | 'png' | 'jpeg';
 
@@ -24,6 +29,7 @@ export type SaveKind = 'project' | 'png' | 'jpeg';
 export interface FileTargetHost extends HostAdapter, ImageDecoderHost, Partial<ScratchHostCapability> {
   chooseSaveTarget?(suggestedName: string, kind: SaveKind): Promise<SaveTarget | null>;
   saveFileTo?(target: SaveTarget, blob: Blob): Promise<void>;
+  openFileSink?(target: SaveTarget): Promise<FileByteSink | null>;
 }
 
 const PICKER_TYPES = {
@@ -73,6 +79,17 @@ export function createBrowserHost(): FileTargetHost {
   } : {};
   return {
     ...targets,
+    ...(picker ? {
+      async openFileSink(target: SaveTarget): Promise<FileByteSink | null> {
+        if (!('handle' in target)) return null;
+        const writable = await (target as HandleTarget).handle.createWritable();
+        return {
+          async write(chunk) { await writable.write(chunk.slice() as Uint8Array<ArrayBuffer>); },
+          async close() { await writable.close(); },
+          async abort() { await writable.abort(); },
+        };
+      },
+    } : {}),
     ...(OpfsScratchHost.available() || typeof indexedDB !== 'undefined'
       ? { scratchHost: new BrowserScratchHost(), editorProfile: 'lite' as const } : {}),
     async chooseImages() {

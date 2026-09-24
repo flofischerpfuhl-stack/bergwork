@@ -33,6 +33,7 @@ export interface EncodedSource {
   readonly mime: string;
   readonly sha256: string;
 }
+export type ArchivedSource = Omit<EncodedSource, 'bytes'>;
 
 /** Storage indirection kept synchronous for existing kernels; swapped stores hydrate before use. */
 export interface RasterTileStorage {
@@ -40,6 +41,42 @@ export interface RasterTileStorage {
   /** Lets lazy stores validate metadata without faulting every tile in during construction. */
   validateFormat?(format: RasterFormat): void;
   residency?(index: number): 'zero' | 'resident' | 'swapped';
+}
+
+export interface RasterTileOverlay {
+  readonly source: Raster;
+  readonly updates: ReadonlyMap<number, PixelArray | null>;
+}
+
+class OverlayRasterTileStorage implements RasterTileStorage {
+  readonly tiles: ReadonlyArray<PixelArray | null>;
+  constructor(readonly overlay: RasterTileOverlay) {
+    const target = { length: overlay.source.cols * overlay.source.rows };
+    let proxy: ReadonlyArray<PixelArray | null>;
+    proxy = new Proxy(target, {
+      get: (object, property, receiver) => {
+        if (property === Symbol.iterator) return Array.prototype[Symbol.iterator].bind(proxy);
+        if (property === 'length') return target.length;
+        if (typeof property === 'string' && /^\d+$/.test(property)) {
+          const index = Number(property);
+          return overlay.updates.has(index) ? overlay.updates.get(index) : overlay.source.tiles[index];
+        }
+        const method = Reflect.get(Array.prototype, property);
+        return typeof method === 'function' ? method.bind(proxy) : Reflect.get(object, property, receiver);
+      },
+      has: (object, property) => typeof property === 'string' && /^\d+$/.test(property)
+        ? Number(property) < target.length : Reflect.has(object, property),
+      set: () => { throw new TypeError('Raster tiles are immutable'); },
+    }) as unknown as ReadonlyArray<PixelArray | null>;
+    this.tiles = proxy;
+  }
+  validateFormat(format: RasterFormat): void {
+    if (format !== this.overlay.source.format) throw new RangeError('Overlay pixel format does not match its source');
+  }
+  residency(index: number): 'zero' | 'resident' | 'swapped' {
+    if (!this.overlay.updates.has(index)) return this.overlay.source.tileResidency(index);
+    return this.overlay.updates.get(index) ? 'resident' : 'zero';
+  }
 }
 
 export class ResidentTileStorage implements RasterTileStorage {
@@ -65,9 +102,13 @@ export class Raster {
   get tiles(): ReadonlyArray<PixelArray | null> { return this.tileStorage.tiles; }
   /** Original encoded bytes, when these pixels are exactly the decoded file. */
   readonly source: EncodedSource | null;
+  /** Original archive identity retained when its bytes were decoded directly into scratch tiles. */
+  readonly archivedSource: ArchivedSource | null;
+  private readonly overlayValue: RasterTileOverlay | null;
 
   constructor(width: number, height: number, channels: Channels, tiles: ReadonlyArray<PixelArray | null> | RasterTileStorage,
-    options: { id?: string; source?: EncodedSource | null; format?: RasterFormat } = {}) {
+    options: { id?: string; source?: EncodedSource | null; archivedSource?: ArchivedSource | null; format?: RasterFormat;
+      overlay?: RasterTileOverlay | null } = {}) {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) {
       throw new RangeError(`Invalid raster size ${width}×${height}`);
     }
@@ -92,6 +133,28 @@ export class Raster {
     this.serial = nextSerial++;
     this.id = options.id ?? uuid();
     this.source = options.source ?? null;
+    this.archivedSource = options.archivedSource ?? null;
+    this.overlayValue = options.overlay ?? null;
+  }
+
+  get tileOverlay(): RasterTileOverlay | null { return this.overlayValue; }
+
+  /** Applies sparse worker results without reading unrelated swapped tiles. */
+  withTileUpdates(updates: Iterable<{ readonly index: number; readonly tile: PixelArray | null }>): Raster {
+    const base = this.overlayValue?.source ?? this;
+    const merged = new Map(this.overlayValue?.updates ?? []);
+    for (const update of updates) {
+      if (!Number.isInteger(update.index) || update.index < 0 || update.index >= this.cols * this.rows) {
+        throw new RangeError('Tile update index is outside the raster');
+      }
+      if (update.tile && (this.format === 'rgba16') !== (update.tile instanceof Uint16Array)) {
+        throw new RangeError(`Tile update type does not match pixel format ${this.format}`);
+      }
+      merged.set(update.index, update.tile);
+    }
+    const overlay = { source: base, updates: merged } satisfies RasterTileOverlay;
+    return new Raster(this.width, this.height, this.channels, new OverlayRasterTileStorage(overlay),
+      { format: this.format, overlay });
   }
 
   tileWidth(col: number): number { return Math.min(TILE, this.width - col * TILE); }
@@ -113,6 +176,21 @@ export class Raster {
     if (!this.tileStorage.residency) return false;
     for (let index = 0; index < this.cols * this.rows; index++) {
       if (this.tileStorage.residency(index) === 'swapped') return true;
+    }
+    return false;
+  }
+
+  hasSwappedTilesIn(rect?: { x: number; y: number; width: number; height: number }): boolean {
+    if (!this.tileStorage.residency) return false;
+    const left = rect ? Math.max(0, Math.floor(rect.x)) : 0;
+    const top = rect ? Math.max(0, Math.floor(rect.y)) : 0;
+    const right = rect ? Math.min(this.width, Math.ceil(rect.x + rect.width)) : this.width;
+    const bottom = rect ? Math.min(this.height, Math.ceil(rect.y + rect.height)) : this.height;
+    if (right <= left || bottom <= top) return false;
+    for (let row = Math.floor(top / TILE); row <= Math.floor((bottom - 1) / TILE); row++) {
+      for (let col = Math.floor(left / TILE); col <= Math.floor((right - 1) / TILE); col++) {
+        if (this.tileStorage.residency(row * this.cols + col) === 'swapped') return true;
+      }
     }
     return false;
   }

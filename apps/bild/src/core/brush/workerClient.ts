@@ -191,10 +191,10 @@ export class BrushRasterWorker {
   private receive(message: BrushWorkerResponse, worker: Worker): void {
     if (message.type === 'error') { this.fail(new Error(message.message)); return; }
     const base = !message.reset && this.latest?.width === message.width && this.latest.height === message.height
-      && this.latest.channels === message.channels ? this.latest.tiles.slice()
-      : new Array(Math.ceil(message.width / 256) * Math.ceil(message.height / 256)).fill(null) as (Uint8Array | null)[];
-    for (const tile of message.tiles) base[tile.index] = tile.data ? new Uint8Array(tile.data) : null;
-    this.latest = new Raster(message.width, message.height, message.channels, base);
+      && this.latest.channels === message.channels ? this.latest : Raster.blank(message.width, message.height, message.channels);
+    this.latest = base.withTileUpdates(message.tiles.map((tile) => ({
+      index: tile.index, tile: tile.data ? new Uint8Array(tile.data) : null,
+    })));
     if (message.type !== 'finished') return;
     this.finalMetadata = { transform: message.transform, bounds: message.bounds, sourceRect: message.sourceRect };
     this.timings.push(message.timing);

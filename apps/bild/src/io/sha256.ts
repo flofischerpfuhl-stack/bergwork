@@ -9,6 +9,11 @@ const K = new Uint32Array([
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ]);
 
+export interface StreamingSha256 {
+  update(bytes: Uint8Array): this;
+  digestHex(): string;
+}
+
 /** Synchronous, allocation-bounded SHA-256 for stable AssetRecord.sha256 values. */
 export function sha256Hex(bytes: Uint8Array): string {
   let h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a;
@@ -65,3 +70,126 @@ export function sha256Hex(bytes: Uint8Array): string {
 
 function rotr(value: number, shift: number): number { return (value >>> shift) | (value << (32 - shift)); }
 function hex(value: number): string { return value.toString(16).padStart(8, '0'); }
+
+/** Stateful SHA-256; `update` never retains caller chunks. */
+export class IncrementalSha256 {
+  private readonly state = new Uint32Array([
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  ]);
+  private readonly words = new Uint32Array(64);
+  private readonly pending = new Uint8Array(64);
+  private pendingLength = 0;
+  private length = 0;
+  private finished = false;
+
+  update(bytes: Uint8Array): this {
+    if (this.finished) throw new Error('SHA-256 digest is already finished');
+    this.length += bytes.byteLength;
+    let offset = 0;
+    if (this.pendingLength) {
+      const take = Math.min(64 - this.pendingLength, bytes.byteLength);
+      this.pending.set(bytes.subarray(0, take), this.pendingLength);
+      this.pendingLength += take; offset += take;
+      if (this.pendingLength === 64) { this.compress(this.pending, 0); this.pendingLength = 0; }
+    }
+    while (offset + 64 <= bytes.byteLength) { this.compress(bytes, offset); offset += 64; }
+    if (offset < bytes.byteLength) {
+      this.pending.set(bytes.subarray(offset), 0);
+      this.pendingLength = bytes.byteLength - offset;
+    }
+    return this;
+  }
+
+  digestHex(): string {
+    if (this.finished) throw new Error('SHA-256 digest is already finished');
+    this.finished = true;
+    const block = this.pending;
+    block.fill(0, this.pendingLength);
+    block[this.pendingLength] = 0x80;
+    if (this.pendingLength >= 56) { this.compress(block, 0); block.fill(0); }
+    const high = Math.floor(this.length / 0x20000000), low = (this.length << 3) >>> 0;
+    block[56] = high >>> 24; block[57] = high >>> 16; block[58] = high >>> 8; block[59] = high;
+    block[60] = low >>> 24; block[61] = low >>> 16; block[62] = low >>> 8; block[63] = low;
+    this.compress(block, 0);
+    return [...this.state].map(hex).join('');
+  }
+
+  private compress(data: Uint8Array, offset: number): void {
+    const w = this.words, s = this.state;
+    for (let i = 0; i < 16; i++) {
+      const at = offset + i * 4;
+      w[i] = ((data[at]! << 24) | (data[at + 1]! << 16) | (data[at + 2]! << 8) | data[at + 3]!) >>> 0;
+    }
+    for (let i = 16; i < 64; i++) {
+      const x = w[i - 15]!, y = w[i - 2]!;
+      w[i] = (w[i - 16]! + (rotr(x, 7) ^ rotr(x, 18) ^ (x >>> 3)) + w[i - 7]!
+        + (rotr(y, 17) ^ rotr(y, 19) ^ (y >>> 10))) >>> 0;
+    }
+    let a = s[0]!, b = s[1]!, c = s[2]!, d = s[3]!, e = s[4]!, f = s[5]!, g = s[6]!, h = s[7]!;
+    for (let i = 0; i < 64; i++) {
+      const t1 = (h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K[i]! + w[i]!) >>> 0;
+      const t2 = ((rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+      h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    s[0] = (s[0]! + a) >>> 0; s[1] = (s[1]! + b) >>> 0; s[2] = (s[2]! + c) >>> 0; s[3] = (s[3]! + d) >>> 0;
+    s[4] = (s[4]! + e) >>> 0; s[5] = (s[5]! + f) >>> 0; s[6] = (s[6]! + g) >>> 0; s[7] = (s[7]! + h) >>> 0;
+  }
+}
+
+interface ShaWasmExports extends WebAssembly.Exports {
+  readonly memory: WebAssembly.Memory;
+  sha_buffer(): number;
+  sha_init(): void;
+  sha_update(length: number): void;
+  sha_finish(): number;
+}
+
+class WasmSha256 implements StreamingSha256 {
+  private readonly exports: ShaWasmExports;
+  private readonly pointer: number;
+  private finished = false;
+
+  constructor(module: WebAssembly.Module) {
+    this.exports = new WebAssembly.Instance(module).exports as ShaWasmExports;
+    this.pointer = this.exports.sha_buffer();
+    this.exports.sha_init();
+  }
+
+  update(bytes: Uint8Array): this {
+    if (this.finished) throw new Error('SHA-256 digest is already finished');
+    for (let offset = 0; offset < bytes.byteLength; offset += 1_048_576) {
+      const length = Math.min(1_048_576, bytes.byteLength - offset);
+      new Uint8Array(this.exports.memory.buffer, this.pointer, length).set(bytes.subarray(offset, offset + length));
+      this.exports.sha_update(length);
+    }
+    return this;
+  }
+
+  digestHex(): string {
+    if (this.finished) throw new Error('SHA-256 digest is already finished');
+    this.finished = true;
+    const pointer = this.exports.sha_finish();
+    return [...new Uint8Array(this.exports.memory.buffer, pointer, 32)]
+      .map((value) => value.toString(16).padStart(2, '0')).join('');
+  }
+}
+
+let wasmModule: Promise<WebAssembly.Module | null> | null = null;
+
+async function loadWasmSha256(): Promise<WebAssembly.Module | null> {
+  if (typeof WebAssembly === 'undefined' || typeof fetch === 'undefined') return null;
+  if ((globalThis as typeof globalThis & { process?: { versions?: { node?: string } } }).process?.versions?.node) return null;
+  try {
+    const response = await fetch(new URL('./sha256.wasm', import.meta.url));
+    if (!response.ok) return null;
+    return await WebAssembly.compile(await response.arrayBuffer());
+  } catch { return null; }
+}
+
+/** Prepared once per archive operation; every returned hasher has independent WASM state. */
+export async function prepareStreamingSha256(): Promise<() => StreamingSha256> {
+  wasmModule ??= loadWasmSha256();
+  const module = await wasmModule;
+  return module ? () => new WasmSha256(module) : () => new IncrementalSha256();
+}
