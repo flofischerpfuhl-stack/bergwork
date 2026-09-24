@@ -18,16 +18,18 @@ static cmsColorSpaceSignature expected_space(int model) {
 }
 
 cmsHTRANSFORM lcms_create_transform(const uint8_t* profile_data, uint32_t profile_size,
-                                    int model, int bits) {
+                                    int model, int bits, int output_bits) {
     cmsHPROFILE source = NULL, destination = NULL;
     cmsHTRANSFORM transform = NULL;
     cmsUInt32Number format = input_format(model, bits);
-    if (!profile_data || !profile_size || !format || (bits != 8 && bits != 16)) return NULL;
+    if (!profile_data || !profile_size || !format || (bits != 8 && bits != 16)
+        || (output_bits != 8 && output_bits != 16)) return NULL;
     source = cmsOpenProfileFromMem(profile_data, profile_size);
     if (!source || cmsGetColorSpace(source) != expected_space(model)) goto done;
     destination = cmsCreate_sRGBProfile();
     if (!destination) goto done;
-    transform = cmsCreateTransform(source, format, destination, TYPE_RGB_8,
+    transform = cmsCreateTransform(source, format, destination,
+                                   output_bits == 16 ? TYPE_RGB_16 : TYPE_RGB_8,
                                    INTENT_PERCEPTUAL, 0);
 done:
     if (destination) cmsCloseProfile(destination);

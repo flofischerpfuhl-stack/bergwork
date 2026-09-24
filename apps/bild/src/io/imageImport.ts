@@ -18,7 +18,6 @@ import { sha256Hex } from './sha256';
 import { decodeTiffNative, TiffError, tiffDimensions } from './tiff';
 import { decodeHeic, HeicError, heicDimensions, isHeic, orientRgba, type HeicDecodeOptions } from './heic';
 import { IccError, loadLittleCms, type Chromaticities } from '../wasm/lcms';
-import { rgba8To16 } from '../core/pixel/format';
 
 export class ImageImportError extends Error {
   readonly code: 'unreadable' | 'unsupported' | 'too-large';
@@ -91,11 +90,10 @@ async function decodeManagedPng(bytes: Uint8Array): Promise<{
       ? lcms.createGrayProfile(png.chromaticities?.white ?? SRGB_CHROMATICITIES.white, gamma)
       : lcms.createRgbProfile(png.chromaticities ?? SRGB_CHROMATICITIES, gamma, png.gamma === null ? 'srgb' : 'gamma');
   }
-  // The current LittleCMS WASM wrapper emits RGB8. Keep the 16-bit storage contract while
-  // documenting that profile conversion has already reduced the source precision.
-  const converted = lcms.transform(profile, png.colors, png.model, png.bits, png.alpha);
-  return { width: png.width, height: png.height,
-    data: png.bits === 16 ? rgba8To16(converted) : converted, bitDepth: png.bits };
+  const converted = png.bits === 16
+    ? lcms.transform16(profile, png.colors as Uint16Array, png.model, png.alpha as Uint16Array | null)
+    : lcms.transform(profile, png.colors, png.model, 8, png.alpha);
+  return { width: png.width, height: png.height, data: converted, bitDepth: png.bits };
 }
 
 async function decodeJpeg(bytes: Uint8Array, info: JpegInfo): Promise<{ width: number; height: number; data: Uint8Array }> {
@@ -108,13 +106,13 @@ async function decodeJpeg(bytes: Uint8Array, info: JpegInfo): Promise<{ width: n
   try {
     // ImageImporter.swift renders through sRGB. ImageIO supplies a generic CMYK space to untagged
     // files; our deterministic browser equivalent is Little CMS's subtractive-sRGB CMYK profile.
-    data = lcms.transform(embedded ?? lcms.createCmykProfile(), samples.data, samples.model, 8);
+    data = lcms.transform(embedded ?? lcms.createCmykProfile(), samples.data, samples.model, 8) as Uint8Array;
   } catch (error) {
     if (!(error instanceof IccError)) throw error;
     // ImageIO ignores an unusable embedded profile. Four-component JPEGs still need a CMYK
     // interpretation; tagged RGB/gray can safely fall back to the platform decoder.
     if (components !== 4) return browserDecode(bytes, 'image/jpeg');
-    data = lcms.transform(lcms.createCmykProfile(), samples.data, 'cmyk', 8);
+    data = lcms.transform(lcms.createCmykProfile(), samples.data, 'cmyk', 8) as Uint8Array;
   }
   return orientRgba(data, samples.width, samples.height, info.orientation);
 }
@@ -182,10 +180,10 @@ export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number
     }
   } else if (kind === 'image/webp') {
     const webp = await import('./webp');
-    if (webp.webpIccProfile(bytes)) {
-      try { pixels = await webp.decodeManagedWebp(bytes); }
-      catch { throw new ImageImportError('unreadable'); }
-    } else pixels = await decodeMeasuredNative(bytes, kind, options.nativeDecoder);
+    // Canvas/ImageBitmap implementations may premultiply before exposing pixels, irreversibly
+    // losing RGB under low alpha. libwebp emits straight RGBA and is bit-exact for lossless files.
+    try { pixels = await webp.decodeManagedWebp(bytes); }
+    catch { throw new ImageImportError('unreadable'); }
   } else if (kind === 'image/avif') {
     const avif = await import('./avif');
     if (avif.avifHasIccProfile(bytes)) {

@@ -30,7 +30,6 @@ for (const file of ['prec_png16_plain.png', 'prec_tiff16_plain.tif']) {
 // Photoshop writes an sRGB iCCP into 16-bit PNGs, ImageMagick writes cHRM + gAMA, and 16-bit TIFFs usually carry ICC.
 for (const file of ['prec_png16_iccp_srgb.png', 'prec_png16_chrm.png', 'prec_tiff16_icc.tif']) {
   test(`QA bug: colour-tagged 16-bit ${file} is quantised to 8 bit on import`, async ({ page }) => {
-    test.fail(true, 'Known failure, owner: 16-bit lane (p2-16bit)');
     await mountBare(page, { width: 2048, height: 4 });
     const got = await importAndRead(page, fs.readFileSync(path.join(QA_DIR, file)), file);
     expect(got.error).toBeUndefined();
@@ -43,7 +42,6 @@ for (const file of ['prec_png16_iccp_srgb.png', 'prec_png16_chrm.png', 'prec_tif
 
 for (const file of ['prec_webp_lossless_lowalpha.webp', 'prec_png_lowalpha.png']) {
   test(`QA lossless ${file}: colour of semi-transparent pixels (alpha 1–61) survives import exactly`, async ({ page }) => {
-    test.fail(file.endsWith('.webp'), 'Known failure, owner: 16-bit lane (p2-16bit)');
     await mountBare(page, { width: 256, height: 16 });
     const got = await importAndRead(page, fs.readFileSync(path.join(QA_DIR, file)), file);
     expect(got.error).toBeUndefined();

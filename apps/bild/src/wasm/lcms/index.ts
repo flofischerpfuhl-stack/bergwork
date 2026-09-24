@@ -13,9 +13,12 @@ export class IccError extends Error {
 }
 
 export interface LittleCms {
-  /** ImageImporter.swift: converts source samples to straight sRGB RGBA8 using perceptual intent. */
+  /** Compatibility conversion to straight sRGB RGBA8. */
   transform(profile: Uint8Array, input: Uint8Array | Uint16Array, model: IccColorModel,
     bits: 8 | 16, alpha?: Uint8Array | Uint16Array | null): Uint8Array;
+  /** Precision-preserving TYPE_RGBA_16-equivalent conversion to straight sRGB RGBA16. */
+  transform16(profile: Uint8Array, input: Uint16Array, model: IccColorModel,
+    alpha?: Uint16Array | null): Uint16Array;
   createRgbProfile(chromaticities: Chromaticities, gamma: number, transfer?: 'gamma' | 'srgb'): Uint8Array;
   createGrayProfile(white: readonly [number, number], gamma: number): Uint8Array;
   createCmykProfile(): Uint8Array;
@@ -59,8 +62,8 @@ function makeLcms(module: Module): LittleCms {
       return module.HEAPU8.slice(pointer, pointer + written);
     } finally { arena.release(); }
   };
-  return {
-    transform(profile, input, model, bits, alpha = null) {
+  const transform = (profile: Uint8Array, input: Uint8Array | Uint16Array, model: IccColorModel,
+    bits: 8 | 16, outputBits: 8 | 16, alpha: Uint8Array | Uint16Array | null): Uint8Array | Uint16Array => {
       if (profile.byteLength === 0) throw new IccError('The embedded ICC profile is empty');
       const channels = CHANNELS[model], bytes = bits / 8;
       if (input.byteLength % (channels * bytes) !== 0) throw new RangeError('ICC input has an incomplete pixel');
@@ -74,21 +77,25 @@ function makeLcms(module: Module): LittleCms {
       let transform = 0;
       try {
         const profilePointer = arena.copy(profile);
-        transform = module._lcms_create_transform(profilePointer, profile.byteLength, MODEL[model], bits);
+        transform = module._lcms_create_transform(profilePointer, profile.byteLength, MODEL[model], bits, outputBits);
         if (!transform) throw new IccError(`The embedded ICC profile is invalid or is not ${model.toUpperCase()}`);
         const chunkPixels = Math.min(pixels, 1_048_576), inputStride = channels * bytes;
-        const inputPointer = arena.allocate(chunkPixels * inputStride), outputPointer = arena.allocate(chunkPixels * 3);
-        const rgba = new Uint8Array(pixels * 4), alphaMax = bits === 16 ? 65535 : 255;
+        const outputBytes = outputBits / 8, outputStride = 3 * outputBytes;
+        const inputPointer = arena.allocate(chunkPixels * inputStride), outputPointer = arena.allocate(chunkPixels * outputStride);
+        const rgba = outputBits === 16 ? new Uint16Array(pixels * 4) : new Uint8Array(pixels * 4);
+        const alphaMax = bits === 16 ? 65535 : 255, outputMax = outputBits === 16 ? 65535 : 255;
         const inputBytes = new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
         for (let first = 0; first < pixels; first += chunkPixels) {
           const count = Math.min(chunkPixels, pixels - first), byteOffset = first * inputStride;
           module.HEAPU8.set(inputBytes.subarray(byteOffset, byteOffset + count * inputStride), inputPointer);
           module._lcms_do_transform(transform, inputPointer, outputPointer, count);
-          const rgb = module.HEAPU8.subarray(outputPointer, outputPointer + count * 3);
+          const rgb = outputBits === 16
+            ? new Uint16Array(module.HEAPU8.buffer, outputPointer, count * 3)
+            : module.HEAPU8.subarray(outputPointer, outputPointer + count * 3);
           for (let pixel = 0, source = 0, target = first * 4; pixel < count; pixel++, source += 3, target += 4) {
             rgba[target] = rgb[source]!; rgba[target + 1] = rgb[source + 1]!; rgba[target + 2] = rgb[source + 2]!;
             rgba[target + 3] = alpha
-              ? Math.floor((alpha[first + pixel]! * 255 + Math.floor(alphaMax / 2)) / alphaMax) : 255;
+              ? Math.floor((alpha[first + pixel]! * outputMax + Math.floor(alphaMax / 2)) / alphaMax) : outputMax;
           }
         }
         return rgba;
@@ -96,6 +103,13 @@ function makeLcms(module: Module): LittleCms {
         if (transform) module._lcms_delete_transform(transform);
         arena.release();
       }
+    };
+  return {
+    transform(profile, input, model, bits, alpha = null) {
+      return transform(profile, input, model, bits, 8, alpha) as Uint8Array;
+    },
+    transform16(profile, input, model, alpha = null) {
+      return transform(profile, input, model, 16, 16, alpha) as Uint16Array;
     },
     createRgbProfile(chromaticities, gamma, transfer = 'gamma') {
       checkWhite(chromaticities.white);

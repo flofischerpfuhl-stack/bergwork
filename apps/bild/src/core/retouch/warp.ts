@@ -1,7 +1,8 @@
 import type { Point, Rect } from '../geometry';
 import { Raster } from '../raster';
+import type { PixelArray } from '../pixel/format';
 import type { DocumentSelection } from '../selection';
-import { RasterMapping, clampByte, selectionCoverage, unionRects, validPoint } from './common';
+import { RasterMapping, selectionCoverage, unionRects, validPoint } from './common';
 import type { LayerTransform } from '../geometry';
 
 export type WarpMode = 'smudge' | 'liquify';
@@ -90,14 +91,14 @@ export class WarpStroke implements RetouchStroke {
     const r = Math.ceil(this.diameter / 2), side = 2 * r + 1;
     this.carried = new Float32Array(side * side * 4);
     const local = this.mapping.pixelPoint(center), cx = Math.round(local.x), cy = Math.round(local.y);
-    const pixels = this.working.readRegion(cx - r, cy - r, side, side);
+    const pixels = this.working.readRegionNative(cx - r, cy - r, side, side);
     for (let i = 0; i < side * side; i++) this.readPremultiplied(pixels, i * 4, this.carried, i * 4);
   }
 
   private smudge(center: Point): Rect | null {
     const bounds = this.mapping.circleBounds(center, this.diameter / 2);
     if (!bounds) return null;
-    const data = this.working.readRegion(bounds.x, bounds.y, bounds.width, bounds.height);
+    const data = this.working.readRegionNative(bounds.x, bounds.y, bounds.width, bounds.height);
     const r = Math.ceil(this.diameter / 2), side = 2 * r + 1;
     const local = this.mapping.pixelPoint(center), cx = Math.round(local.x), cy = Math.round(local.y);
     for (let y = 0; y < bounds.height; y++) {
@@ -112,18 +113,18 @@ export class WarpStroke implements RetouchStroke {
         const ci = ((py - cy + r) * side + px - cx + r) * 4;
         if (ci < 0 || ci + 3 >= this.carried.length) continue;
         const di = (y * bounds.width + x) * 4;
-        const oldAlphaByte = data[di + 3]!, oldAlpha = oldAlphaByte / 255;
+        const oldAlphaByte = data[di + 3]!, oldAlpha = oldAlphaByte / this.original.maximum;
         const carriedAlpha = this.carried[ci + 3]!;
         const paintedAlpha = oldAlphaByte + (carriedAlpha - oldAlphaByte) * w;
         this.carried[ci + 3] = paintedAlpha + (carriedAlpha - paintedAlpha) * this.strength;
-        data[di + 3] = clampByte(paintedAlpha);
+        data[di + 3] = clampSample(paintedAlpha, this.original.maximum);
         if (paintedAlpha <= 0) { data[di] = 0; data[di + 1] = 0; data[di + 2] = 0; continue; }
         for (let k = 0; k < 3; k++) {
           const under = data[di + k]! * oldAlpha;
           const carried = this.carried[ci + k]!;
           const painted = under + (carried - under) * w;
           this.carried[ci + k] = painted + (carried - painted) * this.strength;
-          data[di + k] = clampByte(painted * 255 / paintedAlpha);
+          data[di + k] = clampSample(painted * this.original.maximum / paintedAlpha, this.original.maximum);
         }
       }
     }
@@ -137,7 +138,7 @@ export class WarpStroke implements RetouchStroke {
     const bounds = this.mapping.circleBounds(to, this.diameter / 2, margin);
     const paint = this.mapping.circleBounds(to, this.diameter / 2);
     if (!bounds || !paint) return null;
-    const source = this.working.readRegion(bounds.x, bounds.y, bounds.width, bounds.height);
+    const source = this.working.readRegionNative(bounds.x, bounds.y, bounds.width, bounds.height);
     const output = source.slice();
     const rgba = new Float32Array(4);
     for (let py = paint.y; py < paint.y + paint.height; py++) {
@@ -156,7 +157,7 @@ export class WarpStroke implements RetouchStroke {
     return paint;
   }
 
-  private samplePremultiplied(source: Uint8Array, bounds: Rect, x: number, y: number, out: Float32Array): void {
+  private samplePremultiplied(source: PixelArray, bounds: Rect, x: number, y: number, out: Float32Array): void {
     const sx = Math.min(bounds.x + bounds.width - 1, Math.max(bounds.x, x));
     const sy = Math.min(bounds.y + bounds.height - 1, Math.max(bounds.y, y));
     const x0 = Math.floor(sx), y0 = Math.floor(sy);
@@ -167,29 +168,33 @@ export class WarpStroke implements RetouchStroke {
     const i01 = ((y1 - bounds.y) * bounds.width + x0 - bounds.x) * 4;
     const i11 = ((y1 - bounds.y) * bounds.width + x1 - bounds.x) * 4;
     for (let k = 0; k < 4; k++) {
-      const p00 = k === 3 ? source[i00 + 3]! : source[i00 + k]! * source[i00 + 3]! / 255;
-      const p10 = k === 3 ? source[i10 + 3]! : source[i10 + k]! * source[i10 + 3]! / 255;
-      const p01 = k === 3 ? source[i01 + 3]! : source[i01 + k]! * source[i01 + 3]! / 255;
-      const p11 = k === 3 ? source[i11 + 3]! : source[i11 + k]! * source[i11 + 3]! / 255;
+      const p00 = k === 3 ? source[i00 + 3]! : source[i00 + k]! * source[i00 + 3]! / this.original.maximum;
+      const p10 = k === 3 ? source[i10 + 3]! : source[i10 + k]! * source[i10 + 3]! / this.original.maximum;
+      const p01 = k === 3 ? source[i01 + 3]! : source[i01 + k]! * source[i01 + 3]! / this.original.maximum;
+      const p11 = k === 3 ? source[i11 + 3]! : source[i11 + k]! * source[i11 + 3]! / this.original.maximum;
       const top = p00 + (p10 - p00) * fx;
       const bottom = p01 + (p11 - p01) * fx;
       out[k] = top + (bottom - top) * fy;
     }
   }
 
-  private readPremultiplied(source: Uint8Array, si: number, target: Float32Array, ti: number): void {
-    const alpha = source[si + 3]! / 255;
+  private readPremultiplied(source: PixelArray, si: number, target: Float32Array, ti: number): void {
+    const alpha = source[si + 3]! / this.original.maximum;
     target[ti] = source[si]! * alpha; target[ti + 1] = source[si + 1]! * alpha;
     target[ti + 2] = source[si + 2]! * alpha; target[ti + 3] = source[si + 3]!;
   }
 
-  private writePremultiplied(target: Uint8Array, ti: number, source: Float32Array, si: number): void {
-    const alpha = clampByte(source[si + 3]!);
+  private writePremultiplied(target: PixelArray, ti: number, source: Float32Array, si: number): void {
+    const alpha = clampSample(source[si + 3]!, this.original.maximum);
     target[ti + 3] = alpha;
     if (alpha === 0) { target[ti] = 0; target[ti + 1] = 0; target[ti + 2] = 0; return; }
-    const unpremultiply = 255 / alpha;
-    target[ti] = clampByte(source[si]! * unpremultiply);
-    target[ti + 1] = clampByte(source[si + 1]! * unpremultiply);
-    target[ti + 2] = clampByte(source[si + 2]! * unpremultiply);
+    const unpremultiply = this.original.maximum / alpha;
+    target[ti] = clampSample(source[si]! * unpremultiply, this.original.maximum);
+    target[ti + 1] = clampSample(source[si + 1]! * unpremultiply, this.original.maximum);
+    target[ti + 2] = clampSample(source[si + 2]! * unpremultiply, this.original.maximum);
   }
+}
+
+function clampSample(value: number, maximum: number): number {
+  return Math.min(maximum, Math.max(0, Math.round(value)));
 }

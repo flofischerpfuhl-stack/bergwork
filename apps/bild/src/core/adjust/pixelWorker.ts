@@ -13,7 +13,8 @@ function selection(value: SerializedSelection | null): DocumentSelection | null 
 scope.addEventListener('message', (event: MessageEvent<PixelWorkerRequest>) => {
   const request = event.data;
   try {
-    const raster = Raster.fromPixels(request.width, request.height, 4, request.pixels), selected = selection(request.selection);
+    const raster = Raster.fromPixels(request.width, request.height, 4, request.pixels, { format: request.format });
+    const selected = selection(request.selection);
     if (request.operation === 'histogram') {
       const bins = levelsHistogram(raster, request.transform, selected);
       const response: PixelWorkerResponse = { id: request.id, bins };
@@ -23,8 +24,9 @@ scope.addEventListener('message', (event: MessageEvent<PixelWorkerRequest>) => {
       ? { raster: adjustRaster(raster, request.transform, request.adjustment, selected), transform: request.transform }
       : applyFilter(request.kind, raster, request.transform, request.settings,
         { selection: selected, seed: request.seed, expand: request.expand });
-    const pixels = made.raster.toPixels();
-    const response: PixelWorkerResponse = { id: request.id, pixels, width: made.raster.width, height: made.raster.height, transform: made.transform };
+    const pixels = made.raster.toPixelsNative();
+    const response: PixelWorkerResponse = { id: request.id, pixels, format: made.raster.format,
+      width: made.raster.width, height: made.raster.height, transform: made.transform };
     scope.postMessage(response, [pixels.buffer]);
   } catch (cause) {
     const response: PixelWorkerResponse = { id: request.id, error: cause instanceof Error ? cause.message : String(cause) };

@@ -11,7 +11,6 @@ const corpus = qaCorpus();
 
 for (const item of corpus) {
   test(`QA import ${item.file}: size, orientation, colour and alpha match the reference`, async ({ page }) => {
-    test.fail(item.file === 'webp_lossless_alpha.webp', 'Known failure, owner: 16-bit lane (p2-16bit)');
     await mountBare(page);
     const got = await importAndRead(page, fs.readFileSync(path.join(QA_DIR, item.file)), item.file);
     expect(got.error, `import error for ${item.file}`).toBeUndefined();

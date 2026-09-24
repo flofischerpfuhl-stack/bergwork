@@ -97,15 +97,17 @@ export class SpotHealingStroke {
       const tile = coverage.tiles[row * coverage.cols + col];
       if (!tile) continue;
       const width = coverage.tileWidth(col), height = coverage.tileHeight(row);
-      const base = preview.readRegion(col * TILE, row * TILE, width, height);
+      const base = preview.readRegionNative(col * TILE, row * TILE, width, height);
+      const maximum = preview.maximum;
       for (let i = 0; i < width * height; i++) {
-        const amount = tile[i * 4 + 3]! / 255 * 0.45;
+        const amount = tile[i * 4 + 3]! / coverage.maximum * 0.45;
         if (amount <= 0) continue;
-        const p = i * 4, baseAlpha = base[p + 3]! / 255, alpha = amount + baseAlpha * (1 - amount);
-        base[p] = alpha ? Math.round((31 * amount + base[p]! * baseAlpha * (1 - amount)) / alpha) : 0;
-        base[p + 1] = alpha ? Math.round((31 * amount + base[p + 1]! * baseAlpha * (1 - amount)) / alpha) : 0;
-        base[p + 2] = alpha ? Math.round((31 * amount + base[p + 2]! * baseAlpha * (1 - amount)) / alpha) : 0;
-        base[p + 3] = Math.round(alpha * 255);
+        const p = i * 4, baseAlpha = base[p + 3]! / maximum, alpha = amount + baseAlpha * (1 - amount);
+        const wash = 31 / 255 * maximum;
+        base[p] = alpha ? Math.round((wash * amount + base[p]! * baseAlpha * (1 - amount)) / alpha) : 0;
+        base[p + 1] = alpha ? Math.round((wash * amount + base[p + 1]! * baseAlpha * (1 - amount)) / alpha) : 0;
+        base[p + 2] = alpha ? Math.round((wash * amount + base[p + 2]! * baseAlpha * (1 - amount)) / alpha) : 0;
+        base[p + 3] = Math.round(alpha * maximum);
       }
       preview = preview.withRegion(col * TILE, row * TILE, width, height, base);
     }
@@ -173,7 +175,19 @@ export class SpotHealingStroke {
     const healed = await this.kernels.spotHeal(region, regionCoverage, rw, rh, rw * 4,
       Math.min(1, Math.max(0, this.settings.opacity)), modeNumber(this.settings.mode),
       this.settings.seed ?? Math.floor(Math.random() * 0x1_0000_0000));
-    output = output.withRegion(rx, ry, rw, rh, unpremultiply(healed));
+    const straight = unpremultiply(healed);
+    if (output.format === 'rgba16') {
+      const native = output.readRegionNative(rx, ry, rw, rh) as Uint16Array;
+      // HealPixels.c mutates only nonzero coverage. Do the same on write-back so the RGBA8
+      // compatibility kernel cannot quantize the surrounding 16-bit search rectangle.
+      for (let i = 0; i < regionCoverage.length; i++) {
+        if (regionCoverage[i] === 0) continue;
+        const p = i * 4;
+        native[p] = straight[p]! * 257; native[p + 1] = straight[p + 1]! * 257;
+        native[p + 2] = straight[p + 2]! * 257; native[p + 3] = straight[p + 3]! * 257;
+      }
+      output = output.withRegion(rx, ry, rw, rh, native);
+    } else output = output.withRegion(rx, ry, rw, rh, straight);
     return healingResult(output, this.layer.transform, x0, y0, this.source.width, this.source.height);
   }
 }
@@ -313,7 +327,7 @@ function extractAlpha(raster: Raster): Uint8Array {
 
 function expandedRaster(source: Raster, width: number, height: number, offsetX: number, offsetY: number): Raster {
   if (width === source.width && height === source.height && offsetX === 0 && offsetY === 0) return source;
-  let result = Raster.blank(width, height, 4);
+  let result = Raster.blank(width, height, 4, { format: source.format });
   for (let row = 0; row < source.rows; row++) for (let col = 0; col < source.cols; col++) {
     const tile = source.tiles[row * source.cols + col];
     if (!tile) continue;

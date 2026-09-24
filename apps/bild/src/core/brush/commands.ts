@@ -238,7 +238,12 @@ export function finishBrushStroke(session: EditorSession): StrokeResult | null {
       value.active = null;
       const pending: PendingFinish = { active, promise: Promise.resolve(null), undoRequested: false };
       value.pending = pending;
-      pending.promise = worker.then((result) => settleBackgroundFinish(session, value, pending, result), () => null);
+      pending.promise = worker.then((result) => settleBackgroundFinish(session, value, pending, result), (cause: unknown) => {
+        if (value.pending === pending) value.pending = null;
+        session.errorMessage = cause instanceof Error ? cause.message : String(cause);
+        session.notify('ui');
+        return null;
+      });
       session.notify('ui');
       return null;
     }

@@ -55,7 +55,6 @@ async function strongLevels(page: Page): Promise<void> {
 }
 
 test('QA bug: strong Levels (⌘L) on a 16-bit ramp bands exactly like the 8-bit ramp', async ({ page, browser }) => {
-  test.fail(true, 'Known failure, owner: 16-bit lane (p2-16bit)');
   // The 8-bit reference runs in its own context: reloading this page would bring up the recovery prompt.
   const other = await browser.newContext({ baseURL: test.info().project.use.baseURL, viewport: { width: 1440, height: 900 } });
   const eightPage = await other.newPage();
@@ -149,7 +148,6 @@ const ops: [string, (page: Page) => Promise<void>][] = [
 ];
 for (const [name, run] of ops) {
   test(`QA 16-bit: ${name} keeps a 16-bit layer 16 bit`, async ({ page }) => {
-    test.fail(/Levels|Hue\/Saturation|Gaussian Blur|Brush/.test(name), 'Known failure, owner: 16-bit lane (p2-16bit)');
     await openRamp(page, 16, 512, 256);
     expect(await topRasterFormat(page)).toBe('rgba16');
     const revision = await page.evaluate(() => (window as any).__editorForTests.session.history.undoCount);
@@ -162,7 +160,6 @@ for (const [name, run] of ops) {
 
 for (const mode of ['Paint', 'Erase'] as const) {
   test(`QA bug: a brush stroke (${mode}) on an imported 16-bit layer is drawn on screen but silently discarded`, async ({ page }) => {
-    test.fail(true, 'Known failure, owner: 16-bit lane (p2-16bit)');
     await openRamp(page, 16, 512, 256);
     await page.getByTestId('tool-brush').click();
     if (mode === 'Erase') await page.getByTestId('context-bar').getByText('Erase', { exact: true }).click();
@@ -173,10 +170,10 @@ for (const mode of ['Paint', 'Erase'] as const) {
     await page.mouse.move(cx + 60, cy, { steps: 8 });
     await page.mouse.up();
     // Either the stroke is committed as an undo step, or the user is told why not; neither happens today.
-    await expect.poll(() => page.evaluate(() => {
+    await expect.poll(() => page.evaluate((expectedName) => {
       const s = (window as any).__editorForTests.session;
-      return s.history.pastNames.includes('Brush Stroke') || (window as any).__errors.length > 0;
-    }), { timeout: 10_000 }).toBe(true);
+      return s.history.pastNames.includes(expectedName) || (window as any).__errors.length > 0;
+    }, mode === 'Paint' ? 'Brush Stroke' : 'Erase'), { timeout: 10_000 }).toBe(true);
     const centre = await page.evaluate(() => {
       const s = (window as any).__editorForTests.session;
       const r = s.document.layers.at(-1).raster;

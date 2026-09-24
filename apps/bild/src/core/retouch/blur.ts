@@ -1,5 +1,6 @@
 import type { LayerTransform, Point, Rect } from '../geometry';
 import { Raster } from '../raster';
+import { makePixelArray, type PixelArray } from '../pixel/format';
 import type { DocumentSelection } from '../selection';
 import { RasterMapping, clampByte, selectionCoverage, unionRects, validPoint } from './common';
 import type { RetouchStroke } from './warp';
@@ -92,7 +93,7 @@ export class BlurStroke implements RetouchStroke {
     const boundary = this.original.channels === 1 ? maskBackground(this.original) : 0;
     const blurred = gaussianRegion(this.original, affected,
       this.sigma / Math.max(1e-9, scale.x), this.sigma / Math.max(1e-9, scale.y), boundary);
-    const base = this.original.readRegion(affected.x, affected.y, affected.width, affected.height);
+    const base = this.original.readRegionNative(affected.x, affected.y, affected.width, affected.height);
     const mask = this.coverage.readRegion(affected.x, affected.y, affected.width, affected.height);
     const channels = this.original.channels;
     for (let i = 0; i < mask.length; i++) {
@@ -100,7 +101,8 @@ export class BlurStroke implements RetouchStroke {
       if (amount <= 0) continue;
       const offset = i * channels;
       for (let channel = 0; channel < channels; channel++) {
-        base[offset + channel] = clampByte(base[offset + channel]! + (blurred[offset + channel]! - base[offset + channel]!) * amount);
+        base[offset + channel] = clampSample(base[offset + channel]!
+          + (blurred[offset + channel]! - base[offset + channel]!) * amount, this.original.maximum);
       }
     }
     this.working = this.working.withRegion(affected.x, affected.y, affected.width, affected.height, base);
@@ -117,13 +119,13 @@ export class BlurStroke implements RetouchStroke {
 }
 
 /** Separable Gaussian over one output region; RGBA is convolved premultiplied. */
-export function gaussianRegion(source: Raster, region: Rect, sigmaX: number, sigmaY: number, boundary = 0): Uint8Array {
+export function gaussianRegion(source: Raster, region: Rect, sigmaX: number, sigmaY: number, boundary = 0): PixelArray {
   const kx = gaussianKernel(sigmaX), ky = gaussianKernel(sigmaY);
   const rx = (kx.length - 1) >> 1, ry = (ky.length - 1) >> 1;
   const expandedX = region.x - rx, expandedY = region.y - ry;
   const expandedWidth = region.width + rx * 2, expandedHeight = region.height + ry * 2;
   const channels = source.channels;
-  let input: Uint8Array;
+  let input: PixelArray;
   if (channels === 1 && boundary !== 0
       && (expandedX < 0 || expandedY < 0 || expandedX + expandedWidth > source.width || expandedY + expandedHeight > source.height)) {
     input = new Uint8Array(expandedWidth * expandedHeight); input.fill(boundary);
@@ -134,7 +136,7 @@ export function gaussianRegion(source: Raster, region: Rect, sigmaX: number, sig
       for (let y = 0; y < y1 - y0; y++) input.set(inside.subarray(y * (x1 - x0), (y + 1) * (x1 - x0)),
         (y + y0 - expandedY) * expandedWidth + x0 - expandedX);
     }
-  } else input = source.readRegion(expandedX, expandedY, expandedWidth, expandedHeight);
+  } else input = source.readRegionNative(expandedX, expandedY, expandedWidth, expandedHeight);
   const horizontal = new Float32Array(region.width * expandedHeight * channels);
   for (let y = 0; y < expandedHeight; y++) {
     for (let x = 0; x < region.width; x++) {
@@ -142,7 +144,7 @@ export function gaussianRegion(source: Raster, region: Rect, sigmaX: number, sig
         const sx = x + rx + k, weight = kx[k + rx]!;
         const si = (y * expandedWidth + sx) * channels, hi = (y * region.width + x) * channels;
         if (channels === 4) {
-          const a = input[si + 3]! / 255;
+          const a = input[si + 3]! / source.maximum;
           horizontal[hi] = horizontal[hi]! + input[si]! * a * weight;
           horizontal[hi + 1] = horizontal[hi + 1]! + input[si + 1]! * a * weight;
           horizontal[hi + 2] = horizontal[hi + 2]! + input[si + 2]! * a * weight;
@@ -151,7 +153,7 @@ export function gaussianRegion(source: Raster, region: Rect, sigmaX: number, sig
       }
     }
   }
-  const output = new Uint8Array(region.width * region.height * channels);
+  const output = makePixelArray(source.format, region.width * region.height * channels);
   for (let y = 0; y < region.height; y++) {
     for (let x = 0; x < region.width; x++) {
       const oi = (y * region.width + x) * channels;
@@ -162,20 +164,25 @@ export function gaussianRegion(source: Raster, region: Rect, sigmaX: number, sig
           pr += horizontal[hi]! * weight; pg += horizontal[hi + 1]! * weight;
           pb += horizontal[hi + 2]! * weight; alpha += horizontal[hi + 3]! * weight;
         }
-        output[oi + 3] = clampByte(alpha);
+        output[oi + 3] = clampSample(alpha, source.maximum);
         if (alpha > 0) {
-          const unpremultiply = 255 / alpha;
-          output[oi] = clampByte(pr * unpremultiply); output[oi + 1] = clampByte(pg * unpremultiply);
-          output[oi + 2] = clampByte(pb * unpremultiply);
+          const unpremultiply = source.maximum / alpha;
+          output[oi] = clampSample(pr * unpremultiply, source.maximum);
+          output[oi + 1] = clampSample(pg * unpremultiply, source.maximum);
+          output[oi + 2] = clampSample(pb * unpremultiply, source.maximum);
         }
       } else {
         let value = 0;
         for (let k = -ry; k <= ry; k++) value += horizontal[(y + ry + k) * region.width + x]! * ky[k + ry]!;
-        output[oi] = clampByte(value);
+        output[oi] = clampSample(value, source.maximum);
       }
     }
   }
   return output;
+}
+
+function clampSample(value: number, maximum: number): number {
+  return Math.min(maximum, Math.max(0, Math.round(value)));
 }
 
 /** LayerMask.background(of:): black or white, whichever covers most of the outer edge. */

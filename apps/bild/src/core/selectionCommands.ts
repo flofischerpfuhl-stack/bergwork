@@ -353,7 +353,7 @@ function liftFloatingSelection(document: CanvasDocument, layer: Layer): { raster
   const x = Math.max(0, bounds.x), y = Math.max(0, bounds.y);
   const right = Math.min(document.width, bounds.x + bounds.width), bottom = Math.min(document.height, bounds.y + bounds.height);
   if (right <= x || bottom <= y) return null;
-  const width = right - x, height = bottom - y, out = new Uint8Array(width * height * 4);
+  const width = right - x, height = bottom - y, out = makePixelArray(source.format, width * height * 4);
   const toPixels = invert(pixelToDocument(layer.transform, source.width, source.height));
   let any = false;
   for (let py = 0; py < height; py++) for (let px = 0; px < width; px++) {
@@ -366,7 +366,7 @@ function liftFloatingSelection(document: CanvasDocument, layer: Layer): { raster
     out[offset + 2] = rasterByte(source, sx, sy, 2); out[offset + 3] = alpha;
     if (alpha) any = true;
   }
-  return any ? { raster: Raster.fromPixels(width, height, 4, out), origin: { x, y } } : null;
+  return any ? { raster: Raster.fromPixels(width, height, 4, out, { format: source.format }), origin: { x, y } } : null;
 }
 
 function clearLayerSelection(layer: Layer, selection: DocumentSelection): Layer {
@@ -379,14 +379,15 @@ function sameTransform(a: LayerTransform, b: LayerTransform): boolean {
     && a.rotation === b.rotation && a.flipX === b.flipX && a.flipY === b.flipY && a.sampling === b.sampling;
 }
 
-function sourceOver(destination: Uint8Array, offset: number, red: number, green: number, blue: number, alpha: number): void {
-  const sa = alpha / 255;
+function sourceOver(destination: PixelArray, offset: number, red: number, green: number, blue: number,
+  alpha: number, maximum: number): void {
+  const sa = alpha / maximum;
   if (sa === 0) return;
-  const da = destination[offset + 3]! / 255, outA = sa + da * (1 - sa);
+  const da = destination[offset + 3]! / maximum, outA = sa + da * (1 - sa);
   destination[offset] = Math.round((red * sa + destination[offset]! * da * (1 - sa)) / outA);
   destination[offset + 1] = Math.round((green * sa + destination[offset + 1]! * da * (1 - sa)) / outA);
   destination[offset + 2] = Math.round((blue * sa + destination[offset + 2]! * da * (1 - sa)) / outA);
-  destination[offset + 3] = Math.round(outA * 255);
+  destination[offset + 3] = Math.round(outA * maximum);
 }
 
 /** FloatingSelection.swift `FloatingMerge.merge`, nearest sampled in the CPU port. */
@@ -407,8 +408,8 @@ function mergeFloating(source: Layer, floating: Layer, edit: TransformEdit): { l
   const maxY = Math.ceil(Math.max(sourceRaster.height, ...floatingCorners.map((p) => p.y)));
   const width = maxX - minX, height = maxY - minY;
   if (width < 1 || height < 1 || width > 30_000 || height > 30_000 || width * height > 100_000_000) return null;
-  const out = new Uint8Array(width * height * 4);
-  const old = sourceRaster.toPixels();
+  const out = makePixelArray(sourceRaster.format, width * height * 4);
+  const old = sourceRaster.toPixelsNative();
   for (let y = 0; y < sourceRaster.height; y++) {
     const src = y * sourceRaster.width * 4, dst = ((y - minY) * width - minX) * 4;
     out.set(old.subarray(src, src + sourceRaster.width * 4), dst);
@@ -422,7 +423,7 @@ function mergeFloating(source: Layer, floating: Layer, edit: TransformEdit): { l
     const sx = Math.floor(fp.x), sy = Math.floor(fp.y);
     if (sx < 0 || sy < 0 || sx >= pixels.width || sy >= pixels.height) continue;
     sourceOver(out, (y * width + x) * 4, rasterByte(pixels, sx, sy), rasterByte(pixels, sx, sy, 1),
-      rasterByte(pixels, sx, sy, 2), rasterByte(pixels, sx, sy, 3));
+      rasterByte(pixels, sx, sy, 2), rasterByte(pixels, sx, sy, 3), sourceRaster.maximum);
   }
   const oldCenter = apply(sourceToDocument, { x: (minX + maxX) / 2, y: (minY + maxY) / 2 });
   const size = { width: width * source.transform.size.width / sourceRaster.width,
@@ -440,7 +441,7 @@ function mergeFloating(source: Layer, floating: Layer, edit: TransformEdit): { l
   const moved = edit.corners
     ? distortedSelection(originalSelection, info.original, edit.corners, info.pixelSize.width, info.pixelSize.height)
     : transformedSelection(originalSelection, info.original, edit.draft, info.pixelSize.width, info.pixelSize.height, document);
-  return { layer: { ...source, raster: Raster.fromPixels(width, height, 4, out), transform, mask }, selection: moved };
+  return { layer: { ...source, raster: Raster.fromPixels(width, height, 4, out, { format: sourceRaster.format }), transform, mask }, selection: moved };
 }
 
 function cancelFloating(session: EditorSession, edit: TransformEdit): void {
@@ -531,7 +532,8 @@ function liftPixels(document: CanvasDocument, layer: Layer, selection: DocumentS
   const mapped = integralRect(mappedRectBounds(selected, toPixels));
   const region = rectIntersection(mapped, { x: 0, y: 0, width: source.width, height: source.height });
   if (!region) return null;
-  const out = new Uint8Array(region.width * region.height * 4), toDocument = pixelToDocument(layer.transform, source.width, source.height);
+  const out = makePixelArray(source.format, region.width * region.height * 4);
+  const toDocument = pixelToDocument(layer.transform, source.width, source.height);
   let any = false;
   for (let y = 0; y < region.height; y++) for (let x = 0; x < region.width; x++) {
     const sx = region.x + x, sy = region.y + y, documentPoint = apply(toDocument, { x: sx + 0.5, y: sy + 0.5 });
@@ -541,7 +543,7 @@ function liftPixels(document: CanvasDocument, layer: Layer, selection: DocumentS
     out[offset + 2] = rasterByte(source, sx, sy, 2); out[offset + 3] = alpha;
     if (alpha) any = true;
   }
-  return any ? { raster: Raster.fromPixels(region.width, region.height, 4, out), rect: region } : null;
+  return any ? { raster: Raster.fromPixels(region.width, region.height, 4, out, { format: source.format }), rect: region } : null;
 }
 
 function sampleLifted(raster: Raster, x: number, y: number, smooth: boolean): [number, number, number, number] {
@@ -554,23 +556,23 @@ function sampleLifted(raster: Raster, x: number, y: number, smooth: boolean): [n
   const xs = [x0, x0 + 1, x0, x0 + 1], ys = [y0, y0, y0 + 1, y0 + 1];
   let alpha = 0, red = 0, green = 0, blue = 0;
   for (let i = 0; i < 4; i++) {
-    const a = rasterByte(raster, xs[i]!, ys[i]!, 3) / 255, weight = weights[i]!;
+    const a = rasterByte(raster, xs[i]!, ys[i]!, 3) / raster.maximum, weight = weights[i]!;
     alpha += a * weight; red += rasterByte(raster, xs[i]!, ys[i]!) * a * weight;
     green += rasterByte(raster, xs[i]!, ys[i]!, 1) * a * weight; blue += rasterByte(raster, xs[i]!, ys[i]!, 2) * a * weight;
   }
-  return alpha > 0 ? [Math.round(red / alpha), Math.round(green / alpha), Math.round(blue / alpha), Math.round(alpha * 255)] : [0, 0, 0, 0];
+  return alpha > 0 ? [Math.round(red / alpha), Math.round(green / alpha), Math.round(blue / alpha),
+    Math.round(alpha * raster.maximum)] : [0, 0, 0, 0];
 }
 
 function renderInPlacePixelMove(state: PixelMoveState, target: Rect, placed: Rect, toDocument: Affine): Raster {
   const source = state.originalRaster;
-  if (source.format === 'rgba16') throw new Error('The existing pixel-move kernel cannot edit rgba16 layers yet.');
-  const tiles = source.tiles as ReadonlyArray<Uint8Array | null>, mutable = new Map<number, Uint8Array>();
+  const tiles = source.tiles, mutable = new Map<number, PixelArray>();
   const outputTiles = tiles.slice();
-  const writable = (x: number, y: number): { tile: Uint8Array; offset: number } => {
+  const writable = (x: number, y: number): { tile: PixelArray; offset: number } => {
     const col = Math.floor(x / TILE), row = Math.floor(y / TILE), key = row * source.cols + col;
     let tile = mutable.get(key);
     if (!tile) {
-      tile = outputTiles[key]?.slice() ?? new Uint8Array(source.tileWidth(col) * source.tileHeight(row) * 4);
+      tile = outputTiles[key]?.slice() ?? makePixelArray(source.format, source.tileWidth(col) * source.tileHeight(row) * 4);
       mutable.set(key, tile); outputTiles[key] = tile;
     }
     return { tile, offset: ((y - row * TILE) * source.tileWidth(col) + x - col * TILE) * 4 };
@@ -592,10 +594,10 @@ function renderInPlacePixelMove(state: PixelMoveState, target: Rect, placed: Rec
     const rgba = sampleLifted(state.lifted, x + 0.5 - target.x, y + 0.5 - target.y, smooth);
     if (rgba[3] === 0) continue;
     const pixel = writable(x, y);
-    sourceOver(pixel.tile, pixel.offset, rgba[0], rgba[1], rgba[2], rgba[3]);
+    sourceOver(pixel.tile, pixel.offset, rgba[0], rgba[1], rgba[2], rgba[3], source.maximum);
   }
   for (const [key, tile] of mutable) if (!tile.some((value) => value !== 0)) outputTiles[key] = null;
-  return new Raster(source.width, source.height, 4, outputTiles);
+  return new Raster(source.width, source.height, 4, outputTiles, { format: source.format });
 }
 
 function renderPixelMove(session: EditorSession, state: PixelMoveState, offset: Point):
@@ -618,7 +620,7 @@ function renderPixelMove(session: EditorSession, state: PixelMoveState, offset: 
   if (placed && bounds.x === 0 && bounds.y === 0 && bounds.width === source.width && bounds.height === source.height) {
     return { raster: renderInPlacePixelMove(state, target, placed, toDocument), transform: state.originalTransform, bounds };
   }
-  const out = source.readRegion(bounds.x, bounds.y, bounds.width, bounds.height);
+  const out = source.readRegionNative(bounds.x, bounds.y, bounds.width, bounds.height);
   if (!state.duplicate) {
     for (let y = 0; y < state.liftedRect.height; y++) for (let x = 0; x < state.liftedRect.width; x++) {
       const sx = state.liftedRect.x + x, sy = state.liftedRect.y + y;
@@ -637,10 +639,10 @@ function renderPixelMove(session: EditorSession, state: PixelMoveState, offset: 
     for (let sy = draw.y; sy < draw.y + draw.height; sy++) for (let sx = draw.x; sx < draw.x + draw.width; sx++) {
       const rgba = sampleLifted(state.lifted, sx + 0.5 - target.x, sy + 0.5 - target.y, smooth);
       const ox = sx - bounds.x, oy = sy - bounds.y;
-      sourceOver(out, (oy * bounds.width + ox) * 4, rgba[0], rgba[1], rgba[2], rgba[3]);
+      sourceOver(out, (oy * bounds.width + ox) * 4, rgba[0], rgba[1], rgba[2], rgba[3], source.maximum);
     }
   }
-  return { raster: Raster.fromPixels(bounds.width, bounds.height, 4, out),
+  return { raster: Raster.fromPixels(bounds.width, bounds.height, 4, out, { format: source.format }),
     transform: transformForPixelBounds(state.originalTransform, source.width, source.height, bounds), bounds };
 }
 
@@ -648,7 +650,7 @@ function renderPixelMove(session: EditorSession, state: PixelMoveState, offset: 
 export function beginPixelMove(session: EditorSession, duplicate = false): boolean {
   if (pixelMoves.has(session) || session.isMaskSelected || !canEditPixels(session)) return false;
   const document = session.document, layer = session.activeLayer, selection = session.selection;
-  if (!document || !layer?.raster || layer.raster.format === 'rgba16' || !selection || selectionIsEmpty(selection)) return false;
+  if (!document || !layer?.raster || !selection || selectionIsEmpty(selection)) return false;
   const lifted = liftPixels(document, layer, selection); if (!lifted) return false;
   pixelMoves.set(session, { layerId: layer.id, duplicate, origin: selection, originalRaster: layer.raster,
     originalTransform: layer.transform, lifted: lifted.raster, liftedRect: lifted.rect, offset: { x: 0, y: 0 },
