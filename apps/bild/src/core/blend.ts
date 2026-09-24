@@ -14,6 +14,10 @@ import type { BlendMode } from './document';
 
 export type RGB = readonly [number, number, number];
 
+export const SPECIAL_FILL_BLEND_MODES: ReadonlySet<BlendMode> = new Set([
+  'colorBurn', 'linearBurn', 'colorDodge', 'linearDodge', 'vividLight', 'linearLight', 'hardMix', 'difference',
+]);
+
 export function clamp01(value: number): number { return Math.min(1, Math.max(0, value)); }
 
 export function srgbToLinear(value: number): number {
@@ -193,6 +197,93 @@ export function compositePremultiplied(backdrop: Float32Array, offset: number,
   backdrop[offset + 1] = sg * (1 - ba) + bg * (1 - sa) + both * scratch[1]!;
   backdrop[offset + 2] = sb * (1 - ba) + bb * (1 - sa) + both * scratch[2]!;
   backdrop[offset + 3] = sa + ba - both;
+}
+
+/**
+ * Photoshop Fill: ordinary modes compound alpha; its eight special modes fade the blend kernel
+ * itself while Fill scales only alpha growth/source-only colour. The integer kernels are calibrated
+ * from the psd-tools oracle corpus; layer effects will be composited separately once rendered.
+ */
+export function compositePremultipliedWithFill(backdrop: Float32Array, offset: number,
+  sr: number, sg: number, sb: number, sa: number, coverage: number, opacity: number, fillOpacity: number,
+  mode: BlendMode, scratch = new Float64Array(6), noise = 0): void {
+  coverage = clamp01(coverage); opacity = clamp01(opacity); fillOpacity = clamp01(fillOpacity);
+  if (sa <= 0 || coverage <= 0 || opacity <= 0 || fillOpacity <= 0) return;
+  if (!SPECIAL_FILL_BLEND_MODES.has(mode) || fillOpacity >= 1) {
+    const factor = coverage * opacity * fillOpacity;
+    compositePremultiplied(backdrop, offset, sr * factor, sg * factor, sb * factor, sa * factor,
+      mode, false, scratch, noise);
+    return;
+  }
+  const inverseAlpha = 1 / sa;
+  compositeSpecialFill(backdrop, offset, sr * inverseAlpha, sg * inverseAlpha, sb * inverseAlpha,
+    sa * coverage, opacity, fillOpacity, mode, scratch);
+}
+
+function compositeSpecialFill(backdrop: Float32Array, offset: number, sr: number, sg: number, sb: number,
+  sourceCoverage: number, opacity: number, fill: number, mode: BlendMode, scratch: Float64Array): void {
+  const ba = clamp01(backdrop[offset + 3]!);
+  const br = ba > 0 ? clamp01(backdrop[offset]! / ba) : 0;
+  const bg = ba > 0 ? clamp01(backdrop[offset + 1]! / ba) : 0;
+  const bb = ba > 0 ? clamp01(backdrop[offset + 2]! / ba) : 0;
+  const sr8 = byte(sr), sg8 = byte(sg), sb8 = byte(sb);
+  const br8 = byte(br), bg8 = byte(bg), bb8 = byte(bb);
+  const fillByte = Math.round(fill * 255);
+  scratch[0] = specialFillChannel(mode, sr8, br8, fill, fillByte);
+  scratch[1] = specialFillChannel(mode, sg8, bg8, fill, fillByte);
+  scratch[2] = specialFillChannel(mode, sb8, bb8, fill, fillByte);
+  const effective = sourceCoverage * fill * opacity;
+  const overlap = sourceCoverage * opacity;
+  const alpha = effective + ba * (1 - effective);
+  backdrop[offset] = sr * effective * (1 - ba) + scratch[0]! * overlap * ba + br * ba * (1 - overlap);
+  backdrop[offset + 1] = sg * effective * (1 - ba) + scratch[1]! * overlap * ba + bg * ba * (1 - overlap);
+  backdrop[offset + 2] = sb * effective * (1 - ba) + scratch[2]! * overlap * ba + bb * ba * (1 - overlap);
+  backdrop[offset + 3] = alpha;
+}
+
+function byte(value: number): number { return Math.round(clamp01(value) * 255); }
+function specialFillChannel(mode: BlendMode, source: number, destination: number, fill: number,
+  fillByte: number): number {
+  if (mode === 'vividLight') return vividFill(source, destination, fillByte) / 255;
+  if (mode === 'linearLight') return linearLightFill(source, destination, fillByte) / 255;
+  if (mode === 'hardMix') return hardMixFill(source, destination, fillByte) / 255;
+  const neutral = mode === 'colorBurn' || mode === 'linearBurn' ? 255 : 0;
+  const adjusted = neutral + (source - neutral) * fill;
+  if (mode === 'colorBurn') {
+    const quotient = adjusted <= 0 ? 256 : Math.floor((255 - destination) * 256 / adjusted);
+    return Math.max(0, Math.min(255, 255 - quotient)) / 255;
+  }
+  if (mode === 'colorDodge') {
+    const divisor = 256 - adjusted;
+    const value = divisor <= 0 ? 255 : Math.round(destination * 256 / divisor);
+    return Math.max(0, Math.min(255, value)) / 255;
+  }
+  return channel(mode, destination / 255, byte(adjusted / 255) / 255);
+}
+function nearest(numerator: number, denominator: number): number {
+  return Math.floor((2 * numerator + denominator) / (2 * denominator));
+}
+function linearLightFill(source: number, destination: number, fill: number): number {
+  if (fill <= 0) return destination;
+  return Math.max(0, Math.min(255, destination + nearest((2 * source - 255) * fill, 255) - 1));
+}
+function vividFill(source: number, destination: number, fill: number): number {
+  if (fill <= 0) return destination;
+  if (source >= 128) {
+    const doubled = nearest((source - 128) * 255, 127);
+    const divisor = 255 - nearest(doubled * fill, 255);
+    return divisor <= 0 ? 255 : Math.min(255, nearest(destination * 255, divisor));
+  }
+  const doubled = 255 - nearest((255 - nearest(source * 255, 128)) * fill, 255);
+  const numerator = destination + doubled - 255;
+  if (numerator <= 0 || doubled <= 0) return 0;
+  return Math.min(255, Math.floor((2 * numerator * 255 + doubled - 1) / (2 * doubled)));
+}
+function hardMixFill(source: number, destination: number, fill: number): number {
+  const faded = fill - (fill >= 128 ? 1 : 0);
+  if (faded <= 0) return destination;
+  const anchor = nearest((255 - source) * faded, 255);
+  return Math.max(0, Math.min(255, nearest((destination - anchor) * 255, 255 - faded)));
 }
 
 /** Stable 0...254 dissolve threshold for a document pixel and layer seed; mirrored in shaders.ts. */

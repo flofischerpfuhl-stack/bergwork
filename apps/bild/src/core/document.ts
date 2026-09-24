@@ -67,7 +67,7 @@ export function masksEqual(a: LayerMask | null, b: LayerMask | null): boolean {
 }
 
 export function layersEqual(a: Layer, b: Layer): boolean {
-  return a === b || (a.id === b.id && a.name === b.name && a.visible === b.visible && a.locked === b.locked
+  return a === b || (a.id === b.id && a.name === b.name && a.visible === b.visible
     && transformsEqual(a.transform, b.transform) && a.raster === b.raster && a.parentId === b.parentId
     && a.opacity === b.opacity && a.blendMode === b.blendMode && masksEqual(a.mask, b.mask)
     && a.kind === b.kind && (a.fillOpacity ?? 1) === (b.fillOpacity ?? 1) && jsonEqual(a.locks, b.locks)
@@ -111,6 +111,7 @@ export interface NewLayerFields {
   transform: LayerTransform;
   kind?: Layer['kind'];
   visible?: boolean;
+  /** Read-only compatibility input. Live layers use `locks` as their sole lock state. */
   locked?: boolean;
   parentId?: string | null;
   opacity?: number;
@@ -140,11 +141,12 @@ export interface NewLayerFields {
 
 export function newLayer(fields: NewLayerFields): import('./model').ModelLayer {
   const kind = fields.kind ?? (fields.adjustment ? 'adjustment' : fields.sourceShape ? 'vector' : 'pixel');
+  const locks = fields.locks ?? { transparency: false, pixels: false, position: false, all: fields.locked ?? false };
   const base = {
     id: fields.id, name: fields.name, transform: fields.transform,
-    visible: fields.visible ?? true, locked: fields.locked ?? false, parentId: fields.parentId ?? null,
+    visible: fields.visible ?? true, locked: locks.all, parentId: fields.parentId ?? null,
     opacity: fields.opacity ?? 1, fillOpacity: fields.fillOpacity ?? 1,
-    blendMode: 'normal' as const, locks: { transparency: false, pixels: false, position: false, all: false },
+    blendMode: 'normal' as const, locks,
     colorLabel: 'none' as const, warp: null, crop: null, mask: null, vectorMask: null,
     maskSourceId: null, effects: [], filters: [],
     ...pickCommon(fields), kind,
@@ -180,7 +182,6 @@ export function withLayerRaster(layer: Layer, raster: import('./raster').Raster,
 function pickCommon(fields: NewLayerFields): Partial<import('./model').LayerCommon> {
   return {
     ...(fields.visible === undefined ? {} : { visible: fields.visible }),
-    ...(fields.locked === undefined ? {} : { locked: fields.locked }),
     ...(fields.parentId === undefined ? {} : { parentId: fields.parentId }),
     ...(fields.opacity === undefined ? {} : { opacity: fields.opacity }),
     ...(fields.fillOpacity === undefined ? {} : { fillOpacity: fields.fillOpacity }),

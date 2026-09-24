@@ -163,6 +163,7 @@ export function beginGradient(session: EditorSession, point: Point,
     return true;
   }
   if (!session.canEditLayers || session.selectedLayerIds.size !== 1) return false;
+  if (session.editBlocker(layer.id, 'pixels')) return false;
   const document = session.document;
   if (!document) return false;
   const target = editableTarget(layer, session.isMaskSelected, { width: document.width, height: document.height });
@@ -226,10 +227,12 @@ export function commitGradient(session: EditorSession): boolean {
   pending.delete(session);
   if (active.mask) session.replaceMaskPixels(active.layerId, raster, name);
   else {
+    const constrained = session.constrainLayerPixels(active.layerId, raster, active.edit.transform);
+    if (!constrained) return false;
     session.beginEdit(name);
     const document = session.document;
     if (document) session.replaceDocument({ ...document, layers: document.layers.map((item) => item.id === active.layerId
-      ? withLayerRaster(item, raster, active.edit.transform) : item) });
+      ? withLayerRaster(item, constrained, active.edit.transform) : item) });
     session.endEdit();
   }
   return true;

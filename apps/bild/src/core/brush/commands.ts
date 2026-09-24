@@ -291,12 +291,15 @@ function commitResult(session: EditorSession, active: ActiveStroke, result: Stro
     if (!oldMask) return;
     layers[index] = { ...current, mask: { ...oldMask, raster: result.raster } };
   } else {
+    const transform = result.transform ?? current.transform;
+    const constrained = session.constrainLayerPixels(current.id, result.raster, transform);
+    if (!constrained) return;
     let mask = current.mask;
-    if (mask && !mask.placement && result.transform && (result.raster.width !== current.raster?.width
-      || result.raster.height !== current.raster?.height)) {
-      mask = expandAttachedMask(mask, result);
+    if (mask && !mask.placement && result.transform && (constrained.width !== current.raster?.width
+      || constrained.height !== current.raster?.height)) {
+      mask = expandAttachedMask(mask, { ...result, raster: constrained });
     }
-    layers[index] = { ...current, raster: result.raster, transform: result.transform ?? current.transform, mask };
+    layers[index] = { ...current, raster: constrained, transform, mask };
   }
   session.beginEdit(active.name);
   session.replaceDocument({ ...document!, layers });
@@ -318,7 +321,8 @@ pendingUndoHandlers.push((session) => {
 });
 
 function canPaint(session: EditorSession, layer: Layer | null, document: CanvasDocument | null): boolean {
-  if (!document || !layer || !session.canEditLayers || session.selectedLayerIds.size !== 1 || layer.locked) return false;
+  if (!document || !layer || !session.canEditLayers || session.selectedLayerIds.size !== 1
+    || session.editBlocker(layer.id, 'pixels')) return false;
   if (!effectiveVisibleIds(document.layers).has(layer.id)) return false;
   if (session.isMaskSelected) return !!layer.mask?.enabled;
   if (layer.kind === 'group' || layer.adjustment) return false;

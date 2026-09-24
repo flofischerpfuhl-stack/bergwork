@@ -58,7 +58,8 @@ export function contentFillState(session: EditorSession): ContentFillState | nul
 export function canContentAwareFill(session: EditorSession): boolean {
   const layer = session.activeLayer, selection = session.selection;
   return !states.has(session) && session.canEditLayers && session.selectedLayerIds.size === 1 && !session.isMaskSelected
-    && !!layer && layer.kind !== 'group' && !layer.adjustment && !layer.locked && !!layer.raster && layer.raster.channels === 4
+    && !!layer && layer.kind !== 'group' && !layer.adjustment && !session.editBlocker(layer.id, 'pixels')
+    && !!layer.raster && layer.raster.channels === 4
     && effectiveVisibleIds(session.document!.layers).has(layer.id) && !!selection && !selectionIsEmpty(selection);
 }
 
@@ -147,14 +148,16 @@ export async function applyContentAwareFill(session: EditorSession): Promise<boo
   }
   state.phase = 'applying'; session.isProjectBusy = true; session.notify('ui');
   try {
+    const constrained = session.constrainLayerPixels(current.id, state.previewRaster, state.grownTransform);
+    if (!constrained) return false;
     let mask = current.mask;
     if (mask && !mask.placement && (mask.raster.width > 1 || mask.raster.height > 1)
-      && (state.previewRaster.width !== state.originalRaster.width || state.previewRaster.height !== state.originalRaster.height)) {
-      mask = carryAttachedMask(mask, state.previewRaster.width, state.previewRaster.height, state.sourceRect,
+      && (constrained.width !== state.originalRaster.width || constrained.height !== state.originalRaster.height)) {
+      mask = carryAttachedMask(mask, constrained.width, constrained.height, state.sourceRect,
         state.originalRaster.width, state.originalRaster.height);
     }
     const layers = document!.layers.slice();
-    layers[index] = { ...current, raster: state.previewRaster, transform: state.grownTransform, mask };
+    layers[index] = { ...current, raster: constrained, transform: state.grownTransform, mask };
     session.rasterOverrides.delete(state.layerId);
     session.adjustmentEditingId = null;
     session.beginEdit('Content-Aware Fill'); session.replaceDocument({ ...document!, layers }); session.endEdit();

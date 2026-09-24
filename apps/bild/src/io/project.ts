@@ -159,7 +159,7 @@ export function buildManifest(document: CanvasDocument, name: string, activeLaye
     const kind: LayerRecord['kind'] = layer.kind === 'group' ? 'group' : layer.kind === 'adjustment' ? 'adjustment'
       : layer.kind === 'vector' && layer.sourceShape ? 'shape' : 'raster';
     const record: LayerRecord = {
-      id: layer.id, parentId: layer.parentId, name: layer.name, kind, visible: layer.visible, locked: layer.locked,
+      id: layer.id, parentId: layer.parentId, name: layer.name, kind, visible: layer.visible, locked: layer.locks.all,
       opacity: layer.opacity, blendMode: layer.blendMode,
       transform: matrix(layer.transform, layerPixelWidth(layer), layerPixelHeight(layer)),
       clippedToBelow: layer.maskSourceId !== null,
@@ -225,8 +225,8 @@ function v2Layer(layer: Layer, context: V2BuildContext): LayerRecordV2 {
   const common: LayerCommonV2 = {
     id: layer.id, parentId: layer.parentId, name: layer.name, visible: layer.visible, opacity: layer.opacity,
     fillOpacity: layer.fillOpacity ?? 1, blendMode: layer.blendMode,
-    locks: layer.locks ?? { transparency: false, pixels: layer.locked, position: false, all: layer.locked },
-    colorLabel: layer.colorLabel ?? 'none', transform: layer.transform, warp: layer.warp ?? null, crop: layer.crop ?? null,
+    locks: layer.locks,
+    colorLabel: layer.colorLabel, transform: layer.transform, warp: layer.warp ?? null, crop: layer.crop ?? null,
     mask: layer.mask ? { assetId: addV2Asset(context, layer.mask.raster, 'mask'), transform: layer.mask.placement,
       linked: layer.mask.linked, enabled: layer.mask.enabled } : null,
     vectorMask: layer.vectorMask ?? null, clippedTo: layer.maskSourceId,
@@ -683,7 +683,7 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
       const mask = record.mask && maskRaster ? { raster: maskRaster, enabled: record.mask.enabled,
         linked: record.mask.linked, placement: record.mask.transform } : null;
       const common = {
-        id: record.id, name: record.name, visible: record.visible !== false, locked: record.locks.all,
+        id: record.id, name: record.name, visible: record.visible !== false,
         parentId: record.parentId, opacity: record.opacity, fillOpacity: record.fillOpacity,
         blendMode: record.blendMode as BlendMode, locks: record.locks, colorLabel: record.colorLabel,
         transform: record.transform, warp: record.warp, crop: record.crop, raster, mask,

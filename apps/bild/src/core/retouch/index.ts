@@ -1,6 +1,5 @@
 import type { Point, Rect } from '../geometry';
 import type { EditorSession } from '../session';
-import { withLayerRaster } from '../document';
 import { BlurStroke, type BlurSettings } from './blur';
 import { editableTarget } from './common';
 import { WarpStroke, type RetouchStroke, type WarpMode, type WarpSettings } from './warp';
@@ -26,7 +25,7 @@ export function beginRetouch(session: EditorSession, point: Point, mode: Retouch
   const layer = session.activeLayer;
   if (!session.canEditLayers || session.selectedLayerIds.size !== 1 || !layer
       || (!session.isMaskSelected && (layer.kind === 'group' || layer.adjustment))
-      || (mode !== 'blur' && session.isMaskSelected)) return [];
+      || (mode !== 'blur' && session.isMaskSelected) || session.editBlocker(layer.id, 'pixels')) return [];
   const document = session.document;
   if (!document) return [];
   const target = editableTarget(layer, session.isMaskSelected, { width: document.width, height: document.height });
@@ -62,13 +61,7 @@ export function commitRetouch(session: EditorSession): boolean {
   const raster = active.stroke.finish();
   const name = active.mode[0]!.toUpperCase() + active.mode.slice(1);
   if (active.mask) session.replaceMaskPixels(active.layerId, raster, name);
-  else {
-    session.beginEdit(name);
-    const document = session.document;
-    if (document) session.replaceDocument({ ...document, layers: document.layers.map((item) => item.id === active.layerId
-      ? withLayerRaster(item, raster, active.transform) : item) });
-    session.endEdit();
-  }
+  else session.replaceLayerPixels(active.layerId, raster, name, active.transform);
   return true;
 }
 

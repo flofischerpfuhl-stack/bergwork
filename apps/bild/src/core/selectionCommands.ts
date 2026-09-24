@@ -89,6 +89,7 @@ export function canEditPixels(session: EditorSession): boolean {
   const document = session.document, layer = session.activeLayer;
   if (!document || !layer || !session.canEditLayers || session.selectedLayerIds.size !== 1) return false;
   if (!effectiveVisibleIds(document.layers).has(layer.id)) return false;
+  if (session.editBlocker(layer.id, 'pixels')) return false;
   return session.isMaskSelected ? !!layer.mask?.enabled : layer.kind !== 'group';
 }
 
@@ -97,6 +98,7 @@ export function canInvertPixels(session: EditorSession): boolean {
   if (!document || !layer || session.isProjectBusy || session.isImporting || session.renamingLayerId !== null
     || session.selectedLayerIds.size !== 1 || !effectiveVisibleIds(document.layers).has(layer.id)
     || session.selection && selectionIsEmpty(session.selection)) return false;
+  if (session.editBlocker(layer.id, 'pixels')) return false;
   return session.isMaskSelected ? !!layer.mask?.enabled : layer.kind !== 'group' && !!layer.raster;
 }
 

@@ -16,7 +16,8 @@ export type AdjustmentCommandRegistry = Record<AdjustmentCommandName, Adjustment
 function canAdjust(session: EditorSession): boolean {
   const layer = session.activeLayer;
   return session.canEditLayers && session.selectedLayerIds.size === 1 && !!layer?.raster && !layer.adjustment
-    && !session.isMaskSelected && !levelsEditState(session) && !hueSaturationEditState(session) && !filterEditState(session);
+    && !session.isMaskSelected && !session.editBlocker(layer.id, 'pixels')
+    && !levelsEditState(session) && !hueSaturationEditState(session) && !filterEditState(session);
 }
 function filter(session: EditorSession, kind: Parameters<typeof beginFilterEdit>[1]): AdjustmentCommand {
   return { enabled: () => canAdjust(session), run: () => { beginFilterEdit(session, kind); } };
@@ -31,6 +32,7 @@ export function adjustmentCommands(session: EditorSession): AdjustmentCommandReg
     invert: { enabled: () => {
       const layer = session.activeLayer;
       return session.canEditLayers && session.selectedLayerIds.size === 1 && !!layer
+        && !session.editBlocker(layer.id, 'pixels')
         && (session.isMaskSelected ? !!layer.mask : !!layer.raster && !layer.adjustment);
     }, run: () => {
       const layer = session.activeLayer; if (!layer) return;
@@ -40,7 +42,8 @@ export function adjustmentCommands(session: EditorSession): AdjustmentCommandReg
     } },
     gaussianBlur: filter(session, 'Gaussian Blur'), motionBlur: filter(session, 'Motion Blur'),
     noise: filter(session, 'Add Noise'), lensCorrection: filter(session, 'Lens Correction'),
-    editAdjustment: { enabled: () => !!session.activeLayer?.adjustment && !adjustmentLayerEditState(session),
+    editAdjustment: { enabled: () => !!session.activeLayer?.adjustment
+      && !session.editBlocker(session.activeLayer.id, 'appearance') && !adjustmentLayerEditState(session),
       run: () => { beginAdjustmentLayerEdit(session); } },
     // A submenu command has no single kind to run; UI invokes session.addAdjustment(kind).
     adjustmentLayers: { enabled: () => session.canEditLayers && !!session.document

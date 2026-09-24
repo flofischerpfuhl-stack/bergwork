@@ -141,6 +141,71 @@ vec4 composite(int mode, vec4 dst, vec4 src, ivec2 documentPixel, int seed) {
   return vec4(co, ao);
 }
 
+bool specialFillMode(int mode) {
+  return mode == 4 || mode == 5 || mode == 9 || mode == 10 || mode == 15 || mode == 16 || mode == 18 || mode == 19;
+}
+float halfUp(float numerator, float denominator) { return floor(numerator / denominator + 0.5); }
+float linearLightFill(float s, float d, float fill) {
+  if (fill <= 0.0) return d;
+  return clamp(d + halfUp((2.0 * s - 255.0) * fill, 255.0) - 1.0, 0.0, 255.0);
+}
+float vividFill(float s, float d, float fill) {
+  if (fill <= 0.0) return d;
+  if (s >= 128.0) {
+    float doubled = halfUp((s - 128.0) * 255.0, 127.0);
+    float divisor = 255.0 - halfUp(doubled * fill, 255.0);
+    return divisor <= 0.0 ? 255.0 : min(255.0, halfUp(d * 255.0, divisor));
+  }
+  float doubled = 255.0 - halfUp((255.0 - halfUp(s * 255.0, 128.0)) * fill, 255.0);
+  float numerator = d + doubled - 255.0;
+  if (numerator <= 0.0 || doubled <= 0.0) return 0.0;
+  return min(255.0, floor((2.0 * numerator * 255.0 + doubled - 1.0) / (2.0 * doubled)));
+}
+float hardMixFill(float s, float d, float fill) {
+  float faded = fill - (fill >= 128.0 ? 1.0 : 0.0);
+  if (faded <= 0.0) return d;
+  float anchor = halfUp((255.0 - s) * faded, 255.0);
+  return clamp(halfUp((d - anchor) * 255.0, 255.0 - faded), 0.0, 255.0);
+}
+vec4 compositeFill(int mode, vec4 dst, vec4 sampled, float coverage, float opacity, float fill,
+  ivec2 documentPixel, int seed) {
+  if (!specialFillMode(mode) || fill >= 1.0) {
+    return composite(mode, dst, sampled * (coverage * opacity * fill), documentPixel, seed);
+  }
+  if (sampled.a <= 0.0 || coverage <= 0.0 || opacity <= 0.0 || fill <= 0.0) return dst;
+  float ab = dst.a;
+  vec3 source = floor(clamp(sampled.rgb / sampled.a, 0.0, 1.0) * 255.0 + 0.5);
+  vec3 destination = ab > 0.0 ? floor(clamp(dst.rgb / ab, 0.0, 1.0) * 255.0 + 0.5) : vec3(0.0);
+  float fb = floor(clamp(fill, 0.0, 1.0) * 255.0 + 0.5);
+  vec3 blended;
+  if (mode == 15) blended = vec3(vividFill(source.r, destination.r, fb), vividFill(source.g, destination.g, fb), vividFill(source.b, destination.b, fb));
+  else if (mode == 16) blended = vec3(linearLightFill(source.r, destination.r, fb), linearLightFill(source.g, destination.g, fb), linearLightFill(source.b, destination.b, fb));
+  else if (mode == 18) blended = vec3(hardMixFill(source.r, destination.r, fb), hardMixFill(source.g, destination.g, fb), hardMixFill(source.b, destination.b, fb));
+  else {
+    bool whiteNeutral = mode == 4 || mode == 5;
+    vec3 adjustedFloat = mix(whiteNeutral ? vec3(255.0) : vec3(0.0), source, fill);
+    vec3 adjusted = floor(clamp(adjustedFloat, 0.0, 255.0) + 0.5);
+    blended = blendColor(mode, destination / 255.0, adjusted / 255.0) * 255.0;
+    if (mode == 4) {
+      vec3 quotient = floor((255.0 - destination) * 256.0 / max(adjustedFloat, vec3(1e-30)));
+      blended = clamp(255.0 - mix(quotient, vec3(256.0), lessThanEqual(adjustedFloat, vec3(0.0))), 0.0, 255.0);
+    } else if (mode == 9) {
+      vec3 divisor = 256.0 - adjustedFloat;
+      vec3 value = floor(destination * 256.0 / max(divisor, vec3(1e-30)) + 0.5);
+      blended = clamp(mix(value, vec3(255.0), lessThanEqual(divisor, vec3(0.0))), 0.0, 255.0);
+    }
+  }
+  vec3 straightSource = source / 255.0, straightDestination = destination / 255.0;
+  blended /= 255.0;
+  float sourceCoverage = sampled.a * coverage;
+  float effective = sourceCoverage * fill * opacity;
+  float overlap = sourceCoverage * opacity;
+  float outputAlpha = effective + ab * (1.0 - effective);
+  vec3 outputColor = straightSource * effective * (1.0 - ab) + blended * overlap * ab
+    + straightDestination * ab * (1.0 - overlap);
+  return vec4(outputColor, outputAlpha);
+}
+
 vec4 fetchClamped(sampler2D t, ivec2 p, ivec2 size) {
   return texelFetch(t, clamp(p, ivec2(0), size - 1), 0);
 }
@@ -193,6 +258,7 @@ uniform int uRestrictBounds;
 uniform vec2 uDrawOrigin;
 uniform vec2 uDrawSize;
 uniform float uOpacity;
+uniform float uFillOpacity;
 uniform int uMode;
 uniform int uDissolveSeed;
 uniform int uHasMask;
@@ -221,12 +287,15 @@ void main() {
     return;
   }
   vec2 chunkPixel = lp - uChunkOrigin + vec2(uApron);
-  vec4 src = sampleGrid(uLayer, chunkPixel, ivec2(uTextureSize), uSampling, uMipLevel) * (cover * uOpacity);
+  vec4 sampled = sampleGrid(uLayer, chunkPixel, ivec2(uTextureSize), uSampling, uMipLevel);
+  float coverage = cover;
   if (uHasMask == 1) {
-    src *= texelFetch(uMask, ivec2(vPos), 0).r;
+    coverage *= texelFetch(uMask, ivec2(vPos), 0).r;
   }
-  if (uHasClip == 1) src *= texelFetch(uClip, ivec2(vPos), 0).r;
-  finalColor = uReplace == 1 ? src : composite(uMode, dst, src, ivec2(floor(doc)), uDissolveSeed);
+  if (uHasClip == 1) coverage *= texelFetch(uClip, ivec2(vPos), 0).r;
+  vec4 src = sampled * (coverage * uOpacity * uFillOpacity);
+  finalColor = uReplace == 1 ? src
+    : compositeFill(uMode, dst, sampled, coverage, uOpacity, uFillOpacity, ivec2(floor(doc)), uDissolveSeed);
 }
 `;
 
