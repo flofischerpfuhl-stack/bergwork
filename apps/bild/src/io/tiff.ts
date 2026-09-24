@@ -103,6 +103,7 @@ export async function decodeTiff(bytes: Uint8Array): Promise<TiffResult> {
     const lcms = await loadLittleCms();
     try {
       const data = lcms.transform(parsed.iccProfile, samples.colors, samples.model, samples.bits, samples.alpha);
+      if (!(data instanceof Uint8Array)) throw new TiffError('data', 'Unexpected 16-bit output in the RGBA8 decoder');
       return { width: parsed.width, height: parsed.height, data, dpi: parsed.dpi, hasIcc: true };
     } catch (error) {
       // ImageIO ignores malformed embedded profiles and decodes using the format's fallback interpretation.
@@ -125,11 +126,15 @@ export async function decodeTiffNative(bytes: Uint8Array): Promise<TiffNativeRes
     return { ...await decodeTiff(bytes), bitDepth: 8 };
   }
   if (parsed.iccProfile && [0, 1, 2, 3, 5].includes(layout.photometric)) {
-    // M6 requires deterministic profile handling. The committed lcms bridge currently emits RGB8;
-    // expand that result rather than bypassing the profile (the precision deviation is reported).
-    const managed = await decodeTiff(bytes), expanded = new Uint16Array(managed.data.length);
-    for (let i = 0; i < managed.data.length; i++) expanded[i] = managed.data[i]! * 257;
-    return { ...managed, data: expanded, bitDepth: 16 };
+    const samples = decodeIccSamples(parsed, layout);
+    try {
+      const data = (await loadLittleCms()).transform16(parsed.iccProfile, samples.colors as Uint16Array,
+        samples.model, samples.alpha as Uint16Array | null);
+      return { width: parsed.width, height: parsed.height, data, dpi: parsed.dpi, hasIcc: true, bitDepth: 16 };
+    } catch (error) {
+      // ImageIO ignores an unusable embedded profile and retains the native samples.
+      if (!(error instanceof IccError)) throw error;
+    }
   }
   const output = new Uint16Array(parsed.width * parsed.height * 4);
   for (let i = 3; i < output.length; i += 4) output[i] = 65535;
@@ -198,7 +203,7 @@ interface TiffIccSamples {
   alpha: Uint8Array | Uint16Array | null;
 }
 
-/** Keeps 16-bit TIFF samples intact until Little CMS has produced the final RGBA8 pixels. */
+/** Keeps TIFF samples intact until Little CMS has produced the final RGBA pixels. */
 function decodeIccSamples(parsed: Parsed, layout: DecodeLayout): TiffIccSamples {
   const model: IccColorModel = layout.photometric === 0 || layout.photometric === 1 ? 'gray'
     : layout.photometric === 5 ? 'cmyk' : 'rgb';

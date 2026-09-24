@@ -1,6 +1,7 @@
 import { layerFromTransfer as transferredLayer } from '../transfer';
 import type { Layer } from '../document';
 import type { Raster } from '../raster';
+import type { PixelArray, RasterFormat } from '../pixel/format';
 import { beginSettledStroke, warmBrushDensity, type SettledStroke, type StrokeResult } from './stroke';
 import type {
   BrushTileTransfer, BrushWorkerRequest, BrushWorkerResponse,
@@ -10,7 +11,8 @@ const scope = globalThis as unknown as DedicatedWorkerGlobalScope;
 let stroke: SettledStroke | null = null;
 let previous: Raster | null = null;
 let patchable = false;
-let sourceTiles: (Uint8Array | null)[] | null = null;
+let sourceTiles: (PixelArray | null)[] | null = null;
+let sourceFormat: RasterFormat = 'rgba8';
 let timing = { init: 0, settled: 0, finish: 0 };
 
 // The common fully soft brush table is ready before the first pointer sample reaches this worker.
@@ -32,7 +34,7 @@ function changedTiles(next: Raster, reset: boolean): { tiles: BrushTileTransfer[
     const tile = next.tiles[index] ?? null;
     if (compare && compare.tiles[index] === tile) continue;
     if (!tile) { tiles.push({ index, data: null }); continue; }
-    const data = new Uint8Array(tile).buffer;
+    const data = tile.slice().buffer;
     tiles.push({ index, data });
     transfers.push(data);
   }
@@ -46,7 +48,7 @@ function snapshot(): void {
   const reset = !patchable || !previous || previous.width !== raster.width || previous.height !== raster.height
     || previous.channels !== raster.channels;
   const changed = changedTiles(raster, reset);
-  post({ type: 'snapshot', width: raster.width, height: raster.height, channels: raster.channels,
+  post({ type: 'snapshot', width: raster.width, height: raster.height, channels: raster.channels, format: raster.format,
     reset, tiles: changed.tiles }, changed.transfers);
 }
 
@@ -55,7 +57,7 @@ function finished(result: StrokeResult): void {
   const reset = !patchable || !previous || previous.width !== raster.width || previous.height !== raster.height
     || previous.channels !== raster.channels;
   const changed = changedTiles(raster, reset);
-  post({ type: 'finished', width: raster.width, height: raster.height, channels: raster.channels,
+  post({ type: 'finished', width: raster.width, height: raster.height, channels: raster.channels, format: raster.format,
     reset, tiles: changed.tiles, transform: result.transform, bounds: result.bounds, sourceRect: result.sourceRect,
     timing }, changed.transfers);
 }
@@ -67,8 +69,8 @@ scope.addEventListener('message', (event: MessageEvent<BrushWorkerRequest>) => {
       const started = performance.now();
       const options = request.options;
       const source = options.target === 'mask' ? options.layer.mask?.raster : options.layer.raster;
-      if (source?.format === 'rgba16') throw new Error('The existing 8-bit brush worker cannot paint an rgba16 layer yet.');
-      sourceTiles = options.patchable && source ? source.tiles as (Uint8Array | null)[] : null;
+      sourceFormat = source?.format ?? (options.target === 'mask' ? 'gray8' : 'rgba8');
+      sourceTiles = options.patchable && source ? source.tiles as (PixelArray | null)[] : null;
       stroke = beginSettledStroke({ layer: layerFromTransfer(options.layer), canvas: options.canvas,
         settings: options.settings, target: options.target, pixelLimit: options.pixelLimit, tilePartition: options.partition });
       previous = stroke.currentRaster();
@@ -77,13 +79,17 @@ scope.addEventListener('message', (event: MessageEvent<BrushWorkerRequest>) => {
     } else if (request.type === 'settled') {
       const started = performance.now();
       if (!stroke) throw new Error('Brush worker was not initialized');
-      for (const base of request.bases) if (sourceTiles) sourceTiles[base.index] = base.data;
+      for (const base of request.bases) if (sourceTiles) {
+        sourceTiles[base.index] = sourceFormat === 'rgba16' ? new Uint16Array(base.data) : new Uint8Array(base.data);
+      }
       stroke.addSettled(request.segments);
       timing.settled += performance.now() - started;
     } else if (request.type === 'finish') {
       const started = performance.now();
       if (!stroke) throw new Error('Brush worker was not initialized');
-      for (const base of request.bases) if (sourceTiles) sourceTiles[base.index] = base.data;
+      for (const base of request.bases) if (sourceTiles) {
+        sourceTiles[base.index] = sourceFormat === 'rgba16' ? new Uint16Array(base.data) : new Uint8Array(base.data);
+      }
       const current = stroke;
       stroke = null;
       const result = current.finish(request.segments);

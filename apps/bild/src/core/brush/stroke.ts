@@ -4,6 +4,7 @@ import {
   apply, invert, pixelToDocument, type Affine, type LayerTransform, type Point, type Rect, type Size,
 } from '../geometry';
 import { Raster, TILE } from '../raster';
+import { makePixelArray, type PixelArray } from '../pixel/format';
 import type { DocumentSelection } from '../selection';
 import { falloff, validateBrushSettings, type BrushSettings } from './settings';
 
@@ -16,10 +17,10 @@ interface IntRect { x: number; y: number; width: number; height: number }
 interface CoverageTile {
   readonly permanent: Float32Array;
   tail: Float32Array | null;
-  readonly base: Uint8Array | null;
+  readonly base: PixelArray | null;
   readonly baseIsZero: boolean;
   readonly baseIsOpaque: boolean;
-  output: Uint8Array;
+  output: PixelArray;
 }
 
 const COVERAGE_LUT_SIZE = 16_384;
@@ -46,6 +47,8 @@ export function warmBrushDensity(hardness: number): void {
 export interface CloneSample {
   /** Straight-alpha sRGB at a document point, or transparent outside the source. */
   sample(point: Point): readonly [number, number, number, number];
+  /** Sample maximum; legacy/render samplers are RGBA8 when omitted. */
+  readonly maximum?: 255 | 65535;
   /** Source minus destination in document pixels. */
   readonly offset: Size;
   /** Copy transparent source pixels too (Blur uses this upstream; Clone Stamp normally does not). */
@@ -134,6 +137,7 @@ class ContinuousBrushStroke implements Stroke {
   private readonly paintRed: number;
   private readonly paintGreen: number;
   private readonly paintBlue: number;
+  private readonly maximum: 255 | 65535;
   private readonly blankSaturationDensity: number | null;
   private readonly fastRgbaPaint: boolean;
   private readonly curveTolerance: number;
@@ -164,9 +168,11 @@ class ContinuousBrushStroke implements Stroke {
     this.radius = options.settings.diameter / 2;
     this.radiusSquared = this.radius * this.radius;
     this.depositionSpacing = Math.max(0.25, options.settings.diameter * 0.025);
-    this.paintRed = clampByte(options.settings.red * 255);
-    this.paintGreen = clampByte(options.settings.green * 255);
-    this.paintBlue = clampByte(options.settings.blue * 255);
+    const sourceFormat = options.target === 'mask' ? 'gray8' : options.layer.raster?.format ?? 'rgba8';
+    this.maximum = sourceFormat === 'rgba16' ? 65535 : 255;
+    this.paintRed = clampSample(options.settings.red * this.maximum, this.maximum);
+    this.paintGreen = clampSample(options.settings.green * this.maximum, this.maximum);
+    this.paintBlue = clampSample(options.settings.blue * this.maximum, this.maximum);
     const maximumAlpha = clampByte(COVERAGE_LUT[COVERAGE_LUT_SIZE]! * options.settings.opacity * 255);
     const saturationCoverage = (maximumAlpha - 0.499) / (options.settings.opacity * 255);
     this.blankSaturationDensity = options.settings.hardness < 1 && options.settings.mode === 'paint'
@@ -180,9 +186,6 @@ class ContinuousBrushStroke implements Stroke {
     const baseTransform = placedMask ? maskTransform(options.layer) : options.layer.transform;
     const layerRaster = options.layer.raster ?? null;
     const source = this.isMask ? options.layer.mask?.raster ?? null : layerRaster;
-    if (source?.format === 'rgba16') {
-      throw new Error('The existing 8-bit brush kernel cannot paint an rgba16 layer yet.');
-    }
     const originalWidth = placedMask?.raster.width ?? layerRaster?.width ?? Math.max(1, Math.round(options.layer.transform.size.width));
     const originalHeight = placedMask?.raster.height ?? layerRaster?.height ?? Math.max(1, Math.round(options.layer.transform.size.height));
     const originalMapping = pixelToDocument(baseTransform, originalWidth, originalHeight);
@@ -418,7 +421,8 @@ class ContinuousBrushStroke implements Stroke {
       const output = this.coverage.get(key)!.output;
       tiles[key] = isZero(output) ? null : output.slice();
     }
-    this.raster = new Raster(this.raster.width, this.raster.height, this.raster.channels, tiles);
+    this.raster = new Raster(this.raster.width, this.raster.height, this.raster.channels, tiles,
+      { format: this.raster.format });
     this.pendingSnapshotKeys.clear();
   }
 
@@ -456,15 +460,13 @@ class ContinuousBrushStroke implements Stroke {
     if (state) return state;
     const col = key % this.raster.cols, row = Math.floor(key / this.raster.cols);
     const width = this.raster.tileWidth(col), height = this.raster.tileHeight(row);
-    const native = this.raster.tiles[key];
-    if (native instanceof Uint16Array) throw new Error('The existing 8-bit brush kernel cannot paint an rgba16 layer yet.');
-    const existing = native;
+    const existing = this.raster.tiles[key];
     // Raster tiles are immutable, so BrushStroke.allocateTile's base snapshot can retain the
     // original tile instead of copying it.
     const base = existing ?? null;
     state = { permanent: new Float32Array(width * height), tail: null,
-      base, baseIsZero: !existing, baseIsOpaque: this.raster.channels === 4 && !!base && isOpaqueRgba(base),
-      output: base ? base.slice() : new Uint8Array(width * height * this.raster.channels) };
+      base, baseIsZero: !existing, baseIsOpaque: this.raster.channels === 4 && !!base && isOpaqueRgba(base, this.maximum),
+      output: base ? base.slice() : makePixelArray(this.raster.format, width * height * this.raster.channels) };
     this.coverage.set(key, state);
     return state;
   }
@@ -632,9 +634,9 @@ class ContinuousBrushStroke implements Stroke {
           && this.blankSaturationDensity !== null && coverage >= this.blankSaturationDensity) {
           tailBuffer[pixel] = 0;
           if (state.output[offset] !== this.paintRed || state.output[offset + 1] !== this.paintGreen
-            || state.output[offset + 2] !== this.paintBlue || state.output[offset + 3] !== 255) {
+            || state.output[offset + 2] !== this.paintBlue || state.output[offset + 3] !== this.maximum) {
             state.output[offset] = this.paintRed; state.output[offset + 1] = this.paintGreen;
-            state.output[offset + 2] = this.paintBlue; state.output[offset + 3] = 255; changed = true;
+            state.output[offset + 2] = this.paintBlue; state.output[offset + 3] = this.maximum; changed = true;
           }
           continue;
         }
@@ -679,7 +681,7 @@ class ContinuousBrushStroke implements Stroke {
         coverage *= this.selectionCoverageXY(px, py) * this.settings.opacity;
         if (ch === 1) changed = this.composeMask(state, offset, coverage) || changed;
         else if (state.baseIsZero && !this.clone && this.settings.mode === 'paint') {
-          const alpha = coverage <= 0 ? 0 : clampByte(coverage * 255);
+          const alpha = coverage <= 0 ? 0 : clampSample(coverage * this.maximum, this.maximum);
           if (state.output[offset + 3] !== alpha) {
             changed = true;
             if (alpha === 0) state.output.fill(0, offset, offset + 4);
@@ -694,9 +696,9 @@ class ContinuousBrushStroke implements Stroke {
         else if (opaquePaint) {
           const base = state.base!;
           const keep = 1 - coverage;
-          const r = clampByte(this.settings.red * 255 * coverage + base[offset]! * keep);
-          const g = clampByte(this.settings.green * 255 * coverage + base[offset + 1]! * keep);
-          const b = clampByte(this.settings.blue * 255 * coverage + base[offset + 2]! * keep);
+          const r = clampSample(this.settings.red * this.maximum * coverage + base[offset]! * keep, this.maximum);
+          const g = clampSample(this.settings.green * this.maximum * coverage + base[offset + 1]! * keep, this.maximum);
+          const b = clampSample(this.settings.blue * this.maximum * coverage + base[offset + 2]! * keep, this.maximum);
           if (r !== state.output[offset] || g !== state.output[offset + 1] || b !== state.output[offset + 2]) {
             state.output[offset] = r; state.output[offset + 1] = g; state.output[offset + 2] = b;
             changed = true;
@@ -736,9 +738,9 @@ class ContinuousBrushStroke implements Stroke {
         const coverage = density <= 0 ? 0 : density >= 20 ? COVERAGE_LUT[COVERAGE_LUT_SIZE]!
           : COVERAGE_LUT[Math.round(density * lutScale)]!;
         const keep = 1 - coverage;
-        const r = clampByte(this.settings.red * 255 * coverage + base[offset]! * keep);
-        const g = clampByte(this.settings.green * 255 * coverage + base[offset + 1]! * keep);
-        const b = clampByte(this.settings.blue * 255 * coverage + base[offset + 2]! * keep);
+        const r = clampSample(this.settings.red * this.maximum * coverage + base[offset]! * keep, this.maximum);
+        const g = clampSample(this.settings.green * this.maximum * coverage + base[offset + 1]! * keep, this.maximum);
+        const b = clampSample(this.settings.blue * this.maximum * coverage + base[offset + 2]! * keep, this.maximum);
         if (r !== output[offset] || g !== output[offset + 1] || b !== output[offset + 2]) {
           output[offset] = r; output[offset + 1] = g; output[offset + 2] = b;
           changed = true;
@@ -765,43 +767,49 @@ class ContinuousBrushStroke implements Stroke {
 
   private composeColour(state: CoverageTile, offset: number, alpha: number, px: number, py: number): void {
     const base = state.base;
-    const ba = (base?.[offset + 3] ?? 0) / 255;
+    const ba = (base?.[offset + 3] ?? 0) / this.maximum;
     if (this.settings.mode === 'erase') {
       const outA = ba * (1 - alpha);
       state.output[offset] = outA > 0 ? base?.[offset] ?? 0 : 0;
       state.output[offset + 1] = outA > 0 ? base?.[offset + 1] ?? 0 : 0;
       state.output[offset + 2] = outA > 0 ? base?.[offset + 2] ?? 0 : 0;
-      state.output[offset + 3] = clampByte(outA * 255);
+      state.output[offset + 3] = clampSample(outA * this.maximum, this.maximum);
       return;
     }
     if (this.settings.mode === 'dodge' || this.settings.mode === 'burn' || this.settings.mode === 'sponge') {
       if (ba <= 0) { state.output.fill(0, offset, offset + 4); return; }
-      const adjusted = brushModeColor((base?.[offset] ?? 0) / 255, (base?.[offset + 1] ?? 0) / 255,
-        (base?.[offset + 2] ?? 0) / 255, this.settings, alpha);
-      state.output[offset] = clampByte(adjusted[0] * 255); state.output[offset + 1] = clampByte(adjusted[1] * 255);
-      state.output[offset + 2] = clampByte(adjusted[2] * 255); state.output[offset + 3] = base?.[offset + 3] ?? 0;
+      const adjusted = brushModeColor((base?.[offset] ?? 0) / this.maximum, (base?.[offset + 1] ?? 0) / this.maximum,
+        (base?.[offset + 2] ?? 0) / this.maximum, this.settings, alpha);
+      state.output[offset] = clampSample(adjusted[0] * this.maximum, this.maximum);
+      state.output[offset + 1] = clampSample(adjusted[1] * this.maximum, this.maximum);
+      state.output[offset + 2] = clampSample(adjusted[2] * this.maximum, this.maximum);
+      state.output[offset + 3] = base?.[offset + 3] ?? 0;
       return;
     }
-    let sr = this.settings.red * 255, sg = this.settings.green * 255, sb = this.settings.blue * 255, sa = alpha;
+    let sr = this.settings.red * this.maximum, sg = this.settings.green * this.maximum;
+    let sb = this.settings.blue * this.maximum, sa = alpha;
     if (this.clone) {
       const sampled = this.clone.sample({ x: px + this.clone.offset.width, y: py + this.clone.offset.height });
-      sr = sampled[0]; sg = sampled[1]; sb = sampled[2]; sa *= sampled[3] / 255;
+      const sampleMaximum = this.clone.maximum ?? 255, sampleScale = this.maximum / sampleMaximum;
+      sr = sampled[0] * sampleScale; sg = sampled[1] * sampleScale; sb = sampled[2] * sampleScale;
+      sa = alpha * sampled[3] / sampleMaximum;
       if (this.clone.replace) {
         const mix = alpha;
-        state.output[offset] = clampByte(sr * mix + (base?.[offset] ?? 0) * (1 - mix));
-        state.output[offset + 1] = clampByte(sg * mix + (base?.[offset + 1] ?? 0) * (1 - mix));
-        state.output[offset + 2] = clampByte(sb * mix + (base?.[offset + 2] ?? 0) * (1 - mix));
-        state.output[offset + 3] = clampByte(sampled[3] * mix + (base?.[offset + 3] ?? 0) * (1 - mix));
+        state.output[offset] = clampSample(sr * mix + (base?.[offset] ?? 0) * (1 - mix), this.maximum);
+        state.output[offset + 1] = clampSample(sg * mix + (base?.[offset + 1] ?? 0) * (1 - mix), this.maximum);
+        state.output[offset + 2] = clampSample(sb * mix + (base?.[offset + 2] ?? 0) * (1 - mix), this.maximum);
+        state.output[offset + 3] = clampSample(sampled[3] * sampleScale * mix
+          + (base?.[offset + 3] ?? 0) * (1 - mix), this.maximum);
         return;
       }
     }
     if (ba === 0) {
       if (sa <= 0) state.output.fill(0, offset, offset + 4);
       else {
-        state.output[offset] = clampByte(sr);
-        state.output[offset + 1] = clampByte(sg);
-        state.output[offset + 2] = clampByte(sb);
-        state.output[offset + 3] = clampByte(sa * 255);
+        state.output[offset] = clampSample(sr, this.maximum);
+        state.output[offset + 1] = clampSample(sg, this.maximum);
+        state.output[offset + 2] = clampSample(sb, this.maximum);
+        state.output[offset + 3] = clampSample(sa * this.maximum, this.maximum);
       }
       return;
     }
@@ -811,10 +819,10 @@ class ContinuousBrushStroke implements Stroke {
       return;
     }
     const keep = ba * (1 - sa);
-    state.output[offset] = clampByte((sr * sa + (base?.[offset] ?? 0) * keep) / outA);
-    state.output[offset + 1] = clampByte((sg * sa + (base?.[offset + 1] ?? 0) * keep) / outA);
-    state.output[offset + 2] = clampByte((sb * sa + (base?.[offset + 2] ?? 0) * keep) / outA);
-    state.output[offset + 3] = clampByte(outA * 255);
+    state.output[offset] = clampSample((sr * sa + (base?.[offset] ?? 0) * keep) / outA, this.maximum);
+    state.output[offset + 1] = clampSample((sg * sa + (base?.[offset + 1] ?? 0) * keep) / outA, this.maximum);
+    state.output[offset + 2] = clampSample((sb * sa + (base?.[offset + 2] ?? 0) * keep) / outA, this.maximum);
+    state.output[offset + 3] = clampSample(outA * this.maximum, this.maximum);
   }
 }
 
@@ -995,12 +1003,13 @@ function initialRaster(width: number, height: number, channels: 1 | 4, source: R
   if (source && source.width === width && source.height === height && source.channels === channels
     && sourceRect.x === 0 && sourceRect.y === 0) return source;
   const cols = Math.ceil(width / TILE), rows = Math.ceil(height / TILE);
-  const tiles: (Uint8Array | null)[] = new Array(cols * rows).fill(null);
-  if (!source) return new Raster(width, height, channels, tiles);
+  const format = source?.format ?? (channels === 1 ? 'gray8' : 'rgba8');
+  const tiles: (PixelArray | null)[] = new Array(cols * rows).fill(null);
+  if (!source) return new Raster(width, height, channels, tiles, { format });
   const uniform = source.width === 1 && source.height === 1 ? source.pixel(0, 0) : null;
   for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
     const tw = Math.min(TILE, width - col * TILE), th = Math.min(TILE, height - row * TILE);
-    const tile = new Uint8Array(tw * th * channels);
+    const tile = makePixelArray(format, tw * th * channels);
     let nonzero = false;
     for (let y = 0; y < th; y++) for (let x = 0; x < tw; x++) {
       const gx = col * TILE + x, gy = row * TILE + y;
@@ -1014,18 +1023,18 @@ function initialRaster(width: number, height: number, channels: 1 | 4, source: R
     }
     if (nonzero) tiles[row * cols + col] = tile;
   }
-  return new Raster(width, height, channels, tiles);
+  return new Raster(width, height, channels, tiles, { format });
 }
 
 function cropTiled(source: Raster, rect: Rect): Raster {
   const cols = Math.ceil(rect.width / TILE), rows = Math.ceil(rect.height / TILE);
-  const tiles: (Uint8Array | null)[] = [];
+  const tiles: (PixelArray | null)[] = [];
   for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
     const width = Math.min(TILE, rect.width - col * TILE), height = Math.min(TILE, rect.height - row * TILE);
-    const bytes = source.readRegion(rect.x + col * TILE, rect.y + row * TILE, width, height);
+    const bytes = source.readRegionNative(rect.x + col * TILE, rect.y + row * TILE, width, height);
     tiles.push(isZero(bytes) ? null : bytes);
   }
-  return new Raster(rect.width, rect.height, source.channels, tiles);
+  return new Raster(rect.width, rect.height, source.channels, tiles, { format: source.format });
 }
 
 function transformForBounds(base: LayerTransform, originalWidth: number, originalHeight: number, mapping: Affine, bounds: Rect): LayerTransform {
@@ -1157,9 +1166,10 @@ function capsuleRowSpan(mapping: Affine, col: number, row: number, y: number, re
 function samePoint(a: Point | undefined, b: Point): boolean { return !!a && a.x === b.x && a.y === b.y; }
 function insideCanvasXY(x: number, y: number, canvas: Size): boolean { return x >= 0 && y >= 0 && x < canvas.width && y < canvas.height; }
 function clampByte(value: number): number { return Math.min(255, Math.max(0, Math.round(value))); }
-function isZero(data: Uint8Array): boolean { for (let i = 0; i < data.length; i++) if (data[i]) return false; return true; }
-function isOpaqueRgba(data: Uint8Array): boolean {
-  for (let i = 3; i < data.length; i += 4) if (data[i] !== 255) return false;
+function clampSample(value: number, maximum: number): number { return Math.min(maximum, Math.max(0, Math.round(value))); }
+function isZero(data: PixelArray): boolean { for (let i = 0; i < data.length; i++) if (data[i]) return false; return true; }
+function isOpaqueRgba(data: PixelArray, maximum: number): boolean {
+  for (let i = 3; i < data.length; i += 4) if (data[i] !== maximum) return false;
   return true;
 }
 

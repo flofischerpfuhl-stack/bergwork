@@ -49,23 +49,25 @@ export function cloneSample(document: CanvasDocument, active: Layer, offset: { w
       maskInverse: layer.mask && layer.mask.raster.width > 1 && layer.mask.raster.height > 1
         ? invert(pixelToDocument(maskTransform(layer), layer.mask.raster.width, layer.mask.raster.height)) : null,
     }));
+  const maximum = layers.some((sampled) => sampled.raster.format === 'rgba16') ? 65535 : 255;
   return {
     offset,
+    maximum,
     sample(point) {
       let out: [number, number, number, number] = [0, 0, 0, 0];
       for (const sampled of layers) {
-        const source = sampleRaster(sampled.raster, sampled.inverse, point);
-        let alpha = source[3] / 255 * sampled.layer.opacity;
+        const source = sampleRaster(sampled.raster, sampled.inverse, point, maximum);
+        let alpha = source[3] / maximum * sampled.layer.opacity;
         if (sampled.layer.mask?.enabled) alpha *= sampleMask(sampled.layer, sampled.maskInverse, point) / 255;
         if (alpha <= 0) continue;
         // CloneStamp.cloneSample uses the rendered canvas. Normal source-over is exact for normal layers;
         // renderer-specific blend modes remain the renderer's responsibility.
-        const ba = out[3] / 255, oa = alpha + ba * (1 - alpha);
+        const ba = out[3] / maximum, oa = alpha + ba * (1 - alpha);
         out = oa <= 0 ? [0, 0, 0, 0] : [
-          byte((source[0] * alpha + out[0] * ba * (1 - alpha)) / oa),
-          byte((source[1] * alpha + out[1] * ba * (1 - alpha)) / oa),
-          byte((source[2] * alpha + out[2] * ba * (1 - alpha)) / oa),
-          byte(oa * 255),
+          sample((source[0] * alpha + out[0] * ba * (1 - alpha)) / oa, maximum),
+          sample((source[1] * alpha + out[1] * ba * (1 - alpha)) / oa, maximum),
+          sample((source[2] * alpha + out[2] * ba * (1 - alpha)) / oa, maximum),
+          sample(oa * maximum, maximum),
         ];
       }
       return out;
@@ -73,14 +75,17 @@ export function cloneSample(document: CanvasDocument, active: Layer, offset: { w
   };
 }
 
-function sampleRaster(raster: Raster, inverse: ReturnType<typeof invert>, point: Point): [number, number, number, number] {
+function sampleRaster(raster: Raster, inverse: ReturnType<typeof invert>, point: Point,
+  maximum: 255 | 65535): [number, number, number, number] {
   const x = Math.floor(inverse.a * point.x + inverse.c * point.y + inverse.tx);
   const y = Math.floor(inverse.b * point.x + inverse.d * point.y + inverse.ty);
   if (x < 0 || y < 0 || x >= raster.width || y >= raster.height) return [0, 0, 0, 0];
   const col = Math.floor(x / TILE), row = Math.floor(y / TILE), tile = raster.tiles[row * raster.cols + col];
   if (!tile) return [0, 0, 0, 0];
   const offset = ((y - row * TILE) * raster.tileWidth(col) + (x - col * TILE)) * 4;
-  return [tile[offset] ?? 0, tile[offset + 1] ?? 0, tile[offset + 2] ?? 0, tile[offset + 3] ?? 0];
+  const scale = maximum / raster.maximum;
+  return [sample((tile[offset] ?? 0) * scale, maximum), sample((tile[offset + 1] ?? 0) * scale, maximum),
+    sample((tile[offset + 2] ?? 0) * scale, maximum), sample((tile[offset + 3] ?? 0) * scale, maximum)];
 }
 
 function sampleMask(layer: Layer, inverse: ReturnType<typeof invert> | null, point: Point): number {
@@ -96,4 +101,4 @@ function sampleMask(layer: Layer, inverse: ReturnType<typeof invert> | null, poi
   return tile[(y - row * TILE) * mask.raster.tileWidth(col) + x - col * TILE] ?? 0;
 }
 
-function byte(value: number): number { return Math.min(255, Math.max(0, Math.round(value))); }
+function sample(value: number, maximum: number): number { return Math.min(maximum, Math.max(0, Math.round(value))); }

@@ -1,6 +1,7 @@
 import type { Layer } from '../document';
 import { Raster, TILE } from '../raster';
 import type { LayerTransfer, RasterTransfer } from '../transfer';
+import type { PixelArray } from '../pixel/format';
 import { apply, invert, type Affine, type Rect } from '../geometry';
 import type { BeginStrokeOptions, BrushSegment, StrokeResult } from './stroke';
 import type { BrushWorkerRequest, BrushWorkerResponse } from './workerProtocol';
@@ -68,6 +69,7 @@ export class BrushRasterWorker {
   private remaining = 0;
   private finalMetadata: Omit<StrokeResult, 'raster'> | null = null;
   private readonly timings: { init: number; settled: number; finish: number }[] = [];
+  private failure: Error | null = null;
 
   static create(options: BeginStrokeOptions, geometry: WorkerGeometry): BrushRasterWorker | null {
     if (typeof Worker === 'undefined' || options.clone || options.selection) return null;
@@ -106,6 +108,7 @@ export class BrushRasterWorker {
   }
 
   finish(segments: readonly BrushSegment[]): Promise<StrokeResult> {
+    if (this.failure) return Promise.reject(this.failure);
     if (this.finished) return Promise.reject(new Error('Brush worker is no longer active'));
     if (this.flushTimer !== null) { clearTimeout(this.flushTimer); this.flushTimer = null; }
     const pending = this.settled.splice(0);
@@ -117,7 +120,7 @@ export class BrushRasterWorker {
       for (let index = 0; index < this.workers.length; index++) {
         const bases = this.baseTiles(segments, index, this.workers.length);
         this.workers[index]!.postMessage({ type: 'finish', segments, bases } satisfies BrushWorkerRequest,
-          bases.map((base) => base.data.buffer));
+          bases.map((base) => base.data));
       }
     });
     return promise;
@@ -147,12 +150,12 @@ export class BrushRasterWorker {
     for (let index = 0; index < this.workers.length; index++) {
       const bases = this.baseTiles(segments, index, this.workers.length);
       this.workers[index]!.postMessage({ type: 'settled', segments, bases } satisfies BrushWorkerRequest,
-        bases.map((base) => base.data.buffer));
+        bases.map((base) => base.data));
     }
   }
 
   private baseTiles(segments: readonly BrushSegment[], partition: number,
-    partitionCount: number): { index: number; data: Uint8Array }[] {
+    partitionCount: number): { index: number; data: ArrayBuffer }[] {
     const source = this.source;
     if (!source) return [];
     const inverse = invert(this.geometry.mapping), reach = this.diameter / 2 + 2;
@@ -178,12 +181,12 @@ export class BrushRasterWorker {
         }
       }
     }
-    const result: { index: number; data: Uint8Array }[] = [];
+    const result: { index: number; data: ArrayBuffer }[] = [];
     for (const index of wanted) {
       if (this.loadedBaseTiles.has(index)) continue;
       this.loadedBaseTiles.add(index);
       const tile = source.tiles[index];
-      if (tile) result.push({ index, data: new Uint8Array(tile) });
+      if (tile) result.push({ index, data: tile.slice().buffer });
     }
     return result;
   }
@@ -192,9 +195,11 @@ export class BrushRasterWorker {
     if (message.type === 'error') { this.fail(new Error(message.message)); return; }
     const base = !message.reset && this.latest?.width === message.width && this.latest.height === message.height
       && this.latest.channels === message.channels ? this.latest.tiles.slice()
-      : new Array(Math.ceil(message.width / 256) * Math.ceil(message.height / 256)).fill(null) as (Uint8Array | null)[];
-    for (const tile of message.tiles) base[tile.index] = tile.data ? new Uint8Array(tile.data) : null;
-    this.latest = new Raster(message.width, message.height, message.channels, base);
+      : new Array(Math.ceil(message.width / 256) * Math.ceil(message.height / 256)).fill(null) as (PixelArray | null)[];
+    for (const tile of message.tiles) {
+      base[tile.index] = tile.data ? (message.format === 'rgba16' ? new Uint16Array(tile.data) : new Uint8Array(tile.data)) : null;
+    }
+    this.latest = new Raster(message.width, message.height, message.channels, base, { format: message.format });
     if (message.type !== 'finished') return;
     this.finalMetadata = { transform: message.transform, bounds: message.bounds, sourceRect: message.sourceRect };
     this.timings.push(message.timing);
@@ -209,6 +214,7 @@ export class BrushRasterWorker {
 
   private fail(error: Error): void {
     const reject = this.reject;
+    this.failure = error;
     this.resolve = null; this.reject = null;
     for (const worker of this.workers) worker.terminate();
     reject?.(error);

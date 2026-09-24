@@ -2,6 +2,7 @@ import type { Layer } from '../document';
 import { layerPixelHeight, layerPixelWidth, maskTransform, MAX_PIXELS, MAX_SIDE } from '../document';
 import { apply, invert, pixelToDocument, type Affine, type LayerTransform, type Point, type Rect, type Size } from '../geometry';
 import { Raster, TILE } from '../raster';
+import { type PixelArray } from '../pixel/format';
 import type { DocumentSelection } from '../selection';
 
 export interface RasterTarget {
@@ -50,7 +51,7 @@ function expandedColorTarget(raster: Raster, transform: LayerTransform, canvas: 
     return { raster, transform, mask: false };
   }
   if (width < 1 || height < 1 || width > MAX_SIDE || height > MAX_SIDE || width * height > MAX_PIXELS) return null;
-  const cols = Math.ceil(width / TILE), rows = Math.ceil(height / TILE), tiles: (Uint8Array | null)[] = [];
+  const cols = Math.ceil(width / TILE), rows = Math.ceil(height / TILE), tiles: (PixelArray | null)[] = [];
   for (let row = 0; row < rows; row++) {
     const tileHeight = Math.min(TILE, height - row * TILE);
     for (let col = 0; col < cols; col++) {
@@ -59,7 +60,7 @@ function expandedColorTarget(raster: Raster, transform: LayerTransform, canvas: 
       const overlaps = sourceX < raster.width && sourceY < raster.height
         && sourceX + tileWidth > 0 && sourceY + tileHeight > 0;
       if (!overlaps) { tiles.push(null); continue; }
-      const pixels = raster.readRegion(sourceX, sourceY, tileWidth, tileHeight);
+      const pixels = raster.readRegionNative(sourceX, sourceY, tileWidth, tileHeight);
       let any = false;
       for (let i = 0; i < pixels.length && !any; i++) any = pixels[i] !== 0;
       tiles.push(any ? pixels : null);
@@ -67,7 +68,7 @@ function expandedColorTarget(raster: Raster, transform: LayerTransform, canvas: 
   }
   const center = apply(mapping, { x: left + width / 2, y: top + height / 2 });
   const size = { width: width * transform.size.width / raster.width, height: height * transform.size.height / raster.height };
-  return { raster: new Raster(width, height, 4, tiles), transform: { ...transform, size,
+  return { raster: new Raster(width, height, 4, tiles, { format: raster.format }), transform: { ...transform, size,
     origin: { x: center.x - size.width / 2, y: center.y - size.height / 2 } }, mask: false };
 }
 

@@ -1,5 +1,6 @@
 import type { LayerTransfer } from '../transfer';
 import type { Channels } from '../raster';
+import type { RasterFormat } from '../pixel/format';
 import type { LayerTransform, Rect, Size } from '../geometry';
 import type { BrushSegment } from './stroke';
 import type { BrushSettings } from './settings';
@@ -22,7 +23,7 @@ export type BrushWorkerRequest =
 
 export interface BrushBaseTile {
   readonly index: number;
-  readonly data: Uint8Array;
+  readonly data: ArrayBuffer;
 }
 
 export interface BrushTileTransfer {
@@ -31,9 +32,9 @@ export interface BrushTileTransfer {
 }
 
 export type BrushWorkerResponse =
-  | { readonly type: 'snapshot'; readonly width: number; readonly height: number; readonly channels: Channels;
+  | { readonly type: 'snapshot'; readonly width: number; readonly height: number; readonly channels: Channels; readonly format: RasterFormat;
     readonly reset: boolean; readonly tiles: readonly BrushTileTransfer[] }
-  | { readonly type: 'finished'; readonly width: number; readonly height: number; readonly channels: Channels;
+  | { readonly type: 'finished'; readonly width: number; readonly height: number; readonly channels: Channels; readonly format: RasterFormat;
     readonly reset: boolean; readonly tiles: readonly BrushTileTransfer[]; readonly transform?: LayerTransform;
     readonly bounds: Rect; readonly sourceRect: Rect; readonly timing: { init: number; settled: number; finish: number } }
   | { readonly type: 'error'; readonly message: string };

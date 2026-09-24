@@ -113,8 +113,10 @@ export function previewContentAwareFill(session: EditorSession): Promise<Raster 
   state.job = job;
   const pending = job.then((filled) => {
     if (!isCurrent(session, state, generation)) { discardStale(session, state, generation); return null; }
-    const blended = blendSelection(source, filled, state.coverage);
-    const raster = Raster.fromPixels(width, height, 4, unpremultiply(blended));
+    const pixels = state.grownRaster.format === 'rgba16'
+      ? blendSelection16(state.grownRaster.toPixels16(), filled, state.coverage)
+      : unpremultiply(blendSelection(source, filled, state.coverage));
+    const raster = Raster.fromPixels(width, height, 4, pixels, { format: state.grownRaster.format });
     state.previewRaster = raster; state.phase = 'ready'; state.error = null; state.job = null; state.pending = null;
     session.rasterOverrides.set(state.layerId, raster);
     session.notify('document');
@@ -256,7 +258,7 @@ function selectionMask(selection: DocumentSelection, transform: LayerTransform, 
 
 function expandedRaster(source: Raster, width: number, height: number, offsetX: number, offsetY: number): Raster {
   if (source.width === width && source.height === height && offsetX === 0 && offsetY === 0) return source;
-  let result = Raster.blank(width, height, 4);
+  let result = Raster.blank(width, height, 4, { format: source.format });
   for (let row = 0; row < source.rows; row++) for (let col = 0; col < source.cols; col++) {
     const tile = source.tiles[row * source.cols + col];
     if (!tile) continue;
@@ -272,6 +274,24 @@ function blendSelection(original: Uint8Array, filled: Uint8Array, coverage: Uint
   for (let i = 0; i < coverage.length; i++) {
     const amount = coverage[i]! / 255, inverse = 1 - amount, p = i * 4;
     for (let c = 0; c < 4; c++) output[p + c] = Math.round(filled[p + c]! * amount + original[p + c]! * inverse);
+  }
+  return output;
+}
+
+/** Keep untouched RGBA16 samples exact while blending the upstream RGBA8 synthesis in premultiplied space. */
+function blendSelection16(original: Uint16Array, filled: Uint8Array, coverage: Uint8Array): Uint16Array {
+  const output = original.slice();
+  for (let i = 0; i < coverage.length; i++) {
+    const amount = coverage[i]! / 255;
+    if (amount <= 0) continue;
+    const inverse = 1 - amount, p = i * 4, originalAlpha = original[p + 3]! / 65535;
+    const alpha = filled[p + 3]! * 257 * amount + original[p + 3]! * inverse;
+    output[p + 3] = Math.round(alpha);
+    if (alpha <= 0) { output[p] = output[p + 1] = output[p + 2] = 0; continue; }
+    for (let c = 0; c < 3; c++) {
+      const premultiplied = filled[p + c]! * 257 * amount + original[p + c]! * originalAlpha * inverse;
+      output[p + c] = Math.min(65535, Math.round(premultiplied * 65535 / alpha));
+    }
   }
   return output;
 }
