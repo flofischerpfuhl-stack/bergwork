@@ -415,9 +415,23 @@ export class GpuCompositor {
     const gl = this.gl;
     if (data instanceof Uint16Array) {
       // `data` is always a fresh region buffer. Reusing it for binary16 avoids a second, twice-as-large
-      // float allocation for a 4096px texture chunk.
+      // float allocation for a 4096px texture chunk. WebGL only defines UNPACK_PREMULTIPLY_ALPHA for 8-bit
+      // types (WebKit rejects HALF_FLOAT with it as an invalid format/type combination), so RGBA is
+      // premultiplied here and the flag is off for this upload.
+      const premultiply = format === gl.RGBA && gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL) === true;
+      if (premultiply) {
+        for (let i = 0; i < data.length; i += 4) {
+          const alpha = data[i + 3]!;
+          if (alpha !== 65535) {
+            data[i] = Math.round(data[i]! * alpha / 65535); data[i + 1] = Math.round(data[i + 1]! * alpha / 65535);
+            data[i + 2] = Math.round(data[i + 2]! * alpha / 65535);
+          }
+        }
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      }
       for (let i = 0; i < data.length; i++) data[i] = UNORM16_TO_HALF[data[i]!]!;
       gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, width, height, format, gl.HALF_FLOAT, data);
+      if (premultiply) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
     } else gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, width, height, format, gl.UNSIGNED_BYTE, data);
   }
 

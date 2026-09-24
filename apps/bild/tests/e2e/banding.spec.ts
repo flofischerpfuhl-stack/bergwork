@@ -76,3 +76,34 @@ test('A3 GPU and CPU float pipelines retain a 16-bit adjusted gradient where RGB
     expect(pipeline.rgba16.maxStep).toBeLessThanOrEqual(1 / 255 + 0.0001);
   }
 });
+
+test('semi-transparent 16-bit layers composite the same on the GPU as on the CPU (premultiplied upload)', async ({ page }) => {
+  await page.goto('/?harness=gpu16alpha');
+  const result = await page.evaluate(async () => {
+    const load = (path: string): Promise<any> => import(/* @vite-ignore */ path);
+    const { GpuCompositor } = await load('/src/render/gpuCompositor.ts');
+    const { compositeRegionFloat } = await load('/src/core/composite.ts');
+    const { Raster } = await load('/src/core/raster.ts');
+    const { newLayer } = await load('/src/core/document.ts');
+    const { makeTransform } = await load('/src/core/geometry.ts');
+    const w = 64, h = 16, back = new Uint16Array(w * h * 4), front = new Uint16Array(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      back.set([12000, 40000, 65535, 65535], o);
+      front.set([Math.round(x / w * 65535), 65535 - y * 4000, 20000, Math.round((x + y * w) / (w * h) * 65535)], o);
+    }
+    const layer = (id: string, data: Uint16Array) => newLayer({ id, name: id, raster: Raster.fromPixels(w, h, 4, data, { format: 'rgba16' }),
+      transform: makeTransform({ x: 0, y: 0 }, { width: w, height: h }) });
+    const doc = { id: 'd', width: w, height: h, resolution: 72, selection: null, layers: [layer('back', back), layer('front', front)] };
+    const cpu = compositeRegionFloat(doc, { x: 0, y: 0, width: w, height: h }).rgba as Float32Array;
+    const canvas = document.createElement('canvas'); document.body.append(canvas);
+    const gpu = await GpuCompositor.create(canvas, 1, 1);
+    const out = gpu.readRegionFloat(doc, 0, 0, w, h) as Float32Array;
+    gpu.destroy();
+    let max = 0;
+    for (let i = 0; i < out.length; i++) max = Math.max(max, Math.abs(out[i]! - cpu[i]!));
+    return { max };
+  });
+  console.log('16-bit alpha GPU vs CPU max', result.max);
+  expect(result.max).toBeLessThan(2 / 255);
+});
