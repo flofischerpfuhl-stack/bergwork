@@ -76,6 +76,15 @@ export interface ImageDecodeOptions extends HeicDecodeOptions {
   readonly nativeDecoder?: ((bytes: Uint8Array, mime: string) => Promise<{ width: number; height: number; data: Uint8Array } | null>) | null;
 }
 
+export interface DecodedImageAsset {
+  readonly width: number;
+  readonly height: number;
+  readonly channels: 4;
+  readonly data: Uint8Array | Uint16Array;
+  readonly bitDepth: 8 | 16;
+  readonly mime: ImageKind;
+}
+
 const SRGB_CHROMATICITIES: Chromaticities = {
   white: [0.3127, 0.3290], red: [0.64, 0.33], green: [0.30, 0.60], blue: [0.15, 0.06],
 };
@@ -96,6 +105,16 @@ async function decodeManagedPng(bytes: Uint8Array): Promise<{
   const converted = lcms.transform(profile, png.colors, png.model, png.bits, png.alpha);
   return { width: png.width, height: png.height,
     data: png.bits === 16 ? rgba8To16(converted) : converted, bitDepth: png.bits };
+}
+
+function managedPngColor(color: ReturnType<typeof decodePng>['colorInfo']): boolean {
+  return color.iccp || color.chrm
+    || (color.gama !== null && !color.srgb && Math.abs(color.gama - 0.45455) > 0.0005);
+}
+
+/** Whether archive reopen must use the colour-managed import path instead of the PNG fast path. */
+export function pngNeedsColorConversion(bytes: Uint8Array): boolean {
+  return managedPngColor(decodePng(bytes).colorInfo);
 }
 
 async function decodeJpeg(bytes: Uint8Array, info: JpegInfo): Promise<{ width: number; height: number; data: Uint8Array }> {
@@ -119,8 +138,9 @@ async function decodeJpeg(bytes: Uint8Array, info: JpegInfo): Promise<{ width: n
   return orientRgba(data, samples.width, samples.height, info.orientation);
 }
 
-/** Decodes an image file into a raster that remembers its original bytes. */
-export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number, options: ImageDecodeOptions = {}): Promise<Raster> {
+/** Shared import/project decoder, matching ImageImporter.decode's orientation and sRGB conversion. */
+export async function decodeImageAsset(bytes: Uint8Array, remainingPixels: number,
+  options: ImageDecodeOptions = {}): Promise<DecodedImageAsset> {
   const kind = sniffImage(bytes);
   if (!kind) throw new ImageImportError('unsupported');
   let width = 0, height = 0;
@@ -145,8 +165,7 @@ export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number
   if (kind === 'image/png') {
     let png: ReturnType<typeof decodePng>;
     try { png = decodePng(bytes); } catch { throw new ImageImportError('unreadable'); }
-    const managed = png.colorInfo.iccp || png.colorInfo.chrm
-      || (png.colorInfo.gama !== null && !png.colorInfo.srgb && Math.abs(png.colorInfo.gama - 0.45455) > 0.0005);
+    const managed = managedPngColor(png.colorInfo);
     // ImageImporter.swift renders into an sRGB CIContext. Do the equivalent explicitly so
     // workers and browsers agree, and so 16-bit sources reach ColorSync/lcms before RGBA8 quantization.
     if (managed) {
@@ -198,9 +217,17 @@ export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number
     pixels = await decodeMeasuredNative(bytes, kind, options.nativeDecoder);
   }
   if (pixels.width > MAX_SIDE || pixels.height > MAX_SIDE || pixels.width * pixels.height > remainingPixels) throw new ImageImportError('too-large');
+  return { width: pixels.width, height: pixels.height, channels: 4, data: pixels.data,
+    bitDepth: pixels.bitDepth === 16 ? 16 : 8, mime: kind };
+}
+
+/** Decodes an image file into a raster that remembers its original bytes. */
+export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number,
+  options: ImageDecodeOptions = {}): Promise<Raster> {
+  const pixels = await decodeImageAsset(bytes, remainingPixels, options);
   return Raster.fromPixels(pixels.width, pixels.height, 4, pixels.data, {
     format: pixels.bitDepth === 16 ? 'rgba16' : 'rgba8',
-    source: { bytes, mime: kind, sha256: sha256Hex(bytes) },
+    source: { bytes, mime: pixels.mime, sha256: sha256Hex(bytes) },
   });
 }
 
