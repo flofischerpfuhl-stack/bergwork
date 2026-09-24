@@ -135,6 +135,8 @@ export class EditorController {
   /** Number keys for tools with their own opacity (brushes, gradient); true when handled. */
   opacityKey: ((digit: number) => boolean) | null = null;
   clipboardImageSize: (() => Promise<{ width: number; height: number } | null>) | null = null;
+  /** Extra thumbnails after a layer row's mask (vector masks), provided by feature modules. */
+  layerThumbs: ((session: EditorSession, layer: import('../core/document').Layer) => ReactNode)[] = [];
   /** Lazily loaded renderers (text) that must finish shaping before pixels are read for export or merges. */
   renderPreparers: ((session: EditorSession) => Promise<void>)[] = [];
   private async prepareRender(): Promise<void> { for (const prepare of this.renderPreparers) await prepare(this.session); }

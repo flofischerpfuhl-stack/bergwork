@@ -60,6 +60,11 @@ test('brush paints on the blank layer, eraser clears, shape adds a layer, gradie
   m = await manifest(page);
   expect(m.layers).toHaveLength(2);
   expect(m.layers[1].kind).toBe('shape');
+  // The upgraded Shape tool keeps the rectangle editable: a parametric vector layer, not baked pixels.
+  expect(await page.evaluate(() => {
+    const layer = (window as any).__editorForTests.session.document.layers[1];
+    return { kind: layer.kind, shape: layer.sourceShape?.kind, origin: layer.transform.origin, size: layer.transform.size };
+  })).toEqual({ kind: 'vector', shape: 'Rectangle', origin: { x: 60, y: 60 }, size: { width: 30, height: 30 } });
   pixels = await exportedPixels(page);
   expect(px(pixels, 75, 75)).toEqual([0, 0, 0, 255]);
 

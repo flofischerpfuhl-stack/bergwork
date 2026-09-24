@@ -1,7 +1,7 @@
 /**
  * Painting tools in the UI: Brush/Eraser and Clone Stamp (BrushStroke engine), Smear with Blur,
- * Smudge and Liquify (retouch engines), Gradient, Shape, Eyedropper with its sample ring, and the
- * Color Picker. Ported from BrushControls/GradientControls/ShapeControls/ColorPickerSheet.swift,
+ * Smudge and Liquify (retouch engines), Gradient, Eyedropper with its sample ring, and the
+ * Color Picker (the Shape tool lives in vectorFeature). Ported from BrushControls/GradientControls/ColorPickerSheet.swift,
  * EditorCanvas.swift (brush, gradient, shape and sampling gestures, brush cursor, sample ring) and
  * the key handling in NativeLayerList/EditorCanvas ([ ] size, Shift-[ ] hardness, 1–0 opacity).
  */
@@ -24,7 +24,6 @@ import {
   beginGradient, cancelGradient, commitGradient, defaultGradientSettings, endGradientDrag, handleGradientKey, pendingGradient,
   pendingGradientPreview, refreshGradient, updateGradient, type GradientSettings, type GradientShape, type GradientStyle,
 } from '../core/gradient';
-import { beginShape, cancelShape, commitShape, currentShapeDraft, updateShape, type ShapeKind } from '../core/shape';
 import type { ToolContext, ToolHandler } from '../ui/canvas/tools';
 import type { CanvasView } from '../ui/canvas/CanvasView';
 
@@ -34,8 +33,6 @@ interface PaintState {
   smear: { diameter: number; hardness: number; opacity: number };
   smearMode: RetouchMode;
   gradient: GradientSettings;
-  shapeKind: ShapeKind;
-  cornerRadius: number;
   showsSampleRing: boolean;
   sampling: { point: Point; original: PaletteColor; sampled: PaletteColor } | null;
 }
@@ -46,7 +43,7 @@ export function paintState(session: EditorSession): PaintState {
     state = {
       smear: { diameter: 40, hardness: 0, opacity: 1 }, smearMode: 'liquify',
       gradient: defaultGradientSettings(session.foregroundColor, session.backgroundColor),
-      shapeKind: 'Rectangle', cornerRadius: 0, showsSampleRing: true, sampling: null,
+      showsSampleRing: true, sampling: null,
     };
     paintStates.set(session, state);
   }
@@ -196,26 +193,6 @@ class GradientTool implements ToolHandler {
   }
 }
 
-// MARK: Shape
-
-class ShapeTool implements ToolHandler {
-  down(c: ToolContext): void {
-    const state = paintState(c.session);
-    beginShape(c.session, c.pixel, state.shapeKind, state.cornerRadius);
-  }
-  move(c: ToolContext): void {
-    if (!currentShapeDraft(c.session)) return;
-    // Unlike the Marquee, Option has no other job here, so it draws from the centre.
-    updateShape(c.session, c.pixel, c.modifiers.shift, c.modifiers.option);
-  }
-  up(c: ToolContext): void {
-    if (!currentShapeDraft(c.session)) return;
-    commitShape(c.session, c.session.foregroundColor);
-  }
-  cancel(session: EditorSession): void { cancelShape(session); }
-  hover(): string { return 'crosshair'; }
-}
-
 // MARK: Eyedropper
 
 /** ColorPalette.sampleCompositeColor: the visible composite at a document pixel, or null where transparent. */
@@ -324,20 +301,6 @@ function paintCursors(view: CanvasView) {
         context.fillStyle = 'rgb(191,191,191)'; context.beginPath(); context.arc(p.x, p.y, 3.5, 0, Math.PI * 2); context.fill();
         context.fillStyle = color; context.beginPath(); context.arc(p.x, p.y, 3.5, 0, Math.PI * 2); context.fill();
       }
-    }
-    // Shape being dragged, in the colour it will get.
-    const draft = currentShapeDraft(session);
-    if (draft && draft.rect.width > 0 && draft.rect.height > 0) {
-      const o = session.viewport.viewPoint({ x: draft.rect.x, y: draft.rect.y }, document);
-      const w = draft.rect.width * ppp, h = draft.rect.height * ppp;
-      const path = new Path2D();
-      if (draft.kind === 'Ellipse') path.ellipse(o.x + w / 2, o.y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
-      else path.roundRect(o.x, o.y, w, h, Math.min(draft.cornerRadius * ppp, w / 2, h / 2));
-      context.fillStyle = css(session.foregroundColor);
-      context.fill(path);
-      context.strokeStyle = 'rgba(0,0,0,0.6)';
-      context.lineWidth = 1;
-      context.stroke(path);
     }
     // Sample ring while the eyedropper samples (SampleRingOverlay): new colour on top, original below.
     const sampling = paintState(session).sampling;
@@ -472,32 +435,6 @@ function GradientBar({ controller, session }: { controller: EditorController; se
           <button type="button" className={`${styles.pill} ${styles.pillPrimary}`} onClick={() => { commitGradient(session); syncPreview(session); }}>{t('Apply')}</button>
         </>
       ) : null}
-    </>
-  );
-}
-
-function ShapeBar({ controller, session }: { controller: EditorController; session: EditorSession }) {
-  useSession(session);
-  const t = controller.t;
-  const state = paintState(session);
-  return (
-    <>
-      <span className={styles.headerTitle}>{t('Shape')}</span>
-      <div className={styles.segmented} role="radiogroup" aria-label={t('Shape')}>
-        {(['Rectangle', 'Ellipse'] as ShapeKind[]).map((v) => <button key={v} type="button" role="radio" aria-checked={state.shapeKind === v}
-          className={`${styles.segment} ${state.shapeKind === v ? styles.segmentOn : ''}`}
-          onClick={() => { cancelShape(session); state.shapeKind = v; session.notify('ui'); }}>{t(v)}</button>)}
-      </div>
-      {state.shapeKind === 'Rectangle' ? (
-        <>
-          <span className={styles.secondary}>{t('Radius')}</span>
-          <input className={styles.slider} style={{ width: 100, flex: 'none' }} type="range" min={0} max={200} step={1} value={Math.min(200, state.cornerRadius)}
-            aria-label={t('Radius')} onChange={(e) => { state.cornerRadius = Number(e.target.value); session.notify('ui'); }} />
-          <NumberField label="" suffix="px" width={48} value={state.cornerRadius} onChange={(v) => { state.cornerRadius = Math.min(5000, Math.max(0, v)); session.notify('ui'); }} />
-        </>
-      ) : null}
-      <span className={styles.secondary}>{t('Fill')}</span>
-      <Swatch color={session.foregroundColor} label={t('Foreground color')} onClick={() => controller.openColorPicker?.(false)} />
     </>
   );
 }
@@ -668,7 +605,7 @@ class PickerSampler implements ToolHandler {
 export function installPainting(controller: EditorController): void {
   const previousIcon = controller.toolIcon;
   controller.toolIcon = (tool) => (tool === 'brush' && getBrushSettings(controller.session).mode === 'erase' ? 'eraser' : previousIcon?.(tool) ?? null);
-  for (const tool of ['brush', 'cloneStamp', 'blur', 'gradient', 'shape', 'eyedropper'] as const) controller.availableTools.add(tool);
+  for (const tool of ['brush', 'cloneStamp', 'blur', 'gradient', 'eyedropper'] as const) controller.availableTools.add(tool);
   controller.canvasSetups.push((view) => {
     const brush = new BrushTool();
     view.tools.brush = brush;
@@ -681,29 +618,21 @@ export function installPainting(controller: EditorController): void {
     };
     view.tools.blur = new SmearTool();
     view.tools.gradient = new GradientTool();
-    view.tools.shape = new ShapeTool();
     view.tools.eyedropper = new EyedropperTool(controller);
     view.painters.push(paintCursors(view));
   });
   for (const tool of ['brush', 'cloneStamp', 'blur'] as const) controller.contextBars[tool] = (session) => <BrushBar controller={controller} session={session} />;
   controller.contextBars.gradient = (session) => <GradientBar controller={controller} session={session} />;
-  controller.contextBars.shape = (session) => <ShapeBar controller={controller} session={session} />;
   controller.contextBars.eyedropper = (session) => <EyedropperBar controller={controller} session={session} />;
   const t = controller.t;
   controller.statusHints.brush = (s) => `${getBrushSettings(s).mode === 'erase' ? t('Drag to erase') : t('Drag to paint')} · ${t('[ ] size · Shift-[ ] hardness · 1–0 opacity · Escape cancel · Space to pan')}`;
   controller.statusHints.blur = (s) => `${paintState(s).smearMode === 'blur' ? t('Drag to soften') : paintState(s).smearMode === 'smudge' ? t('Drag to smudge') : t('Drag to push pixels')} · ${t('[ ] size · Shift-[ ] hardness · 1–0 strength · Space to pan')}`;
   controller.statusHints.cloneStamp = () => t('Option-click to set the source · Drag to clone · [ ] size · Shift-[ ] hardness · 1–0 opacity · Space to pan');
-  controller.statusHints.shape = (s) => `${t('Drag to draw a shape on a new layer')} · ${t('Shift')} ${paintState(s).shapeKind === 'Rectangle' ? t('square') : t('circle')} · ${t('Option from center · Shift-U switches · Escape cancel · Space to pan')}`;
   controller.statusHints.gradient = () => t('Drag to draw · Drag ends to adjust · Shift 45° · 1–0 opacity · Enter apply · Escape cancel');
   controller.statusHints.eyedropper = () => t('Click or drag to sample the canvas colour');
 
   controller.toolKeyHandlers.b = () => { controller.session.selectTool('brush'); setBrushSettings(controller.session, { ...getBrushSettings(controller.session), mode: 'paint' }); };
   controller.toolKeyHandlers.e = () => { controller.session.selectTool('brush'); setBrushSettings(controller.session, { ...getBrushSettings(controller.session), mode: 'erase' }); };
-  controller.toolKeyHandlers.u = (shift) => {
-    const session = controller.session;
-    if (shift && session.tool === 'shape') { const s = paintState(session); cancelShape(session); s.shapeKind = s.shapeKind === 'Rectangle' ? 'Ellipse' : 'Rectangle'; session.notify('ui'); }
-    else session.selectTool('shape');
-  };
   controller.opacityKey = (digit) => {
     const session = controller.session;
     if (!isBrushLike(session.tool) && session.tool !== 'gradient') return false;
@@ -730,7 +659,6 @@ export function installPainting(controller: EditorController): void {
     if (event.key === 'Escape' && (isBrushStrokeActive(session) || currentRetouchPreview(session))) {
       cancelBrushStroke(session); cancelRetouch(session); syncPreview(session); return true;
     }
-    if (event.key === 'Escape' && currentShapeDraft(session)) { cancelShape(session); return true; }
     if (!isBrushLike(session.tool)) return false;
     const smear = session.tool === 'blur';
     const step = (increase: boolean, hardness: boolean) => {

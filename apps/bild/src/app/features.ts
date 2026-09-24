@@ -14,6 +14,7 @@ import { installGuides } from './guidesFeature';
 import { installLayerStyles } from './layerStylesFeature';
 import { installArtboards } from './artboardFeature';
 import { installText } from './textFeature';
+import { installVector } from './vectorFeature';
 import type { EditorProfile } from './profiles';
 
 export function installFeatures(controller: EditorController, profile: EditorProfile = controller.profile): void {
@@ -28,6 +29,7 @@ export function installFeatures(controller: EditorController, profile: EditorPro
   if (enabled.has('styles')) installLayerStyles(controller);
   if (enabled.has('artboards')) installArtboards(controller);
   if (enabled.has('text')) installText(controller);
+  if (enabled.has('vector')) installVector(controller);
   const tools = new Set(profile.tools);
   for (const tool of controller.availableTools) if (!tools.has(tool)) controller.availableTools.delete(tool);
 }
