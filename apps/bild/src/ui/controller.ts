@@ -23,7 +23,12 @@ import { unzipSync } from 'fflate';
 import { encodeArchive } from '../workers/archiveClient';
 import { isQuotaError, RecoveryStore } from '../platform/recovery';
 import { browserDecode, decodeImageFile, fileBaseName, ImageImportError } from '../io/imageImport';
-import { DEFAULT_JPEG, jpegBlob, pngBlob, type JpegOptions } from '../io/export';
+import { DEFAULT_JPEG, type JpegOptions } from '../io/export';
+import {
+  planExport, type ExportFile, type ExportFormat, type ExportPlanItem, type ExportRenderer, type ExportRequest, type ExportRunOptions,
+} from '../io/exportPlan';
+import type { ExportSizeEstimate } from '../io/exportPipeline';
+import { zipSync } from 'fflate';
 import { encodePng } from '../io/png';
 import { sha256Hex } from '../io/sha256';
 import type { GpuCompositor } from '../render/gpuCompositor';
@@ -52,6 +57,9 @@ export interface CanvasHost {
   redraw(): void;
   /** Straight-alpha pixels of a document region composited like the canvas. */
   readRegion(document: CanvasDocument, x: number, y: number, width: number, height: number): Uint8Array;
+  /** Export rendering at any scale (`ExportRenderer`); optional for hosts that only read regions. */
+  readView?(document: CanvasDocument, width: number, height: number, viewToDoc: import('../core/geometry').Affine, scale: number): Uint8Array;
+  readViewFloat?(document: CanvasDocument, width: number, height: number, viewToDoc: import('../core/geometry').Affine, scale: number): Float32Array | null;
 }
 
 /** Whether a ZIP holds a macOS Compositor package rather than this port's archive (listing names only). */
@@ -549,36 +557,96 @@ export class EditorController {
     } catch (error) { this.reportError('save-failed', error); }
   }
 
-  async exportBlob(format: 'png' | 'jpeg', options: Partial<JpegOptions> = {}, session: EditorSession = this.session): Promise<Blob> {
-    const document = session.document;
-    if (!document) throw new ProjectError('no-document', 'There is no canvas to export.');
-    if (document.width * document.height > 100_000_000 || document.width > MAX_SIDE || document.height > MAX_SIDE) {
-      throw new ProjectError('too-large', 'Image export supports canvases up to 100 megapixels and 30,000 pixels per side.');
-    }
-    session.commitTransform();
+  // MARK: Export (one pipeline: src/io/exportPipeline.ts)
+
+  /** The canvas compositor as export renderer (GPU where available, the same pixels as the canvas). */
+  private async exportRenderer(): Promise<ExportRenderer> {
     const canvas = await this.readyCanvas();
-    const pixels = canvas.readRegion(document, 0, 0, document.width, document.height);
-    if (format === 'png') return pngBlob(pixels, document.width, document.height, document.resolution);
-    return jpegBlob(pixels, document.width, document.height, document.resolution, { ...this.jpegOptions, ...options });
+    if (canvas.readView) {
+      return {
+        readView: (document, width, height, view, scale) => canvas.readView!(document, width, height, view, scale),
+        readViewFloat: (document, width, height, view, scale) => canvas.readViewFloat?.(document, width, height, view, scale) ?? null,
+      };
+    }
+    const cpu = (await import('../io/exportPipeline')).cpuExportRenderer();
+    return {
+      readView: (document, width, height, view, scale) => (view.a === 1 && view.d === 1 && view.b === 0 && view.c === 0
+        && Number.isInteger(view.tx) && Number.isInteger(view.ty)
+        ? canvas.readRegion(document, view.tx, view.ty, width, height) : cpu.readView(document, width, height, view, scale)),
+      readViewFloat: cpu.readViewFloat!,
+    };
   }
 
-  /** Export: choose the file first (see save), then read the pixels back and encode. */
-  async exportTo(format: 'png' | 'jpeg'): Promise<void> {
+  /** Request defaults shared by every entry point: the project name and the stored JPEG settings. */
+  exportRequest(format: ExportFormat, overrides: Partial<ExportRequest> = {}, session: EditorSession = this.session): ExportRequest {
+    const jpeg = format === 'jpeg' ? { quality: this.jpegOptions.quality,
+      matte: { red: this.jpegOptions.red, green: this.jpegOptions.green, blue: this.jpegOptions.blue } } : {};
+    return { targets: [{ kind: 'document' }], format, baseName: session.projectName ?? this.workspace.current.title, ...jpeg, ...overrides };
+  }
+
+  /** File names and pixel sizes a request produces (synchronous; for the export dialog). */
+  planExport(request: ExportRequest, session: EditorSession = this.session): ExportPlanItem[] {
+    return planExport(session.document, request);
+  }
+
+  /** Renders and encodes a request without saving (dialog previews, `EditorHandle.exportImage`). */
+  async exportFiles(request: ExportRequest, options: ExportRunOptions = {}, session: EditorSession = this.session): Promise<ExportFile[]> {
+    session.commitTransform();
+    planExport(session.document, request); // fail fast before waiting for the canvas
+    const { runExport } = await import('../io/exportPipeline');
+    return runExport(session.document, request, await this.exportRenderer(), options);
+  }
+
+  /** File-size preview: really encodes (small outputs in full, large ones as a tile mosaic) in a worker; cancel with `signal`. */
+  async estimateExport(request: ExportRequest, options: ExportRunOptions = {}, session: EditorSession = this.session): Promise<ExportSizeEstimate[]> {
+    session.commitTransform();
+    const { estimateExportSize } = await import('../io/exportPipeline');
+    return estimateExportSize(session.document, request, await this.exportRenderer(), options);
+  }
+
+  /**
+   * Export with saving: the destination is chosen first, while the user's click still counts (see save),
+   * then pixels are rendered and encoded. Several files are saved as one ZIP.
+   */
+  async exportWith(request: ExportRequest, options: ExportRunOptions = {}): Promise<boolean> {
     const session = this.session;
-    if (!session.document) return;
+    if (!session.document) return false;
     try {
-      const name = `${session.projectName ?? this.workspace.current.title}.${format === 'png' ? 'png' : 'jpg'}`;
+      session.commitTransform();
+      const plan = planExport(session.document, request);
+      const single = plan.length === 1;
+      const name = single ? plan[0]!.name : `${request.baseName ?? session.projectName ?? this.workspace.current.title} export.zip`;
       const files = this.capabilities.files;
       let target: FileSaveTarget | null = null;
       if (files) {
-        target = await files.chooseSaveTarget(name, format);
-        if (!target) return;
+        target = await files.chooseSaveTarget(name, single ? request.format : 'zip');
+        if (!target) return false;
       }
-      const blob = await this.exportBlob(format);
-      if (format === 'jpeg') storeQuality(this.jpegOptions.quality);
+      const { runExport } = await import('../io/exportPipeline');
+      const encoded = await runExport(session.document, request, await this.exportRenderer(), options);
+      const blob = single
+        ? new Blob([encoded[0]!.bytes as Uint8Array<ArrayBuffer>], { type: encoded[0]!.mime })
+        : new Blob([zipSync(Object.fromEntries(encoded.map((file) => [file.name, [file.bytes, { level: 0 }]]))) as Uint8Array<ArrayBuffer>],
+          { type: 'application/zip' });
       if (target && files) await files.writeFile(target, blob);
       else await this.host.saveFile(blob, name);
-    } catch (error) { this.reportError('export-failed', error); }
+      return true;
+    } catch (error) { this.reportError('export-failed', error); return false; }
+  }
+
+  async exportBlob(format: 'png' | 'jpeg', options: Partial<JpegOptions> = {}, session: EditorSession = this.session): Promise<Blob> {
+    const jpeg = { ...this.jpegOptions, ...options };
+    const request = this.exportRequest(format, format === 'jpeg'
+      ? { quality: jpeg.quality, matte: { red: jpeg.red, green: jpeg.green, blue: jpeg.blue } } : {}, session);
+    const [file] = await this.exportFiles(request, {}, session);
+    return new Blob([file!.bytes as Uint8Array<ArrayBuffer>], { type: file!.mime });
+  }
+
+  /** File > Export PNG/JPEG: the whole canvas at 1×, through the same pipeline as the export dialog. */
+  async exportTo(format: 'png' | 'jpeg'): Promise<void> {
+    if (!this.session.document) return;
+    const exported = await this.exportWith(this.exportRequest(format));
+    if (exported && format === 'jpeg') storeQuality(this.jpegOptions.quality);
   }
 
   async closeTab(id: string): Promise<void> {

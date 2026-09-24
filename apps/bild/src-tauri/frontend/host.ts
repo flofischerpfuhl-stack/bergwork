@@ -6,6 +6,11 @@ import { bindCapabilityRegistry } from '../../src/platform/hosts';
 interface NativeTarget extends SaveTarget { readonly path: string }
 const IMAGE_FILTER = { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff', 'heic', 'heif', 'psd'] };
 const PROJECT_FILTER = { name: 'Fernwork image project', extensions: ['fwimg', 'zip'] };
+const SAVE_FILTERS: Record<'png' | 'jpeg' | 'webp' | 'avif' | 'tiff' | 'zip', { name: string; extensions: string[] }> = {
+  png: { name: 'PNG image', extensions: ['png'] }, jpeg: { name: 'JPEG image', extensions: ['jpg', 'jpeg'] },
+  webp: { name: 'WebP image', extensions: ['webp'] }, avif: { name: 'AVIF image', extensions: ['avif'] },
+  tiff: { name: 'TIFF image', extensions: ['tif', 'tiff'] }, zip: { name: 'Exported images (ZIP)', extensions: ['zip'] },
+};
 const baseName = (path: string) => path.split(/[\\/]/).at(-1) || path;
 const ownedBytes = (bytes: Uint8Array): Uint8Array<ArrayBuffer> => new Uint8Array(bytes);
 async function asFiles(paths: readonly string[]): Promise<File[]> {
@@ -25,8 +30,7 @@ function nativeFiles(): FileSystemHost {
       return paths.map((id) => ({ id, name: baseName(id) }));
     },
     async chooseSaveTarget(suggestedName, kind) {
-      const filters = kind === 'project' ? [PROJECT_FILTER]
-        : [{ name: kind === 'png' ? 'PNG image' : 'JPEG image', extensions: kind === 'png' ? ['png'] : ['jpg', 'jpeg'] }];
+      const filters = kind === 'project' ? [PROJECT_FILTER] : [SAVE_FILTERS[kind]];
       const path = await window.__TAURI__.dialog.save({ defaultPath: suggestedName, filters });
       return path ? { name: baseName(path), path } as NativeTarget : null;
     },

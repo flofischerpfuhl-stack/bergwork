@@ -129,6 +129,20 @@ Artboards are not layers. Each item has `id`, `name`, a document-space `rect`, R
 `colorLabel`. Their order is document order. Layer membership remains spatial/hierarchical rather
 than being encoded by an artboard parent.
 
+Membership rule (`src/core/artboards.ts`): a top-level layer together with its descendants is one
+unit; a top-level layer clipped to or live-masked by another unit joins that unit. A unit's bounds
+are the union of its layers' content bounds (alpha-trimmed pixels through the layer transform;
+the transform box for vector, text and embedded layers without a rendered cache; folders,
+adjustment and fill layers have none). The unit belongs to the last artboard in document order whose
+rect contains the centre of those bounds. Units without bounds or outside every artboard are loose
+and render into every export region they overlap. An artboard export shows its own members and the
+loose units, clipped to its rect, over its background.
+
+Artboard rects are whole pixels inside the canvas (`x, y >= 0`); editors grow the canvas to the
+right/bottom to fit them. Readers accept records without `background` (white, opaque) or with an
+unknown `colorLabel` (`none`) and drop duplicate ids. A file without artboards exports the whole
+canvas.
+
 ## Saved history
 
 `history` has `schemaVersion:1`, `enabled`, `retainedByteLimit`, `cursor`, `commands`, and `snapshots`.

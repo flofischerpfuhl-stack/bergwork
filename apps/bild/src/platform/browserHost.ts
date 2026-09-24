@@ -34,6 +34,10 @@ const PICKER_TYPES = {
   project: { description: 'Fernwork image project', accept: { 'application/zip': ['.fwimg', '.zip'] } },
   png: { description: 'PNG image', accept: { 'image/png': ['.png'] } },
   jpeg: { description: 'JPEG image', accept: { 'image/jpeg': ['.jpg', '.jpeg'] } },
+  webp: { description: 'WebP image', accept: { 'image/webp': ['.webp'] } },
+  avif: { description: 'AVIF image', accept: { 'image/avif': ['.avif'] } },
+  tiff: { description: 'TIFF image', accept: { 'image/tiff': ['.tif', '.tiff'] } },
+  zip: { description: 'Exported images (ZIP)', accept: { 'application/zip': ['.zip'] } },
 } as const;
 
 interface HandleTarget extends SaveTarget { readonly handle: FileSystemFileHandle }

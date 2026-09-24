@@ -9,7 +9,8 @@ export interface HostFileReference {
 }
 
 export interface FileSaveTarget { readonly name: string }
-export type FileSaveKind = 'project' | 'png' | 'jpeg';
+/** `zip` holds several exported files (one export request with several targets or sizes). */
+export type FileSaveKind = 'project' | 'png' | 'jpeg' | 'webp' | 'avif' | 'tiff' | 'zip';
 
 /** Fallback: HostAdapter pickers/downloads remain usable when this capability is absent. */
 export interface FileSystemHost extends VersionedCapability {
