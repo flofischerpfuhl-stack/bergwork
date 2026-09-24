@@ -35,6 +35,7 @@ import { decodePng, decodePngNativeRGBA, encodePng } from './png';
 import { sha256Hex } from './sha256';
 import { normalizeArtboards } from '../core/artboards';
 import { parseCubeLut } from '../core/adjust/cube';
+import { pngNeedsColorConversion } from './imageImport';
 
 export const EXTENSION_KEY = 'org.compositor.port';
 const MANIFEST_LIMIT = 4 * 1024 * 1024;
@@ -243,6 +244,26 @@ function liveAdjustment(value: AdjustmentRecordV2): LayerAdjustment {
 
 interface V2BuildContext { assets: Map<string, AssetRecordV2>; rasters: Map<string, Raster>; binaryAssets: Map<string, Uint8Array> }
 
+interface SerializedSelectionV2 {
+  readonly assetId: string;
+  readonly x: number;
+  readonly y: number;
+  readonly antialiased: boolean;
+}
+
+interface V2DocumentExtras {
+  readonly guides: NonNullable<CanvasDocument['guides']>;
+  /** Resource bytes remain global ZIP assets; documents carry only their references. */
+  readonly resources: readonly string[];
+  readonly fonts: NonNullable<CanvasDocument['fonts']>;
+  readonly selection: SerializedSelectionV2 | null;
+}
+
+type V2DocumentSource = Pick<ProjectManifestV2,
+  'id' | 'width' | 'height' | 'resolution' | 'globalLightAngle' | 'layers' | 'artboards'>
+  & Partial<Pick<ProjectManifestV2, 'guides' | 'fonts'>>
+  & Partial<Pick<V2DocumentExtras, 'resources' | 'selection'>>;
+
 function addV2Asset(context: V2BuildContext, raster: Raster, role: AssetRecordV2['role']): string {
   const occupied = context.assets.get(raster.id);
   if (occupied && occupied.role !== role) throw new ProjectError('invalid', `Asset ID ${raster.id} is used for incompatible roles.`);
@@ -254,6 +275,16 @@ function addV2Asset(context: V2BuildContext, raster: Raster, role: AssetRecordV2
     context.rasters.set(raster.id, raster);
   }
   return raster.id;
+}
+
+function v2DocumentExtras(document: CanvasDocument, context: V2BuildContext): V2DocumentExtras {
+  return {
+    guides: document.guides ?? [],
+    resources: (document.resources ?? []).map((resource) => resource.id),
+    fonts: document.fonts ?? [],
+    selection: document.selection ? { assetId: addV2Asset(context, document.selection.mask, 'mask'),
+      x: document.selection.x, y: document.selection.y, antialiased: document.selection.antialiased } : null,
+  };
 }
 
 function v2Layer(layer: Layer, context: V2BuildContext): LayerRecordV2 {
@@ -313,11 +344,11 @@ function manifestV2WithContext(document: CanvasDocument, name: string, activeLay
     context.binaryAssets.set(resource.id, resource.bytes);
   }
   const layers = document.layers.map((layer) => v2Layer(layer, context));
+  const extras = v2DocumentExtras(document, context);
   return { format: 'fernwork-image', version: 2, id: document.id, name, width: document.width, height: document.height,
     resolution: document.resolution, globalLightAngle: document.globalLightAngle ?? 120,
     colorSpace: 'srgb', activeLayerId, layers, artboards: document.artboards ?? [],
-    ...(document.guides?.length ? { guides: document.guides.map((g) => ({ id: g.id, orientation: g.orientation, position: g.position })) } : {}),
-    assets: [...context.assets.values()], ...(document.fonts?.length ? { fonts: document.fonts } : {}) };
+    ...extras, assets: [...context.assets.values()] };
 }
 
 /** Native v2 manifest. `buildManifest` remains the v1 compatibility projection for EditorHandle. */
@@ -348,11 +379,28 @@ export function writeArchive(document: CanvasDocument, name: string, activeLayer
   return { blob: new Blob([zipped as BlobPart], { type: 'application/zip' }), manifest };
 }
 
+type SerializedHistoryDocumentV2 = Pick<V2DocumentSource,
+  'id' | 'width' | 'height' | 'resolution' | 'globalLightAngle' | 'layers' | 'artboards'> & V2DocumentExtras;
+
 interface HistorySnapshotFile {
-  document: Omit<ProjectManifestV2, 'format' | 'version' | 'name' | 'assets' | 'history'> | null;
+  document: SerializedHistoryDocumentV2 | null;
   activeLayerId: string | null;
   revision: number;
   tileRasters?: readonly { id: string; width: number; height: number; channels: 1 | 4; format?: string; tiles: readonly (string | null)[] }[];
+}
+
+function historyDocument(document: CanvasDocument, built: ProjectManifestV2): SerializedHistoryDocumentV2 {
+  const supported = new Set<keyof CanvasDocument>([
+    'id', 'width', 'height', 'resolution', 'globalLightAngle', 'layers', 'artboards', 'guides', 'resources', 'fonts', 'selection',
+  ]);
+  // A newly added document field must fail loudly until its archive representation is defined.
+  for (const key of Object.keys(document) as (keyof CanvasDocument)[]) {
+    if (!supported.has(key)) throw new ProjectError('encode', `History cannot encode document field ${String(key)}.`);
+  }
+  const source = built as ProjectManifestV2 & V2DocumentExtras;
+  return { id: built.id, width: built.width, height: built.height, resolution: built.resolution,
+    globalLightAngle: built.globalLightAngle, layers: built.layers, artboards: built.artboards,
+    guides: source.guides, resources: source.resources, fonts: source.fonts, selection: source.selection };
 }
 
 function writeHistory(state: PersistedHistoryState, name: string, context: V2BuildContext, files: Zippable): ProjectHistoryV2 {
@@ -389,11 +437,8 @@ function writeHistory(state: PersistedHistoryState, name: string, context: V2Bui
         tileRasters.push({ id: raster.id, width: raster.width, height: raster.height, channels: raster.channels, format: raster.format, tiles });
       }
     }
-    const value: HistorySnapshotFile = { document: built ? {
-      id: built.id, width: built.width, height: built.height, resolution: built.resolution, colorSpace: built.colorSpace,
-      globalLightAngle: built.globalLightAngle, activeLayerId: built.activeLayerId, layers: built.layers,
-      artboards: built.artboards, extensions: built.extensions,
-    } : null, activeLayerId: snapshot.activeLayerId, revision: snapshot.revision, tileRasters };
+    const value: HistorySnapshotFile = { document: built && snapshot.document ? historyDocument(snapshot.document, built) : null,
+      activeLayerId: snapshot.activeLayerId, revision: snapshot.revision, tileRasters };
     files[path] = [new TextEncoder().encode(JSON.stringify(value)), { level: 6 }];
     snapshots.push({ id, path, activeLayerId: snapshot.activeLayerId, revision: snapshot.revision });
     return id;
@@ -405,7 +450,9 @@ function writeHistory(state: PersistedHistoryState, name: string, context: V2Bui
 
 // MARK: Reading
 
-export type ImageDecoder = (bytes: Uint8Array, mime: string) => Promise<{ width: number; height: number; channels: 1 | 4; data: Uint8Array }>;
+export type ImageDecoder = (bytes: Uint8Array, mime: string) => Promise<{
+  width: number; height: number; channels: 1 | 4; data: Uint8Array | Uint16Array; bitDepth?: 8 | 16;
+}>;
 
 /** Rejects absolute paths, drive letters, backslashes and any `..` segment. */
 export function isSafeRelativePath(path: string): boolean {
@@ -495,15 +542,13 @@ export async function readArchive(blob: Blob, decodeImage: ImageDecoder): Promis
     const hash = sha256Hex(bytes);
     if (hash !== record.sha256) throw new ProjectError('missing-image', 'An image inside the project is damaged (checksum mismatch). The current document has not been replaced.');
     let pixels: { width: number; height: number; channels: 1 | 4; data: Uint8Array | Uint16Array; bitDepth: 8 | 16 };
-    if (record.mime === 'image/png') {
-      if (mask) {
-        const png = decodePng(bytes);
-        pixels = { ...png, bitDepth: 8 };
-      } else {
-        const png = decodePngNativeRGBA(bytes);
-        pixels = { ...png, channels: 4 };
-      }
-    } else pixels = { ...await decodeImage(bytes, record.mime), bitDepth: 8 };
+    if (record.mime === 'image/png' && (mask || !pngNeedsColorConversion(bytes))) {
+      pixels = mask ? { ...decodePng(bytes), bitDepth: 8 } : { ...decodePngNativeRGBA(bytes), channels: 4 };
+    }
+    else {
+      const image = await decodeImage(bytes, record.mime);
+      pixels = { ...image, bitDepth: image.bitDepth ?? (image.data instanceof Uint16Array ? 16 : 8) };
+    }
     if (pixels.width !== record.width || pixels.height !== record.height) invalid('asset size does not match its record');
     let data = pixels.data;
     let channels = pixels.channels;
@@ -677,13 +722,13 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
   if (imagePixels > MAX_PIXELS || maskPixels > MAX_PIXELS) throw new ProjectError('too-large', 'This project exceeds the 100-megapixel image limit.');
 
   const rasters = new Map<string, Raster>();
-  const resources: Array<NonNullable<CanvasDocument['resources']>[number]> = [];
+  const resourceValues = new Map<string, NonNullable<CanvasDocument['resources']>[number]>();
   for (const record of records.values()) {
     if (record.role !== 'pattern' && record.role !== 'embedded' && record.role !== 'font' && record.role !== 'lut') continue;
     const bytes = entries[record.path];
     if (!bytes || sha256Hex(bytes) !== record.sha256) throw new ProjectError('missing-image', 'An embedded project asset is missing or damaged.');
     if (record.role === 'lut') try { parseCubeLut(bytes); } catch { invalid('colour lookup resource'); }
-    resources.push({ id: record.id, role: record.role, mime: record.mime, bytes });
+    resourceValues.set(record.id, { id: record.id, role: record.role, mime: record.mime, bytes });
   }
   const decode = async (id: string, mask: boolean): Promise<Raster> => {
     const existing = rasters.get(id);
@@ -698,8 +743,13 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
     if (!bytes || sha256Hex(bytes) !== record.sha256) throw new ProjectError('missing-image', 'An image inside the project is missing or damaged.');
     // Image assets keep their depth: PNG16 stays 16-bit (A3); masks and other codecs are 8-bit.
     let decoded: { width: number; height: number; channels: 1 | 4; data: Uint8Array | Uint16Array; bitDepth: 8 | 16 };
-    if (record.mime === 'image/png') decoded = mask ? { ...decodePng(bytes), bitDepth: 8 } : { ...decodePngNativeRGBA(bytes), channels: 4 };
-    else decoded = { ...await decodeImage(bytes, record.mime), bitDepth: 8 };
+    if (record.mime === 'image/png' && (mask || !pngNeedsColorConversion(bytes))) {
+      decoded = mask ? { ...decodePng(bytes), bitDepth: 8 } : { ...decodePngNativeRGBA(bytes), channels: 4 };
+    }
+    else {
+      const image = await decodeImage(bytes, record.mime);
+      decoded = { ...image, bitDepth: image.bitDepth ?? (image.data instanceof Uint16Array ? 16 : 8) };
+    }
     if (decoded.width !== record.width || decoded.height !== record.height) invalid('asset size does not match its record');
     let data = decoded.data, channels = decoded.channels;
     if (mask && channels === 4) {
@@ -719,7 +769,8 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
     return raster;
   };
 
-  const parseDocument = async (source: Pick<ProjectManifestV2, 'id' | 'width' | 'height' | 'resolution' | 'globalLightAngle' | 'layers' | 'artboards'>): Promise<CanvasDocument> => {
+  const selectionValues = new Map<string, NonNullable<CanvasDocument['selection']>>();
+  const parseDocument = async (source: V2DocumentSource): Promise<CanvasDocument> => {
     if (typeof source.id !== 'string' || !source.id || !Number.isInteger(source.width) || !Number.isInteger(source.height)
       || source.width < 1 || source.height < 1 || source.width > MAX_SIDE || source.height > MAX_SIDE
       || !num(source.resolution) || source.resolution < 1 || source.resolution > 9600
@@ -805,20 +856,37 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
         || !num(artboard.rect?.x) || !num(artboard.rect?.y) || !num(artboard.rect?.width) || !num(artboard.rect?.height)
         || artboard.rect.width < 1 || artboard.rect.height < 1) invalid('artboard');
     }
-    const guides = (source as { guides?: unknown }).guides;
+    // Snapshots written before document fields were complete inherit the live values. New files
+    // always write empty arrays/null explicitly, so an intentional earlier state stays empty.
+    const guides = source.guides ?? manifest.guides;
     if (guides !== undefined && (!Array.isArray(guides) || guides.length > 10_000 || !guides.every((g) => g && typeof g.id === 'string'
       && (g.orientation === 'horizontal' || g.orientation === 'vertical') && num(g.position) && Math.abs(g.position) <= 1_000_000))) invalid('guides');
-    const fontRecords = (manifest as ProjectManifestV2).fonts;
+    const fontRecords = source.fonts ?? manifest.fonts;
     if (fontRecords !== undefined && (!Array.isArray(fontRecords) || fontRecords.some((font) => !font
       || typeof font.id !== 'string' || typeof font.family !== 'string' || typeof font.style !== 'string'
       || !num(font.weight) || typeof font.embeddingAllowed !== 'boolean'
       || !['bundled', 'system', 'local', 'embedded'].includes(font.source)
       || (font.resourceId !== undefined && records.get(font.resourceId)?.role !== 'font')))) invalid('fonts');
+    const resourceIds = source.resources;
+    if (resourceIds !== undefined && (!Array.isArray(resourceIds) || new Set(resourceIds).size !== resourceIds.length
+      || resourceIds.some((id) => typeof id !== 'string' || !resourceValues.has(id)))) invalid('resource references');
+    const resources = resourceIds === undefined ? [...resourceValues.values()] : resourceIds.map((id) => resourceValues.get(id)!);
+    const selectionRecord = source.selection;
+    let selection: CanvasDocument['selection'] = null;
+    if (selectionRecord !== undefined && selectionRecord !== null) {
+      if (typeof selectionRecord.assetId !== 'string' || records.get(selectionRecord.assetId)?.role !== 'mask'
+        || !Number.isInteger(selectionRecord.x) || !Number.isInteger(selectionRecord.y)
+        || typeof selectionRecord.antialiased !== 'boolean') invalid('selection');
+      const key = `${selectionRecord.assetId}:${selectionRecord.x}:${selectionRecord.y}:${selectionRecord.antialiased}`;
+      selection = selectionValues.get(key) ?? { mask: await decode(selectionRecord.assetId, true),
+        x: selectionRecord.x, y: selectionRecord.y, antialiased: selectionRecord.antialiased };
+      selectionValues.set(key, selection);
+    }
     if (source.globalLightAngle !== undefined && (!num(source.globalLightAngle) || Math.abs(source.globalLightAngle) > 360_000)) invalid('global light');
     return { id: source.id, width: source.width, height: source.height, resolution: source.resolution,
       globalLightAngle: source.globalLightAngle ?? 120,
       layers, artboards: normalizeArtboards(source.artboards), ...(guides?.length ? { guides: (guides as Guide[]).map((g) => ({ id: g.id, orientation: g.orientation, position: g.position })) } : {}),
-      resources, ...(fontRecords?.length ? { fonts: fontRecords } : {}), selection: null };
+      resources, ...(fontRecords?.length ? { fonts: fontRecords } : {}), selection };
   };
 
   const document = await parseDocument(manifest);
@@ -971,7 +1039,7 @@ function validLiveFilter(value: import('../../contracts-v2').FilterRecordV2): bo
 }
 
 async function readHistory(history: ProjectHistoryV2, entries: Record<string, Uint8Array>, records: ReadonlyMap<string, AssetRecordV2>,
-  parseDocument: (source: Pick<ProjectManifestV2, 'id' | 'width' | 'height' | 'resolution' | 'globalLightAngle' | 'layers' | 'artboards'>) => Promise<CanvasDocument>): Promise<PersistedHistoryState | undefined> {
+  parseDocument: (source: V2DocumentSource) => Promise<CanvasDocument>): Promise<PersistedHistoryState | undefined> {
   if (history.schemaVersion !== 1 || !Number.isInteger(history.cursor) || history.cursor < 0 || history.cursor > history.commands.length
     || !num(history.retainedByteLimit) || history.retainedByteLimit < 0) invalid('history header');
   if (!history.enabled) return { schemaVersion: 1, enabled: false, retainedByteLimit: history.retainedByteLimit, past: [], future: [] };
@@ -994,7 +1062,7 @@ async function readHistory(history: ProjectHistoryV2, entries: Record<string, Ui
         if (!asset || asset.role !== 'history-tile' || !tile || sha256Hex(tile) !== asset.sha256) invalid('history tile asset');
       }
     }
-    const document = raw.document ? await parseDocument(raw.document as Pick<ProjectManifestV2, 'id' | 'width' | 'height' | 'resolution' | 'globalLightAngle' | 'layers' | 'artboards'>) : null;
+    const document = raw.document ? await parseDocument(raw.document) : null;
     snapshots.set(record.id, { document, activeLayerId: raw.activeLayerId, revision: raw.revision });
   }
   const commands = history.commands.map((record) => {

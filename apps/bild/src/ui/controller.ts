@@ -5,7 +5,7 @@
 
 import type { HostAdapter, LayerId, ProjectManifestV1 } from '../../contracts';
 import type { EditorHandleV2, ProjectManifestV2 } from '../../contracts-v2';
-import { MAX_SIDE, type CanvasDocument } from '../core/document';
+import { MAX_PIXELS, MAX_SIDE, type CanvasDocument } from '../core/document';
 import type { LayerEffect } from '../core/model/types';
 import { Raster, alphaBounds, cropRaster } from '../core/raster';
 import type { EditorSession, SessionServices, Tool } from '../core/session';
@@ -23,7 +23,7 @@ import { readCompPackage, readCompZip, writeCompZip } from '../io/compPackage';
 import { unzipSync } from 'fflate';
 import { encodeArchive } from '../workers/archiveClient';
 import { isQuotaError, RecoveryStore } from '../platform/recovery';
-import { browserDecode, decodeImageFile, fileBaseName, ImageImportError } from '../io/imageImport';
+import { decodeImageAsset, decodeImageFile, fileBaseName, ImageImportError } from '../io/imageImport';
 import { DEFAULT_JPEG, type JpegOptions } from '../io/export';
 import {
   planExport, type ExportFile, type ExportFormat, type ExportPlanItem, type ExportRenderer, type ExportRequest, type ExportRunOptions,
@@ -378,7 +378,9 @@ export class EditorController {
       this.installLoaded(loaded.document, loaded.activeLayerId, name?.replace(/\.comp$/i, '') ?? loaded.name);
       return;
     }
-    const loaded = await readArchive(blob, (data, mime) => browserDecode(data, mime));
+    // ProjectStore.swift canonicalizes assets to PNG. We retain original encodings for smaller
+    // files, so reopening must repeat ImageImporter.decode's colour/orientation pipeline.
+    const loaded = await readArchive(blob, (data) => decodeImageAsset(data, MAX_PIXELS, { host: this.capabilities.codecs }));
     const tab = this.workspace.createTab(name ?? loaded.name);
     tab.session.installProject(loaded.document, loaded.activeLayerId, name ?? loaded.name, loaded.history);
     this.workspace.adopt(tab);
@@ -750,4 +752,3 @@ export function trimToAlpha(raster: Raster): { raster: Raster; x: number; y: num
   if (bounds.x === 0 && bounds.y === 0 && bounds.width === raster.width && bounds.height === raster.height) return { raster, x: 0, y: 0 };
   return { raster: cropRaster(raster, bounds.x, bounds.y, bounds.width, bounds.height), x: bounds.x, y: bounds.y };
 }
-

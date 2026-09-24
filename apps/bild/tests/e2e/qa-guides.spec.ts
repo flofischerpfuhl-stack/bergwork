@@ -108,7 +108,6 @@ test('QA guides: Lock Guides blocks creating, moving and clearing; unlocking and
 
 for (const saveHistory of [true, false]) {
   test(`QA ${saveHistory ? 'bug: a project with a guide cannot be reopened when history is saved (the default)' : 'guides: a project with guides reopens when history is not saved'}`, async ({ page }) => {
-    test.fail(saveHistory, 'Known failure, owner: storage/IO lane (guides in history snapshots, non-PNG/ICC asset reopen)');
     await canvas(page);
     await newGuide(page, 'Vertical', '200');
     if (!saveHistory) {

@@ -27,7 +27,6 @@ const layerDigests = (page: Page) => page.evaluate(() => {
 const corpus = qaCorpus();
 for (const item of corpus) {
   test(`QA .fwimg round trip: ${item.file} reopens with the same pixels and bit depth`, async ({ page }) => {
-    test.fail(/^(png8_gamma1|png8_iccp_widegamut|jpeg_cmyk_fogra)\.|^tiff8_|^tiff_multipage/.test(item.file), 'Known failure, owner: storage/IO lane (guides in history snapshots, non-PNG/ICC asset reopen)');
     await mountBare(page, { width: 128, height: 96 });
     const b64 = fs.readFileSync(path.join(QA_DIR, item.file)).toString('base64');
     await page.evaluate(async ({ b64, name }) => {
@@ -161,7 +160,6 @@ test('QA bug: a .fwimg dropped on the new-tab (+) button is treated as an image 
 });
 
 test('QA bug: a project with a guide, saved and opened again through File › Open Project, is rejected as damaged', async ({ page }) => {
-  test.fail(true, 'Known failure, owner: storage/IO lane (guides in history snapshots, non-PNG/ICC asset reopen)');
   await mountForTest(page);
   await page.getByTestId('widthInput').fill('100');
   await page.getByTestId('heightInput').fill('80');
@@ -186,7 +184,6 @@ test('QA bug: a project with a guide, saved and opened again through File › Op
 });
 
 test('QA bug: the recovery copy of an unsaved document with a guide cannot be recovered after a reload', async ({ page }) => {
-  test.fail(true, 'Known failure, owner: storage/IO lane (guides in history snapshots, non-PNG/ICC asset reopen)');
   await mountForTest(page);
   await page.getByTestId('widthInput').fill('64');
   await page.getByTestId('heightInput').fill('48');
