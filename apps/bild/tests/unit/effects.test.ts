@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { writePsdUint8Array, type Psd } from 'ag-psd';
+import { writePsdUint8Array, type LayerEffectsInfo, type Psd } from 'ag-psd';
 import { compositeRegion } from '../../src/core/composite';
 import { documentWithLayerEffects } from '../../src/core/effects/document';
 import { renderEffectPasses } from '../../src/core/effects/render';
@@ -14,6 +14,13 @@ import { readPsdDocument } from '../../src/io/psd';
 const red = { red: 1, green: 0, blue: 0 };
 const green = { red: 0, green: 1, blue: 0 };
 const blue = { red: 0, green: 0, blue: 1 };
+
+function generatedEffectPsd(effects: LayerEffectsInfo, hidden = false): ReturnType<typeof readPsdDocument> {
+  const imageData = { width: 1, height: 1, data: new Uint8ClampedArray([255, 255, 255, 255]) };
+  return readPsdDocument(writePsdUint8Array({ width: 1, height: 1, imageData,
+    children: [{ name: 'Flag', top: 0, left: 0, bottom: 1, right: 1, imageData, hidden, effects }] },
+  { generateThumbnail: false }));
+}
 
 function at(pass: ReturnType<typeof renderEffectPasses>[number], x: number, y: number): number[] {
   return pass.raster.pixel(x - pass.sourceX, y - pass.sourceY);
@@ -46,6 +53,15 @@ describe('layer effects (PRODUCT-PLAN 6.7)', () => {
     const [gradient] = renderEffectPasses(new Uint8Array([255, 255]), 2, 1, [gradientStroke]);
     expect(at(gradient!, 0, 0)).toEqual([255, 0, 0, 255]);
     expect(at(gradient!, 1, 0)).toEqual([0, 0, 255, 255]);
+  });
+
+  it('positions an antialiased stroke edge from source coverage', () => {
+    const effect: LayerEffect = { kind: 'stroke', schemaVersion: 1, enabled: true, width: 1,
+      position: 'outside', color: red };
+    const [pass] = renderEffectPasses(new Uint8Array([255, 64, 0, 0]), 4, 1, [effect]);
+    // The 25%-covered edge pixel moves the outer boundary by 0.25 px, leaving 25% in the next pixel.
+    expect(at(pass!, 2, 0)).toEqual([255, 0, 0, 64]);
+    expect(at(pass!, 3, 0)[3]).toBe(0);
   });
 
   it('renders the linear distance contour for an outer glow', () => {
@@ -149,25 +165,59 @@ describe('layer effects (PRODUCT-PLAN 6.7)', () => {
   it('imports the Phase-2 PSD effects as live records and preserves Photoshop global light', () => {
     const imageData = { width: 2, height: 1, data: new Uint8ClampedArray([255, 255, 255, 255, 255, 255, 255, 255]) };
     const psd: Psd = { width: 2, height: 1, imageResources: { globalAngle: 33 }, imageData,
-      children: [{ name: 'Styled', top: 0, left: 0, bottom: 1, right: 2, imageData, effects: {
+      children: [{ name: 'Styled', top: 0, left: 0, bottom: 1, right: 2, imageData, effects: { scale: 2,
         dropShadow: [{ enabled: true, useGlobalLight: true, opacity: 0.7, angle: 10,
           distance: { units: 'Pixels', value: 4 }, size: { units: 'Pixels', value: 6 },
           choke: { units: 'Pixels', value: 20 }, color: { r: 10, g: 20, b: 30 }, blendMode: 'multiply' }],
         outerGlow: { enabled: true, opacity: 0.4, size: { units: 'Pixels', value: 3 },
           choke: { units: 'Pixels', value: 5 }, color: { r: 20, g: 40, b: 80 }, blendMode: 'screen' },
         solidFill: [{ enabled: true, opacity: 0.5, color: { r: 0, g: 255, b: 0 }, blendMode: 'normal' }],
-        gradientOverlay: [{ enabled: true, opacity: 0.6, angle: 45, scale: 80, blendMode: 'overlay',
+        gradientOverlay: [{ enabled: true, opacity: 0.6, angle: 45, scale: 0.8, blendMode: 'overlay',
           gradient: { name: 'BW', type: 'solid', colorStops: [
             { location: 0, midpoint: 0.5, color: { r: 0, g: 0, b: 0 } },
-            { location: 4096, midpoint: 0.5, color: { r: 255, g: 255, b: 255 } },
-          ], opacityStops: [{ location: 0, midpoint: 0.5, opacity: 1 }, { location: 4096, midpoint: 0.5, opacity: 1 }] } }],
+            { location: 1, midpoint: 0.5, color: { r: 255, g: 255, b: 255 } },
+          ], opacityStops: [{ location: 0, midpoint: 0.5, opacity: 1 }, { location: 1, midpoint: 0.5, opacity: 1 }] } }],
         stroke: [{ enabled: true, size: { units: 'Pixels', value: 2 }, position: 'outside', fillType: 'color',
           opacity: 1, color: { r: 255, g: 0, b: 0 }, blendMode: 'normal' }],
       } }] };
     const imported = readPsdDocument(writePsdUint8Array(psd, { generateThumbnail: false }));
     expect(imported.document.globalLightAngle).toBe(33);
-    expect(imported.document.layers[0]!.effects.map((effect) => effect.kind))
+    const importedEffects = imported.document.layers[0]!.effects;
+    expect(importedEffects.map((effect) => effect.kind))
       .toEqual(['dropShadow', 'outerGlow', 'colorOverlay', 'gradientOverlay', 'stroke']);
+    expect(importedEffects.find((effect) => effect.kind === 'stroke')).toMatchObject({ width: 2 });
+    expect(importedEffects.find((effect) => effect.kind === 'gradientOverlay')).toMatchObject({ scale: 80,
+      gradient: { stops: [{ offset: 0 }, { offset: 1 }] } });
     expect(imported.unsupported.some((issue) => issue.code === 'layer-effects')).toBe(false);
+  });
+
+  it('honours the PSD layer-effects master switch', () => {
+    const imported = generatedEffectPsd({ disabled: true, solidFill: [{ enabled: true, present: true,
+      opacity: 1, color: { r: 255, g: 0, b: 0 }, blendMode: 'normal' }] });
+    expect(imported.document.layers[0]!.effects).toEqual([]);
+  });
+
+  it('preserves a present but disabled PSD effect without rendering it', () => {
+    const imported = generatedEffectPsd({ solidFill: [{ enabled: false, present: true,
+      opacity: 1, color: { r: 255, g: 0, b: 0 }, blendMode: 'normal' }] });
+    expect(imported.document.layers[0]!.effects).toMatchObject([{ kind: 'colorOverlay', enabled: false }]);
+    expect(renderEffectPasses(new Uint8Array([255]), 1, 1, imported.document.layers[0]!.effects)).toEqual([]);
+  });
+
+  it('omits a PSD effect whose present flag is false', () => {
+    const imported = generatedEffectPsd({ solidFill: [{ enabled: true, present: false,
+      opacity: 1, color: { r: 255, g: 0, b: 0 }, blendMode: 'normal' }] });
+    expect(imported.document.layers[0]!.effects).toEqual([]);
+  });
+
+  it('preserves but does not expand effects on a hidden PSD layer', () => {
+    const imported = generatedEffectPsd({ solidFill: [{ enabled: true, present: true,
+      opacity: 1, color: { r: 255, g: 0, b: 0 }, blendMode: 'normal' }] }, true);
+    const layer = imported.document.layers[0]!;
+    expect(layer).toMatchObject({ visible: false, effects: [{ kind: 'colorOverlay', enabled: true }] });
+    const expanded = documentWithLayerEffects(imported.document, { transform: (value) => value.transform,
+      maskPlacement: (value) => value.mask?.placement ?? null, raster: (value) => value.raster,
+      maskRaster: (value) => value.mask?.raster });
+    expect(expanded.layers).toHaveLength(1);
   });
 });

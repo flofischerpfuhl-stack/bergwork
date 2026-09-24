@@ -88,6 +88,63 @@ function distanceTransform(solid: Uint8Array, width: number, height: number, dis
   return result;
 }
 
+/**
+ * Photoshop locates a stroke boundary from coverage, not an alpha > 0 silhouette. This follows
+ * psd-tools' `_signed_distance`/`_distance_band`: a partial pixel states a boundary 0.5-alpha
+ * pixels from its centre, while exact 0/1 steps retain the Euclidean half-pixel boundary.
+ */
+function signedDistance(alpha: Uint8Array, width: number, height: number, reach: number): Float32Array {
+  const count = alpha.length, inside = new Uint8Array(count), partial = new Uint8Array(count);
+  let partialCount = 0;
+  for (let i = 0; i < count; i++) {
+    inside[i] = alpha[i]! >= 128 ? 1 : 0;
+    if (alpha[i]! > 0 && alpha[i]! < 255) { partial[i] = 1; partialCount++; }
+  }
+  const toInside = distanceTransform(inside, width, height, true);
+  const toOutside = distanceTransform(inside, width, height, false);
+  const base = new Float32Array(count);
+  for (let i = 0; i < count; i++) base[i] = inside[i] ? -(toOutside[i]! - 0.5) : toInside[i]! - 0.5;
+  if (!partialCount) return base;
+
+  const hard = new Uint8Array(count);
+  let hardCount = 0;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const i = y * width + x, value = alpha[i]!;
+    if (value !== 0 && value !== 255) continue;
+    const opposite = value === 0 ? 255 : 0;
+    if ((x > 0 && alpha[i - 1] === opposite) || (x + 1 < width && alpha[i + 1] === opposite)
+      || (y > 0 && alpha[i - width] === opposite) || (y + 1 < height && alpha[i + width] === opposite)) {
+      hard[i] = 1; hardCount++;
+    }
+  }
+  const toPartial = distanceTransform(partial, width, height, true);
+  const toHard = hardCount ? distanceTransform(hard, width, height, true) : null;
+  const span = Math.ceil(reach), output = base.slice();
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const i = y * width + x;
+    if (partial[i]) { output[i] = 0.5 - alpha[i]! / 255; continue; }
+    if (toPartial[i]! > reach || (toHard && toPartial[i]! > toHard[i]!)) continue;
+    let nearest = inside[i] ? -Infinity : Infinity;
+    const top = Math.max(0, y - span), bottom = Math.min(height - 1, y + span);
+    const left = Math.max(0, x - span), right = Math.min(width - 1, x + span);
+    for (let sy = top; sy <= bottom; sy++) for (let sx = left; sx <= right; sx++) {
+      const sourceIndex = sy * width + sx;
+      if (!partial[sourceIndex]) continue;
+      const distance = Math.hypot(sx - x, sy - y);
+      if (distance > reach) continue;
+      const stated = 0.5 - alpha[sourceIndex]! / 255;
+      if (inside[i]) nearest = Math.max(nearest, stated - distance);
+      else nearest = Math.min(nearest, stated + distance);
+    }
+    if (Number.isFinite(nearest)) output[i] = nearest;
+  }
+  return output;
+}
+
+function distanceBand(distance: number, low: number, high: number): number {
+  return clamp01(high - distance + 0.5) * clamp01(distance - low + 0.5);
+}
+
 function edt1d(f: Float64Array, d: Float64Array, length: number, v: Int32Array, z: Float64Array): void {
   let k = 0; v[0] = 0; z[0] = -Infinity; z[1] = Infinity;
   for (let q = 1; q < length; q++) {
@@ -150,9 +207,8 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
   const source = expandedAlpha(alpha, width, height, margin);
   const solid = new Uint8Array(source.length);
   for (let i = 0; i < source.length; i++) solid[i] = source[i]! > 0 ? 1 : 0;
-  let toSolid: Float32Array | null = null, toEmpty: Float32Array | null = null;
+  let toSolid: Float32Array | null = null;
   const solidDistances = () => toSolid ??= distanceTransform(solid, outWidth, outHeight, true);
-  const emptyDistances = () => toEmpty ??= distanceTransform(solid, outWidth, outHeight, false);
   const behind: EffectPass[] = [], above: EffectPass[] = [];
 
   for (const effect of enabled) {
@@ -186,16 +242,13 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
       }
       behind.push(pass(rgba, outWidth, outHeight, margin, 'behind', effect.blendMode, effect.opacity, false));
     } else if (effect.kind === 'stroke') {
-      const radius = Math.max(0, effect.width), outside = solidDistances(), inside = emptyDistances(), fill = solidFill(effect);
+      const radius = Math.max(0, effect.width), fill = solidFill(effect);
+      const low = effect.position === 'inside' ? -radius : effect.position === 'center' ? -radius / 2 : 0;
+      const high = effect.position === 'inside' ? 0 : effect.position === 'center' ? radius / 2 : radius;
+      const distances = radius > 0 ? signedDistance(source, outWidth, outHeight, Math.max(Math.abs(low), Math.abs(high)) + 1)
+        : null;
       for (let i = 0; i < source.length; i++) {
-        const isSolid = solid[i] !== 0;
-        let coverage = 0;
-        if (effect.position === 'outside' && !isSolid) coverage = clamp01(radius + 1 - outside[i]!);
-        else if (effect.position === 'inside' && isSolid) coverage = clamp01(radius + 1 - inside[i]!) * source[i]! / 255;
-        else if (effect.position === 'center') {
-          const half = radius / 2;
-          coverage = isSolid ? clamp01(half + 1 - inside[i]!) * source[i]! / 255 : clamp01(half + 1 - outside[i]!);
-        }
+        const coverage = distances ? distanceBand(distances[i]!, low, high) : 0;
         putPixel(rgba, i * 4, fill, coverage, i % outWidth - margin, Math.floor(i / outWidth) - margin, width, height);
       }
       above.push(pass(rgba, outWidth, outHeight, margin, 'above', effect.blendMode ?? 'normal', effect.opacity ?? 1, false));

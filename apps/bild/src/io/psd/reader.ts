@@ -138,55 +138,61 @@ function gradient(value: EffectSolidGradient | undefined): import('../../core/mo
     const amount = right.location === left.location ? 0 : (location - left.location) / (right.location - left.location);
     return left.opacity + (right.opacity - left.opacity) * Math.min(1, Math.max(0, amount));
   };
-  return { stops: value.colorStops.map((stop) => ({ offset: Math.min(1, Math.max(0, stop.location / 4096)),
+  // ag-psd normalizes descriptor locations to 0...1 in parseGradient().
+  return { stops: value.colorStops.map((stop) => ({ offset: Math.min(1, Math.max(0, stop.location)),
     color: rgb(stop.color), opacity: opacityAt(stop.location) })) };
 }
 
 function importEffects(source: AgLayer, state: ImportState, layerPath: string): readonly LayerEffect[] {
   const info: LayerEffectsInfo | undefined = source.effects;
   if (!info || info.disabled) return [];
-  const scale = (info.scale ?? 100) / 100, result: LayerEffect[] = [];
+  const rendered = (effect: { present?: boolean; enabled?: boolean } | undefined): boolean =>
+    !!effect && effect.present !== false && effect.enabled !== false;
+  // Effect dimensions are already final pixels. The list-wide Scl metadata is not a render-time
+  // multiplier (psd-tools test_second_stroke_traces_the_layer pins 1 px strokes with Scl 208%).
+  const result: LayerEffect[] = [];
   for (const shadow of info.dropShadow ?? []) if (shadow.present !== false) result.push({
     kind: 'dropShadow', schemaVersion: 1, enabled: shadow.enabled !== false, opacity: shadow.opacity ?? 1,
-    angle: shadow.angle ?? 120, useGlobalLight: shadow.useGlobalLight ?? false, distance: units(shadow.distance) * scale,
-    blur: units(shadow.size) * scale, size: units(shadow.size) * scale, spread: units(shadow.choke), color: rgb(shadow.color),
+    angle: shadow.angle ?? 120, useGlobalLight: shadow.useGlobalLight ?? false, distance: units(shadow.distance),
+    blur: units(shadow.size), size: units(shadow.size), spread: units(shadow.choke), color: rgb(shadow.color),
     blendMode: effectBlend(shadow.blendMode, 'multiply'), contour: 'linear', noise: 0, knockout: shadow.layerConceals !== false,
   });
   const glow = info.outerGlow;
   if (glow?.present !== false && glow) result.push({ kind: 'outerGlow', schemaVersion: 1, enabled: glow.enabled !== false,
     opacity: glow.opacity ?? 1, color: rgb(glow.color), blendMode: effectBlend(glow.blendMode, 'screen'),
-    spread: units(glow.choke), size: units(glow.size) * scale, contour: 'linear', noise: 0 });
+    spread: units(glow.choke), size: units(glow.size), contour: 'linear', noise: 0 });
   for (const fill of info.solidFill ?? []) if (fill.present !== false) result.push({
     kind: 'colorOverlay', schemaVersion: 1, enabled: fill.enabled !== false, opacity: fill.opacity ?? 1,
     color: rgb(fill.color), blendMode: effectBlend(fill.blendMode, 'normal'),
   });
   for (const overlay of info.gradientOverlay ?? []) if (overlay.present !== false) {
-    if (overlay.gradient?.type !== 'solid' || (overlay.type && overlay.type !== 'linear')) {
+    if (overlay.enabled !== false && (overlay.gradient?.type !== 'solid' || (overlay.type && overlay.type !== 'linear'))) {
       issue(state, 'gradient-overlay', 'A noise or non-linear gradient overlay was approximated as a linear gradient.',
         'approximated', layerPath);
     }
     result.push({ kind: 'gradientOverlay', schemaVersion: 1, enabled: overlay.enabled !== false,
       opacity: overlay.opacity ?? 1, blendMode: effectBlend(overlay.blendMode, 'normal'), angle: overlay.angle ?? 90,
-      scale: overlay.scale ?? 100, gradient: { ...gradient(overlay.gradient?.type === 'solid' ? overlay.gradient : undefined),
+      scale: (overlay.scale ?? 1) * 100, gradient: { ...gradient(overlay.gradient?.type === 'solid' ? overlay.gradient : undefined),
         reverse: overlay.reverse ?? false } });
   }
   for (const stroke of info.stroke ?? []) if (stroke.present !== false) {
     if (stroke.fillType === 'pattern') {
-      issue(state, 'stroke-pattern', 'Pattern stroke is not a live Phase-2 effect.', 'not-rendered', layerPath); continue;
+      if (stroke.enabled !== false) issue(state, 'stroke-pattern', 'Pattern stroke is not a live Phase-2 effect.', 'not-rendered', layerPath);
+      continue;
     }
     const fill = stroke.fillType === 'gradient'
       ? { kind: 'gradient' as const, gradient: gradient(stroke.gradient?.type === 'solid' ? stroke.gradient : undefined),
-        angle: stroke.gradient?.angle ?? 90, scale: stroke.gradient?.scale ?? 100 }
+        angle: stroke.gradient?.angle ?? 90, scale: (stroke.gradient?.scale ?? 1) * 100 }
       : { kind: 'color' as const, color: rgb(stroke.color) };
-    result.push({ kind: 'stroke', schemaVersion: 1, enabled: stroke.enabled !== false, width: units(stroke.size) * scale,
+    result.push({ kind: 'stroke', schemaVersion: 1, enabled: stroke.enabled !== false, width: units(stroke.size),
       position: stroke.position ?? 'outside', fill, opacity: stroke.opacity ?? 1,
       blendMode: effectBlend(stroke.blendMode, 'normal') });
   }
-  if (info.innerShadow?.length) issue(state, 'inner-shadow', 'Inner shadow needs a Phase-3 rasterised effect pass.', 'not-rendered', layerPath);
-  if (info.innerGlow) issue(state, 'inner-glow', 'Inner glow needs a Phase-3 rasterised effect pass.', 'not-rendered', layerPath);
-  if (info.bevel) issue(state, 'bevel', 'Bevel/emboss needs a rasterised effect pass.', 'not-rendered', layerPath);
-  if (info.satin) issue(state, 'satin', 'Satin needs a rasterised effect pass.', 'not-rendered', layerPath);
-  if (info.patternOverlay) issue(state, 'pattern-overlay', 'Pattern overlay needs a rasterised effect pass.', 'not-rendered', layerPath);
+  if (info.innerShadow?.some(rendered)) issue(state, 'inner-shadow', 'Inner shadow needs a Phase-3 rasterised effect pass.', 'not-rendered', layerPath);
+  if (rendered(info.innerGlow)) issue(state, 'inner-glow', 'Inner glow needs a Phase-3 rasterised effect pass.', 'not-rendered', layerPath);
+  if (rendered(info.bevel)) issue(state, 'bevel', 'Bevel/emboss needs a rasterised effect pass.', 'not-rendered', layerPath);
+  if (rendered(info.satin)) issue(state, 'satin', 'Satin needs a rasterised effect pass.', 'not-rendered', layerPath);
+  if (rendered(info.patternOverlay)) issue(state, 'pattern-overlay', 'Pattern overlay needs a rasterised effect pass.', 'not-rendered', layerPath);
   return result;
 }
 
