@@ -58,7 +58,7 @@ export function contentFillState(session: EditorSession): ContentFillState | nul
 export function canContentAwareFill(session: EditorSession): boolean {
   const layer = session.activeLayer, selection = session.selection;
   return !states.has(session) && session.canEditLayers && session.selectedLayerIds.size === 1 && !session.isMaskSelected
-    && !!layer && !layer.isGroup && !layer.adjustment && !layer.locked && !!layer.raster && layer.raster.channels === 4
+    && !!layer && layer.kind !== 'group' && !layer.adjustment && !layer.locked && !!layer.raster && layer.raster.channels === 4
     && effectiveVisibleIds(session.document!.layers).has(layer.id) && !!selection && !selectionIsEmpty(selection);
 }
 

@@ -32,8 +32,8 @@ export interface CompositeHooks {
   maskPlacement(layer: Layer): LayerTransform | null;
   blendMode(layer: Layer): BlendMode;
   /** Pixels to draw instead of the stored raster (brush stroke in progress, previews). */
-  raster(layer: Layer): Raster | null;
-  maskRaster(layer: Layer): Raster | null;
+  raster(layer: Layer): Raster | null | undefined;
+  maskRaster(layer: Layer): Raster | null | undefined;
   /** Geometry-only ordinary Brush/Eraser preview; clone and selection strokes use `raster`. */
   readonly brush?: GpuBrushPreview | null;
 }
@@ -42,7 +42,7 @@ export const DEFAULT_HOOKS: CompositeHooks = {
   transform: (l) => l.transform,
   maskPlacement: (l) => l.mask?.placement ?? null,
   blendMode: (l) => l.blendMode,
-  raster: (l) => l.raster,
+  raster: (l) => l.raster ?? null,
   maskRaster: (l) => l.mask?.raster ?? null,
 };
 

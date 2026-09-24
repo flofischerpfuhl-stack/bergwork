@@ -68,7 +68,7 @@ export function renderSelectedPixels(document: CanvasDocument, layer: Layer, mas
 export function canCopyPixels(session: EditorSession): boolean {
   const layer = session.activeLayer;
   if (!session.document || !layer || !session.canEditLayers || session.selection && selectionIsEmpty(session.selection)) return false;
-  return session.isMaskSelected ? !!layer.mask : !layer.isGroup && !!layer.raster;
+  return session.isMaskSelected ? !!layer.mask : layer.kind !== 'group' && !!layer.raster;
 }
 
 export function copySelection(session: EditorSession, clipboard = pixelClipboard, hooks: ClipboardHooks = {}): boolean {
@@ -130,7 +130,7 @@ export async function paste(session: EditorSession, clipboard = pixelClipboard, 
 /** Cmd-J: selected pixels become a layer in place; no selection duplicates the layer. */
 export function layerViaCopy(session: EditorSession): string | null {
   const layer = session.activeLayer;
-  if (!session.canEditLayers || !layer || layer.isGroup || session.selection && selectionIsEmpty(session.selection)) return null;
+  if (!session.canEditLayers || !layer || layer.kind === 'group' || session.selection && selectionIsEmpty(session.selection)) return null;
   if (!session.selection) { session.duplicateActiveLayer(); return session.activeLayerId; }
   const copied = renderSelectedPixels(session.document!, layer, session.isMaskSelected);
   return copied ? session.addPixelLayer(copied.raster, copied.origin, session.nextLayerName(), 'Layer via Copy') : null;

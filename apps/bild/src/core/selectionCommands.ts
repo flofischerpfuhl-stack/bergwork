@@ -1,7 +1,7 @@
 /** Selection commands and selection-clipped pixel edits (Selection.swift / SelectionEdits.swift). */
 
 import {
-  effectiveVisibleIds, layerPixelHeight, layerPixelWidth, maskTransform, MAX_PIXELS, MAX_SIDE, newLayer,
+  effectiveVisibleIds, layerPixelHeight, layerPixelWidth, maskTransform, MAX_PIXELS, MAX_SIDE, newLayer, withLayerRaster,
   type CanvasDocument, type Layer,
 } from './document';
 import {
@@ -89,7 +89,7 @@ export function canEditPixels(session: EditorSession): boolean {
   const document = session.document, layer = session.activeLayer;
   if (!document || !layer || !session.canEditLayers || session.selectedLayerIds.size !== 1) return false;
   if (!effectiveVisibleIds(document.layers).has(layer.id)) return false;
-  return session.isMaskSelected ? !!layer.mask?.enabled : !layer.isGroup;
+  return session.isMaskSelected ? !!layer.mask?.enabled : layer.kind !== 'group';
 }
 
 export function canInvertPixels(session: EditorSession): boolean {
@@ -97,7 +97,7 @@ export function canInvertPixels(session: EditorSession): boolean {
   if (!document || !layer || session.isProjectBusy || session.isImporting || session.renamingLayerId !== null
     || session.selectedLayerIds.size !== 1 || !effectiveVisibleIds(document.layers).has(layer.id)
     || session.selection && selectionIsEmpty(session.selection)) return false;
-  return session.isMaskSelected ? !!layer.mask?.enabled : !layer.isGroup && !!layer.raster;
+  return session.isMaskSelected ? !!layer.mask?.enabled : layer.kind !== 'group' && !!layer.raster;
 }
 
 function rasterByte(raster: Raster, x: number, y: number, channel = 0): number {
@@ -259,7 +259,7 @@ function tracedSelection(raster: Raster, transform: LayerTransform, canvas: Canv
 
 export function loadLayerSelection(session: EditorSession, layerId: string, mode: SelectionMode = 'New', antialiased = true): boolean {
   const document = session.document, layer = session.layer(layerId);
-  if (!document || !layer?.raster || layer.isGroup || !canEditSelection(session)) return false;
+  if (!document || !layer?.raster || !canEditSelection(session)) return false;
   const traced = tracedSelection(layer.raster, layer.transform, document, false, antialiased);
   return traced ? applySelection(session, traced, mode, 'Load Layer Selection') : false;
 }
@@ -700,7 +700,7 @@ export function finishPixelMove(session: EditorSession): boolean {
   pixelMoves.delete(session); session.rasterOverrides.delete(state.layerId);
   session.edit(state.duplicate ? 'Duplicate Pixels' : 'Move Pixels', () => {
     const document = session.document; if (!document) return;
-    const layers = document.layers.map((layer) => layer.id === state.layerId ? { ...layer, raster, transform, mask } : layer);
+    const layers = document.layers.map((layer) => layer.id === state.layerId ? withLayerRaster(layer, raster, transform, mask) : layer);
     session.replaceDocument({ ...document, layers, selection });
   });
   return true;

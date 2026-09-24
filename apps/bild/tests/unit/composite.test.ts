@@ -15,8 +15,11 @@ function transform(x: number, y: number, width: number, height: number,
   sampling: LayerSampling = 'Nearest', extra: Partial<LayerTransform> = {}): LayerTransform {
   return makeTransform({ x, y }, { width, height }, { sampling, ...extra });
 }
-function layer(id: string, raster: Raster | null, t: LayerTransform, extra: Partial<Layer> = {}): Layer {
-  return newLayer({ id, name: id, raster, transform: t, ...extra });
+function layer(id: string, raster: Raster | null, t: LayerTransform,
+  extra: Partial<Layer> & { isGroup?: boolean } = {}): Layer {
+  const { isGroup, ...fields } = extra;
+  const kind = isGroup ? 'group' : fields.adjustment ? 'adjustment' : 'pixel';
+  return newLayer({ id, name: id, raster, transform: t, ...fields, kind });
 }
 function document(width: number, height: number, layers: readonly Layer[]): CanvasDocument {
   return { id: 'document', width, height, resolution: 72, layers, selection: null };
@@ -160,7 +163,8 @@ describe('live masks (LiveMaskTests)', () => {
 });
 
 describe('adjustment surface (AdjustmentLayerTests)', () => {
-  const adjustment: LayerAdjustment = { kind: 'Curves' };
+  const adjustment: LayerAdjustment = { kind: 'Curves', schemaVersion: 1,
+    parameters: { channel: 'RGB', channels: Array.from({ length: 4 }, () => [{ x: 0, y: 0 }, { x: 255, y: 255 }]) } };
   const invert: AdjustmentApplier = (_settings, input) => {
     const result = input.slice();
     for (let i = 0; i < result.length; i += 4) {

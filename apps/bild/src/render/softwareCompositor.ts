@@ -102,7 +102,7 @@ export class SoftwareCompositor {
   private simpleComposite(document: CanvasDocument, view: ViewSpec, hooks: CompositeHooks): SoftwareSurface | null {
     if (typeof OffscreenCanvas === 'undefined') return null;
     const layers = renderLayers(document.layers);
-    if (document.layers.some((layer) => layer.isGroup && layer.mask?.enabled)
+    if (document.layers.some((layer) => layer.kind === 'group' && layer.mask?.enabled)
       || layers.some((layer) => layer.adjustment || layer.maskSourceId || layer.mask?.enabled
       || hooks.blendMode(layer) !== 'normal')) return null;
     const documentToTarget = invert(view.viewToDoc);

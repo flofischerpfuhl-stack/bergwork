@@ -3,6 +3,7 @@ import type { EditorSession } from './session';
 import type { Point } from './geometry';
 import { Raster, TILE } from './raster';
 import type { DocumentSelection } from './selection';
+import { withLayerRaster } from './document';
 import { editableTarget, RasterMapping, clampByte, selectionCoverage, validPoint } from './retouch/common';
 
 export type GradientShape = 'Linear' | 'Radial';
@@ -154,7 +155,7 @@ export function beginGradient(session: EditorSession, point: Point,
   settings: GradientSettings = settingsFromSession(session)): boolean {
   if (!validPoint(point) || session.tool !== 'gradient') return false;
   const layer = session.activeLayer;
-  if (!layer || layer.isGroup || (!session.isMaskSelected && layer.adjustment)) return false;
+  if (!layer || layer.kind === 'group' || (!session.isMaskSelected && layer.adjustment)) return false;
   const current = pending.get(session);
   if (current && current.layerId === layer.id && current.mask === session.isMaskSelected) {
     const edit = new GradientEdit(current.edit.original, current.edit.transform, point, session.selection, settings);
@@ -228,7 +229,7 @@ export function commitGradient(session: EditorSession): boolean {
     session.beginEdit(name);
     const document = session.document;
     if (document) session.replaceDocument({ ...document, layers: document.layers.map((item) => item.id === active.layerId
-      ? { ...item, raster, transform: active.edit.transform, shape: null } : item) });
+      ? withLayerRaster(item, raster, active.edit.transform) : item) });
     session.endEdit();
   }
   return true;

@@ -20,7 +20,7 @@ export function bandingDocument(bits: 8 | 16): CanvasDocument {
   const base = newLayer({ id: 'gradient', name: 'gradient', transform,
     raster: Raster.fromPixels(WIDTH, 1, 4, pixels, { format: bits === 16 ? 'rgba16' : 'rgba8' }) });
   const levelsBase = defaultAdjustment('Levels', { red: 0, green: 0, blue: 0 }, { red: 1, green: 1, blue: 1 });
-  const levels: LayerAdjustment = { ...levelsBase, levels: { channel: 'RGB', ranges: [
+  const levels: LayerAdjustment = { ...levelsBase, parameters: { channel: 'RGB', ranges: [
     { ...defaultLevelRange(), black: 24, gamma: 0.58, white: 238 },
     defaultLevelRange(), defaultLevelRange(), defaultLevelRange(),
   ] } };
@@ -28,7 +28,7 @@ export function bandingDocument(bits: 8 | 16): CanvasDocument {
   const points = [{ x: 0, y: 0 }, { x: 48, y: 6 }, { x: 112, y: 44 },
     { x: 176, y: 224 }, { x: 224, y: 250 }, { x: 255, y: 255 }];
   const identity = [{ x: 0, y: 0 }, { x: 255, y: 255 }];
-  const curves: LayerAdjustment = { ...curvesBase, curves: { channel: 'RGB', channels: [points, identity, identity, identity] } };
+  const curves: LayerAdjustment = { ...curvesBase, parameters: { channel: 'RGB', channels: [points, identity, identity, identity] } };
   return { id: `banding-${bits}`, width: WIDTH, height: 1, resolution: 72, selection: null, layers: [base,
     newLayer({ id: 'levels', name: 'levels', transform, adjustment: levels }),
     newLayer({ id: 'curves', name: 'curves', transform, adjustment: curves }),

@@ -178,7 +178,7 @@ class ContinuousBrushStroke implements Stroke {
 
     const placedMask = this.isMask && options.layer.mask?.placement ? options.layer.mask : null;
     const baseTransform = placedMask ? maskTransform(options.layer) : options.layer.transform;
-    const layerRaster = options.layer.raster;
+    const layerRaster = options.layer.raster ?? null;
     const source = this.isMask ? options.layer.mask?.raster ?? null : layerRaster;
     if (source?.format === 'rgba16') {
       throw new Error('The existing 8-bit brush kernel cannot paint an rgba16 layer yet.');

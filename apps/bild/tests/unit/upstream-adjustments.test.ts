@@ -16,6 +16,7 @@ import { Raster } from '../../src/core/raster';
 import { applySelection } from '../../src/core/selectionCommands';
 import { rectangleSelection } from '../../src/core/selectionOps';
 import { EditorSession } from '../../src/core/session';
+import { migrateLegacyAdjustment } from '../../src/io/project';
 
 function pixels(values: readonly number[]): Float32Array {
   return Float32Array.from(values, (value) => value / 255);
@@ -39,14 +40,13 @@ describe('upstream ImageAdjustmentTests', () => {
   it('settingsSaveAndOlderAdjustmentsStillOpen', () => {
     const levels = defaultAdjustment('Levels', { red: 0, green: 0, blue: 0 }, { red: 1, green: 1, blue: 1 });
     const json = JSON.stringify(levels);
-    expect(json).not.toContain('exposureSettings');
-    expect(json).not.toContain('gradientMapSettings');
-    expect(json).not.toContain('grainSettings');
+    expect(json).toContain('schemaVersion');
     expect(JSON.parse(json)).toEqual(levels);
-    const grain: LayerAdjustment = { ...defaultAdjustment('Grain', { red: 0, green: 0, blue: 0 }, { red: 1, green: 1, blue: 1 }),
-      grainSettings: { amount: 40, size: 3, roughness: 10, seed: 9 } };
+    const grain: LayerAdjustment = { kind: 'Grain', schemaVersion: 1,
+      parameters: { amount: 40, size: 3, roughness: 10, seed: 9 } };
     expect(isValidAdjustment(JSON.parse(JSON.stringify(grain)) as LayerAdjustment)).toBe(true);
-    expect(isValidAdjustment({ kind: 'Exposure', exposureSettings: { exposure: 0, offset: 0, gamma: 0 } })).toBe(false);
+    expect(isValidAdjustment({ kind: 'Exposure', schemaVersion: 1,
+      parameters: { exposure: 0, offset: 0, gamma: 0 } })).toBe(false);
   });
 
   it('newAdjustmentLayersStartFromThePaletteRenderAndEditInThePanel (engine state)', () => {
@@ -56,7 +56,7 @@ describe('upstream ImageAdjustmentTests', () => {
     session.setPaletteColor({ red: 0, green: 0, blue: 1 }, true);
     session.addAdjustment('Gradient Map');
     const id = session.activeLayerId!, adjustment = session.activeLayer!.adjustment!;
-    expect(adjustment).toMatchObject({ kind: 'Gradient Map', gradientMapSettings: {
+    expect(adjustment).toMatchObject({ kind: 'Gradient Map', parameters: {
       shadows: { red: 1, green: 0, blue: 0 }, highlights: { red: 0, green: 0, blue: 1 },
     } });
     expect(session.adjustmentEditingId).toBe(id);
@@ -83,7 +83,8 @@ describe('upstream AdjustmentLayerTests', () => {
     const value = defaultAdjustment('Curves', session.foregroundColor, session.backgroundColor);
     const curves = resolveAdjustment(value).curves, channels = curves.channels.map((channel) => channel.slice());
     channels[0] = [{ x: 0, y: 255 }, { x: 255, y: 0 }];
-    session.updateAdjustment(adjustment, { ...value, curves: { ...curves, channels } });
+    if (value.kind !== 'Curves') throw new Error('Expected curves adjustment');
+    session.updateAdjustment(adjustment, { ...value, parameters: { ...curves, channels } });
     session.toggleClippingMask(adjustment);
     const clipped = render(session);
     expect(clipped.pixel(0, 0)).toEqual([255, 0, 255, 255]);
@@ -97,7 +98,8 @@ describe('upstream AdjustmentLayerTests', () => {
     const original = solid(2, 2, [255, 0, 0, 255]);
     session.insertRaster(original, 'Red'); session.addAdjustment('Hue/Saturation');
     const id = session.activeLayerId!; session.adjustmentEditingId = null;
-    session.updateAdjustment(id, { kind: 'Hue/Saturation', hue: 120, saturation: 0, lightness: 0, colorize: false });
+    session.updateAdjustment(id, { kind: 'Hue/Saturation', schemaVersion: 1,
+      parameters: { hue: 120, saturation: 0, lightness: 0, colorize: false, settings: defaultHueSaturation(120) } });
     expect(render(session).pixel(0, 0)).toEqual([0, 255, 0, 255]);
     session.setLayerOpacity(0);
     expect(render(session).pixel(0, 0)).toEqual([255, 0, 0, 255]);
@@ -112,7 +114,8 @@ describe('upstream AdjustmentLayerTests', () => {
     const id = session.activeLayerId!, original = session.activeLayer!.adjustment!;
     const resolved = resolveAdjustment(original), channels = resolved.curves.channels.map((channel) => channel.slice());
     channels[0] = [{ x: 0, y: 0 }, { x: 128, y: 190 }, { x: 255, y: 255 }];
-    const changed = { ...original, curves: { ...resolved.curves, channels } };
+    if (original.kind !== 'Curves') throw new Error('Expected curves adjustment');
+    const changed = { ...original, parameters: { ...resolved.curves, channels } };
     session.beginEdit('Edit Curves'); session.updateAdjustment(id, changed); session.endEdit();
     session.undo(); expect(session.activeLayer!.adjustment).toEqual(original);
     session.redo(); expect(session.activeLayer!.adjustment).toEqual(changed);
@@ -127,7 +130,8 @@ describe('upstream AdjustmentLayerTests', () => {
     ]));
     session.insertRaster(alpha, 'Red'); session.addAdjustment('Hue/Saturation');
     const id = session.activeLayerId!; session.adjustmentEditingId = null;
-    session.updateAdjustment(id, { kind: 'Hue/Saturation', hue: 120, saturation: 0, lightness: 0, colorize: false });
+    session.updateAdjustment(id, { kind: 'Hue/Saturation', schemaVersion: 1,
+      parameters: { hue: 120, saturation: 0, lightness: 0, colorize: false, settings: defaultHueSaturation(120) } });
     session.setLayerBlendMode('multiply');
     expect(render(session).toPixels()).toEqual(Uint8Array.from([
       0, 0, 0, 255, 0, 0, 0, 128, 0, 0, 0, 32, 0, 0, 0, 0,
@@ -147,8 +151,10 @@ describe('upstream AdjustmentLayerTests', () => {
       session.addAdjustment(kind); const id = session.activeLayerId!, created = session.activeLayer!.adjustment!;
       session.adjustmentEditingId = null;
       const state = beginAdjustmentLayerEdit(session, id)!;
-      const changed = kind === 'Exposure' ? { ...created, exposureSettings: { exposure: 1, offset: 0, gamma: 1 } }
-        : { ...created, hue: 30 };
+      const changed: LayerAdjustment = created.kind === 'Exposure'
+        ? { ...created, parameters: { exposure: 1, offset: 0, gamma: 1 } }
+        : created.kind === 'Hue/Saturation'
+          ? { ...created, parameters: { ...created.parameters, hue: 30 } } : created;
       expect(updateAdjustmentLayerEdit(session, changed)).toBe(true);
       expect(session.layer(id)!.adjustment).toEqual(changed);
       expect(finishAdjustmentLayerEdit(session, false)).toBe(true);
@@ -158,9 +164,9 @@ describe('upstream AdjustmentLayerTests', () => {
   );
 
   it('legacyHSVStillDecodesAndRenders', () => {
-    const legacy: LayerAdjustment = { kind: 'Hue/Saturation', hue: 120, saturation: 0, lightness: 0, colorize: false };
-    const decoded = JSON.parse(JSON.stringify(legacy)) as LayerAdjustment;
-    expect(decoded.hsvSettings).toBeUndefined();
+    const decoded = migrateLegacyAdjustment(JSON.parse(JSON.stringify({
+      kind: 'Hue/Saturation', hue: 120, saturation: 0, lightness: 0, colorize: false,
+    })));
     expect(resolveAdjustment(decoded).hsvSettings.adjustments.Master!.hue).toBe(120);
     expect(bytes(applyAdjustment(decoded, pixels([255, 0, 0, 255]), 1, 1, 0, 0))).toEqual([0, 255, 0, 255]);
   });
@@ -172,13 +178,15 @@ describe('upstream HueSaturationTests and LevelsTests', () => {
       255, 0, 0, 255, 128, 128, 128, 255, 0, 0, 255, 128, 0, 0, 0, 0,
     ]));
     const adjusted = adjustRaster(source, makeTransform({ x: 0, y: 0 }, { width: 4, height: 1 }),
-      { kind: 'Hue/Saturation', hsvSettings: defaultHueSaturation() });
+      { kind: 'Hue/Saturation', schemaVersion: 1,
+        parameters: { hue: 0, saturation: 0, lightness: 0, colorize: false, settings: defaultHueSaturation() } });
     expect(adjusted.toPixels()).toEqual(source.toPixels());
   });
 
   it('colorizeGivesEverythingOneHueAndKeepsAlpha', () => {
     const settings = defaultHueSaturation(210, 80, 0, true);
-    const result = bytes(applyAdjustment({ kind: 'Hue/Saturation', hsvSettings: settings },
+    const result = bytes(applyAdjustment({ kind: 'Hue/Saturation', schemaVersion: 1,
+      parameters: { hue: 210, saturation: 80, lightness: 0, colorize: true, settings } },
       pixels([255, 0, 0, 255, 128, 128, 128, 128]), 2, 1, 0, 0));
     expect(result[2]).toBeGreaterThan(result[0]!); expect(result[2]).toBeGreaterThan(result[1]!);
     expect(result[6]).toBeGreaterThan(result[4]!); expect(result[7]).toBe(128);
@@ -190,7 +198,8 @@ describe('upstream HueSaturationTests and LevelsTests', () => {
     applySelection(session, rectangleSelection({ x: 0, y: 0, width: 2, height: 1 }, session.document!), 'New', 'Select');
     const before = session.activeLayer!.raster!, count = session.history.undoCount;
     const result = adjustRaster(before, session.activeLayer!.transform,
-      { kind: 'Hue/Saturation', hsvSettings: defaultHueSaturation(120) }, session.selection);
+      { kind: 'Hue/Saturation', schemaVersion: 1,
+        parameters: { hue: 120, saturation: 0, lightness: 0, colorize: false, settings: defaultHueSaturation(120) } }, session.selection);
     session.replaceLayerPixels(session.activeLayerId!, result, 'Hue/Saturation');
     expect(session.activeLayer!.raster!.pixel(0, 0)).toEqual([0, 255, 0, 255]);
     expect(session.activeLayer!.raster!.pixel(3, 0)).toEqual([255, 0, 0, 255]);
@@ -201,21 +210,25 @@ describe('upstream HueSaturationTests and LevelsTests', () => {
   it('colorRangesAdjustIndependently and rangesLeaveOtherHuesAloneAndInvertFlipsTheBand', () => {
     let settings = defaultHueSaturation(60, 0, 0, false, 'Reds');
     settings = { ...settings, adjustments: { ...settings.adjustments, Blues: { hue: 0, saturation: -100, lightness: 0 } } };
-    let result = bytes(applyAdjustment({ kind: 'Hue/Saturation', hsvSettings: settings }, pixels([255, 0, 0, 255, 0, 0, 255, 255]), 2, 1, 0, 0));
+    let result = bytes(applyAdjustment({ kind: 'Hue/Saturation', schemaVersion: 1,
+      parameters: { hue: 0, saturation: 0, lightness: 0, colorize: false, settings } }, pixels([255, 0, 0, 255, 0, 0, 255, 255]), 2, 1, 0, 0));
     expect(result.slice(0, 4)).toEqual([255, 255, 0, 255]);
     expect(result[4]).toBe(result[5]); expect(result[5]).toBe(result[6]);
     settings = defaultHueSaturation(0, 0, -100, false, 'Reds');
-    result = bytes(applyAdjustment({ kind: 'Hue/Saturation', hsvSettings: settings }, pixels([255, 0, 0, 255, 0, 0, 255, 255]), 2, 1, 0, 0));
+    result = bytes(applyAdjustment({ kind: 'Hue/Saturation', schemaVersion: 1,
+      parameters: { hue: 0, saturation: 0, lightness: -100, colorize: false, settings } }, pixels([255, 0, 0, 255, 0, 0, 255, 255]), 2, 1, 0, 0));
     expect(result.slice(0, 4)).toEqual([0, 0, 0, 255]); expect(result.slice(4)).toEqual([0, 0, 255, 255]);
     const inverted: HueSaturationSettings = { ...settings, invertRange: true };
-    result = bytes(applyAdjustment({ kind: 'Hue/Saturation', hsvSettings: inverted }, pixels([255, 0, 0, 255, 0, 0, 255, 255]), 2, 1, 0, 0));
+    result = bytes(applyAdjustment({ kind: 'Hue/Saturation', schemaVersion: 1,
+      parameters: { hue: 0, saturation: 0, lightness: -100, colorize: false, settings: inverted } },
+    pixels([255, 0, 0, 255, 0, 0, 255, 255]), 2, 1, 0, 0));
     expect(result.slice(0, 4)).toEqual([255, 0, 0, 255]); expect(result.slice(4)).toEqual([0, 0, 0, 255]);
   });
 
   it('identityAndChannelSelectionAreExactNoOps', () => {
     const settings = { ...defaultLevels(), channel: 'Blue' as const };
     const source = pixels([0, 0, 0, 255, 64, 32, 0, 128, 0, 0, 0, 0]);
-    expect(bytes(applyAdjustment({ kind: 'Levels', levels: settings }, source, 3, 1, 0, 0))).toEqual(bytes(source));
+    expect(bytes(applyAdjustment({ kind: 'Levels', schemaVersion: 1, parameters: settings }, source, 3, 1, 0, 0))).toEqual(bytes(source));
   });
 
   it('channelsCoexistAndUseDocumentedOrder', () => {
@@ -223,7 +236,8 @@ describe('upstream HueSaturationTests and LevelsTests', () => {
     ranges[1] = { black: 0, gamma: 2, white: 255, outputBlack: 0, outputWhite: 255 };
     ranges[0] = { black: 40, gamma: 1, white: 210, outputBlack: 0, outputWhite: 255 };
     const settings = { ...base, ranges };
-    const result = bytes(applyAdjustment({ kind: 'Levels', levels: settings }, pixels([64, 64, 64, 255]), 1, 1, 0, 0));
+    const result = bytes(applyAdjustment({ kind: 'Levels', schemaVersion: 1, parameters: settings },
+      pixels([64, 64, 64, 255]), 1, 1, 0, 0));
     const expectedRed = Math.round(levelValue(64 / 255, settings, 'Red') * 255);
     expect(result[0]).toBe(expectedRed); expect(result[0]).toBeGreaterThan(result[1]!); expect(result[1]).toBe(result[2]);
   });

@@ -17,10 +17,10 @@ export interface RasterTransfer {
   tiles: (PixelArray | null)[];
   source: EncodedSource | null;
 }
-export type LayerTransfer = Omit<Layer, 'raster' | 'mask'> & {
-  raster: RasterTransfer | null;
+type LayerTransferFor<L extends Layer> = L extends Layer ? Omit<L, 'raster' | 'mask'> & {
   mask: (Omit<NonNullable<Layer['mask']>, 'raster'> & { raster: RasterTransfer }) | null;
-};
+} & (L extends { readonly raster: Raster | null } ? { raster: RasterTransfer | null } : { raster?: never }) : never;
+export type LayerTransfer = LayerTransferFor<Layer>;
 export type DocumentTransfer = Omit<CanvasDocument, 'layers' | 'selection'> & {
   layers: LayerTransfer[];
   selection: (Omit<NonNullable<CanvasDocument['selection']>, 'mask'> & { mask: RasterTransfer }) | null;
@@ -43,13 +43,22 @@ export function rasterFromTransfer(value: RasterTransfer, known?: ReadonlyMap<st
 export function documentToTransfer(document: CanvasDocument): DocumentTransfer {
   return {
     ...document,
-    layers: document.layers.map((layer) => ({
-      ...layer,
-      raster: layer.raster ? rasterToTransfer(layer.raster) : null,
-      mask: layer.mask ? { ...layer.mask, raster: rasterToTransfer(layer.mask.raster) } : null,
-    })),
+    layers: document.layers.map(layerToTransfer),
     selection: document.selection ? { ...document.selection, mask: rasterToTransfer(document.selection.mask) } : null,
   };
+}
+
+function layerToTransfer(layer: Layer): LayerTransfer {
+  const mask = layer.mask ? { ...layer.mask, raster: rasterToTransfer(layer.mask.raster) } : null;
+  switch (layer.kind) {
+    case 'pixel': return { ...layer, raster: layer.raster ? rasterToTransfer(layer.raster) : null, mask };
+    case 'vector': return { ...layer, raster: layer.raster ? rasterToTransfer(layer.raster) : null, mask };
+    case 'text': return { ...layer, raster: layer.raster ? rasterToTransfer(layer.raster) : null, mask };
+    case 'embedded': return { ...layer, raster: layer.raster ? rasterToTransfer(layer.raster) : null, mask };
+    case 'group': return { ...layer, mask };
+    case 'adjustment': return { ...layer, mask };
+    case 'fill': return { ...layer, mask };
+  }
 }
 
 export function documentFromTransfer(value: DocumentTransfer, original?: CanvasDocument | null): CanvasDocument {
@@ -70,11 +79,20 @@ export function documentFromTransfer(value: DocumentTransfer, original?: CanvasD
   };
   return {
     ...value,
-    layers: value.layers.map((layer) => ({
-      ...layer,
-      raster: layer.raster ? raster(layer.raster) : null,
-      mask: layer.mask ? { ...layer.mask, raster: raster(layer.mask.raster) } : null,
-    })),
+    layers: value.layers.map((layer) => layerFromTransfer(layer, raster)),
     selection: value.selection ? { ...value.selection, mask: raster(value.selection.mask) } : null,
   };
+}
+
+export function layerFromTransfer(value: LayerTransfer, raster: (value: RasterTransfer) => Raster = rasterFromTransfer): Layer {
+  const mask = value.mask ? { ...value.mask, raster: raster(value.mask.raster) } : null;
+  switch (value.kind) {
+    case 'pixel': return { ...value, raster: value.raster ? raster(value.raster) : null, mask };
+    case 'vector': return { ...value, raster: value.raster ? raster(value.raster) : null, mask };
+    case 'text': return { ...value, raster: value.raster ? raster(value.raster) : null, mask };
+    case 'embedded': return { ...value, raster: value.raster ? raster(value.raster) : null, mask };
+    case 'group': return { ...value, mask };
+    case 'adjustment': return { ...value, mask };
+    case 'fill': return { ...value, mask };
+  }
 }

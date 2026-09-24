@@ -4,7 +4,7 @@
  */
 
 import { uuid } from './ids';
-import { descendantIds, MAX_PIXELS, type Layer } from './document';
+import { descendantIds, MAX_PIXELS, withLayerRaster, type Layer } from './document';
 import { EditorSession, type SessionServices } from './session';
 
 export class ProjectTab {
@@ -139,7 +139,7 @@ export class ProjectWorkspace {
       if (!layer.maskSourceId || included.has(layer.maskSourceId)) continue;
       if (layer.adjustment) { copied[i] = { ...layer, maskSourceId: null }; continue; }
       const baked = await this.services?.bakeLiveMask(sourceDocument, layer.id);
-      copied[i] = { ...layer, raster: baked ?? layer.raster, maskSourceId: null };
+      copied[i] = baked ? { ...withLayerRaster(layer, baked), maskSourceId: null } : { ...layer, maskSourceId: null };
     }
     const mapping = new Map(copied.map((l) => [l.id, uuid()]));
     const size = target.session.document ?? sourceDocument;

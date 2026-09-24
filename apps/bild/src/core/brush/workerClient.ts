@@ -40,11 +40,16 @@ function rasterTransfer(raster: Raster, pixels = true): RasterTransfer {
 }
 
 function layerTransfer(layer: Layer, target: 'pixels' | 'mask', pixels: boolean): LayerTransfer {
-  return {
-    ...layer,
-    raster: layer.raster ? rasterTransfer(layer.raster, pixels && target === 'pixels') : null,
-    mask: layer.mask ? { ...layer.mask, raster: rasterTransfer(layer.mask.raster, pixels && target === 'mask') } : null,
-  };
+  const mask = layer.mask ? { ...layer.mask, raster: rasterTransfer(layer.mask.raster, pixels && target === 'mask') } : null;
+  switch (layer.kind) {
+    case 'pixel': return { ...layer, raster: layer.raster ? rasterTransfer(layer.raster, pixels && target === 'pixels') : null, mask };
+    case 'vector': return { ...layer, raster: layer.raster ? rasterTransfer(layer.raster, pixels && target === 'pixels') : null, mask };
+    case 'text': return { ...layer, raster: layer.raster ? rasterTransfer(layer.raster, pixels && target === 'pixels') : null, mask };
+    case 'embedded': return { ...layer, raster: layer.raster ? rasterTransfer(layer.raster, pixels && target === 'pixels') : null, mask };
+    case 'group': return { ...layer, mask };
+    case 'adjustment': return { ...layer, mask };
+    case 'fill': return { ...layer, mask };
+  }
 }
 
 /** One exact raster job. Module workers are intentionally absent in Vitest, which keeps its synchronous path. */

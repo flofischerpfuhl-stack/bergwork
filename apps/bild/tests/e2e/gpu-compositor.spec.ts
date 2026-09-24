@@ -36,7 +36,7 @@ test('GPU compositor reproduces upstream compositing semantics', async ({ page }
     out.clippingStack = read(doc(2, 1, [base, layer([0, 0, 255, 255, 0, 0, 255, 255], 2, 1, { maskSourceId: base.id })]), 2, 1);
     const hiddenBase = layer([255, 0, 0, 255, 0, 0, 0, 0], 2, 1, { visible: false });
     out.liveMaskHiddenBase = read(doc(2, 1, [hiddenBase, layer([0, 255, 0, 255, 0, 255, 0, 255], 2, 1, { maskSourceId: hiddenBase.id })]), 2, 1);
-    const folder = newLayer({ id: 'F', name: 'f', isGroup: true, transform: makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 }),
+    const folder = newLayer({ id: 'F', name: 'f', kind: 'group', transform: makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 }),
       mask: { raster: Raster.fromPixels(2, 1, 1, [0, 255]), enabled: true, placement: null, linked: true } });
     out.folderMask = read(doc(2, 1, [folder, layer([9, 9, 9, 255, 9, 9, 9, 255], 2, 1, { parentId: 'F' })]), 2, 1);
     out.rotated = read(doc(1, 2, [newLayer({ id: 'R', name: 'r', raster: Raster.fromPixels(2, 1, 4, [255, 0, 0, 255, 0, 0, 255, 255]),

@@ -21,7 +21,8 @@ describe('shape tool (ShapeToolTests.swift)', () => {
     expect(session.history.undoCount).toBe(count + 1);
     expect(session.layer(id)!.transform).toMatchObject({ origin: { x: 10, y: 10 }, size: { width: 30, height: 20 } });
     expect(session.layer(id)!.raster!.pixel(0, 0)).toEqual([255, 0, 0, 255]);
-    expect(session.layer(id)!.shape).toEqual({ kind: 'Rectangle', red: 1, green: 0, blue: 0, cornerRadius: 0 });
+    expect(session.layer(id)!.kind).toBe('vector');
+    expect(session.layer(id)!.sourceShape).toEqual({ kind: 'Rectangle', red: 1, green: 0, blue: 0, cornerRadius: 0 });
     session.undo();
     expect(session.document!.layers.map((layer) => layer.name)).toEqual(['Layer 1']);
   });
@@ -62,7 +63,7 @@ describe('shape tool (ShapeToolTests.swift)', () => {
 
   it('redrawShape keeps corners crisp and its document-pixel radius fixed after scale', () => {
     const style: LayerShapeStyle = { kind: 'Rectangle', red: 1, green: 0, blue: 0, cornerRadius: 5 };
-    const layer = newLayer({ id: 'shape', name: 'Rectangle 1', shape: style,
+    const layer = newLayer({ id: 'shape', name: 'Rectangle 1', kind: 'vector', sourceShape: style,
       raster: rasterizeShape('Rectangle', 20, 10, { red: 1, green: 0, blue: 0 }, 5),
       transform: makeTransform({ x: 0, y: 0 }, { width: 80, height: 40 }) });
     const redrawn = redrawShapeLayer(layer);
@@ -70,7 +71,7 @@ describe('shape tool (ShapeToolTests.swift)', () => {
     expect(redrawn.raster).toMatchObject({ width: 80, height: 40 });
     expect(redrawn.raster!.pixel(0, 0)[3]).toBe(0);
     expect(redrawn.raster!.pixel(5, 0)[3]).toBe(255);
-    expect(redrawn.shape).toBe(style);
+    expect(redrawn.kind === 'vector' ? redrawn.sourceShape : null).toBe(style);
   });
 
   it('EditorSession redrawShape runs when a live shape is scaled and pixel edits end liveness', () => {
@@ -84,8 +85,8 @@ describe('shape tool (ShapeToolTests.swift)', () => {
     session.previewTransform({ ...session.transformEdit!.draft, size: { width: 80, height: 40 } });
     session.commitTransform();
     expect(session.layer(id)!.raster).toMatchObject({ width: 80, height: 40 });
-    expect(session.layer(id)!.shape).not.toBeNull();
+    expect(session.layer(id)!.kind).toBe('vector');
     session.replaceLayerPixels(id, rasterizeShape('Ellipse', 80, 40, { red: 0, green: 0, blue: 1 }), 'Paint');
-    expect(session.layer(id)!.shape).toBeNull();
+    expect(session.layer(id)!.kind).toBe('pixel');
   });
 });

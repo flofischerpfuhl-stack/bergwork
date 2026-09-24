@@ -37,30 +37,29 @@ export interface ExposureSettings { readonly exposure: number; readonly offset: 
 export interface GradientMapSettings { readonly shadows: RGB; readonly highlights: RGB; readonly reversed: boolean }
 export interface GrainSettings { readonly amount: number; readonly size: number; readonly roughness: number; readonly seed: number }
 
-/** Strict live adjustment shape. Optional fields are the backward-compatible Codable defaults. */
-export interface LayerAdjustment {
-  readonly [key: string]: AdjustmentKind | 1 | number | boolean | HueSaturationSettings | LevelsSettings
-    | CurvesSettings | ExposureSettings | GradientMapSettings | GrainSettings | undefined;
-  readonly schemaVersion?: 1;
-  readonly kind: AdjustmentKind;
-  readonly hue?: number;
-  readonly saturation?: number;
-  readonly lightness?: number;
-  readonly colorize?: boolean;
-  readonly hsvSettings?: HueSaturationSettings;
-  readonly levels?: LevelsSettings;
-  readonly curves?: CurvesSettings;
-  readonly exposureSettings?: ExposureSettings;
-  readonly gradientMapSettings?: GradientMapSettings;
-  readonly grainSettings?: GrainSettings;
+export interface HueSaturationParameters {
+  readonly hue: number;
+  readonly saturation: number;
+  readonly lightness: number;
+  readonly colorize: boolean;
+  readonly settings: HueSaturationSettings;
 }
 
+/** Strict live adjustment records. Legacy Codable records are normalised by project readers. */
+export type LayerAdjustment =
+  | { readonly kind: 'Hue/Saturation'; readonly schemaVersion: 1; readonly parameters: HueSaturationParameters }
+  | { readonly kind: 'Levels'; readonly schemaVersion: 1; readonly parameters: LevelsSettings }
+  | { readonly kind: 'Curves'; readonly schemaVersion: 1; readonly parameters: CurvesSettings }
+  | { readonly kind: 'Exposure'; readonly schemaVersion: 1; readonly parameters: ExposureSettings }
+  | { readonly kind: 'Gradient Map'; readonly schemaVersion: 1; readonly parameters: GradientMapSettings }
+  | { readonly kind: 'Grain'; readonly schemaVersion: 1; readonly parameters: GrainSettings };
+
 export interface LayerShape {
-  readonly kind?: 'Rectangle' | 'Ellipse';
-  readonly red?: number;
-  readonly green?: number;
-  readonly blue?: number;
-  readonly cornerRadius?: number;
+  readonly kind: 'Rectangle' | 'Ellipse';
+  readonly red: number;
+  readonly green: number;
+  readonly blue: number;
+  readonly cornerRadius: number;
 }
 
 export interface LayerLocks {
@@ -109,7 +108,6 @@ export interface LayerCommon {
   readonly visible: boolean;
   readonly locked: boolean;
   readonly parentId: string | null;
-  readonly isGroup: boolean;
   readonly opacity: number;
   readonly fillOpacity: number;
   readonly blendMode: BlendMode;
@@ -118,75 +116,64 @@ export interface LayerCommon {
   readonly transform: LayerTransform;
   readonly warp: WarpQuad | null;
   readonly crop: CropParameters | null;
-  readonly raster: Raster | null;
   readonly mask: LayerMask | null;
   readonly vectorMask: VectorMask | null;
   readonly maskSourceId: string | null;
   readonly effects: readonly LayerEffect[];
   readonly filters: readonly LiveFilter[];
-  /** Compatibility projections used by the existing renderer/tool engine. */
-  readonly adjustment: LayerAdjustment | null;
-  readonly shape: LayerShape | null;
 }
 
-export interface PixelLayer extends LayerCommon { readonly kind: 'pixel'; readonly isGroup: false }
-export interface GroupLayer extends LayerCommon { readonly kind: 'group'; readonly isGroup: true }
-export interface AdjustmentLayer extends LayerCommon { readonly kind: 'adjustment'; readonly isGroup: false; readonly adjustment: LayerAdjustment }
+interface WithoutAdjustment { readonly adjustment?: never }
+interface WithoutRaster { readonly raster?: never }
+interface WithoutSourceShape { readonly sourceShape?: never }
+
+export interface PixelLayer extends LayerCommon, WithoutAdjustment, WithoutSourceShape {
+  readonly kind: 'pixel';
+  /** A newly-created blank pixel layer has no allocated tiles until its first edit. */
+  readonly raster: Raster | null;
+}
+export interface GroupLayer extends LayerCommon, WithoutAdjustment, WithoutRaster, WithoutSourceShape { readonly kind: 'group' }
+export interface AdjustmentLayer extends LayerCommon, WithoutRaster, WithoutSourceShape {
+  readonly kind: 'adjustment'; readonly adjustment: LayerAdjustment;
+}
 export type FillParameters =
   | { readonly kind: 'solid'; readonly schemaVersion: 1; readonly color: RGB }
   | { readonly kind: 'gradient'; readonly schemaVersion: 1; readonly angle: number; readonly stops: readonly { offset: number; color: RGB; opacity: number }[] }
   | { readonly kind: 'pattern'; readonly schemaVersion: 1; readonly assetId: string; readonly scale: number; readonly angle: number };
-export interface FillLayer extends LayerCommon { readonly kind: 'fill'; readonly isGroup: false; readonly fill: FillParameters }
+export interface FillLayer extends LayerCommon, WithoutAdjustment, WithoutRaster, WithoutSourceShape {
+  readonly kind: 'fill'; readonly fill: FillParameters;
+}
 export interface VectorStyle {
   readonly fill: FillParameters | null;
   readonly stroke: { readonly color: RGB; readonly width: number; readonly alignment: 'inside' | 'center' | 'outside' } | null;
 }
-export interface VectorLayer extends LayerCommon { readonly kind: 'vector'; readonly isGroup: false; readonly paths: readonly VectorPath[]; readonly style: VectorStyle }
+export interface VectorLayer extends LayerCommon, WithoutAdjustment {
+  readonly kind: 'vector';
+  readonly paths: readonly VectorPath[];
+  readonly style: VectorStyle;
+  /** Rendered cache used until the vector renderer owns this layer end-to-end. */
+  readonly raster: Raster | null;
+  /** Editable primitive metadata; paths/style remain the canonical vector representation. */
+  readonly sourceShape: LayerShape | null;
+}
 export interface TextRun { readonly from: number; readonly to: number; readonly fontFamily: string; readonly fontSize: number; readonly color: RGB }
-export interface TextLayer extends LayerCommon {
-  readonly kind: 'text'; readonly isGroup: false; readonly text: string; readonly runs: readonly TextRun[];
+export interface TextLayer extends LayerCommon, WithoutAdjustment, WithoutSourceShape {
+  readonly kind: 'text'; readonly text: string; readonly runs: readonly TextRun[];
   readonly box: { readonly width: number; readonly height: number } | null;
   readonly alignment: 'left' | 'center' | 'right' | 'justify';
+  /** Rendered cache while font/vector rendering is loaded lazily. */
+  readonly raster: Raster | null;
 }
-export interface EmbeddedLayer extends LayerCommon {
-  readonly kind: 'embedded'; readonly isGroup: false;
+export interface EmbeddedLayer extends LayerCommon, WithoutAdjustment, WithoutSourceShape {
+  readonly kind: 'embedded';
   readonly content: { readonly mode: 'embedded' | 'linked'; readonly mediaType: 'image' | 'svg' | 'pdf' | 'project';
     readonly assetId?: string; readonly uri?: string; readonly sourceName: string };
+  /** Rendered cache for embedded content. */
+  readonly raster: Raster | null;
 }
 
 export type ModelLayer = PixelLayer | GroupLayer | AdjustmentLayer | FillLayer | VectorLayer | TextLayer | EmbeddedLayer;
-
-/**
- * Source-compatible input shape for v1 callers. Persistence normalises this to `ModelLayer`.
- * New documents and all public factories always produce a discriminated `ModelLayer`.
- */
-export interface LegacyLayer {
-  readonly kind?: ModelLayer['kind'];
-  readonly id: string;
-  readonly name: string;
-  readonly visible: boolean;
-  readonly locked: boolean;
-  readonly parentId: string | null;
-  readonly isGroup: boolean;
-  readonly opacity: number;
-  readonly fillOpacity?: number;
-  readonly blendMode: BlendMode;
-  readonly locks?: LayerLocks;
-  readonly colorLabel?: ColorLabel;
-  readonly transform: LayerTransform;
-  readonly warp?: WarpQuad | null;
-  readonly crop?: CropParameters | null;
-  readonly raster: Raster | null;
-  readonly mask: LayerMask | null;
-  readonly vectorMask?: VectorMask | null;
-  readonly maskSourceId: string | null;
-  readonly effects?: readonly LayerEffect[];
-  readonly filters?: readonly LiveFilter[];
-  readonly adjustment: LayerAdjustment | null;
-  readonly shape: LayerShape | null;
-}
-
-export type Layer = ModelLayer | LegacyLayer;
+export type Layer = ModelLayer;
 
 export interface Artboard {
   readonly id: string;

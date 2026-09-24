@@ -292,7 +292,7 @@ export async function finishSpotHealing(session: EditorSession): Promise<StrokeR
 function canHeal(session: EditorSession, document: CanvasDocument | null, layer: Layer | null): boolean {
   if (!document || !layer || !layer.raster || layer.raster.channels !== 4 || session.tool !== 'spotHealing'
     || !session.canEditLayers || session.selectedLayerIds.size !== 1 || session.isMaskSelected || layer.locked
-    || layer.isGroup || layer.adjustment) return false;
+    || layer.adjustment) return false;
   if (!effectiveVisibleIds(document.layers).has(layer.id)) return false;
   return !document.selection || document.selection.mask.tiles.some((tile) => tile?.some((value) => value !== 0));
 }

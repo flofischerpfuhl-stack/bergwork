@@ -10,7 +10,7 @@
 import {
   ADJUSTMENT_KINDS, adoptClipping, descendantIds, documentsEqual, effectiveVisibleIds, hierarchyEntries,
   isValidStructure, layerPixelHeight, layerPixelWidth, maskTransform, MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
-  releaseDetachedClipping, renderLayers as renderLayersOf, uniqueName, usedPixels,
+  releaseDetachedClipping, renderLayers as renderLayersOf, uniqueName, usedPixels, withLayerRaster,
   type AdjustmentKind, type BlendMode, type CanvasDocument, type HierarchyEntry, type Layer, type LayerAdjustment,
   type LayerMask, BLEND_MODES,
 } from './document';
@@ -192,7 +192,7 @@ export class EditorSession {
   }
   get canUndo(): boolean { return this.canUseHistory && (this.history.canUndo || hasPendingGradient(this)); }
   get canRedo(): boolean { return this.canUseHistory && this.history.canRedo; }
-  get canEditAppearance(): boolean { return this.canEditLayers && this.selectedLayerIds.size === 1 && this.activeLayer?.isGroup === false; }
+  get canEditAppearance(): boolean { return this.canEditLayers && this.selectedLayerIds.size === 1 && !!this.activeLayer && this.activeLayer.kind !== 'group'; }
   get canEditMask(): boolean { return this.canEditLayers && this.selectedLayerIds.size === 1 && this.activeLayer !== null; }
   get canStartProjectOperation(): boolean {
     return !editBlockers.some((blocks) => blocks(this)) && !this.isProjectBusy && !this.isImporting
@@ -331,7 +331,7 @@ export class EditorSession {
       const layer = newLayer({
         id: uuid(), name, raster,
         transform: makeTransform({ x: Math.floor(c.x - raster.width / 2), y: Math.floor(c.y - raster.height / 2) }, { width: raster.width, height: raster.height }),
-        parentId: this.activeLayer?.isGroup ? this.activeLayerId : this.activeLayer?.parentId ?? null,
+        parentId: this.activeLayer?.kind === 'group' ? this.activeLayerId : this.activeLayer?.parentId ?? null,
       });
       if (layer.parentId) this.expand(layer.parentId);
       this.setLayers([...document.layers, layer]);
@@ -349,12 +349,12 @@ export class EditorSession {
     const layer = newLayer({
       id: uuid(), name: uniqueName(document.layers, this.label('Layer')),
       transform: makeTransform({ x: 0, y: 0 }, { width: document.width, height: document.height }),
-      parentId: active?.isGroup ? this.activeLayerId : active?.parentId ?? null,
+      parentId: active?.kind === 'group' ? this.activeLayerId : active?.parentId ?? null,
     });
     if (layer.parentId) this.expand(layer.parentId);
     let insertion = document.layers.findIndex((l) => l.id === this.activeLayerId);
     insertion = insertion >= 0 ? insertion + 1 : document.layers.length;
-    if (active?.isGroup) {
+    if (active?.kind === 'group') {
       const inside = descendantIds(document.layers, active.id);
       let topmost = -1;
       document.layers.forEach((l, i) => { if (inside.has(l.id)) topmost = i; });
@@ -373,9 +373,9 @@ export class EditorSession {
     if (!this.canEditLayers || !document || document.layers.length >= MAX_LAYERS) return;
     const active = this.activeLayer;
     const group = newLayer({
-      id: uuid(), name: uniqueName(document.layers, this.label('Folder')), isGroup: true,
+      id: uuid(), name: uniqueName(document.layers, this.label('Folder')), kind: 'group',
       transform: makeTransform({ x: 0, y: 0 }, { width: document.width, height: document.height }),
-      parentId: active?.isGroup ? this.activeLayerId : active?.parentId ?? null,
+      parentId: active?.kind === 'group' ? this.activeLayerId : active?.parentId ?? null,
     });
     const layers = document.layers.slice();
     const index = layers.findIndex((l) => l.id === this.activeLayerId);
@@ -408,7 +408,7 @@ export class EditorSession {
       parent = ancestors(ordered[0]!).find((candidate) => ordered.every((id) => ancestors(id).includes(candidate))) ?? null;
     }
     const group = newLayer({
-      id: uuid(), name: uniqueName(document.layers, this.label('Folder')), isGroup: true, parentId: parent,
+      id: uuid(), name: uniqueName(document.layers, this.label('Folder')), kind: 'group', parentId: parent,
       transform: makeTransform({ x: 0, y: 0 }, { width: document.width, height: document.height }),
     });
     const branches = ordered.map((id) => {
@@ -445,7 +445,7 @@ export class EditorSession {
   }
 
   toggleGroupExpansion(id: string): void {
-    if (this.isProjectBusy || !this.layer(id)?.isGroup) return;
+    if (this.isProjectBusy || this.layer(id)?.kind !== 'group') return;
     const next = new Set(this.collapsedGroupIds);
     if (next.has(id)) next.delete(id);
     else {
@@ -533,7 +533,7 @@ export class EditorSession {
   canPlaceLayer(id: string, parent: string | null): boolean {
     if (!this.canEditLayers || !this.layer(id)) return false;
     if (parent === null) return true;
-    return parent !== id && !descendantIds(this.document!.layers, id).has(parent) && this.layer(parent)?.isGroup === true;
+    return parent !== id && !descendantIds(this.document!.layers, id).has(parent) && this.layer(parent)?.kind === 'group';
   }
 
   /** Moves a layer (with its subtree when a folder) into `parent`, above `target` or at the bottom. */
@@ -585,7 +585,7 @@ export class EditorSession {
   duplicateActiveLayer(): void {
     const layer = this.activeLayer;
     const document = this.document;
-    if (!this.canEditLayers || !layer || layer.isGroup || !document) return;
+    if (!this.canEditLayers || !layer || layer.kind === 'group' || !document) return;
     const index = document.layers.findIndex((l) => l.id === layer.id);
     const copy: Layer = { ...layer, id: uuid(), name: `${layer.name} ${this.label('copy')}` };
     this.edit('Duplicate Layer', () => {
@@ -598,7 +598,7 @@ export class EditorSession {
 
   duplicateLayer(id: string, parent: string | null, above: string | null = null, atBottom = false): boolean {
     const layer = this.layer(id);
-    if (!this.canEditLayers || !layer || layer.isGroup || !this.canPlaceLayer(id, parent)) return false;
+    if (!this.canEditLayers || !layer || layer.kind === 'group' || !this.canPlaceLayer(id, parent)) return false;
     this.beginEdit('Duplicate Layer');
     try {
       this.selectLayer(id);
@@ -670,7 +670,9 @@ export class EditorSession {
     this.edit('Delete Layer', () => {
       const layers = document.layers.filter((l) => !removed.has(l.id)).map((l) => {
         if (l.maskSourceId && removed.has(l.maskSourceId)) {
-          return { ...l, maskSourceId: null, raster: baked.get(l.id) ?? l.raster };
+          const raster = baked.get(l.id);
+          if (raster) return { ...withLayerRaster(l, raster), maskSourceId: null };
+          return { ...l, maskSourceId: null };
         }
         return l;
       });
@@ -718,7 +720,7 @@ export class EditorSession {
     const document = this.document;
     if (!Number.isFinite(opacity) || !this.canEditLayers || !document) return;
     const value = Math.min(1, Math.max(0, opacity));
-    const targets = document.layers.filter((l) => this.selectedLayerIds.has(l.id) && !l.isGroup && l.opacity !== value);
+    const targets = document.layers.filter((l) => this.selectedLayerIds.has(l.id) && l.kind !== 'group' && l.opacity !== value);
     if (!targets.length) return;
     this.finishOpacityEdit();
     this.edit('Layer Opacity', () => {
@@ -809,7 +811,7 @@ export class EditorSession {
   // MARK: Transform
 
   get transformsAsGroup(): boolean {
-    return this.selectedLayerIds.size > 1 || (this.selectedLayerIds.size === 1 && this.activeLayer?.isGroup === true);
+    return this.selectedLayerIds.size > 1 || (this.selectedLayerIds.size === 1 && this.activeLayer?.kind === 'group');
   }
 
   get groupTransformMembers(): Layer[] {
@@ -818,7 +820,7 @@ export class EditorSession {
     const parents = new Map(document.layers.map((l) => [l.id, l.parentId]));
     const visible = effectiveVisibleIds(document.layers);
     return document.layers.filter((layer) => {
-      if (!layer.raster || layer.isGroup || !visible.has(layer.id)) return false;
+      if (!layer.raster || !visible.has(layer.id)) return false;
       let current: string | null = layer.id;
       for (let i = 0; i < 64 && current; i++) {
         if (this.selectedLayerIds.has(current)) return true;
@@ -840,7 +842,7 @@ export class EditorSession {
     if (!(this.document !== null && !this.isProjectBusy && !this.isImporting && this.renamingLayerId === null && this.adjustmentEditingId === null)) return false;
     if (this.transformsAsGroup) return this.groupTransformMembers.length > 0;
     const layer = this.activeLayer;
-    return !!layer?.raster && !layer.isGroup && effectiveVisibleIds(this.document!.layers).has(layer.id);
+    return !!layer?.raster && effectiveVisibleIds(this.document!.layers).has(layer.id);
   }
 
   /** Whether transforming places only the active layer's unlinked mask. */
@@ -939,7 +941,7 @@ export class EditorSession {
   displayedRaster(layer: Layer): Raster | null {
     const preview = this.livePreview(layer.id);
     if (preview && !preview.mask) return preview.raster;
-    return this.rasterOverrides.get(layer.id) ?? layer.raster;
+    return this.rasterOverrides.get(layer.id) ?? layer.raster ?? null;
   }
   displayedMaskRaster(layer: Layer): Raster | null {
     const preview = this.livePreview(layer.id);
@@ -1202,7 +1204,7 @@ export class EditorSession {
   canCopyMask(source: string, target: string): boolean {
     if (!this.canEditLayers || source === target) return false;
     const from = this.layer(source), to = this.layer(target);
-    return !!from?.mask && !!to && !to.isGroup;
+    return !!from?.mask && !!to && to.kind !== 'group';
   }
   copyMask(source: string, target: string): void {
     if (!this.canCopyMask(source, target)) return;
@@ -1222,8 +1224,8 @@ export class EditorSession {
   canLinkMask(source: string, target: string): boolean {
     const layers = this.document?.layers;
     if (!this.canEditLayers || source === target || !layers) return false;
-    if (!layers.some((l) => l.id === source && !l.isGroup && !l.adjustment)) return false;
-    if (!layers.some((l) => l.id === target && !l.isGroup)) return false;
+    if (!layers.some((l) => l.id === source && l.kind !== 'group' && !l.adjustment)) return false;
+    if (!layers.some((l) => l.id === target && l.kind !== 'group')) return false;
     return isValidStructure(layers.map((l) => (l.id === target ? { ...l, maskSourceId: source } : l)));
   }
   linkMask(source: string, target: string): boolean {
@@ -1248,11 +1250,11 @@ export class EditorSession {
   canToggleClippingMask(id: string): boolean {
     const layers = this.document?.layers;
     const layer = this.layer(id);
-    if (!this.canEditLayers || !layers || !layer || layer.isGroup) return false;
+    if (!this.canEditLayers || !layers || !layer || layer.kind === 'group') return false;
     if (layer.maskSourceId) return true;
     const siblings = layers.filter((l) => l.parentId === layer.parentId);
     const index = siblings.findIndex((l) => l.id === id);
-    if (index <= 0 || siblings[index - 1]!.isGroup) return false;
+    if (index <= 0 || siblings[index - 1]!.kind === 'group') return false;
     const below = siblings[index - 1]!;
     return this.canLinkMask(below.maskSourceId ?? below.id, id);
   }
@@ -1260,13 +1262,13 @@ export class EditorSession {
   toggleClippingMask(id: string): void {
     const layers = this.document?.layers;
     const layer = this.layer(id);
-    if (!this.canEditLayers || !layers || !layer || layer.isGroup) return;
+    if (!this.canEditLayers || !layers || !layer || layer.kind === 'group') return;
     if (layer.maskSourceId) { this.removeLiveMask(id); return; }
     const siblings = layers.filter((l) => l.parentId === layer.parentId);
     const index = siblings.findIndex((l) => l.id === id);
     if (index <= 0) return;
     const below = siblings[index - 1]!;
-    if (below.isGroup) return;
+    if (below.kind === 'group') return;
     this.linkMask(below.maskSourceId ?? below.id, id);
   }
 
@@ -1280,7 +1282,7 @@ export class EditorSession {
     const layer = newLayer({
       id: uuid(), name: this.label(kind), adjustment,
       transform: makeTransform({ x: 0, y: 0 }, { width: document.width, height: document.height }),
-      parentId: active?.isGroup ? this.activeLayerId : active?.parentId ?? null,
+      parentId: active?.kind === 'group' ? this.activeLayerId : active?.parentId ?? null,
     });
     const index = document.layers.findIndex((l) => l.id === this.activeLayerId);
     this.edit(`New ${kind} Adjustment`, () => {
@@ -1296,8 +1298,8 @@ export class EditorSession {
 
   /** Live update while the adjustment's panel is open (not an undo step by itself). */
   updateAdjustment(id: string, value: LayerAdjustment): void {
-    if (!this.layer(id)?.adjustment) return;
-    this.updateLayer(id, (l) => ({ ...l, adjustment: value }));
+    if (this.layer(id)?.kind !== 'adjustment') return;
+    this.updateLayer(id, (l) => l.kind === 'adjustment' ? { ...l, adjustment: value } : l);
     this.notify('document');
   }
 
@@ -1313,18 +1315,18 @@ export class EditorSession {
       for (const id of this.selectedLayerIds) for (const d of descendantIds(layers, id)) picked.add(d);
       const ordered = layers.filter((l) => picked.has(l.id));
       const top = [...ordered].reverse().find((l) => this.selectedLayerIds.has(l.id));
-      if (!ordered.some((l) => !l.isGroup) || !top) return null;
+      if (!ordered.some((l) => l.kind !== 'group') || !top) return null;
       return { ids: ordered.map((l) => l.id), removed: picked, name: top.name, parent: top.parentId, anchor: top.id, action: 'Merge Layers' };
     }
-    if (active.isGroup) {
+    if (active.kind === 'group') {
       const inside = descendantIds(layers, active.id);
-      if (!layers.some((l) => inside.has(l.id) && !l.isGroup)) return null;
+      if (!layers.some((l) => inside.has(l.id) && l.kind !== 'group')) return null;
       const ids = layers.filter((l) => inside.has(l.id) || l.id === active.id).map((l) => l.id);
       return { ids, removed: new Set(ids), name: active.name, parent: active.parentId, anchor: active.id, action: 'Merge Group' };
     }
     const index = layers.findIndex((l) => l.id === active.id);
     const below = [...layers.slice(0, index)].reverse().find((l) => l.parentId === active.parentId);
-    if (!below || below.isGroup) return null;
+    if (!below || below.kind === 'group') return null;
     return { ids: [below.id, active.id], removed: new Set([below.id, active.id]), name: below.name, parent: active.parentId, anchor: active.id, action: 'Merge Down' };
   }
   get canMergeLayers(): boolean { return this.mergePlan() !== null; }
@@ -1376,7 +1378,10 @@ export class EditorSession {
   /** Replaces a layer's pixels (and optionally transform) as one undo step. */
   replaceLayerPixels(id: string, raster: Raster, name: string, transform?: LayerTransform): void {
     if (!this.layer(id)) return;
-    this.edit(name, () => this.updateLayer(id, (l) => ({ ...l, raster, shape: null, transform: transform ?? l.transform })));
+    this.edit(name, () => this.updateLayer(id, (layer) => {
+      const nextTransform = transform ?? layer.transform;
+      return withLayerRaster(layer, raster, nextTransform);
+    }));
   }
   replaceMaskPixels(id: string, raster: Raster, name: string): void {
     if (!this.layer(id)?.mask) return;
@@ -1389,7 +1394,7 @@ export class EditorSession {
     const active = this.activeLayer;
     const layer = newLayer({ id: uuid(), name, raster,
       transform: makeTransform(origin, { width: raster.width, height: raster.height }),
-      parentId: active?.isGroup ? this.activeLayerId : active?.parentId ?? null });
+      parentId: active?.kind === 'group' ? this.activeLayerId : active?.parentId ?? null });
     const index = document.layers.findIndex((l) => l.id === this.activeLayerId);
     this.finishOpacityEdit();
     this.edit(editName, () => {

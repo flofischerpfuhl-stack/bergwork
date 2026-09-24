@@ -211,7 +211,7 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     reportLayerFeatures(source, isGroup, state, layerPath);
     const opacity = Math.min(1, Math.max(0, (source.opacity ?? 1) * (source.fillOpacity ?? 1)));
     const imported = newLayer({
-      id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, isGroup,
+      id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : 'pixel',
       visible: source.hidden !== true, opacity, blendMode: mappedMode, transform: layerTransform,
       raster: image ? Raster.fromPixels(image.width, image.height, 4, pixelDataToRgba8(image)) : null,
       mask: maskFor(source, layerTransform, state, layerPath),

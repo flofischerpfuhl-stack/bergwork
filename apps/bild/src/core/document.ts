@@ -10,7 +10,9 @@
 import type { LayerTransform, Point } from './geometry';
 import { transformsEqual } from './geometry';
 import type {
-  AdjustmentKind, BlendMode, CanvasDocument, Layer, LayerAdjustment, LayerMask, LayerShape,
+  AdjustmentKind, BlendMode, CanvasDocument, ColorLabel, CropParameters, EmbeddedLayer, FillParameters, Layer,
+  LayerAdjustment, LayerEffect, LayerLocks, LayerMask, LayerShape, LiveFilter, TextRun, VectorMask, VectorPath,
+  VectorStyle, WarpQuad,
 } from './model';
 export type {
   AdjustmentKind, Artboard, BlendMode, CanvasDocument, ColorLabel, CropParameters, DocumentResource, EmbeddedLayer,
@@ -67,13 +69,13 @@ export function masksEqual(a: LayerMask | null, b: LayerMask | null): boolean {
 export function layersEqual(a: Layer, b: Layer): boolean {
   return a === b || (a.id === b.id && a.name === b.name && a.visible === b.visible && a.locked === b.locked
     && transformsEqual(a.transform, b.transform) && a.raster === b.raster && a.parentId === b.parentId
-    && a.isGroup === b.isGroup && a.opacity === b.opacity && a.blendMode === b.blendMode && masksEqual(a.mask, b.mask)
+    && a.opacity === b.opacity && a.blendMode === b.blendMode && masksEqual(a.mask, b.mask)
     && a.kind === b.kind && (a.fillOpacity ?? 1) === (b.fillOpacity ?? 1) && jsonEqual(a.locks, b.locks)
     && (a.colorLabel ?? 'none') === (b.colorLabel ?? 'none')
     && jsonEqual(a.warp ?? null, b.warp ?? null) && jsonEqual(a.crop ?? null, b.crop ?? null)
     && jsonEqual(a.vectorMask ?? null, b.vectorMask ?? null)
     && jsonEqual(a.effects ?? [], b.effects ?? []) && jsonEqual(a.filters ?? [], b.filters ?? [])
-    && a.maskSourceId === b.maskSourceId && jsonEqual(a.adjustment, b.adjustment) && jsonEqual(a.shape, b.shape)
+    && a.maskSourceId === b.maskSourceId && jsonEqual(a.adjustment, b.adjustment)
     && jsonEqual(kindPayload(a), kindPayload(b)));
 }
 
@@ -103,43 +105,104 @@ function jsonEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-export type NewLayerFields = Partial<Omit<Layer, 'kind'>> & Pick<Layer, 'id' | 'name' | 'transform'> & {
-  kind?: Exclude<Layer['kind'], undefined>;
-  fill?: import('./model').FillParameters;
-  paths?: readonly import('./model').VectorPath[];
-  style?: import('./model').VectorStyle;
+export interface NewLayerFields {
+  id: string;
+  name: string;
+  transform: LayerTransform;
+  kind?: Layer['kind'];
+  visible?: boolean;
+  locked?: boolean;
+  parentId?: string | null;
+  opacity?: number;
+  fillOpacity?: number;
+  blendMode?: BlendMode;
+  locks?: LayerLocks;
+  colorLabel?: ColorLabel;
+  warp?: WarpQuad | null;
+  crop?: CropParameters | null;
+  raster?: import('./raster').Raster | null;
+  mask?: LayerMask | null;
+  vectorMask?: VectorMask | null;
+  maskSourceId?: string | null;
+  effects?: readonly LayerEffect[];
+  filters?: readonly LiveFilter[];
+  adjustment?: LayerAdjustment;
+  sourceShape?: LayerShape | null;
+  fill?: FillParameters;
+  paths?: readonly VectorPath[];
+  style?: VectorStyle;
   text?: string;
-  runs?: readonly import('./model').TextRun[];
+  runs?: readonly TextRun[];
   box?: { readonly width: number; readonly height: number } | null;
   alignment?: 'left' | 'center' | 'right' | 'justify';
-  content?: import('./model').EmbeddedLayer['content'];
-};
+  content?: EmbeddedLayer['content'];
+}
 
 export function newLayer(fields: NewLayerFields): import('./model').ModelLayer {
-  const candidate = fields;
-  const kind = candidate.kind ?? (candidate.isGroup ? 'group' : candidate.adjustment ? 'adjustment' : candidate.shape ? 'vector' : 'pixel');
+  const kind = fields.kind ?? (fields.adjustment ? 'adjustment' : fields.sourceShape ? 'vector' : 'pixel');
   const base = {
-    visible: true, locked: false, parentId: null, isGroup: kind === 'group', opacity: 1, fillOpacity: 1,
+    id: fields.id, name: fields.name, transform: fields.transform,
+    visible: fields.visible ?? true, locked: fields.locked ?? false, parentId: fields.parentId ?? null,
+    opacity: fields.opacity ?? 1, fillOpacity: fields.fillOpacity ?? 1,
     blendMode: 'normal' as const, locks: { transparency: false, pixels: false, position: false, all: false },
-    colorLabel: 'none' as const, warp: null, crop: null, raster: null, mask: null, vectorMask: null,
-    maskSourceId: null, effects: [], filters: [], adjustment: null, shape: null, ...candidate, kind,
+    colorLabel: 'none' as const, warp: null, crop: null, mask: null, vectorMask: null,
+    maskSourceId: null, effects: [], filters: [],
+    ...pickCommon(fields), kind,
   };
-  if (kind === 'fill') return { ...base, isGroup: false, fill: candidate.fill ?? { kind: 'solid', schemaVersion: 1, color: { red: 0, green: 0, blue: 0 } } } as import('./model').ModelLayer;
-  if (kind === 'vector') return { ...base, isGroup: false, paths: candidate.kind === 'vector' ? candidate.paths : [],
-    style: candidate.kind === 'vector' ? candidate.style : { fill: null, stroke: null } } as import('./model').ModelLayer;
-  if (kind === 'text') return { ...base, isGroup: false, text: candidate.kind === 'text' ? candidate.text : '',
-    runs: candidate.kind === 'text' ? candidate.runs : [], box: candidate.kind === 'text' ? candidate.box : null,
-    alignment: candidate.kind === 'text' ? candidate.alignment : 'left' } as import('./model').ModelLayer;
-  if (kind === 'embedded') return { ...base, isGroup: false, content: candidate.kind === 'embedded' ? candidate.content
-    : { mode: 'embedded', mediaType: 'image', sourceName: '' } } as import('./model').ModelLayer;
-  return { ...base, isGroup: kind === 'group' } as import('./model').ModelLayer;
+  switch (kind) {
+    case 'pixel': return { ...base, kind, raster: fields.raster ?? null };
+    case 'group': return { ...base, kind };
+    case 'adjustment': {
+      if (!fields.adjustment) throw new TypeError('An adjustment layer requires adjustment parameters.');
+      return { ...base, kind, adjustment: fields.adjustment };
+    }
+    case 'fill': return { ...base, kind, fill: fields.fill
+      ?? { kind: 'solid', schemaVersion: 1, color: { red: 0, green: 0, blue: 0 } } };
+    case 'vector': return { ...base, kind, raster: fields.raster ?? null, paths: fields.paths ?? [],
+      style: fields.style ?? { fill: null, stroke: null }, sourceShape: fields.sourceShape ?? null };
+    case 'text': return { ...base, kind, raster: fields.raster ?? null, text: fields.text ?? '', runs: fields.runs ?? [],
+      box: fields.box ?? null, alignment: fields.alignment ?? 'left' };
+    case 'embedded': return { ...base, kind, raster: fields.raster ?? null,
+      content: fields.content ?? { mode: 'embedded', mediaType: 'image', sourceName: '' } };
+  }
+}
+
+/** Installs destructive pixel output without leaking raster fields onto non-raster union members. */
+export function withLayerRaster(layer: Layer, raster: import('./raster').Raster,
+  transform: LayerTransform = layer.transform, mask: LayerMask | null = layer.mask): Layer {
+  if (layer.kind === 'pixel') return { ...layer, raster, transform, mask };
+  if (layer.kind === 'vector' || layer.kind === 'text' || layer.kind === 'embedded') {
+    return newLayer({ ...layer, kind: 'pixel', raster, transform, mask });
+  }
+  return layer;
+}
+
+function pickCommon(fields: NewLayerFields): Partial<import('./model').LayerCommon> {
+  return {
+    ...(fields.visible === undefined ? {} : { visible: fields.visible }),
+    ...(fields.locked === undefined ? {} : { locked: fields.locked }),
+    ...(fields.parentId === undefined ? {} : { parentId: fields.parentId }),
+    ...(fields.opacity === undefined ? {} : { opacity: fields.opacity }),
+    ...(fields.fillOpacity === undefined ? {} : { fillOpacity: fields.fillOpacity }),
+    ...(fields.blendMode === undefined ? {} : { blendMode: fields.blendMode }),
+    ...(fields.locks === undefined ? {} : { locks: fields.locks }),
+    ...(fields.colorLabel === undefined ? {} : { colorLabel: fields.colorLabel }),
+    ...(fields.warp === undefined ? {} : { warp: fields.warp }),
+    ...(fields.crop === undefined ? {} : { crop: fields.crop }),
+    ...(fields.mask === undefined ? {} : { mask: fields.mask }),
+    ...(fields.vectorMask === undefined ? {} : { vectorMask: fields.vectorMask }),
+    ...(fields.maskSourceId === undefined ? {} : { maskSourceId: fields.maskSourceId }),
+    ...(fields.effects === undefined ? {} : { effects: fields.effects }),
+    ...(fields.filters === undefined ? {} : { filters: fields.filters }),
+  };
 }
 
 function kindPayload(layer: Layer): unknown {
   const model = layer as import('./model').ModelLayer;
   switch (layer.kind) {
     case 'fill': return (model as import('./model').FillLayer).fill;
-    case 'vector': { const value = model as import('./model').VectorLayer; return { paths: value.paths, style: value.style }; }
+    case 'vector': { const value = model as import('./model').VectorLayer;
+      return { paths: value.paths, style: value.style, sourceShape: value.sourceShape }; }
     case 'text': { const value = model as import('./model').TextLayer; return { text: value.text, runs: value.runs, box: value.box, alignment: value.alignment }; }
     case 'embedded': return (model as import('./model').EmbeddedLayer).content;
     default: return null;
@@ -163,7 +226,7 @@ export function hierarchyEntries(layers: readonly Layer[], topFirst = false, col
     for (const layer of topFirst ? [...siblings].reverse() : siblings) {
       const effective = visible && layer.visible;
       result.push({ layer, depth, visible: effective });
-      if (layer.isGroup && !collapsed.has(layer.id)) visit(layer.id, depth + 1, effective);
+      if (layer.kind === 'group' && !collapsed.has(layer.id)) visit(layer.id, depth + 1, effective);
     }
   };
   visit(null, 0, true);
@@ -172,7 +235,7 @@ export function hierarchyEntries(layers: readonly Layer[], topFirst = false, col
 
 /** Visible pixel/adjustment layers in compositing order (CanvasDocument.renderLayers). */
 export function renderLayers(layers: readonly Layer[]): Layer[] {
-  return hierarchyEntries(layers).filter((e) => e.visible && !e.layer.isGroup).map((e) => e.layer);
+  return hierarchyEntries(layers).filter((e) => e.visible && e.layer.kind !== 'group').map((e) => e.layer);
 }
 
 export function effectiveVisibleIds(layers: readonly Layer[]): Set<string> {
@@ -219,8 +282,8 @@ export interface HierarchyRecord {
 }
 
 export function hierarchyRecord(layer: Layer): HierarchyRecord {
-  return { id: layer.id, parentId: layer.parentId, isGroup: layer.isGroup, hasImage: !!layer.raster,
-    maskSourceId: layer.maskSourceId, isAdjustment: !!layer.adjustment };
+  return { id: layer.id, parentId: layer.parentId, isGroup: layer.kind === 'group', hasImage: !!layer.raster,
+    maskSourceId: layer.maskSourceId, isAdjustment: layer.kind === 'adjustment' };
 }
 
 /** LayerHierarchy.validate: unique ids, parents are groups, no cycles, depth ≤ 64, groups carry no image. */
@@ -288,7 +351,7 @@ export function releaseDetachedClipping(layers: Layer[]): void {
     for (const layer of stack) {
       if (layer.maskSourceId) {
         if (layer.maskSourceId !== base) { release.add(layer.id); base = layer.id; }
-      } else base = layer.isGroup ? null : layer.id;
+      } else base = layer.kind === 'group' ? null : layer.id;
     }
   }
   for (let i = 0; i < layers.length; i++) {
@@ -299,7 +362,7 @@ export function releaseDetachedClipping(layers: Layer[]): void {
 /** A layer dropped between a base and a layer clipped to it joins that clipping group. */
 export function adoptClipping(id: string, layers: Layer[]): void {
   const layer = layers.find((l) => l.id === id);
-  if (!layer || layer.isGroup) return;
+  if (!layer || layer.kind === 'group') return;
   const siblings = layers.filter((l) => l.parentId === layer.parentId);
   const index = siblings.findIndex((l) => l.id === id);
   if (index <= 0 || index + 1 >= siblings.length) return;
