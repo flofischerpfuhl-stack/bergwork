@@ -308,6 +308,7 @@
   font: 13px/1.2 var(--cmp-font); padding: 2px 5px; border-radius: 5px; border: 1px solid var(--cmp-accent); background: var(--cmp-surface);
   color: var(--cmp-text); width: 100%;
 }
+.lockNotice { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 10px; background: var(--cmp-raised); color: var(--cmp-text); box-shadow: var(--cmp-shadow); font-size: 12px; pointer-events: none; z-index: 5; }
 .layerRowContext { opacity: 0.55; }
 .eye[data-label]:not([data-label="none"]) { color: #fff; border-radius: 4px; }
 .layerLock { flex: none; display: grid; place-items: center; width: 18px; color: var(--cmp-text-secondary); }

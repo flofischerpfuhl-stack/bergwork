@@ -9,7 +9,7 @@
 
 import type { CanvasDocument } from '../../core/document';
 import { rectUnion, type Point } from '../../core/geometry';
-import type { EditorSession } from '../../core/session';
+import type { EditorSession, Tool } from '../../core/session';
 import { currentBrushPreview, currentGpuBrushPreview } from '../../core/brush';
 import { GpuCompositor, type CompositeHooks, type ViewSpec } from '../../render/gpuCompositor';
 import { SoftwareCompositor } from '../../render/softwareCompositor';
@@ -19,6 +19,9 @@ import { defaultTools, HandTool, overlayGeometry, type Modifiers, type ToolConte
 export type OverlayPainter = (context: CanvasRenderingContext2D, session: EditorSession, time: number) => void;
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+
+/** Tools that change pixels of the active layer (or its mask); a pixel lock refuses them. */
+const PIXEL_TOOLS: ReadonlySet<Tool> = new Set<Tool>(['brush', 'spotHealing', 'cloneStamp', 'blur', 'gradient']);
 
 export function modifiersOf(event: { shiftKey: boolean; altKey: boolean; metaKey: boolean; ctrlKey: boolean }): Modifiers {
   return { shift: event.shiftKey, option: event.altKey, command: isMac ? event.metaKey : event.ctrlKey, control: isMac && event.ctrlKey };
@@ -370,6 +373,10 @@ export class CanvasView implements CanvasHost {
     if (event.button !== 0) return;
     const handler = this.toolHandler(modifiersOf(event), point);
     if (!handler) return;
+    // Painting tools on a layer whose pixels are locked: say why nothing happens (Option-click still samples colour).
+    const layer = this.session.activeLayer;
+    if (handler === this.tools[this.session.tool] && PIXEL_TOOLS.has(this.session.tool) && layer && !event.altKey
+      && this.session.refuseLayerEdit(layer.id, 'pixels')) return;
     this.element.setPointerCapture(event.pointerId);
     this.active = { handler, pointerId: event.pointerId, session: this.session };
     handler.down(this.context(event, point));

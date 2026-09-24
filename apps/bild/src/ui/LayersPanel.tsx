@@ -14,7 +14,9 @@ import { CanvasThumbnail, fittedSize } from './Thumbnail';
 import { MenuPopup } from './TopBar';
 import { ADJUSTMENT_KINDS, BLEND_MODES, blendLabel, descendantIds, hierarchyEntries, maskTransform, type AdjustmentKind, type HierarchyEntry, type Layer } from '../core/document';
 import type { ColorLabel, LayerLocks } from '../core/model/types';
-import { filterLayers, type LayerQuery } from '../core/layerSearch';
+import { filterLayers, type LayerSearchQuery } from '../core/layerSearch';
+
+type LayerQuery = { -readonly [K in keyof LayerSearchQuery]: K extends 'kinds' ? Layer['kind'][] : K extends 'labels' ? ColorLabel[] : LayerSearchQuery[K] };
 import type { EditorSession } from '../core/session';
 import type { MenuEntry } from './menus';
 
@@ -89,7 +91,7 @@ function Appearance({ controller, session }: { controller: EditorController; ses
   const fill = layer?.fillOpacity ?? 1;
   // Locks work on every selected layer, folders included (Photoshop).
   const lockable = session.canEditLayers && session.selectedLayerIds.size > 0 && !!layer;
-  const locks = layer ? session.layerLocks(layer.id) : null;
+  const locks = layer ? session.lockState(layer.id) : null;
   const mode = layer ? session.displayedBlendMode(layer) : 'normal';
   const items: MenuEntry[] = BLEND_MODES.map((b) => ({ label: t(b.label), enabled: true, checked: b.mode === layer?.blendMode, run: () => session.setLayerBlendMode(b.mode) }));
   return (
@@ -107,10 +109,12 @@ function Appearance({ controller, session }: { controller: EditorController; ses
         <span>{t('Lock')}</span>
         <span className={styles.lockButtons} role="group" aria-label={t('Lock')}>
           {LOCKS.map((lock) => {
-            const on = !!locks?.[lock.key];
+            // Pressed shows the layer's own flag; a flag implied by Lock All or by a locked folder shows as unavailable.
+            const on = !!layer?.locks[lock.key];
+            const implied = !on && !!locks?.[lock.key];
             return (
               <button key={lock.key} type="button" className={`${styles.lockButton} ${on ? styles.lockButtonOn : ''}`} aria-pressed={on}
-                disabled={!lockable} title={t(lock.label)} aria-label={t(lock.label)} data-testid={`lock-${lock.key}`}
+                disabled={!lockable || implied} title={t(lock.label)} aria-label={t(lock.label)} data-testid={`lock-${lock.key}`}
                 onClick={() => session.setLayerLocks([...session.selectedLayerIds], { [lock.key]: !on })}>
                 <Icon name={lock.icon} size={14} />
               </button>
@@ -119,7 +123,8 @@ function Appearance({ controller, session }: { controller: EditorController; ses
         </span>
       </div>
       <PercentControl controller={controller} label="Fill opacity" testId="fill" value={fill} enabled={enabled}
-        begin={() => session.beginFillOpacityEdit()} finish={() => session.finishFillOpacityEdit()} set={(v) => session.setLayerFillOpacity(v)} />
+        begin={() => { if (layer) session.beginFillOpacityEdit([layer.id]); }} finish={() => session.finishFillOpacityEdit()}
+        set={(v) => { if (layer) session.setFillOpacity([layer.id], v); }} />
       {popup ? (
         <BlendPopup controller={controller} session={session} anchor={popup} items={items} onClose={() => { setPopup(null); session.previewBlendMode(null); }} />
       ) : null}
@@ -204,7 +209,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
     }
     if (enabled && event.pointerType === 'mouse') onDragStart?.(event, layer.id);
   };
-  const locks = session.layerLocks(layer.id);
+  const locks = session.lockState(layer.id);
   const lockedAll = locks.all, lockedSome = locks.transparency || locks.pixels || locks.position;
 
   return (
@@ -322,7 +327,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
   const filtering = !!document && isActive(query);
   const found = filtering ? filterLayers(document, query) : null;
   // While filtering, folders open so matches inside collapsed folders show; their folders stay as context rows.
-  const rows = found ? hierarchyEntries(document!.layers, true).filter((r) => found.matches.has(r.layer.id) || found.ancestors.has(r.layer.id))
+  const rows = found ? hierarchyEntries(document!.layers, true).filter((r) => found.matchingIds.has(r.layer.id) || found.ancestorIds.has(r.layer.id))
     : session.layerRows;
   const listRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -433,7 +438,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
       { label: t('Hide/Show Layer'), enabled: session.canEditLayers, run: () => session.toggleLayerVisibility(id) },
       { label: t('Color Label'), enabled: session.canEditLayers, submenu: COLOR_LABELS.map((c) => ({
         label: t(c.name), enabled: true, checked: layer.colorLabel === c.label,
-        run: () => session.setLayerColorLabel(session.selectedLayerIds.has(id) ? [...session.selectedLayerIds] : [id], c.label),
+        run: () => session.setColorLabel(session.selectedLayerIds.has(id) ? [...session.selectedLayerIds] : [id], c.label),
       })) },
       'separator',
       { label: t('Add White Mask'), enabled: session.canEditLayers && !layer.mask, run: () => { select(); controller.addMask(true); } },
@@ -510,9 +515,9 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
           {rows.map((entry) => (
             <LayerRow key={entry.layer.id} controller={controller} session={session} entry={entry} rows={rows} drag={drag}
               onDragStart={found ? null : startDrag} onContext={(id, x, y) => setMenu({ id, x, y })}
-              context={!!found && !found.matches.has(entry.layer.id)} />
+              context={!!found && !found.matchingIds.has(entry.layer.id)} />
           ))}
-          {found && !found.matches.size ? <div className={styles.panelNote} data-testid="layer-search-empty">{t('No matching layers')}</div> : null}
+          {found && !found.matchingIds.size ? <div className={styles.panelNote} data-testid="layer-search-empty">{t('No matching layers')}</div> : null}
           {drag?.moved && drag.target?.index === rows.length ? <div style={{ height: 2, background: 'var(--cmp-accent)' }} /> : null}
         </div>
       ) : (
