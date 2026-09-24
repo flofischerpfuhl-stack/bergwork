@@ -30,7 +30,7 @@ export function beginFilterEdit(session: EditorSession, kind: FilterKind,
   settings: FilterSettings = defaultFilterSettings()): FilterEditState | null {
   const layer = session.activeLayer;
   if (edits.has(session) || !session.canEditLayers || session.selectedLayerIds.size !== 1 || !layer?.raster
-    || !!layer.adjustment || session.isMaskSelected) return null;
+    || !!layer.adjustment || session.isMaskSelected || session.editBlocker(layer.id, 'pixels')) return null;
   const state: FilterEditState = { kind, layerId: layer.id, originalRaster: layer.raster, originalTransform: layer.transform,
     settings: normalizeFilterSettings(settings), seed: Math.floor(Math.random() * 0x1_0000_0000), preview: true,
     committing: false, preparing: false, previewError: null, request: 0 };
@@ -69,15 +69,17 @@ export async function applyFilterEdit(session: EditorSession): Promise<boolean> 
     const job = filterPixelJob(state.kind, state.originalRaster, state.originalTransform, state.settings,
       session.selection, state.seed, true); jobs.set(session, job); const made = await job.promise;
     session.rasterOverrides.delete(state.layerId); edits.delete(session);
-    const changedGrid = made.raster.width !== state.originalRaster.width || made.raster.height !== state.originalRaster.height;
+    const constrained = session.constrainLayerPixels(state.layerId, made.raster, made.transform);
+    if (!constrained) return false;
+    const changedGrid = constrained.width !== state.originalRaster.width || constrained.height !== state.originalRaster.height;
     if (changedGrid && current.mask?.placement === null) {
-      const mask = { ...current.mask, raster: carryMask(current.mask.raster, current.transform, made.transform, made.raster.width, made.raster.height) };
-      const replacement: Layer = { ...current, raster: made.raster, transform: made.transform, mask };
+      const mask = { ...current.mask, raster: carryMask(current.mask.raster, current.transform, made.transform, constrained.width, constrained.height) };
+      const replacement: Layer = { ...current, raster: constrained, transform: made.transform, mask };
       const document = session.document!;
       session.beginEdit(state.kind);
       session.replaceDocument({ ...document, layers: document.layers.map((layer) => layer.id === state.layerId ? replacement : layer) });
       session.endEdit();
-    } else session.replaceLayerPixels(state.layerId, made.raster, state.kind, made.transform);
+    } else session.replaceLayerPixels(state.layerId, constrained, state.kind, made.transform);
     return true;
   } catch (error) {
     state.committing = false; state.previewError = error instanceof Error ? error.message : String(error); session.notify('ui'); return false;

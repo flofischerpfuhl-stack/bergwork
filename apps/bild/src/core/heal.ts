@@ -275,11 +275,14 @@ export async function finishSpotHealing(session: EditorSession): Promise<StrokeR
     const document = session.document, index = document?.layers.findIndex((item) => item.id === active.layerId) ?? -1;
     const layer = index >= 0 ? document!.layers[index]! : null;
     if (!layer || layer.raster !== active.sourceRaster || !sameTransform(layer.transform, active.sourceTransform)) return result;
+    const transform = result.transform ?? layer.transform;
+    const constrained = session.constrainLayerPixels(layer.id, result.raster, transform);
+    if (!constrained) return result;
     const layers = document!.layers.slice();
     let mask = layer.mask;
-    if (mask && !mask.placement && (result.raster.width !== active.sourceRaster.width
-      || result.raster.height !== active.sourceRaster.height)) mask = expandAttachedMask(mask, result);
-    layers[index] = { ...layer, raster: result.raster, transform: result.transform ?? layer.transform, mask };
+    if (mask && !mask.placement && (constrained.width !== active.sourceRaster.width
+      || constrained.height !== active.sourceRaster.height)) mask = expandAttachedMask(mask, { ...result, raster: constrained });
+    layers[index] = { ...layer, raster: constrained, transform, mask };
     session.beginEdit('Spot Healing'); session.replaceDocument({ ...document!, layers }); session.endEdit();
     return result;
   } catch (error) {
@@ -291,7 +294,8 @@ export async function finishSpotHealing(session: EditorSession): Promise<StrokeR
 
 function canHeal(session: EditorSession, document: CanvasDocument | null, layer: Layer | null): boolean {
   if (!document || !layer || !layer.raster || layer.raster.channels !== 4 || session.tool !== 'spotHealing'
-    || !session.canEditLayers || session.selectedLayerIds.size !== 1 || session.isMaskSelected || layer.locked
+    || !session.canEditLayers || session.selectedLayerIds.size !== 1 || session.isMaskSelected
+    || session.editBlocker(layer.id, 'pixels')
     || layer.adjustment) return false;
   if (!effectiveVisibleIds(document.layers).has(layer.id)) return false;
   return !document.selection || document.selection.mask.tiles.some((tile) => tile?.some((value) => value !== 0));

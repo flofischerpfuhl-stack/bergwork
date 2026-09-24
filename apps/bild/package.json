@@ -6,8 +6,8 @@
   "engines": { "node": ">=22.18.0 <23" },
   "scripts": {
     "dev": "vite",
-    "tauri:dev": "bash scripts/tauri-dev.sh",
-    "tauri:build": "bash scripts/tauri-build.sh",
+    "tauri:dev": "node scripts/tauri.mjs dev",
+    "tauri:build": "node scripts/tauri.mjs build",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "test:unit": "vitest run tests/unit",

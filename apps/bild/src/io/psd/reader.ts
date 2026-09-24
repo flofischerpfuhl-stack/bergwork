@@ -2,7 +2,10 @@ import {
   initializeCanvas, readPsd, type BlendMode as AgBlendMode, type Layer as AgLayer,
   type PixelData, type Psd,
 } from 'ag-psd';
-import { type BlendMode, type CanvasDocument, type Layer, MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer } from '../../core/document';
+import {
+  type BlendMode, type CanvasDocument, type ColorLabel, type Layer, type LayerLocks,
+  MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
+} from '../../core/document';
 import { makeTransform, samePlacement, type LayerTransform } from '../../core/geometry';
 import { Raster } from '../../core/raster';
 
@@ -176,12 +179,32 @@ function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportSta
     || (hasClippedChildren && source.blendClippendElements === false)) {
     issue(state, 'advanced-blending', 'Advanced blending flags are not rendered.', 'not-rendered', layerPath);
   }
-  if ((source.fillOpacity ?? 1) !== 1) issue(state, 'fill-opacity',
-    'Fill opacity is approximated by multiplying layer opacity.', 'approximated', layerPath);
+  if (source.protected?.artboards) issue(state, 'lock-artboards',
+    'The PSD artboard lock has no layer-lock equivalent.', 'editability-only', layerPath);
   if (isGroup && (source.blendMode ?? 'pass through') !== 'pass through') issue(state, 'isolated-group',
     `Group blend mode “${source.blendMode}” is rendered as pass-through.`, 'not-rendered', layerPath);
   if (isGroup && (source.opacity ?? 1) !== 1) issue(state, 'group-opacity',
     'Group opacity is not represented by the current document model.', 'not-rendered', layerPath);
+}
+
+const COLOR_LABELS: ReadonlySet<string> = new Set(['none', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray']);
+
+function importedColorLabel(source: AgLayer, state: ImportState, layerPath: string): ColorLabel {
+  const value: unknown = source.layerColor ?? 'none';
+  if (typeof value === 'string' && COLOR_LABELS.has(value)) return value as ColorLabel;
+  issue(state, `layer-color:${String(value)}`, `Layer colour label “${String(value)}” is unsupported.`,
+    'editability-only', layerPath);
+  return 'none';
+}
+
+function importedLocks(source: AgLayer): LayerLocks {
+  const transparency = source.transparencyProtected === true || source.protected?.transparency === true;
+  const pixels = source.protected?.composite === true;
+  const position = source.protected?.position === true;
+  // PSD stores Lock All as the three protection bits, so the two UI states are indistinguishable on read.
+  const all = transparency && pixels && position;
+  return { transparency: all ? false : transparency, pixels: all ? false : pixels,
+    position: all ? false : position, all };
 }
 
 function importSiblings(sources: readonly AgLayer[], parentId: string | null, parentPath: string,
@@ -209,10 +232,12 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     if (source.clipping && !clippingBaseId) issue(state, 'orphan-clipping',
       'Clipping layer has no visible base in its group.', 'not-rendered', layerPath);
     reportLayerFeatures(source, isGroup, state, layerPath);
-    const opacity = Math.min(1, Math.max(0, (source.opacity ?? 1) * (source.fillOpacity ?? 1)));
+    const opacity = Math.min(1, Math.max(0, source.opacity ?? 1));
+    const fillOpacity = Math.min(1, Math.max(0, source.fillOpacity ?? 1));
     const imported = newLayer({
       id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : 'pixel',
-      visible: source.hidden !== true, opacity, blendMode: mappedMode, transform: layerTransform,
+      visible: source.hidden !== true, opacity, fillOpacity, blendMode: mappedMode,
+      locks: importedLocks(source), colorLabel: importedColorLabel(source, state, layerPath), transform: layerTransform,
       raster: image ? Raster.fromPixels(image.width, image.height, 4, pixelDataToRgba8(image)) : null,
       mask: maskFor(source, layerTransform, state, layerPath),
       maskSourceId: source.clipping && !isGroup ? clippingBaseId : null,

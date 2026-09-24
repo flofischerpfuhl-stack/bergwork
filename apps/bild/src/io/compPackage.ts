@@ -354,7 +354,6 @@ export async function readCompPackage(input: Map<string, Uint8Array>): Promise<L
       id: record.id,
       name: record.name,
       visible: record.isVisible,
-      locked: false,
       parentId: record.parentID ?? null,
       kind: record.isGroup === true ? 'group' : record.adjustment ? 'adjustment' : record.shape && raster ? 'vector' : 'pixel',
       opacity: record.opacity ?? 1,

@@ -251,6 +251,7 @@ export class GpuCompositor {
         uDrawOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
         uDrawSize: { value: new Float32Array(2), type: 'vec2<f32>' },
         uOpacity: { value: 1, type: 'f32' },
+        uFillOpacity: { value: 1, type: 'f32' },
         uMode: { value: 0, type: 'i32' },
         uDissolveSeed: { value: 0, type: 'i32' },
         uHasMask: { value: 0, type: 'i32' },
@@ -947,7 +948,7 @@ export class GpuCompositor {
           uTextureSize: new Float32Array([chunk.width + CHUNK_APRON * 2, chunk.height + CHUNK_APRON * 2]), uApron: CHUNK_APRON,
           uMipLevel: u.uMipLevel, uRestrictChunk: restricted ? 1 : 0,
           uRestrictBounds: 0,
-          uOpacity: layer.opacity, uMode: BLEND_INDEX[mode] ?? 0,
+          uOpacity: layer.opacity, uFillOpacity: layer.fillOpacity, uMode: BLEND_INDEX[mode] ?? 0,
           uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
           uHasMask: maskTarget ? 1 : 0,
           uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0, uReplace: replace ? 1 : 0,
@@ -975,7 +976,7 @@ export class GpuCompositor {
           uMipLevel: u.uMipLevel, uRestrictChunk: 1,
           uRestrictBounds: 1, uDrawOrigin: new Float32Array([bounds.x, bounds.y]),
           uDrawSize: new Float32Array([bounds.width, bounds.height]),
-          uOpacity: layer.opacity, uMode: BLEND_INDEX[mode] ?? 0,
+          uOpacity: layer.opacity, uFillOpacity: layer.fillOpacity, uMode: BLEND_INDEX[mode] ?? 0,
           uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
           uHasMask: maskTarget ? 1 : 0,
           uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0, uReplace: replace ? 1 : 0,
@@ -1129,7 +1130,8 @@ export class GpuCompositor {
       lut = source;
     }
     this.run(pass, out, view.width, view.height, { uBackdrop: backdrop.source, uClip: clip?.source ?? this.white, uLut: lut }, {
-      uHasClip: clip ? 1 : 0, uMode: BLEND_INDEX[hooks.blendMode(layer)] ?? 0, uOpacity: layer.opacity,
+      uHasClip: clip ? 1 : 0, uMode: BLEND_INDEX[hooks.blendMode(layer)] ?? 0,
+      uOpacity: layer.opacity * layer.fillOpacity,
       uViewToDoc: mat3(view.viewToDoc), uParams: program?.params(layer) ?? new Float32Array(32),
     });
     return out;

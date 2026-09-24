@@ -13,7 +13,8 @@ import {
   releaseDetachedClipping, renderLayers as renderLayersOf, uniqueName, usedPixels, withLayerRaster,
   type AdjustmentKind, type BlendMode, type CanvasDocument, type HierarchyEntry, type Layer, type LayerAdjustment,
   type LayerMask, BLEND_MODES,
-type Guide, } from './document';
+  type Guide, } from './document';
+import type { ColorLabel, LayerLocks } from './model';
 import {
   boundingBox, center, corners as transformCorners, following, isValidTransform, makeTransform, mirrored, samePlacement,
   snapOffset, transformsEqual, type LayerTransform, type Point, type Rect, type Size,
@@ -29,6 +30,10 @@ import { defaultAdjustment } from './adjustments';
 import { cancelShape, redrawShapeLayer } from './shape';
 import { cancelGradient, hasPendingGradient, refreshGradientPalette, resolveGradient } from './gradient';
 import { distortLayer, groupDistortTarget, maskBackground, warpMask } from './distort';
+import {
+  effectiveLayerLocks, layerLockBlocker, preserveLayerTransparency,
+  type LayerEditKind, type LayerLockBlocker,
+} from './locks';
 
 export type Tool =
   | 'move' | 'marquee' | 'lasso' | 'wand' | 'crop' | 'brush' | 'spotHealing' | 'cloneStamp' | 'blur'
@@ -122,6 +127,7 @@ export class EditorSession {
   showsPixelGrid = true;
   blendPreview: { layerId: string; mode: BlendMode } | null = null;
   opacityEditLayerId: string | null = null;
+  fillOpacityEditLayerIds: readonly string[] | null = null;
   renamingLayerId: string | null = null;
   adjustmentEditingId: string | null = null;
   foregroundColor: PaletteColor = BLACK;
@@ -131,6 +137,8 @@ export class EditorSession {
   isProjectBusy = false;
   isImporting = false;
   errorMessage: string | null = null;
+  /** Last structured refusal; command surfaces may translate `code` and fall back to `message`. */
+  lastEditBlocker: LayerLockBlocker | null = null;
   projectName: string | null = null;
   pendingOpacityDigit: { digit: number; time: number } | null = null;
   services: SessionServices | null = null;
@@ -195,7 +203,10 @@ export class EditorSession {
   }
   get canUndo(): boolean { return this.canUseHistory && (this.history.canUndo || hasPendingGradient(this)); }
   get canRedo(): boolean { return this.canUseHistory && this.history.canRedo; }
-  get canEditAppearance(): boolean { return this.canEditLayers && this.selectedLayerIds.size === 1 && !!this.activeLayer && this.activeLayer.kind !== 'group'; }
+  get canEditAppearance(): boolean {
+    return this.canEditLayers && this.selectedLayerIds.size === 1 && !!this.activeLayer && this.activeLayer.kind !== 'group'
+      && !this.editBlocker(this.activeLayer.id, 'appearance');
+  }
   get canEditMask(): boolean { return this.canEditLayers && this.selectedLayerIds.size === 1 && this.activeLayer !== null; }
   get canStartProjectOperation(): boolean {
     return !editBlockers.some((blocks) => blocks(this)) && !this.isProjectBusy && !this.isImporting
@@ -204,6 +215,22 @@ export class EditorSession {
 
   get layerRows(): HierarchyEntry[] {
     return hierarchyEntries(this.document?.layers ?? [], true, this.collapsedGroupIds);
+  }
+
+  lockState(id: string): LayerLocks {
+    return this.document ? effectiveLayerLocks(this.document, id)
+      : { transparency: false, pixels: false, position: false, all: false };
+  }
+  editBlocker(id: string, kind: LayerEditKind): LayerLockBlocker | null {
+    return this.document ? layerLockBlocker(this.document, id, kind) : null;
+  }
+  /** Records a blocker only when an edit is actually attempted. */
+  refuseLayerEdit(id: string, kind: LayerEditKind): boolean {
+    const blocker = this.editBlocker(id, kind);
+    if (!blocker) return false;
+    this.lastEditBlocker = blocker;
+    this.notify('ui');
+    return true;
   }
 
   // MARK: Transactions
@@ -236,6 +263,15 @@ export class EditorSession {
     if (id !== this.activeLayerId) this.isMaskSelected = false;
     this.activeLayerId = id;
     this.selectedLayerIds = new Set(id ? [id] : []);
+  }
+
+  private targetLayers(ids: Iterable<string>): Layer[] | null {
+    const document = this.document;
+    if (!document) return null;
+    const wanted = new Set(ids);
+    if (!wanted.size) return null;
+    const targets = document.layers.filter((layer) => wanted.has(layer.id));
+    return targets.length === wanted.size ? targets : null;
   }
 
   // MARK: Undo
@@ -693,6 +729,65 @@ export class EditorSession {
 
   // MARK: Appearance
 
+  /** Lock toggles are always permitted, including unlocking a fully locked parent. */
+  setLayerLocks(ids: Iterable<string>, partial: Partial<LayerLocks>): void {
+    const targets = this.targetLayers(ids);
+    if (!this.canEditLayers || !targets) return;
+    const entries = Object.entries(partial).filter((entry): entry is [keyof LayerLocks, boolean] =>
+      ['transparency', 'pixels', 'position', 'all'].includes(entry[0]) && typeof entry[1] === 'boolean');
+    if (!entries.length) return;
+    const changes = targets.filter((layer) => entries.some(([key, value]) => layer.locks[key] !== value));
+    if (!changes.length) return;
+    this.edit('Set Layer Locks', () => {
+      for (const target of changes) this.updateLayer(target.id, (layer) => {
+        const locks = { ...layer.locks };
+        for (const [key, value] of entries) locks[key] = value;
+        return { ...layer, locks, locked: locks.all };
+      });
+    });
+  }
+
+  setColorLabel(ids: Iterable<string>, label: ColorLabel): void {
+    const targets = this.targetLayers(ids);
+    if (!this.canEditLayers || !targets
+      || !['none', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray'].includes(label)) return;
+    const changes = targets.filter((layer) => layer.colorLabel !== label);
+    if (!changes.length) return;
+    this.edit(changes.length === 1 ? 'Set Layer Color Label' : 'Set Layer Color Labels', () => {
+      for (const target of changes) this.updateLayer(target.id, (layer) => ({ ...layer, colorLabel: label }));
+    });
+  }
+
+  beginFillOpacityEdit(ids: Iterable<string> = this.selectedLayerIds): boolean {
+    if (this.fillOpacityEditLayerIds || !this.canEditLayers) return false;
+    const targets = this.targetLayers(ids);
+    if (!targets || targets.some((layer) => this.refuseLayerEdit(layer.id, 'appearance'))) return false;
+    this.finishOpacityEdit();
+    this.beginEdit('Layer Fill Opacity');
+    this.fillOpacityEditLayerIds = targets.map((layer) => layer.id);
+    return true;
+  }
+
+  finishFillOpacityEdit(): void {
+    if (!this.fillOpacityEditLayerIds) return;
+    this.fillOpacityEditLayerIds = null;
+    this.endEdit();
+  }
+
+  setFillOpacity(ids: Iterable<string>, opacity: number): void {
+    if (!Number.isFinite(opacity) || !this.canEditLayers) return;
+    const targets = this.targetLayers(ids);
+    if (!targets || targets.some((layer) => this.refuseLayerEdit(layer.id, 'appearance'))) return;
+    const value = Math.min(1, Math.max(0, opacity));
+    const changes = targets.filter((layer) => layer.fillOpacity !== value);
+    if (!changes.length) return;
+    const live = this.fillOpacityEditLayerIds;
+    if (live && (live.length !== targets.length || live.some((id) => !targets.some((layer) => layer.id === id)))) return;
+    if (!live) this.beginEdit('Layer Fill Opacity');
+    for (const target of changes) this.updateLayer(target.id, (layer) => ({ ...layer, fillOpacity: value }));
+    if (live) this.changed(); else this.endEdit();
+  }
+
   displayedBlendMode(layer: Layer): BlendMode {
     const preview = this.blendPreview;
     return preview && preview.layerId === layer.id && this.activeLayerId === layer.id ? preview.mode : layer.blendMode;
@@ -702,7 +797,9 @@ export class EditorSession {
     this.notify('document');
   }
   beginOpacityEdit(): void {
-    if (!this.canEditAppearance || this.opacityEditLayerId || !this.activeLayerId) return;
+    if (!this.activeLayerId || this.refuseLayerEdit(this.activeLayerId, 'appearance')
+      || !this.canEditAppearance || this.opacityEditLayerId) return;
+    this.finishFillOpacityEdit();
     this.beginEdit('Layer Opacity');
     this.opacityEditLayerId = this.activeLayerId;
   }
@@ -713,7 +810,7 @@ export class EditorSession {
   }
   setLayerOpacity(opacity: number): void {
     const id = this.opacityEditLayerId ?? this.activeLayerId;
-    if (!Number.isFinite(opacity) || !this.canEditAppearance || !id) return;
+    if (!id || this.refuseLayerEdit(id, 'appearance') || !Number.isFinite(opacity) || !this.canEditAppearance) return;
     const standalone = this.opacityEditLayerId === null;
     if (standalone) this.beginEdit('Layer Opacity');
     this.updateLayer(id, (l) => ({ ...l, opacity: Math.min(1, Math.max(0, opacity)) }));
@@ -723,7 +820,9 @@ export class EditorSession {
     const document = this.document;
     if (!Number.isFinite(opacity) || !this.canEditLayers || !document) return;
     const value = Math.min(1, Math.max(0, opacity));
-    const targets = document.layers.filter((l) => this.selectedLayerIds.has(l.id) && l.kind !== 'group' && l.opacity !== value);
+    const selected = document.layers.filter((l) => this.selectedLayerIds.has(l.id) && l.kind !== 'group');
+    if (selected.some((layer) => this.refuseLayerEdit(layer.id, 'appearance'))) return;
+    const targets = selected.filter((l) => l.opacity !== value);
     if (!targets.length) return;
     this.finishOpacityEdit();
     this.edit('Layer Opacity', () => {
@@ -732,7 +831,7 @@ export class EditorSession {
   }
   setLayerBlendMode(mode: BlendMode): void {
     this.blendPreview = null;
-    if (!this.canEditAppearance || !this.activeLayerId) return;
+    if (!this.activeLayerId || this.refuseLayerEdit(this.activeLayerId, 'appearance') || !this.canEditAppearance) return;
     this.finishOpacityEdit();
     const id = this.activeLayerId;
     this.edit('Layer Blend Mode', () => this.updateLayer(id, (l) => ({ ...l, blendMode: mode })));
@@ -843,9 +942,13 @@ export class EditorSession {
 
   get canTransform(): boolean {
     if (!(this.document !== null && !this.isProjectBusy && !this.isImporting && this.renamingLayerId === null && this.adjustmentEditingId === null)) return false;
-    if (this.transformsAsGroup) return this.groupTransformMembers.length > 0;
+    if (this.transformsAsGroup) {
+      const members = this.groupTransformMembers;
+      return members.length > 0 && !members.some((layer) => this.editBlocker(layer.id, 'position'));
+    }
     const layer = this.activeLayer;
-    return !!layer?.raster && effectiveVisibleIds(this.document!.layers).has(layer.id);
+    return !!layer?.raster && effectiveVisibleIds(this.document!.layers).has(layer.id)
+      && !this.editBlocker(layer.id, 'position');
   }
 
   /** Whether transforming places only the active layer's unlinked mask. */
@@ -998,6 +1101,12 @@ export class EditorSession {
       if (edit.corners) { this.commitDistort(edit, edit.corners); return; }
       if (edit.group) {
         if (!isValidTransform(edit.draft)) return;
+        for (const [id, original] of edit.group.originals) {
+          const moved = following(original, edit.group.box, edit.draft);
+          const resamples = moved.size.width !== original.size.width || moved.size.height !== original.size.height
+            || moved.rotation !== original.rotation || moved.flipX !== original.flipX || moved.flipY !== original.flipY;
+          if (this.refuseLayerEdit(id, 'position') || (resamples && this.refuseLayerEdit(id, 'pixels'))) return;
+        }
         this.edit('Transform Layers', () => {
           for (const [id, original] of edit.group!.originals) {
             const moved = following(original, edit.group!.box, edit.draft);
@@ -1010,6 +1119,10 @@ export class EditorSession {
       }
       const layer = this.layer(edit.layerId);
       if (!isValidTransform(edit.draft) || !layer) return;
+      const resamples = edit.draft.size.width !== layer.transform.size.width || edit.draft.size.height !== layer.transform.size.height
+        || edit.draft.rotation !== layer.transform.rotation || edit.draft.flipX !== layer.transform.flipX
+        || edit.draft.flipY !== layer.transform.flipY;
+      if (this.refuseLayerEdit(layer.id, 'position') || (resamples && this.refuseLayerEdit(layer.id, 'pixels'))) return;
       this.edit('Transform Layer', () => this.updateLayer(edit.layerId, (l) => redrawShapeLayer({ ...l, transform: edit.draft,
         mask: l.mask ? { ...l.mask, placement: maskPlacementMoving(l.mask, l.transform, edit.draft) } : null })));
     } finally {
@@ -1053,6 +1166,9 @@ export class EditorSession {
   }
 
   nudgeLayer(dx: number, dy: number): void {
+    const ids = this.transformsAsGroup ? this.groupTransformMembers.map((layer) => layer.id)
+      : this.activeLayerId ? [this.activeLayerId] : [];
+    if (ids.some((id) => this.refuseLayerEdit(id, 'position'))) return;
     const alreadyEditing = this.transformEdit !== null;
     if (!alreadyEditing) this.beginTransform(false);
     const edit = this.transformEdit;
@@ -1066,7 +1182,9 @@ export class EditorSession {
     const layer = this.layer(edit.layerId);
     const mask = layer?.mask;
     if (!isValidTransform(edit.draft) || !layer || !mask) return;
+    if (this.refuseLayerEdit(layer.id, 'position')) return;
     if (edit.corners) {
+      if (this.refuseLayerEdit(layer.id, 'pixels')) return;
       try {
         // LayerMask.commitMaskTransform: a mask distorted alone keeps its edge tone outside the quad.
         const moved = warpMask(mask.raster, edit.draft, edit.corners, maskBackground(mask.raster));
@@ -1092,6 +1210,7 @@ export class EditorSession {
     this.beginEdit(edit.group ? 'Distort Layers' : 'Distort');
     try {
       for (const id of ids) {
+        if (this.refuseLayerEdit(id, 'position') || this.refuseLayerEdit(id, 'pixels')) return;
         const layer = this.layer(id);
         if (!layer?.raster) continue;
         try {
@@ -1128,6 +1247,7 @@ export class EditorSession {
     }
     const ids = new Set(members.map((m) => m.id));
     if (!ids.size) return;
+    if ([...ids].some((id) => this.refuseLayerEdit(id, 'position'))) return;
     this.finishOpacityEdit();
     this.edit(horizontally ? 'Flip Horizontal' : 'Flip Vertical', () => {
       for (const id of ids) {
@@ -1143,6 +1263,7 @@ export class EditorSession {
     this.commitTransform();
     const document = this.document;
     if (!this.canEditLayers || !document) return;
+    if (document.layers.some((layer) => this.refuseLayerEdit(layer.id, 'position'))) return;
     const axis = horizontally ? document.width / 2 : document.height / 2;
     this.finishOpacityEdit();
     this.edit(horizontally ? 'Flip Canvas Horizontal' : 'Flip Canvas Vertical', () => {
@@ -1160,7 +1281,7 @@ export class EditorSession {
   /** Adds a solid mask (no selection) — reveal-all or hide-all. Selection-shaped masks come from the selection module. */
   addLayerMask(revealing = true): void {
     const layer = this.activeLayer;
-    if (!this.canEditMask || !layer || layer.mask) return;
+    if (!this.canEditMask || !layer || layer.mask || this.refuseLayerEdit(layer.id, 'pixels')) return;
     this.finishOpacityEdit();
     this.edit(revealing ? 'Add Reveal-All Mask' : 'Add Hide-All Mask', () => {
       this.updateLayer(layer.id, (l) => ({ ...l, mask: { raster: Raster.solidMask(revealing), enabled: true, placement: null, linked: true } }));
@@ -1171,7 +1292,7 @@ export class EditorSession {
   /** Installs a ready-made mask raster covering the layer's grid (Add Mask from Selection). */
   setMaskFromRaster(raster: Raster, name: string, clearSelection: boolean): void {
     const layer = this.activeLayer;
-    if (!this.canEditMask || !layer || layer.mask) return;
+    if (!this.canEditMask || !layer || layer.mask || this.refuseLayerEdit(layer.id, 'pixels')) return;
     this.finishOpacityEdit();
     this.edit(name, () => {
       this.updateLayer(layer.id, (l) => ({ ...l, mask: { raster, enabled: true, placement: null, linked: true } }));
@@ -1182,7 +1303,7 @@ export class EditorSession {
 
   toggleLayerMask(): void {
     const layer = this.activeLayer;
-    if (!this.canEditMask || !layer?.mask) return;
+    if (!this.canEditMask || !layer?.mask || this.refuseLayerEdit(layer.id, 'appearance')) return;
     this.finishOpacityEdit();
     this.edit(layer.mask.enabled ? 'Disable Layer Mask' : 'Enable Layer Mask',
       () => this.updateLayer(layer.id, (l) => ({ ...l, mask: { ...l.mask!, enabled: !l.mask!.enabled } })));
@@ -1190,7 +1311,7 @@ export class EditorSession {
 
   deleteLayerMask(): void {
     const layer = this.activeLayer;
-    if (!this.canEditMask || !layer?.mask) return;
+    if (!this.canEditMask || !layer?.mask || this.refuseLayerEdit(layer.id, 'pixels')) return;
     this.finishOpacityEdit();
     this.edit('Delete Layer Mask', () => {
       this.updateLayer(layer.id, (l) => ({ ...l, mask: null }));
@@ -1200,7 +1321,7 @@ export class EditorSession {
 
   toggleMaskLink(id: string): void {
     const layer = this.layer(id);
-    if (!this.canEditLayers || !layer?.mask) return;
+    if (!this.canEditLayers || !layer?.mask || this.refuseLayerEdit(id, 'appearance')) return;
     this.commitTransform();
     this.finishOpacityEdit();
     this.edit(layer.mask.linked ? 'Unlink Layer Mask' : 'Link Layer Mask',
@@ -1210,7 +1331,7 @@ export class EditorSession {
   canCopyMask(source: string, target: string): boolean {
     if (!this.canEditLayers || source === target) return false;
     const from = this.layer(source), to = this.layer(target);
-    return !!from?.mask && !!to && to.kind !== 'group';
+    return !!from?.mask && !!to && to.kind !== 'group' && !this.editBlocker(target, 'pixels');
   }
   copyMask(source: string, target: string): void {
     if (!this.canCopyMask(source, target)) return;
@@ -1229,7 +1350,7 @@ export class EditorSession {
 
   canLinkMask(source: string, target: string): boolean {
     const layers = this.document?.layers;
-    if (!this.canEditLayers || source === target || !layers) return false;
+    if (!this.canEditLayers || source === target || !layers || this.editBlocker(target, 'appearance')) return false;
     if (!layers.some((l) => l.id === source && l.kind !== 'group' && !l.adjustment)) return false;
     if (!layers.some((l) => l.id === target && l.kind !== 'group')) return false;
     return isValidStructure(layers.map((l) => (l.id === target ? { ...l, maskSourceId: source } : l)));
@@ -1243,7 +1364,7 @@ export class EditorSession {
   removeLiveMask(target: string): void {
     const document = this.document;
     const layer = this.layer(target);
-    if (!this.canEditLayers || !document || !layer?.maskSourceId) return;
+    if (!this.canEditLayers || !document || !layer?.maskSourceId || this.refuseLayerEdit(target, 'appearance')) return;
     const source = layer.maskSourceId;
     const siblings = document.layers.filter((l) => l.parentId === layer.parentId);
     const index = siblings.findIndex((l) => l.id === target);
@@ -1359,6 +1480,7 @@ export class EditorSession {
     const moves = new Map<string, { dx: number; dy: number }>();
     units.forEach((unit, i) => { const o = offsets[i]!; if (o.dx || o.dy) for (const id of unit.ids) moves.set(id, o); });
     if (!moves.size) return;
+    if ([...moves.keys()].some((id) => this.refuseLayerEdit(id, 'position'))) return;
     this.commitTransform();
     this.edit(name, () => {
       this.document = { ...this.document!, layers: this.document!.layers.map((l) => {
@@ -1423,17 +1545,20 @@ export class EditorSession {
       const ordered = layers.filter((l) => picked.has(l.id));
       const top = [...ordered].reverse().find((l) => this.selectedLayerIds.has(l.id));
       if (!ordered.some((l) => l.kind !== 'group') || !top) return null;
+      if (ordered.some((layer) => this.editBlocker(layer.id, 'pixels'))) return null;
       return { ids: ordered.map((l) => l.id), removed: picked, name: top.name, parent: top.parentId, anchor: top.id, action: 'Merge Layers' };
     }
     if (active.kind === 'group') {
       const inside = descendantIds(layers, active.id);
       if (!layers.some((l) => inside.has(l.id) && l.kind !== 'group')) return null;
       const ids = layers.filter((l) => inside.has(l.id) || l.id === active.id).map((l) => l.id);
+      if (ids.some((id) => this.editBlocker(id, 'pixels'))) return null;
       return { ids, removed: new Set(ids), name: active.name, parent: active.parentId, anchor: active.id, action: 'Merge Group' };
     }
     const index = layers.findIndex((l) => l.id === active.id);
     const below = [...layers.slice(0, index)].reverse().find((l) => l.parentId === active.parentId);
     if (!below || below.kind === 'group') return null;
+    if ([below.id, active.id].some((id) => this.editBlocker(id, 'pixels'))) return null;
     return { ids: [below.id, active.id], removed: new Set([below.id, active.id]), name: below.name, parent: active.parentId, anchor: active.id, action: 'Merge Down' };
   }
   get canMergeLayers(): boolean { return this.mergePlan() !== null; }
@@ -1483,15 +1608,23 @@ export class EditorSession {
   // MARK: Pixel layer helpers used by tools
 
   /** Replaces a layer's pixels (and optionally transform) as one undo step. */
+  constrainLayerPixels(id: string, raster: Raster, transform?: LayerTransform): Raster | null {
+    const layer = this.layer(id);
+    if (!layer || this.refuseLayerEdit(id, 'pixels')) return null;
+    const nextTransform = transform ?? layer.transform;
+    return layer.raster && this.lockState(id).transparency
+      ? preserveLayerTransparency(layer.raster, layer.transform, raster, nextTransform) : raster;
+  }
   replaceLayerPixels(id: string, raster: Raster, name: string, transform?: LayerTransform): void {
-    if (!this.layer(id)) return;
+    const constrained = this.constrainLayerPixels(id, raster, transform);
+    if (!constrained) return;
     this.edit(name, () => this.updateLayer(id, (layer) => {
       const nextTransform = transform ?? layer.transform;
-      return withLayerRaster(layer, raster, nextTransform);
+      return withLayerRaster(layer, constrained, nextTransform);
     }));
   }
   replaceMaskPixels(id: string, raster: Raster, name: string): void {
-    if (!this.layer(id)?.mask) return;
+    if (!this.layer(id)?.mask || this.refuseLayerEdit(id, 'pixels')) return;
     this.edit(name, () => this.updateLayer(id, (l) => ({ ...l, mask: { ...l.mask!, raster } })));
   }
   /** Inserts pixels as a new layer above the active one (addPixelLayer). */

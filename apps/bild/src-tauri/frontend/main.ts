@@ -25,9 +25,12 @@ async function main(): Promise<void> {
     return;
   }
   document.body.style.cssText = 'margin:0;width:100vw;height:100vh;overflow:hidden';
+  const locale = navigator.language.startsWith('de') ? 'de' : 'en';
+  // The standalone app owns the page, so the document language follows the UI (screen readers, hyphenation).
+  document.documentElement.lang = locale;
   await mountEditor(root, {
     host: createTauriHost(),
-    locale: navigator.language.startsWith('de') ? 'de' : 'en',
+    locale,
     theme: 'dark',
   });
   await window.__TAURI__.event.listen('fernwork-menu-new', () => dispatchNativeShortcut('n'));
