@@ -13,6 +13,7 @@ import { setShortcutLocale, type FeatureRegistry } from './menus';
 import type { IconName } from './icons';
 import type { CanvasView } from './canvas/CanvasView';
 import type { Modifiers, ToolHandler } from './canvas/tools';
+import type { Point } from '../core/geometry';
 import { pixelClipboard, type ClipboardHooks, type PixelClipboardEntry } from '../core/clipboard';
 import { failureMessage, ImportQueue } from '../core/importQueue';
 import { ProjectWorkspace, type ProjectTab } from '../core/workspace';
@@ -99,7 +100,7 @@ export class EditorController {
   /** Non-modal panels drawn over the canvas (adjustment and filter panels). */
   panels: (() => ReactNode)[] = [];
   /** Canvas input taken over by an open panel (eyedroppers), ahead of the current tool. */
-  canvasInterceptors: ((session: EditorSession, modifiers: Modifiers) => ToolHandler | null)[] = [];
+  canvasInterceptors: ((session: EditorSession, modifiers: Modifiers, point: Point | null) => ToolHandler | null)[] = [];
   /** Secondary-button (right) drags on the canvas, e.g. resizing the brush; the first that accepts the press owns it. */
   secondaryDrags: ((session: EditorSession) => SecondaryDrag | null)[] = [];
   /** Number keys for tools with their own opacity (brushes, gradient); true when handled. */

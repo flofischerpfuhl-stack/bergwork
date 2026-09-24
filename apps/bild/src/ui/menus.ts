@@ -25,7 +25,7 @@ export interface Menu { title: string; items: MenuEntry[] }
 
 /** Features whose module is registered at runtime (selection, brushes, adjustments…). */
 export interface FeatureRegistry {
-  [command: string]: { enabled: () => boolean; run: () => void } | undefined;
+  [command: string]: { enabled: () => boolean; run: () => void; checked?: () => boolean } | undefined;
 }
 
 export function buildMenus(controller: EditorController, features: FeatureRegistry): Menu[] {
@@ -37,7 +37,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
   const pending = t('Not yet available in the browser port');
   const feature = (key: string, label: string, shortcut?: string): MenuItem => {
     const f = features[key];
-    return f ? { label, shortcut, enabled: f.enabled(), run: f.run } : { label, shortcut, enabled: false, note: pending };
+    return f ? { label, shortcut, enabled: f.enabled(), run: f.run, checked: f.checked?.() } : { label, shortcut, enabled: false, note: pending };
   };
   const mergePlan = session.mergePlan();
   return [
@@ -143,6 +143,15 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         { label: t('Move Layer Down'), shortcut: 'mod+[', enabled: session.canMoveActiveLayer(-1), run: () => session.moveActiveLayer(-1) },
         { label: t(mergePlan?.action ?? 'Merge Down'), shortcut: 'mod+e', enabled: !!mergePlan, run: () => void controller.mergeLayers() },
         'separator',
+        { label: t('Align'), enabled: !!features['align-left']?.enabled(), submenu: [
+          feature('align-left', t('Left Edges')), feature('align-hcenter', t('Horizontal Centers')), feature('align-right', t('Right Edges')),
+          feature('align-top', t('Top Edges')), feature('align-vcenter', t('Vertical Centers')), feature('align-bottom', t('Bottom Edges')),
+        ] },
+        { label: t('Distribute'), enabled: !!features['distribute-hcenters']?.enabled(), submenu: [
+          feature('distribute-hcenters', t('Horizontal Centers')), feature('distribute-vcenters', t('Vertical Centers')),
+          feature('distribute-hspacing', t('Horizontal Spacing')), feature('distribute-vspacing', t('Vertical Spacing')),
+        ] },
+        'separator',
         { label: t('Flip Layer Horizontal'), enabled: session.canTransform, run: () => session.flipLayers(true) },
         { label: t('Flip Layer Vertical'), enabled: session.canTransform, run: () => session.flipLayers(false) },
         'separator',
@@ -159,6 +168,13 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         { label: t('Zoom Out'), shortcut: 'mod+-', enabled: !!document, run: () => session.zoomTo(session.viewport.zoom / 1.25) },
         'separator',
         { label: t('Pixel Grid (800% and above)'), enabled: true, checked: session.showsPixelGrid, run: () => { session.showsPixelGrid = !session.showsPixelGrid; session.notify('view'); } },
+        feature('toggleRulers', t('Rulers'), 'mod+r'),
+        feature('toggleGuides', t('Show Guides'), 'mod+;'),
+        feature('snapToGuides', t('Snap to Guides')),
+        feature('lockGuides', t('Lock Guides'), 'mod+alt+;'),
+        feature('newGuide', t('New Guide…')),
+        feature('clearGuides', t('Clear Guides')),
+        'separator',
         { label: t('Show Transform Controls'), shortcut: 'mod+h', enabled: session.tool === 'move' && !!document, checked: session.showsTransformControls,
           run: () => { session.showsTransformControls = !session.showsTransformControls; session.notify('document'); } },
       ],

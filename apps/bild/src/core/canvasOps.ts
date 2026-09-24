@@ -39,7 +39,8 @@ function validSize(width: number, height: number): boolean {
     && width <= MAX_SIDE && height <= MAX_SIDE;
 }
 
-function translated(layer: Layer, dx: number, dy: number): Layer {
+/** A layer moved by (dx, dy), carrying a separately placed mask along. */
+export function translated(layer: Layer, dx: number, dy: number): Layer {
   const transform = { ...layer.transform,
     origin: { x: layer.transform.origin.x + dx, y: layer.transform.origin.y + dy } };
   if (!isValidTransform(transform)) throw new CanvasOperationError('tooLarge');

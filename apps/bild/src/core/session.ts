@@ -13,13 +13,16 @@ import {
   releaseDetachedClipping, renderLayers as renderLayersOf, uniqueName, usedPixels,
   type AdjustmentKind, type BlendMode, type CanvasDocument, type HierarchyEntry, type Layer, type LayerAdjustment,
   type LayerMask, BLEND_MODES,
-} from './document';
+type Guide, } from './document';
 import {
   boundingBox, center, corners as transformCorners, following, isValidTransform, makeTransform, mirrored, samePlacement,
   snapOffset, transformsEqual, type LayerTransform, type Point, type Rect, type Size,
 } from './geometry';
 import { DocumentHistory, type HistorySnapshot, type PersistedHistoryState } from './history';
 import { uuid } from './ids';
+import { alignOffsets, alignUnits, distributeOffsets, type AlignEdge, type AlignUnit, type DistributeMode } from './align';
+import { translated } from './canvasOps';
+import { selectionBounds } from './selectionOps';
 import { Raster } from './raster';
 import { CanvasViewport } from './viewport';
 import { defaultAdjustment } from './adjustments';
@@ -891,6 +894,9 @@ export class EditorSession {
     const document = this.document;
     if (!document) return { xs: [], ys: [] };
     const xs = [0, document.width / 2, document.width], ys = [0, document.height / 2, document.height];
+    if (this.showsGuides && this.snapsToGuides) {
+      for (const guide of document.guides ?? []) (guide.orientation === 'vertical' ? xs : ys).push(guide.position);
+    }
     for (const layer of renderLayersOf(document.layers)) {
       if (!layer.raster || excluding.has(layer.id)) continue;
       const box = boundingBox(this.displayedTransform(layer));
@@ -1268,6 +1274,96 @@ export class EditorSession {
     const below = siblings[index - 1]!;
     if (below.isGroup) return;
     this.linkMask(below.maskSourceId ?? below.id, id);
+  }
+
+  // MARK: Rulers, guides, align
+
+  /** View state (not saved in the document): rulers, guides shown, guides locked, snapping to guides. */
+  showsRulers = false;
+  showsGuides = true;
+  guidesLocked = false;
+  snapsToGuides = true;
+
+  get guides(): readonly Guide[] { return this.document?.guides ?? []; }
+
+  addGuide(orientation: Guide['orientation'], position: number): string | null {
+    const document = this.document;
+    if (!document || !Number.isFinite(position) || this.guidesLocked) return null;
+    const guide: Guide = { id: uuid(), orientation, position: Math.round(position) };
+    this.edit('New Guide', () => { this.document = { ...this.document!, guides: [...(this.document!.guides ?? []), guide] }; });
+    return guide.id;
+  }
+
+  /** Moves a guide; `record` false while dragging (the drag's first move opens the step, `endGuideDrag` closes it). */
+  moveGuide(id: string, position: number): void {
+    const document = this.document;
+    if (!document || this.guidesLocked || !Number.isFinite(position)) return;
+    this.document = { ...document, guides: (document.guides ?? []).map((g) => (g.id === id ? { ...g, position: Math.round(position) } : g)) };
+    this.notify('document');
+  }
+
+  beginGuideDrag(): void { if (this.document && !this.guidesLocked) this.beginEdit('Move Guide'); }
+  endGuideDrag(): void { if (this.history.isInTransaction) this.endEdit(); }
+  /** Deletes a guide inside the open drag step (dropped back on its ruler). */
+  dropGuideInDrag(id: string): void {
+    if (!this.document) return;
+    this.document = { ...this.document, guides: (this.document.guides ?? []).filter((g) => g.id !== id) };
+    this.notify('document');
+  }
+
+  removeGuide(id: string): void {
+    const document = this.document;
+    if (!document || this.guidesLocked || !(document.guides ?? []).some((g) => g.id === id)) return;
+    this.edit('Delete Guide', () => { this.document = { ...this.document!, guides: (this.document!.guides ?? []).filter((g) => g.id !== id) }; });
+  }
+
+  clearGuides(): void {
+    if (!this.document?.guides?.length || this.guidesLocked) return;
+    this.edit('Clear Guides', () => { this.document = { ...this.document!, guides: [] }; });
+  }
+
+  /** Selected layer ids in document order, for align/distribute. */
+  private alignSelection(): string[] {
+    const document = this.document;
+    if (!document) return [];
+    return document.layers.map((l) => l.id).filter((id) => this.selectedLayerIds.has(id));
+  }
+
+  canAlign(): boolean { return this.canEditLayers && alignUnits(this.document!, this.alignSelection(), (l) => boundingBox(this.displayedTransform(l))).length >= 1; }
+  canDistribute(): boolean { return this.canEditLayers && alignUnits(this.document!, this.alignSelection(), (l) => boundingBox(this.displayedTransform(l))).length >= 3; }
+
+  /** Photoshop's rule: several layers align to their common box; one layer to the selection, or else to the canvas. */
+  alignLayers(edge: AlignEdge): void {
+    const document = this.document;
+    if (!document || !this.canEditLayers) return;
+    const units = alignUnits(document, this.alignSelection(), (l) => boundingBox(this.displayedTransform(l)));
+    if (!units.length) return;
+    const selection = this.selection;
+    const target = units.length > 1 ? null
+      : selection ? selectionBounds(selection) ?? { x: 0, y: 0, width: document.width, height: document.height }
+        : { x: 0, y: 0, width: document.width, height: document.height };
+    this.moveUnits(units, alignOffsets(units, edge, target), 'Align Layers');
+  }
+
+  distributeLayers(mode: DistributeMode): void {
+    const document = this.document;
+    if (!document || !this.canEditLayers) return;
+    const units = alignUnits(document, this.alignSelection(), (l) => boundingBox(this.displayedTransform(l)));
+    if (units.length < 3) return;
+    this.moveUnits(units, distributeOffsets(units, mode), 'Distribute Layers');
+  }
+
+  private moveUnits(units: readonly AlignUnit[], offsets: readonly { dx: number; dy: number }[], name: string): void {
+    const moves = new Map<string, { dx: number; dy: number }>();
+    units.forEach((unit, i) => { const o = offsets[i]!; if (o.dx || o.dy) for (const id of unit.ids) moves.set(id, o); });
+    if (!moves.size) return;
+    this.commitTransform();
+    this.edit(name, () => {
+      this.document = { ...this.document!, layers: this.document!.layers.map((l) => {
+        const o = moves.get(l.id);
+        return o ? translated(l, Math.round(o.dx), Math.round(o.dy)) : l;
+      }) };
+    });
   }
 
   // MARK: History panel

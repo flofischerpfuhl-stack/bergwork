@@ -139,6 +139,8 @@ export interface ProjectManifestV2 {
   activeLayerId: LayerIdV2 | null;
   layers: readonly LayerRecordV2[];
   artboards: readonly ArtboardRecordV2[];
+  /** Ruler guides (optional; absent in files written before guides existed). */
+  guides?: readonly { id: string; orientation: 'horizontal' | 'vertical'; position: number }[];
   assets: readonly AssetRecordV2[];
   history?: ProjectHistoryV2;
   extensions?: Record<string, unknown>;
