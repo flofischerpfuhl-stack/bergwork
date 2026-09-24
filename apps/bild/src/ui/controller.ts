@@ -5,7 +5,7 @@
 
 import type { HostAdapter, LayerId, ProjectManifestV1 } from '../../contracts';
 import type { EditorHandleV2, ProjectManifestV2 } from '../../contracts-v2';
-import { MAX_PIXELS, MAX_SIDE, type CanvasDocument } from '../core/document';
+import { MAX_PIXELS, MAX_SIDE, type CanvasDocument, type Layer } from '../core/document';
 import type { LayerEffect } from '../core/model/types';
 import { Raster, alphaBounds, cropRaster } from '../core/raster';
 import type { EditorSession, SessionServices, Tool } from '../core/session';
@@ -32,6 +32,8 @@ import type { ExportSizeEstimate } from '../io/exportPipeline';
 import { zipSync } from 'fflate';
 import { encodePng } from '../io/png';
 import { sha256Hex } from '../io/sha256';
+import { readPsdDocumentManaged, type PsdReadResult } from '../io/psd';
+import { uuid } from '../core/ids';
 import type { GpuCompositor } from '../render/gpuCompositor';
 import { capabilitiesOf, type FileSaveTarget, type HostCapabilityMap, type HostFileReference } from '../platform/hosts';
 import { profileFor, type EditorProfile } from '../app/profiles';
@@ -278,15 +280,82 @@ export class EditorController {
     tab.session.createNewProject(width, height);
   }
 
-  async importFiles(files: readonly File[], into: ProjectTab = this.workspace.current, point: { x: number; y: number } | null = null): Promise<string[]> {
-    const result = await this.imports.enqueue(into.session, files.map((file) => ({
+  async importFiles(files: readonly File[], into: ProjectTab = this.workspace.current, point: { x: number; y: number } | null = null,
+    importPsdAsLayers = false): Promise<string[]> {
+    const psd = files.filter((file) => /\.ps[db]$/i.test(file.name));
+    const images = files.filter((file) => !/\.ps[db]$/i.test(file.name));
+    const psdIds: string[] = [];
+    for (const file of psd) {
+      try {
+        const imported = await readPsdDocumentManaged(new Uint8Array(await file.arrayBuffer()));
+        if (importPsdAsLayers) psdIds.push(...this.importPsdLayers(imported, into, fileBaseName(file.name)));
+        else this.openPsd(imported, fileBaseName(file.name), into.session.document ? null : into);
+      } catch (error) {
+        this.reportError('import-failed', error, this.t('Import couldn’t finish'));
+      }
+    }
+    const result = await this.imports.enqueue(into.session, images.map((file) => ({
       name: file.name,
       layerName: fileBaseName(file.name),
       read: async () => new Uint8Array(await file.arrayBuffer()),
     })), { point });
     const message = failureMessage(result);
     if (message) this.reportError('import-failed', new Error(message), this.t('Import couldn’t finish'));
-    return [...result.layerIds];
+    return [...psdIds, ...result.layerIds];
+  }
+
+  private psdNotices(imported: PsdReadResult): void {
+    const notices = imported.unsupported.filter((feature) => feature.impact !== 'editability-only'
+      || feature.code === 'compatibility-preview' || feature.code === 'flattened-composite');
+    if (!notices.length) return;
+    this.host.reportError({ code: 'psd-import-notice', message: notices.map((notice) =>
+      `${notice.layerPath ? `${notice.layerPath}: ` : ''}${notice.message}`).join('\n') });
+  }
+
+  private openPsd(imported: PsdReadResult, name: string, target: ProjectTab | null): void {
+    const active = [...imported.document.layers].reverse().find((layer) => layer.visible)?.id ?? null;
+    if (target) target.session.installProject(imported.document, active, name);
+    else this.installLoaded(imported.document, active, name);
+    this.psdNotices(imported);
+  }
+
+  private importPsdLayers(imported: PsdReadResult, into: ProjectTab, name: string): string[] {
+    const session = into.session;
+    if (!session.document) {
+      const active = [...imported.document.layers].reverse().find((layer) => layer.visible)?.id ?? null;
+      session.installProject(imported.document, active, name);
+      this.psdNotices(imported);
+      return active ? [active] : [];
+    }
+    const rasterPixels = imported.document.layers.reduce((sum, layer) => sum + (layer.raster
+      ? layer.raster.width * layer.raster.height : 0), 0);
+    if (rasterPixels > session.remainingPixelBudget()) throw new RangeError('The PSD layers exceed this project’s pixel budget.');
+    const idMap = new Map(imported.document.layers.map((layer) => [layer.id, uuid()]));
+    const resourceMap = new Map((imported.document.resources ?? []).map((resource) => [resource.id, uuid()]));
+    const dx = Math.floor((session.document.width - imported.document.width) / 2);
+    const dy = Math.floor((session.document.height - imported.document.height) / 2);
+    const shift = (layer: Layer): Layer => {
+      const adjustment = layer.adjustment?.kind === 'Colour Lookup' ? { ...layer.adjustment,
+        parameters: { ...layer.adjustment.parameters,
+          resourceId: resourceMap.get(layer.adjustment.parameters.resourceId) ?? layer.adjustment.parameters.resourceId } } : layer.adjustment;
+      return { ...layer, id: idMap.get(layer.id)!, parentId: layer.parentId ? idMap.get(layer.parentId) ?? null : null,
+        maskSourceId: layer.maskSourceId ? idMap.get(layer.maskSourceId) ?? null : null,
+        transform: { ...layer.transform, origin: { x: layer.transform.origin.x + dx, y: layer.transform.origin.y + dy } },
+        mask: layer.mask ? { ...layer.mask, placement: layer.mask.placement ? { ...layer.mask.placement,
+          origin: { x: layer.mask.placement.origin.x + dx, y: layer.mask.placement.origin.y + dy } } : null } : null,
+        ...(adjustment ? { adjustment } : {}) } as Layer;
+    };
+    const layers = imported.document.layers.map(shift);
+    session.beginEdit('Import PSD Layers');
+    try {
+      session.replaceDocument({ ...session.document, layers: [...session.document.layers, ...layers],
+        resources: [...(session.document.resources ?? []), ...(imported.document.resources ?? []).map((resource) => ({
+          ...resource, id: resourceMap.get(resource.id)!, bytes: resource.bytes.slice(),
+        }))] });
+      session.setActiveLayer([...layers].reverse().find((layer) => layer.visible)?.id ?? null);
+    } finally { session.endEdit(); }
+    this.psdNotices(imported);
+    return layers.map((layer) => layer.id);
   }
 
   /** Browser paste entry point: external decoding shares the same per-session queue as file drops. */
@@ -349,7 +418,7 @@ export class EditorController {
   async chooseAndImport(): Promise<void> {
     try {
       const files = await this.host.chooseImages();
-      if (files.length) await this.importFiles(files);
+      if (files.length) await this.importFiles(files, this.workspace.current, null, true);
     } catch (error) { this.reportError('import-failed', error, this.t('Import couldn’t finish')); }
   }
 
@@ -360,7 +429,10 @@ export class EditorController {
     for (const reference of files) {
       try {
         const blob = await capability.readFile(reference);
-        if (/\.(fwimg|zip|comp)$/i.test(reference.name)) {
+        if (/\.ps[db]$/i.test(reference.name)) {
+          const imported = await readPsdDocumentManaged(new Uint8Array(await blob.arrayBuffer()));
+          this.openPsd(imported, fileBaseName(reference.name), null);
+        } else if (/\.(fwimg|zip|comp)$/i.test(reference.name)) {
           await this.openArchive(blob, reference.name);
           const target = capability.saveTargetFor?.(reference);
           if (target) saveTargets.set(this.session, target);
@@ -443,7 +515,10 @@ export class EditorController {
     if (!this.workspace.canSwitch) return;
     try {
       const blob = await this.host.chooseProject();
-      if (blob) await this.openArchive(blob, blob instanceof File ? fileBaseName(blob.name) : undefined);
+      if (blob instanceof File && /\.ps[db]$/i.test(blob.name)) {
+        const imported = await readPsdDocumentManaged(new Uint8Array(await blob.arrayBuffer()));
+        this.openPsd(imported, fileBaseName(blob.name), null);
+      } else if (blob) await this.openArchive(blob, blob instanceof File ? fileBaseName(blob.name) : undefined);
     } catch (error) { this.reportError(error instanceof ProjectError ? error.code : 'open-failed', error); }
   }
 

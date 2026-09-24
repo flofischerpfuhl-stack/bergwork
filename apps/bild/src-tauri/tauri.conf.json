@@ -44,7 +44,7 @@
         "mimeType": "application/vnd.fernwork.image"
       },
       {
-        "ext": ["psd"],
+        "ext": ["psd", "psb"],
         "name": "Photoshop document",
         "description": "Layered image document",
         "role": "Editor",

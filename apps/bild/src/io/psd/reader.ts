@@ -15,6 +15,9 @@ import {
   type RGB,
 } from '../../core/adjustments';
 import { parseCubeLut } from '../../core/adjust/cube';
+import { readRawPsdComposite } from './composite';
+import { decodePsdLayerChannels } from './layerChannels';
+import type { LittleCms } from '../../wasm/lcms';
 
 export type PsdUnsupportedImpact = 'not-rendered' | 'approximated' | 'editability-only';
 
@@ -93,6 +96,13 @@ export function pixelDataToRgba8(image: PixelData): Uint8Array {
     for (let index = 0; index < output.length; index++) output[index] = byte(image.data[index]!, 1);
   }
   return output;
+}
+
+function rasterFromPixelData(image: PixelData): Raster {
+  if (image.data instanceof Uint16Array) {
+    return Raster.fromPixels(image.width, image.height, 4, image.data, { format: 'rgba16' });
+  }
+  return Raster.fromPixels(image.width, image.height, 4, pixelDataToRgba8(image));
 }
 
 function transform(left: number, top: number, width: number, height: number): LayerTransform {
@@ -255,7 +265,8 @@ function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportSta
     'Smart object uses its saved pixel cache and is not editable.', 'editability-only', layerPath);
   if (source.realMask) issue(state, 'real-mask', 'The real/vector-derived mask channel is not rendered.', 'not-rendered', layerPath);
   if (source.filterEffectsMasks) issue(state, 'smart-filter', 'Smart filters and their masks are not rendered.', 'not-rendered', layerPath);
-  if (source.knockout) issue(state, 'knockout', 'Knockout compositing is not rendered.', 'not-rendered', layerPath);
+  if (source.knockout) issue(state, 'knockout', 'Knockout is rendered from the layer shape; its boundary is inferred from group nesting.',
+    'approximated', layerPath);
   const ranges = source.blendingRanges;
   const defaultRange = (values: readonly number[]): boolean => values.length === 4
     && values[0] === 0 && values[1] === 0 && values[2] === 255 && values[3] === 255;
@@ -271,10 +282,7 @@ function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportSta
   }
   if (source.protected?.artboards) issue(state, 'lock-artboards',
     'The PSD artboard lock has no layer-lock equivalent.', 'editability-only', layerPath);
-  if (isGroup && (source.blendMode ?? 'pass through') !== 'pass through') issue(state, 'isolated-group',
-    `Group blend mode “${source.blendMode}” is rendered as pass-through.`, 'not-rendered', layerPath);
-  if (isGroup && (source.opacity ?? 1) !== 1) issue(state, 'group-opacity',
-    'Group opacity is not represented by the current document model.', 'not-rendered', layerPath);
+  // Non-pass-through group isolation and group opacity are carried by PSD-specific group metadata below.
 }
 
 function rgbColor(value: unknown, fallback: RGB = { red: 1, green: 1, blue: 1 }): RGB {
@@ -316,13 +324,18 @@ function importedAdjustment(source: AgLayer, state: ImportState, layerPath: stri
       const sourceRanges = [adjustment.master, adjustment.reds, adjustment.yellows, adjustment.greens,
         adjustment.cyans, adjustment.blues, adjustment.magentas];
       const names = ['Master', 'Reds', 'Yellows', 'Greens', 'Cyans', 'Blues', 'Magentas'] as const;
-      const master = adjustment.master, settings = defaultHueSaturation(master?.hue ?? 0, master?.saturation ?? 0, master?.lightness ?? 0);
+      const master = adjustment.master, colorize = master?.a === 256;
+      const masterHue = colorize ? master?.b ?? 0 : master?.hue ?? 0;
+      const masterSaturation = colorize ? master?.c ?? 0 : master?.saturation ?? 0;
+      const masterLightness = colorize ? master?.d ?? 0 : master?.lightness ?? 0;
+      const settings = defaultHueSaturation(masterHue, masterSaturation, masterLightness, colorize);
       const adjustments = { ...settings.adjustments }, bands = { ...settings.bands };
       sourceRanges.forEach((range, index) => { if (!range) return; const name = names[index]!;
         adjustments[name] = { hue: range.hue, saturation: range.saturation, lightness: range.lightness };
         if (name !== 'Master') bands[name] = { falloffStart: range.a, rangeStart: range.b, rangeEnd: range.c, falloffEnd: range.d }; });
-      return { kind: 'Hue/Saturation', schemaVersion: 1, parameters: { hue: master?.hue ?? 0,
-        saturation: master?.saturation ?? 0, lightness: master?.lightness ?? 0, colorize: false,
+      if (colorize) adjustments.Master = { hue: masterHue, saturation: masterSaturation, lightness: masterLightness };
+      return { kind: 'Hue/Saturation', schemaVersion: 1, parameters: { hue: masterHue,
+        saturation: masterSaturation, lightness: masterLightness, colorize,
         settings: { ...settings, adjustments, bands } } };
     }
     case 'vibrance': return { kind: 'Basic', schemaVersion: 1, parameters: {
@@ -548,7 +561,10 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const width = Math.max(0, (source.right ?? left) - left), height = Math.max(0, (source.bottom ?? top) - top);
     const adjustment = importedAdjustment(source, state, layerPath);
     const image = source.adjustment ? undefined : source.imageData;
+    const adjustmentMask = adjustment && source.mask?.imageData ? source.mask : null;
     const layerTransform = image ? transform(left, top, image.width, image.height)
+      : adjustmentMask ? transform(adjustmentMask.left ?? 0, adjustmentMask.top ?? 0,
+        adjustmentMask.imageData!.width, adjustmentMask.imageData!.height)
       : transform(isGroup ? 0 : left, isGroup ? 0 : top,
         isGroup ? state.documentWidth : width, isGroup ? state.documentHeight : height);
     const sourceMode = source.blendMode ?? (isGroup ? 'pass through' : 'normal');
@@ -568,11 +584,11 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const editableTransform = textData ? psdTextTransform(textData, layerTransform, textBox) : layerTransform;
     const vectorContent = !isGroup && !textData && !!(source.vectorFill || source.vectorStroke) && !!source.vectorMask?.paths.length;
     const vectorPaths = vectorContent ? psdVectorPaths(source.vectorMask!.paths, editableTransform.origin) : [];
-    const imported = newLayer({
+    let imported: Layer = newLayer({
       id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : textData ? 'text' : vectorContent ? 'vector' : adjustment ? 'adjustment' : 'pixel',
       visible: source.hidden !== true, opacity, fillOpacity, blendMode: mappedMode,
       locks: importedLocks(source), colorLabel: importedColorLabel(source, state, layerPath), transform: editableTransform,
-      raster: image ? Raster.fromPixels(image.width, image.height, 4, pixelDataToRgba8(image)) : null,
+      raster: image ? rasterFromPixelData(image) : null,
       ...(textData ? { text: editableText, runs: psdTextRuns(textData, editableText),
         paragraphs: psdParagraphs(textData, editableText), box: textBox,
         alignment: psdAlignment(textData.paragraphStyle?.justification), renderedTransform: layerTransform } : {}),
@@ -583,6 +599,11 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
       effects: importEffects(source, state, layerPath),
       ...(adjustment ? { adjustment } : {}),
     });
+    if (isGroup) imported = { ...imported,
+      psdIsolated: sourceMode !== 'pass through', psdKnockout: source.knockout === true } as Layer
+        & { readonly psdIsolated: boolean; readonly psdKnockout: boolean };
+    if (source.mask) imported = { ...imported, psdMaskDefault: source.mask.defaultColor ?? 0 } as Layer
+      & { readonly psdMaskDefault: number };
     result.push(imported);
     if (isGroup) {
       clippingBaseId = null;
@@ -600,39 +621,162 @@ function resolution(psd: Psd): number {
   return info.horizontalResolutionUnit === 'PPCM' ? info.horizontalResolution * 2.54 : info.horizontalResolution;
 }
 
-/** Parse a PSD/PSB without DOM/canvas and adapt the structures supported by CanvasDocument today. */
-export function readPsdDocument(bytes: Uint8Array): PsdReadResult {
+function parserWarningImpact(message: string): PsdUnsupportedImpact {
+  // psd-tools writes these generator/content-authentication records on otherwise pixel-identical files.
+  // ag-psd also reports descriptor padding as unread bytes; neither participates in compositing.
+  if (/^Unhandled additional info: (?:CAI  |GenI)$/.test(message)
+    || /^Unread (?:2|4) bytes left for additional info: (?:vstk|PtFl|artb|brst)$/.test(message)) {
+    return 'editability-only';
+  }
+  return 'not-rendered';
+}
+
+function rawCompositeFallback(bytes: Uint8Array, parserError: unknown, rasterOverride: Raster | null = null): PsdReadResult {
+  const raw = readRawPsdComposite(bytes);
+  const raster = rasterOverride ?? Raster.fromPixels(raw.width, raw.height, 4, raw.rgba);
+  const message = parserError instanceof Error ? parserError.message : String(parserError);
+  const unsupported: PsdUnsupportedFeature[] = [{
+    code: 'ag-psd-parser', message, impact: 'editability-only',
+  }, {
+    code: `color-mode:${raw.colorMode}`,
+    message: `PSD color mode ${raw.colorMode} was opened from its saved composite preview; layers are not editable.`,
+    impact: 'editability-only',
+  }, {
+    code: 'flattened-composite',
+    message: 'This PSD was opened flattened from its saved composite because its layer data could not be decoded.',
+    impact: 'editability-only',
+  }];
+  if (raw.bitsPerChannel !== 8) unsupported.push({
+    code: `bit-depth:${raw.bitsPerChannel}`,
+    message: `${raw.bitsPerChannel}-bit composite channels are tone-mapped to RGBA8.`, impact: 'approximated',
+  });
+  if (raw.iccProfile) unsupported.push({
+    code: 'embedded-icc', message: 'An embedded profile was detected, but this synchronous compatibility preview uses its deterministic colour-mode conversion.',
+    impact: 'approximated',
+  });
+  const document: CanvasDocument = {
+    id: 'psd-document', width: raw.width, height: raw.height, resolution: 72, selection: null,
+    layers: [newLayer({ id: 'psd-layer-1', name: 'Photoshop composite (flattened)', kind: 'pixel',
+      transform: transform(0, 0, raw.width, raw.height), raster })], resources: [],
+  };
+  return { document, oracle: raster, unsupported, parserWarnings: [message],
+    source: { width: raw.width, height: raw.height, bitsPerChannel: raw.bitsPerChannel,
+      colorMode: raw.colorMode, isPsb: raw.isPsb } };
+}
+
+function sourceColorMode(bytes: Uint8Array): number {
+  if (bytes.length < 26 || String.fromCharCode(...bytes.subarray(0, 4)) !== '8BPS') throw new Error('Invalid PSD signature');
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint16(24);
+}
+
+function colorManagedComposite(raw: ReturnType<typeof readRawPsdComposite>, lcms: LittleCms | null): Raster {
+  if (lcms && raw.managedSamples && (raw.bitsPerChannel === 8 || raw.bitsPerChannel === 16)
+    && (raw.colorMode === 1 || raw.colorMode === 4)) {
+    const model = raw.colorMode === 4 ? 'cmyk' as const : 'gray' as const;
+    const profile = raw.iccProfile ?? (model === 'cmyk' ? lcms.createCmykProfile()
+      : lcms.createGrayProfile([0.3127, 0.329], 2.2));
+    return Raster.fromPixels(raw.width, raw.height, 4,
+      lcms.transform(profile, raw.managedSamples, model, raw.bitsPerChannel, raw.managedAlpha));
+  }
+  return Raster.fromPixels(raw.width, raw.height, 4, raw.rgba);
+}
+
+function readRawLayerPsd(bytes: Uint8Array, raw: ReturnType<typeof readRawPsdComposite>,
+  lcms: LittleCms | null, parserWarnings: string[]): Psd {
+  // ag-psd rejects CMYK/Lab/duotone/multichannel before reading layer records. RGB here only bypasses that gate;
+  // decodePsdLayerChannels interprets every raw layer plane using the untouched original mode below.
+  const parseBytes = [4, 7, 8, 9].includes(raw.colorMode) ? bytes.slice() : bytes;
+  if (parseBytes !== bytes) { parseBytes[24] = 0; parseBytes[25] = 3; }
+  const psd = readPsd(parseBytes, {
+    useRawData: true, skipCompositeImageData: true, skipThumbnail: true, skipLinkedFilesData: true,
+    logMissingFeatures: true, log: (...values: unknown[]) => parserWarnings.push(values.map(String).join(' ')),
+  });
+  const context = { colorMode: raw.colorMode, bitsPerChannel: raw.bitsPerChannel, isPsb: raw.isPsb,
+    palette: raw.palette, iccProfile: raw.iccProfile, lcms };
+  for (const layer of psd.children ?? []) decodePsdLayerChannels(layer, context);
+  psd.colorMode = raw.colorMode;
+  return psd;
+}
+
+function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): PsdReadResult {
   ensureCanvasFreeImageData();
   const parserWarnings: string[] = [];
-  const psd = readPsd(bytes, {
-    useImageData: true, skipThumbnail: true, skipLinkedFilesData: true, logMissingFeatures: true,
-    log: (...values: unknown[]) => parserWarnings.push(values.map(String).join(' ')),
-  });
+  let psd: Psd;
+  let oracleOverride: Raster | null = null;
+  const originalMode = sourceColorMode(bytes);
+  try {
+    if ([4, 7, 8, 9].includes(originalMode) || (originalMode === 1 && lcms)) {
+      const raw = readRawPsdComposite(bytes);
+      psd = readRawLayerPsd(bytes, raw, lcms, parserWarnings);
+      oracleOverride = colorManagedComposite(raw, lcms);
+    } else {
+      psd = readPsd(bytes, {
+        useImageData: true, skipThumbnail: true, skipLinkedFilesData: true, logMissingFeatures: true,
+        log: (...values: unknown[]) => parserWarnings.push(values.map(String).join(' ')),
+      });
+    }
+  } catch (error) {
+    return rawCompositeFallback(bytes, error);
+  }
+  if (oracleOverride && !(psd.children?.length)) {
+    return rawCompositeFallback(bytes, new Error('PSD has no decodable layer records'), oracleOverride);
+  }
   if (psd.width > MAX_SIDE || psd.height > MAX_SIDE || psd.width * psd.height > MAX_PIXELS) {
     throw new RangeError(`PSD size ${psd.width}×${psd.height} exceeds the document limit`);
   }
   const unsupported: PsdUnsupportedFeature[] = parserWarnings.map((message) => ({
-    code: 'ag-psd-parser', message, impact: 'not-rendered',
+    code: 'ag-psd-parser', message, impact: parserWarningImpact(message),
   }));
   const bitsPerChannel = psd.bitsPerChannel ?? 8, colorMode = psd.colorMode ?? 3;
   if (bitsPerChannel !== 8) unsupported.push({ code: `bit-depth:${bitsPerChannel}`,
-    message: `${bitsPerChannel}-bit channels are quantized to RGBA8.`, impact: 'approximated' });
+    message: bitsPerChannel === 16 ? '16-bit RGB layer channels are retained as RGBA16; colour-managed modes currently have 8-bit CMS output.'
+      : '32-bit floating channels use a bounded display conversion.', impact: 'approximated' });
   if (colorMode !== 3) unsupported.push({ code: `color-mode:${colorMode}`,
-    message: `PSD color mode ${colorMode} uses ag-psd's conversion to sRGB-like RGBA.`, impact: 'approximated' });
+    message: `PSD color mode ${colorMode} layer channels were converted independently to sRGB.`,
+    impact: colorMode === 1 || colorMode === 4 ? 'editability-only' : 'approximated' });
+  if (oracleOverride && colorMode === 4 && !lcms) unsupported.push({ code: 'embedded-icc',
+    message: 'The synchronous CMYK path uses a deterministic fallback; product open applies Little CMS.', impact: 'approximated' });
   if (psd.artboards) unsupported.push({ code: 'artboards', message: 'Artboard metadata is not represented.', impact: 'not-rendered' });
   const documentResolution = resolution(psd);
   const state: ImportState = { nextId: 1, documentWidth: psd.width, documentHeight: psd.height, resolution: documentResolution,
     unsupported, resources: [] };
   const layers = importSiblings(psd.children ?? [], null, '', state);
   if (layers.length > MAX_LAYERS) throw new RangeError(`PSD has ${layers.length} layers; the document limit is ${MAX_LAYERS}`);
-  const document: CanvasDocument = {
-    id: 'psd-document', width: psd.width, height: psd.height, resolution: documentResolution,
-    globalLightAngle: psd.imageResources?.globalAngle ?? 120, layers, resources: state.resources, selection: null,
-  };
-  const oracle = psd.imageData
-    ? Raster.fromPixels(psd.imageData.width, psd.imageData.height, 4, pixelDataToRgba8(psd.imageData)) : null;
+  const oracle = oracleOverride ?? (psd.imageData ? rasterFromPixelData(psd.imageData) : null);
   if (!oracle) unsupported.push({ code: 'composite-image', message: 'PSD has no decodable embedded composite image.',
     impact: 'not-rendered' });
+  let documentLayers = layers;
+  if (oracle && unsupported.some((feature) => feature.impact === 'not-rendered')) {
+    // The editable layers stay visible: they are the document. Photoshop's saved composite is added on top as a hidden,
+    // locked reference the user can show to compare, never as a cover over layers that would then seem not to react.
+    documentLayers = [...layers, newLayer({
+      id: `psd-layer-${state.nextId++}`, name: 'Photoshop appearance (reference)', kind: 'pixel', visible: false,
+      locks: { transparency: false, pixels: true, position: true, all: true },
+      transform: transform(0, 0, psd.width, psd.height), raster: oracle,
+    })];
+    unsupported.push({
+      code: 'compatibility-preview',
+      message: 'Some PSD features are not rendered natively; a hidden “Photoshop appearance” reference layer shows the saved result.',
+      impact: 'editability-only',
+    });
+  }
+  const document: CanvasDocument = {
+    id: 'psd-document', width: psd.width, height: psd.height, resolution: resolution(psd),
+    globalLightAngle: psd.imageResources?.globalAngle ?? 120, layers: documentLayers, resources: state.resources, selection: null,
+  };
   return { document, oracle, unsupported, parserWarnings,
     source: { width: psd.width, height: psd.height, bitsPerChannel, colorMode, isPsb: bytes[5] === 2 } };
+}
+
+/** Parse a PSD/PSB synchronously without DOM/canvas. Product open should prefer readPsdDocumentManaged. */
+export function readPsdDocument(bytes: Uint8Array): PsdReadResult {
+  return readPsdDocumentInternal(bytes, null);
+}
+
+/** Product open path: apply embedded/default gray or CMYK profiles independently to every decoded layer. */
+export async function readPsdDocumentManaged(bytes: Uint8Array): Promise<PsdReadResult> {
+  const mode = sourceColorMode(bytes);
+  if (mode !== 1 && mode !== 4) return readPsdDocumentInternal(bytes, null);
+  const { loadLittleCms } = await import('../../wasm/lcms');
+  return readPsdDocumentInternal(bytes, await loadLittleCms());
 }

@@ -4,8 +4,8 @@ import type { ColorHost, ComputeHost, FileSystemHost, FontHost, HostCapabilityMa
 import { bindCapabilityRegistry } from '../../src/platform/hosts';
 
 interface NativeTarget extends SaveTarget { readonly path: string }
-const IMAGE_FILTER = { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff', 'heic', 'heif', 'psd'] };
-const PROJECT_FILTER = { name: 'Fernwork image project', extensions: ['fwimg', 'zip'] };
+const IMAGE_FILTER = { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff', 'heic', 'heif', 'psd', 'psb'] };
+const PROJECT_FILTER = { name: 'Fernwork image project or PSD', extensions: ['fwimg', 'zip', 'psd', 'psb'] };
 const SAVE_FILTERS: Record<'png' | 'jpeg' | 'webp' | 'avif' | 'tiff' | 'zip', { name: string; extensions: string[] }> = {
   png: { name: 'PNG image', extensions: ['png'] }, jpeg: { name: 'JPEG image', extensions: ['jpg', 'jpeg'] },
   webp: { name: 'WebP image', extensions: ['webp'] }, avif: { name: 'AVIF image', extensions: ['avif'] },

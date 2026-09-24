@@ -15,9 +15,7 @@ import {
   Mesh, MeshGeometry, RenderTexture, Shader, State, Texture, TextureSource, WebGLRenderer,
 } from 'pixi.js';
 import { adjustmentProgram } from './adjustPrograms';
-import {
-  ancestorIds, maskTransform as storedMaskTransform, renderLayers, type BlendMode, type CanvasDocument, type Layer,
-} from '../core/document';
+import { ancestorIds, maskTransform as storedMaskTransform, type BlendMode, type CanvasDocument, type Layer } from '../core/document';
 import { apply, concat, invert, pixelToDocument, type Affine, type LayerTransform, type Rect } from '../core/geometry';
 import { TILE, type Raster } from '../core/raster';
 import { blendSeed } from '../core/blend';
@@ -26,7 +24,7 @@ import type { BrushSegment, GpuBrushPreview } from '../core/brush';
 import { documentWithLayerEffects } from '../core/effects';
 import {
   adjustFragment, BLEND_INDEX, BRUSH_COVERAGE_FRAGMENT, BRUSH_MASK_FRAGMENT, BRUSH_MAX_FRAGMENT, BRUSH_PAINT_FRAGMENT, COVERAGE_FRAGMENT,
-  IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT, STACK_FRAGMENT,
+  GROUP_FRAGMENT, IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT, STACK_FRAGMENT,
   UNPREMULTIPLY_FRAGMENT, VERTEX,
 } from './shaders';
 import { liveFilterHooks } from './liveFilterPasses';
@@ -353,6 +351,12 @@ export class GpuCompositor {
         uDissolveSeed: { value: 0, type: 'i32' },
         uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
       }, ['uBackdrop', 'uSurface', 'uBase', 'uClip']],
+      group: [GROUP_FRAGMENT, {
+        uMode: { value: 0, type: 'i32' }, uDissolveSeed: { value: 0, type: 'i32' },
+        uOpacity: { value: 1, type: 'f32' }, uFillOpacity: { value: 1, type: 'f32' },
+        uKnockout: { value: 0, type: 'i32' },
+        uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+      }, ['uBackdrop', 'uSurface', 'uKnockoutBase']],
       unpremultiply: [UNPREMULTIPLY_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uSource']],
       present: [PRESENT_FRAGMENT, {
         uCanvasRect: { value: new Float32Array(4), type: 'vec4<f32>' },
@@ -876,25 +880,26 @@ export class GpuCompositor {
     } else {
       this.destroyBrushCompositeCache();
     }
-    let acc = this.acquire(width, height);
-    this.clear(acc);
     const byId = new Map(document.layers.map((l) => [l.id, l]));
     if (!activeBrush) this.destroyBrushState();
-    const ids = renderLayers(document.layers).filter((l) => hooks.raster(l) || activeBrush?.layerId === l.id || l.adjustment)
-      .map((l) => l.id);
-    const stacks = new Map<string, string[]>();
-    const stacked = new Set<string>();
-    ids.forEach((base, index) => {
-      const layer = byId.get(base)!;
-      if (layer.maskSourceId || layer.adjustment) return;
-      const children: string[] = [];
-      for (const child of ids.slice(index + 1)) {
-        const c = byId.get(child)!;
-        if (c.maskSourceId !== base || c.parentId !== layer.parentId) break;
-        children.push(child);
+    const children = new Map<string | null, Layer[]>();
+    for (const layer of document.layers) {
+      const siblings = children.get(layer.parentId);
+      if (siblings) siblings.push(layer); else children.set(layer.parentId, [layer]);
+    }
+    const isolated = (layer: Layer): boolean => layer.kind === 'group'
+      && ((layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === true
+        || layer.opacity !== 1 || layer.fillOpacity !== 1 || layer.blendMode !== 'normal');
+    const sequence = (parent: string | null): Layer[] => {
+      const output: Layer[] = [];
+      for (const layer of children.get(parent) ?? []) {
+        if (!layer.visible) continue;
+        if (layer.kind === 'group') {
+          if (isolated(layer)) output.push(layer); else output.push(...sequence(layer.id));
+        } else if (hooks.raster(layer) || activeBrush?.layerId === layer.id || layer.adjustment) output.push(layer);
       }
-      if (children.length) { stacks.set(base, children); for (const c of children) stacked.add(c); }
-    });
+      return output;
+    };
     const folderClips = new Map<string, RenderTexture | null>();
     const liveCoverage = new Map<string, RenderTexture | null>();
     const temporaries: RenderTexture[] = [];
@@ -936,34 +941,54 @@ export class GpuCompositor {
       return coverage;
     };
 
-    for (const id of ids) {
-      if (stacked.has(id)) continue;
-      const layer = byId.get(id)!;
-      const clip = folderClip(id);
-      if (layer.adjustment) {
-        if (layer.maskSourceId) continue;
-        const next = this.adjust(acc, layer, view, hooks, this.adjustmentClip(layer, clip, view, hooks, temporaries));
-        this.release(acc);
-        acc = next;
-        continue;
+    const renderSequence = (layers: readonly Layer[], root = false): RenderTexture => {
+      let surface = this.acquire(width, height); this.clear(surface);
+      let knockoutBase: RenderTexture | null = null;
+      const stacks = new Map<string, Layer[]>(), stacked = new Set<string>();
+      layers.forEach((base, index) => {
+        if (base.kind === 'group' || base.maskSourceId || base.adjustment) return;
+        const clipped: Layer[] = [];
+        for (const child of layers.slice(index + 1)) {
+          if (child.kind === 'group' || child.maskSourceId !== base.id || child.parentId !== base.parentId) break;
+          clipped.push(child);
+        }
+        if (clipped.length) { stacks.set(base.id, clipped); for (const child of clipped) stacked.add(child.id); }
+      });
+      for (const layer of layers) {
+        if (stacked.has(layer.id)) continue;
+        if (layer.kind === 'group') {
+          const groupSurface = renderSequence(sequence(layer.id));
+          const next = this.drawGroupSurface(surface, groupSurface, knockoutBase, layer, view, hooks.blendMode(layer));
+          this.release(surface); this.release(groupSurface); surface = next; continue;
+        }
+        const clip = folderClip(layer.id);
+        if (layer.adjustment) {
+          if (layer.maskSourceId) continue;
+          const next = this.adjust(surface, layer, view, hooks, this.adjustmentClip(layer, clip, view, hooks, temporaries));
+          this.release(surface); surface = next; continue;
+        }
+        const clipped = stacks.get(layer.id);
+        if (clipped) {
+          const next = this.drawStack(surface, layer, clipped, view, hooks, clip, temporaries);
+          this.release(surface); surface = next; continue;
+        }
+        let combined = clip;
+        if (layer.maskSourceId) {
+          const live = coverageOf(layer.maskSourceId, 1);
+          if (!live) continue;
+          combined = clip ? this.multiplyTargets(clip, live, view, temporaries) : live;
+        }
+        const next = this.drawLayer(surface, layer, view, hooks, combined, hooks.blendMode(layer));
+        this.release(surface); surface = next;
+        if (root && !knockoutBase && layer.locks.transparency) {
+          knockoutBase = this.acquire(width, height);
+          this.run(this.pass('copy'), knockoutBase, width, height, { uSource: surface.source }, {});
+        }
       }
-      const children = stacks.get(id);
-      if (children) {
-        const next = this.drawStack(acc, layer, children.map((c) => byId.get(c)!), view, hooks, clip, temporaries);
-        this.release(acc);
-        acc = next;
-        continue;
-      }
-      let combined = clip;
-      if (layer.maskSourceId) {
-        const live = coverageOf(layer.maskSourceId, 1);
-        if (!live) continue;
-        combined = clip ? this.multiplyTargets(clip, live, view, temporaries) : live;
-      }
-      const next = this.drawLayer(acc, layer, view, hooks, combined, hooks.blendMode(layer));
-      this.release(acc);
-      acc = next;
-    }
+      if (knockoutBase) this.release(knockoutBase);
+      return surface;
+    };
+    let acc = renderSequence(sequence(null), true);
     for (const t of temporaries) this.release(t);
     if (this.frame % 60 === 0) this.collectTextures();
     if (activeBrush && brushState) {
@@ -1209,7 +1234,11 @@ export class GpuCompositor {
     temporaries: RenderTexture[]): RenderTexture | null {
     const raster = layer.mask?.enabled || layer.vectorMask?.enabled ? hooks.maskRaster(layer) : null;
     if (!raster) return folderClip;
-    return this.multiplyMask(folderClip, raster, `mask:${layer.id}`, hooks.transform(layer), view, temporaries);
+    const background = ((layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault ?? 0) / 255;
+    const placement = (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault === undefined
+      ? hooks.transform(layer) : hooks.maskPlacement(layer) ?? hooks.transform(layer);
+    const clip = this.renderMask(folderClip, raster, `mask:${layer.id}`, placement, view, background);
+    temporaries.push(clip); return clip;
   }
 
   private adjust(backdrop: RenderTexture, layer: Layer, view: ViewSpec, hooks: CompositeHooks, clip: RenderTexture | null): RenderTexture {
@@ -1274,6 +1303,18 @@ export class GpuCompositor {
     }, { uHasClip: clip ? 1 : 0, uMode: BLEND_INDEX[mode] ?? 0,
       uDissolveSeed: mode === 'dissolve' ? blendSeed(base.id) : 0, uViewToDoc: mat3(view.viewToDoc) });
     this.release(surface);
+    return out;
+  }
+
+  private drawGroupSurface(backdrop: RenderTexture, surface: RenderTexture, knockoutBase: RenderTexture | null, group: Layer,
+    view: ViewSpec, mode: BlendMode): RenderTexture {
+    const out = this.acquire(view.width, view.height);
+    this.run(this.pass('group'), out, view.width, view.height, {
+      uBackdrop: backdrop.source, uSurface: surface.source, uKnockoutBase: knockoutBase?.source ?? this.white,
+    }, { uMode: BLEND_INDEX[mode] ?? 0, uDissolveSeed: mode === 'dissolve' ? blendSeed(group.id) : 0,
+      uOpacity: group.opacity, uFillOpacity: group.fillOpacity,
+      uKnockout: (group as Layer & { readonly psdKnockout?: boolean }).psdKnockout === true ? 1 : 0,
+      uViewToDoc: mat3(view.viewToDoc) });
     return out;
   }
 

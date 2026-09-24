@@ -1,7 +1,7 @@
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { cpuCompositeRegion } from '../../src/render/cpuRender';
-import { PSD_BLEND_MODES, readPsdDocument, type PsdUnsupportedFeature } from '../../src/io/psd';
+import { PSD_BLEND_MODES, readPsdDocumentManaged, type PsdUnsupportedFeature } from '../../src/io/psd';
 
 export interface FidelityThreshold { readonly mean: number; readonly p99: number }
 
@@ -96,7 +96,7 @@ export async function measureFile(absolute: string, corpusRoot: string): Promise
   let categories = categoriesFor(file);
   try {
     const bytes = new Uint8Array(await readFile(absolute));
-    const imported = readPsdDocument(bytes);
+    const imported = await readPsdDocumentManaged(bytes);
     categories = categoriesFor(file, imported.source.bitsPerChannel);
     const threshold = THRESHOLDS[categories[0]!]!;
     if (!imported.oracle) return { file, categories, parsed: true, rendered: false, passed: false,
@@ -107,8 +107,10 @@ export async function measureFile(absolute: string, corpusRoot: string): Promise
       { x: 0, y: 0, width: imported.document.width, height: imported.document.height });
     const expected = imported.oracle.toPixels();
     const metrics = differenceMetrics(rendered, expected);
+    // A file opened flattened from its own saved composite trivially matches the oracle; it is not native rendering.
+    const flattened = imported.unsupported.some((feature) => feature.code === 'flattened-composite');
     return { file, categories, parsed: true, rendered: true,
-      passed: metrics.mean <= threshold.mean && metrics.p99 <= threshold.p99,
+      passed: !flattened && metrics.mean <= threshold.mean && metrics.p99 <= threshold.p99,
       threshold, metrics, unsupported: imported.unsupported, bitsPerChannel: imported.source.bitsPerChannel };
   } catch (error) {
     const threshold = THRESHOLDS[categories[0]!]!;
@@ -128,6 +130,7 @@ interface CategorySummary {
 function failureCause(result: FidelityResult): string {
   if (!result.parsed) return `parse: ${result.error ?? 'unknown error'}`;
   if (!result.rendered) return result.error ?? 'not rendered';
+  if (result.unsupported.some((feature) => feature.code === 'flattened-composite')) return 'opened flattened (layers not decoded)';
   const unsupported = result.unsupported.find((feature) => feature.impact !== 'editability-only');
   return unsupported ? `unsupported: ${unsupported.code}` : 'wrong math/order/colour conversion';
 }
@@ -175,13 +178,17 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
   const passRate = results.length ? passed / results.length * 100 : 0;
   const lines = [
     '# PSD fidelity baseline', '',
-    `Corpus: psd-tools commit \`${commit}\`; ${results.length} PSD/PSB files. ag-psd 31.0.2, canvas-free \`useImageData\` mode.`, '',
+    `Corpus: psd-tools commit \`${commit}\`; ${results.length} PSD/PSB files. ag-psd 31.0.2 plus native non-RGB layer-channel decoding.`, '',
     'The oracle is each PSD’s embedded Photoshop composite. Metrics are absolute byte deltas over premultiplied RGB plus',
     'alpha (so undefined straight RGB below transparency is ignored): mean over all channels and the nearest-rank 99th',
     'percentile. A file passes only when both limits for its primary feature folder pass.',
     'The runner is a measurement baseline: fidelity failures are reported but do not make the command itself fail.', '',
     `Overall: ${parsed}/${results.length} parsed, ${rendered}/${results.length} rendered, ${passed}/${results.length} passed (${passRate.toFixed(1)}%).`,
     `The Product Plan A7 acceptance target of at least 90% is ${passRate >= 90 ? 'met' : '**not met**'} by this baseline.`, '',
+    'Integrator native baseline (`ebb5277`): 159/300 (53.0%). Current native result: 181/300 (60.3%).',
+    'Per-folder pass-count changes: adjustments 12→13, effects 10→11, transparency 1→13, colour modes 2→5,',
+    'gradients 2→4, descriptors 4→5, root 56→58; blend modes, layers, paths, masks, group clipping, and colour',
+    'profiles are unchanged. The overlapping 16/32-bit and PSB tags changed 9→7 and 23→22 respectively.', '',
     '## Thresholds and feature summary', '',
     '| Feature | Limits (mean / p99) | Files | Parsed | Rendered | Passed | Pass rate | Top failure causes |',
     '|---|---:|---:|---:|---:|---:|---:|---|',
@@ -246,12 +253,18 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
     lines.push(`| ${cell(result.file)} | ${result.categories[0]} | ${result.parsed ? 'yes' : 'no'} | ${result.rendered ? 'yes' : 'no'} | ${result.passed ? 'yes' : 'no'} | ${decimal(result.metrics?.mean)} | ${result.metrics?.p99 ?? '—'} | ${result.metrics?.maximum ?? '—'} | ${cell(issues)} |`);
   }
   lines.push('', '## Known deviations and next work', '',
-    '- ag-psd converts non-RGB documents without ICC colour management; embedded profiles are not exposed by this ag-psd version.',
-    '- 16/32-bit channels are reduced to the editor’s RGBA8 raster model before compositing.',
-    '- PSD adjustment layers, effects, vector masks, smart filters, blend-if, knockouts, isolated groups, and advanced group',
-    '  compositing are reported but not evaluated. Text, vector, and smart-object layers use saved pixel caches only.',
-    '- A bounded raster mask is mapped to the editor’s placed mask. Outside coverage uses the editor’s edge-majority inference;',
-    '  a conflict with the PSD mask default is reported as `mask-default`.',
+    '- CMYK and grayscale layer channels use Little CMS with an embedded profile when present and deterministic default profiles',
+    '  otherwise. Lab uses a D50 Lab-to-sRGB conversion; duotone/multichannel use their available channel values because the',
+    '  proprietary Photoshop ink curves are not present in the parsed data.',
+    '- RGBA16 layer data is retained. The 32-bit path clamps floating samples to display range; it does not reproduce Photoshop’s',
+    '  document-specific 32-bit preview/tone-mapping transform, which remains a major corpus failure source.',
+    '- Isolated groups, group opacity/fill, nested group order, and the corpus knockout cases are composited natively on CPU and GPU.',
+    '  ag-psd exposes knockout as a boolean but not the shallow/deep selector; the pass-through shallow nested case remains ambiguous.',
+    '- Remaining adjustment mismatches are listed per file above: modern Brightness/Contrast, curve interpolation, non-colorize',
+    '  Hue/Saturation ranges, non-RGB Levels/Invert, Posterize, and Threshold differ from Photoshop’s proprietary kernels.',
+    '- Vector/group masks without pixel channels, smart filters, blend-if, pattern/bevel effects, and group clipping remain unsupported.',
+    '  Text, vector, and smart-object layers use their layer-owned saved pixel caches; never the document merged composite.',
+    '- Bounded raster masks retain the PSD outside-mask default. Density is baked into mask samples; feather is still unsupported.',
     '- Dissolve uses a deterministic local dither because the PSD layer data contains neither Photoshop’s process-local random',
     '  table nor a seed. Its probability/opaque-pixel semantics match, but individual saved-composite dots do not.',
     '', 'Run `npm run psd:fidelity` after `scripts/fetch-psd-corpus.sh` to regenerate this report.', '',
