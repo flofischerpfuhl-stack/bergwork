@@ -28,6 +28,7 @@ import { sha256Hex } from '../io/sha256';
 import type { GpuCompositor } from '../render/gpuCompositor';
 import type { FileTargetHost, SaveTarget } from '../platform/browserHost';
 import type { ImageDecoderHost } from '../platform/imageDecoder';
+import type { ScratchHostCapability } from '../platform/scratchHost';
 import { translator, type Locale } from './i18n';
 import { createUiStore, type Dialog, type UiStore } from './store';
 import { describeError, isCancellation } from './errors';
@@ -418,7 +419,7 @@ export class EditorController {
     return writeArchive(final, name, session.activeLayerId, session.history.exportState()).blob;
   }
 
-  // MARK: Recovery copies (IndexedDB)
+  // MARK: Crash journal recovery (ScratchHost / OPFS)
 
   private recovery: RecoveryStore | null = null;
   private recoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -427,8 +428,9 @@ export class EditorController {
 
   /** Offers archives left by an earlier page load, then keeps copies of modified tabs. */
   async startRecovery(): Promise<void> {
-    if (!RecoveryStore.available()) return;
-    this.recovery = new RecoveryStore();
+    const scratch = (this.host as HostAdapter & Partial<ScratchHostCapability>).scratchHost;
+    if (!RecoveryStore.available(scratch)) return;
+    this.recovery = new RecoveryStore(scratch);
     try {
       const previous = await this.recovery.previous();
       if (previous.length) {
@@ -468,7 +470,8 @@ export class EditorController {
 
   private scheduleRecoveryCopy(tab: ProjectTab): void {
     clearTimeout(this.recoveryTimers.get(tab.id));
-    this.recoveryTimers.set(tab.id, setTimeout(() => void this.writeRecoveryCopy(tab), 2500));
+    // PRODUCT-PLAN section 8: journal commits are batched for at most one second.
+    this.recoveryTimers.set(tab.id, setTimeout(() => void this.writeRecoveryCopy(tab), 750));
   }
 
   private async writeRecoveryCopy(tab: ProjectTab): Promise<void> {
@@ -480,7 +483,8 @@ export class EditorController {
       const name = session.projectName ?? tab.title;
       await encodeArchive(session.document, name, session.activeLayerId);
       const archive = writeArchive(session.document, name, session.activeLayerId, session.history.exportState()).blob;
-      await store.put({ id: tab.id, name: session.projectName ?? tab.title, savedAt: Date.now(), size: archive.size, archive });
+      await store.put({ id: tab.id, name: session.projectName ?? tab.title, savedAt: Date.now(), size: archive.size, archive,
+        command: session.history.undoName || undefined });
     } catch (error) {
       if (isQuotaError(error)) {
         this.recoveryPaused.add(tab.id);

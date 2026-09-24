@@ -4,7 +4,7 @@ interface TauriDialogFilter {
 }
 
 interface TauriGlobals {
-  core: { invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> };
+  core: { invoke<T>(command: string, args?: Record<string, unknown> | Uint8Array | ArrayBuffer): Promise<T> };
   dialog: {
     open(options: { multiple: boolean; directory: boolean; filters: TauriDialogFilter[] }): Promise<string | string[] | null>;
     save(options: { defaultPath?: string; filters: TauriDialogFilter[] }): Promise<string | null>;

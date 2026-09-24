@@ -5,6 +5,8 @@ use tauri::{
     AppHandle, Emitter, Manager, WebviewUrl,
 };
 
+mod scratch;
+
 #[tauri::command]
 fn write_matrix_result(result: String) -> Result<(), String> {
     let path = env::var_os("FERNWORK_MATRIX_RESULT")
@@ -43,8 +45,17 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![write_matrix_result])
+        .invoke_handler(tauri::generate_handler![
+            write_matrix_result,
+            scratch::scratch_write,
+            scratch::scratch_read,
+            scratch::scratch_remove,
+            scratch::scratch_list,
+            scratch::scratch_flush
+        ])
         .setup(|app| {
+            let scratch_path = app.path().app_cache_dir()?.join("scratch");
+            app.manage(scratch::ScratchManager::open(scratch_path).map_err(std::io::Error::other)?);
             let measuring = env::var_os("FERNWORK_WEBVIEW_MATRIX").is_some();
             let url = if measuring {
                 WebviewUrl::App("index.html?webview-matrix=1".into())
