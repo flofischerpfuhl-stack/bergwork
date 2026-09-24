@@ -1,5 +1,8 @@
 use std::sync::Mutex;
-use std::{env, path::PathBuf};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     webview::WebviewWindowBuilder,
@@ -71,10 +74,12 @@ pub fn run() {
     tauri::Builder::default()
         .manage(host::StartupFiles(Mutex::new(host::file_references(
             env::args().skip(1),
+            &env::current_dir().unwrap_or_default(),
         ))))
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            let files = host::file_references(argv.into_iter().skip(1));
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            let files = host::file_references(argv.into_iter().skip(1), Path::new(&cwd));
             if !files.is_empty() {
+                host::allow_opened_files(app, &files);
                 let _ = app.emit("fernwork-open-files", files);
             }
         }))
@@ -101,6 +106,11 @@ pub fn run() {
             a6_spike::a6_runtime_settings,
         ])
         .setup(|app| {
+            {
+                let startup = app.state::<host::StartupFiles>();
+                let files = startup.0.lock().expect("startup file lock poisoned");
+                host::allow_opened_files(app.handle(), &files);
+            }
             let measuring_a6 =
                 cfg!(feature = "a6-spike") && env::var_os("FERNWORK_A6_SPIKE").is_some();
             let measuring = env::var_os("FERNWORK_WEBVIEW_MATRIX").is_some();

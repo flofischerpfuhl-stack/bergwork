@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(target_os = "linux")]
+use std::process::Command;
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::Command,
     sync::Mutex,
 };
 use tauri::{AppHandle, Manager};
+use tauri_plugin_fs::FsExt;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -313,12 +315,14 @@ pub fn display_icc_profile() -> DisplayProfile {
     profile
 }
 
-pub fn file_references(arguments: impl IntoIterator<Item = String>) -> Vec<FileReference> {
+/// Files named on a command line. Relative paths resolve against the launching process's working directory
+/// (for a second instance that is its own directory, not ours).
+pub fn file_references(arguments: impl IntoIterator<Item = String>, cwd: &Path) -> Vec<FileReference> {
     arguments
         .into_iter()
         .filter(|argument| !argument.starts_with('-'))
         .filter_map(|argument| {
-            let path = PathBuf::from(argument);
+            let path = cwd.join(argument);
             if !path.is_file() {
                 return None;
             }
@@ -331,9 +335,34 @@ pub fn file_references(arguments: impl IntoIterator<Item = String>) -> Vec<FileR
         .collect()
 }
 
+/// Paths the OS handed us (command line, file association, second instance) are the user's choice, like a dialog
+/// selection: add exactly these files to the filesystem plugin's scope so the editor may read them.
+pub fn allow_opened_files(app: &AppHandle, files: &[FileReference]) {
+    for file in files {
+        if let Err(error) = app.fs_scope().allow_file(&file.id) {
+            eprintln!("fernwork: could not allow opened file {}: {error}", file.id);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_line_files_resolve_against_the_launching_directory() {
+        let directory = env::temp_dir().join(format!("fernwork-args-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("in put.png"), b"x").unwrap();
+        let files = file_references(
+            ["--flag".to_string(), "in put.png".to_string(), "missing.png".to_string()],
+            &directory,
+        );
+        fs::remove_dir_all(&directory).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "in put.png");
+        assert_eq!(PathBuf::from(&files[0].id), directory.join("in put.png"));
+    }
 
     #[test]
     fn checksum_job_is_sha256_and_unknown_jobs_fall_back() {
