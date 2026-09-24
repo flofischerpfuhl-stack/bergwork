@@ -10,8 +10,8 @@ test('dragging a layer onto another tab copies it there as one undo step', async
   // A second project tab.
   await page.getByTestId('new-canvas').click();
   await page.getByTestId('createCanvas').last().click();
-  await expect(page.getByRole('tab')).toHaveCount(2);
-  const tabs = page.getByRole('tab');
+  await expect(page.getByRole('tablist', { name: 'Project tabs' }).getByRole('tab')).toHaveCount(2);
+  const tabs = page.getByRole('tablist', { name: 'Project tabs' }).getByRole('tab');
   await tabs.nth(0).click();
   const row = page.getByTestId('layer-row').first();
   await expect(row).toContainText('green');
@@ -57,8 +57,8 @@ test('New Canvas opens an empty tab without a modal; M and L switch the selectio
   expect(await page.evaluate(() => document.activeElement?.closest('[data-testid=compositor-editor]') !== null)).toBe(true);
   await page.getByTestId('menu-File').click();
   await page.getByTestId('menu-new-canvas').click();
-  await expect(page.getByRole('tab')).toHaveCount(2);
-  await expect(page.getByRole('tab').nth(1)).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tablist', { name: 'Project tabs' }).getByRole('tab')).toHaveCount(2);
+  await expect(page.getByRole('tablist', { name: 'Project tabs' }).getByRole('tab').nth(1)).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('[role=alertdialog], [aria-modal=true]')).toHaveCount(0);
   await page.getByTestId('createCanvas').click();
   const editor = page.getByTestId('compositor-editor');
@@ -98,7 +98,7 @@ test('Save asks where once and then overwrites; Save As asks again; a cancelled 
   await editor.press(`${mod}+s`);
   await expect.poll(writes).toEqual(['as:Untitled.fwimg', 'as:Untitled.fwimg', 'to:Poster.fwimg']);
   expect(await modified()).toBe(false);
-  await expect(page.getByRole('tab', { selected: true })).toContainText('Poster');
+  await expect(page.getByRole('tablist', { name: 'Project tabs' }).getByRole('tab', { selected: true })).toContainText('Poster');
   await page.getByTestId('menu-Layer').click();
   await page.getByTestId('menu-new-layer').click();
   await editor.press(`${mod}+s`);
@@ -124,7 +124,7 @@ test('a .comp package (v7) written by the engine reopens with the same layers, m
   const saved = await page.evaluate(() => ({ name: (window as any).__saved[0].name }));
   expect(saved.name).toBe('Untitled.comp.zip');
   await page.evaluate(() => (window as any).__handle.openProject((window as any).__saved[0].blob));
-  await expect(page.getByRole('tab')).toHaveCount(2);
+  await expect(page.getByRole('tablist', { name: 'Project tabs' }).getByRole('tab')).toHaveCount(2);
   const after = await manifest(page);
   expect(after.layers.map((l: any) => [l.name, l.kind, !!l.mask, l.parameters?.kind ?? null]))
     .toEqual(before.layers.map((l: any) => [l.name, l.kind, !!l.mask, l.parameters?.kind ?? null]));

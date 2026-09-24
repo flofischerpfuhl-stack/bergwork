@@ -143,7 +143,7 @@ test.describe('desktop workflows', () => {
     await page.getByTestId('menu-File').click();
     await page.getByTestId('menu-save').click();
     await expect.poll(() => page.evaluate(() => (window as any).__saved.length)).toBe(1);
-    await expect(page.getByRole('tab', { selected: true }).locator('span')).toHaveCount(0);
+    await expect(page.getByRole('tablist', { name: 'Project tabs' }).getByRole('tab', { selected: true }).locator('span')).toHaveCount(0);
     const result = await page.evaluate(async () => {
       const w = window as any;
       const saved = w.__saved[0];

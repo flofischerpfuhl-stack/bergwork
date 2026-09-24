@@ -5,7 +5,7 @@ Status: ✅ done · 🟡 partial · ❌ missing · 🔬 Phase-0 spike measured (
 Each row names its evidence: a test, a measurement, or a screenshot path. "Green" counts only on the integration
 branch.
 
-Last update: 2026-09-24, Phase 0.
+Last update: 2026-09-24, Phase 1 (wave 1 merged: A2, A3, A8, WebP/AVIF/GIF, guides, history panel, offline WebView2).
 
 ## 6.1 Document, layers, view
 
@@ -17,11 +17,11 @@ Last update: 2026-09-24, Phase 0.
 | Export per artboard/layer, @1x/@2x/@3x | ❌ | benchmark 2/9/10 red (`artifacts/benchmarks.md`) |
 | Layers, groups, masks, clipping masks, opacity | ✅ | `tests/e2e/editor-workflows.spec.ts`, `tests/unit/upstream-history-layers.test.ts` |
 | Fill opacity, locks, colour labels, layer-panel search | ❌ | Phase 1 |
-| All 27 blend modes | 🟡 13/27 | Measured against the PSD oracle: the 13 existing modes pass; 14 missing (`artifacts/psd-fidelity.md`) |
+| All 27 blend modes | ✅ 26/27 exact, dissolve by rule | Photoshop oracle: all 26 deterministic modes pass; dissolve uses Photoshop's binary-alpha rule, which a PSD composite cannot pin pixel-exact (`artifacts/psd-fidelity.md`, `tests/unit/blend.test.ts`); blend-modes folder 93.8 % |
 | Artboards | ❌ | Phase 2 |
-| Guides, rulers, grid, smart guides, snapping | 🟡 snapping to centre/edges | Phase 1 |
-| Align/distribute, numeric transform | 🟡 numeric | Phase 1 |
-| History panel (saved with the project) | ❌ | Phase 1; benchmark 20 red |
+| Guides, rulers, grid, smart guides, snapping | 🟡 rulers, guides (create from ruler, move, delete, numeric, lock, clear, saved in `.fwimg`), snapping to guides/centre/edges; grid and smart guides missing | `tests/e2e/guides.spec.ts`, `tests/unit/align-guides.test.ts` |
+| Align/distribute, numeric transform | ✅ | `tests/unit/align-guides.test.ts` (6 edges, 4 distribute modes), `tests/e2e/guides.spec.ts` |
+| History panel (saved with the project) | ✅ | `tests/e2e/history-panel.spec.ts` (jump back/forward, saved with the project and undo continues after reopening; option to not save it) |
 | Embedded/linked content | ❌ | Phase 2; benchmark 4 red |
 | Swatches, recent colours, eyedropper anywhere | 🟡 colour picker panel | `tests/e2e/painting.spec.ts` |
 
@@ -58,7 +58,7 @@ Last update: 2026-09-24, Phase 0.
 | Function | Status | Evidence |
 |---|---|---|
 | Free transform, flip, distort, crop, image/canvas size | ✅ | `tests/unit/transform*.test.ts`, `tests/e2e/editor-workflows.spec.ts` |
-| Non-destructive crop | 🟡 | Phase 1 (model v2) |
+| Non-destructive crop | 🟡 model v2 field present, no tool yet | `src/core/model/types.ts` (`crop`), Phase 2 UI |
 | Mesh warp, perspective, straighten | ❌ | Phase 3; benchmark 16 red |
 
 ## 6.6 Text and vector
@@ -81,7 +81,7 @@ Last update: 2026-09-24, Phase 0.
 |---|---|---|
 | PNG/JPEG/TIFF import with ICC → sRGB | ✅ | `tests/unit/icc.test.ts`, `tests/unit/jpeg.test.ts`, `tests/e2e/own-files.spec.ts` (integrator files) |
 | HEIC (browser / host codec / opt-in LGPL) | ✅ | `tests/e2e/heic.spec.ts`; camera HEIC mean Δ 0.38 |
-| WebP/AVIF/GIF import | ❌ | Phase 1 |
+| WebP/AVIF/GIF import | ✅ | `tests/unit/codec-formats.test.ts`, `tests/e2e/own-files.spec.ts` (integrator files android.webp, adobe.webp, example.avif, pal.gif; Chromium, Firefox, WebKit) |
 | PSD read | 🔬 | `artifacts/psd-fidelity.md`: 276/300 parsed, 43.3 % under threshold (target ≥ 90 % in Phase 2) |
 | PSD write, RAW | ❌ | Phase 3 |
 | Mac `.comp` read | ✅ | `tests/unit/compPackage.test.ts`, `tests/e2e/workspace.spec.ts` |
@@ -95,4 +95,10 @@ Last update: 2026-09-24, Phase 0.
 | A5 CanvasKit | 🔬 all abort criteria passed | `artifacts/canvaskit-check.md` |
 | A7 PSD corpus + oracle | 🔬 baseline | `artifacts/psd-fidelity.md`, `scripts/fetch-psd-corpus.sh` |
 | A9 core-task benchmarks | 🔬 skeleton: 1 green / 19 red at the first missing capability | `tests/benchmarks/`, `artifacts/benchmarks.md` |
-| A0, A2, A3, A4, A8 | ❌ | Phase 1 |
+| A2 model v2 + format v2 + migration | 🟡 v2 format, migration, history in the project done; engine still accepts a legacy layer shape → lane A2b | `tests/unit/model-v2.test.ts`, `tests/unit/format-v2.test.ts` |
+| A3 pixel formats, float pipeline | ✅ rgba16 rasters, float compositing on GPU and CPU; ICC for 16-bit sources still at 8-bit precision | `tests/e2e/banding.spec.ts` (Chromium, Firefox, WebKit; incl. semi-transparent 16-bit), `tests/unit/raster16.test.ts` |
+| A8 blend modes | ✅ | see 6.1 |
+| A4 swap + journal | 🟡 ScratchHost (OPFS, Tauri mmap), tile cache, journal merged into A4b base; not yet wired to rasters → lane A4b | `tests/unit/storage.test.ts`, `tests/e2e/journal.spec.ts` (Chromium) |
+| A6 WebKitGTK spike | 🔬 forced SHM fixes zoom (7–9 ms), native wgpu slower, native JPEG decode only helps with batched IPC → lane A6b | `artifacts/a6-spike.md` |
+| Offline WebView2 (M8) | ✅ | hardened Windows build: 0 connections in 5 min (`artifacts/tauri-webview-matrix.md`) |
+| A0 engine/UI/host separation | ❌ | after A2b/A4b |
