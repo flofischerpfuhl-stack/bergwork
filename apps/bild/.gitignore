@@ -11,3 +11,4 @@ artifacts/e2e-results
 tests/fixtures/psd/*
 !tests/fixtures/psd/SOURCES.md
 !tests/fixtures/psd/SHA256SUMS
+.vite-cache/

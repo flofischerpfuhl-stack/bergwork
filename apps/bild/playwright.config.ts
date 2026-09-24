@@ -33,6 +33,7 @@ export default defineConfig({
   ],
   webServer: {
     command: `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port ${port} --strictPort`,
+    env: { VITE_CACHE_DIR: `.vite-cache/e2e-${port}` },
     url: `http://127.0.0.1:${port}`,
     reuseExistingServer: false,
     timeout: 120_000,
