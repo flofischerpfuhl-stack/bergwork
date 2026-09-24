@@ -59,11 +59,15 @@ for (const item of cases) {
       await handle.importImage(new Blob([data]), name);
       const session = (window as any).__editorForTests.session;
       const raster = session.document.layers.at(-1).raster;
-      return { width: raster.width, height: raster.height, pixels: Array.from(raster.toPixels() as Uint8Array) };
+      // Base64 instead of a number array: a 12-million-element array is slow to serialise, above all in Firefox.
+      const pixels = raster.toPixels() as Uint8Array;
+      let binary = '';
+      for (let i = 0; i < pixels.length; i += 0x8000) binary += String.fromCharCode(...pixels.subarray(i, i + 0x8000));
+      return { width: raster.width, height: raster.height, pixels: btoa(binary) };
     }, { bytes, name: item.file });
     const ref = rgbOf(fs.readFileSync(`${dir}/${item.ref}`));
     expect([result.width, result.height]).toEqual([ref.width, ref.height]);
-    const got = Uint8Array.from(result.pixels);
+    const got = new Uint8Array(Buffer.from(result.pixels, 'base64'));
     const diff = meanDiff(got, ref.rgba);
     const raw = item.raw ? meanDiff(rgbOf(fs.readFileSync(`${dir}/${item.raw}`)).rgba, ref.rgba) : null;
     console.log(`OWN ${item.file}: mean |Δ| to reference ${diff.toFixed(2)}${raw !== null ? `, without conversion ${raw.toFixed(2)}` : ''}`);
