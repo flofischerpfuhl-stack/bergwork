@@ -13,6 +13,7 @@ import {
   type RGB,
 } from '../../core/adjustments';
 import { parseCubeLut } from '../../core/adjust/cube';
+import { readRawPsdComposite } from './composite';
 
 export type PsdUnsupportedImpact = 'not-rendered' | 'approximated' | 'editability-only';
 
@@ -489,7 +490,10 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const width = Math.max(0, (source.right ?? left) - left), height = Math.max(0, (source.bottom ?? top) - top);
     const adjustment = importedAdjustment(source, state, layerPath);
     const image = source.adjustment ? undefined : source.imageData;
+    const adjustmentMask = adjustment && source.mask?.imageData ? source.mask : null;
     const layerTransform = image ? transform(left, top, image.width, image.height)
+      : adjustmentMask ? transform(adjustmentMask.left ?? 0, adjustmentMask.top ?? 0,
+        adjustmentMask.imageData!.width, adjustmentMask.imageData!.height)
       : transform(isGroup ? 0 : left, isGroup ? 0 : top,
         isGroup ? state.documentWidth : width, isGroup ? state.documentHeight : height);
     const sourceMode = source.blendMode ?? (isGroup ? 'pass through' : 'normal');
@@ -537,19 +541,67 @@ function resolution(psd: Psd): number {
   return info.horizontalResolutionUnit === 'PPCM' ? info.horizontalResolution * 2.54 : info.horizontalResolution;
 }
 
+function parserWarningImpact(message: string): PsdUnsupportedImpact {
+  // psd-tools writes these generator/content-authentication records on otherwise pixel-identical files.
+  // ag-psd also reports descriptor padding as unread bytes; neither participates in compositing.
+  if (/^Unhandled additional info: (?:CAI  |GenI)$/.test(message)
+    || /^Unread (?:2|4) bytes left for additional info: (?:vstk|PtFl|artb|brst)$/.test(message)) {
+    return 'editability-only';
+  }
+  return 'not-rendered';
+}
+
+function rawCompositeFallback(bytes: Uint8Array, parserError: unknown): PsdReadResult {
+  const raw = readRawPsdComposite(bytes);
+  const raster = Raster.fromPixels(raw.width, raw.height, 4, raw.rgba);
+  const message = parserError instanceof Error ? parserError.message : String(parserError);
+  const unsupported: PsdUnsupportedFeature[] = [{
+    code: 'ag-psd-parser', message, impact: 'editability-only',
+  }, {
+    code: `color-mode:${raw.colorMode}`,
+    message: `PSD color mode ${raw.colorMode} was opened from its saved composite preview; layers are not editable.`,
+    impact: 'editability-only',
+  }, {
+    code: 'compatibility-preview',
+    message: 'This PSD uses its saved composite preview because its layer data could not be decoded.',
+    impact: 'editability-only',
+  }];
+  if (raw.bitsPerChannel !== 8) unsupported.push({
+    code: `bit-depth:${raw.bitsPerChannel}`,
+    message: `${raw.bitsPerChannel}-bit composite channels are tone-mapped to RGBA8.`, impact: 'approximated',
+  });
+  if (raw.iccProfile) unsupported.push({
+    code: 'embedded-icc', message: 'An embedded profile was detected, but this synchronous compatibility preview uses its deterministic colour-mode conversion.',
+    impact: 'approximated',
+  });
+  const document: CanvasDocument = {
+    id: 'psd-document', width: raw.width, height: raw.height, resolution: 72, selection: null,
+    layers: [newLayer({ id: 'psd-layer-1', name: 'PSD compatibility preview', kind: 'pixel',
+      transform: transform(0, 0, raw.width, raw.height), raster })], resources: [],
+  };
+  return { document, oracle: raster, unsupported, parserWarnings: [message],
+    source: { width: raw.width, height: raw.height, bitsPerChannel: raw.bitsPerChannel,
+      colorMode: raw.colorMode, isPsb: raw.isPsb } };
+}
+
 /** Parse a PSD/PSB without DOM/canvas and adapt the structures supported by CanvasDocument today. */
 export function readPsdDocument(bytes: Uint8Array): PsdReadResult {
   ensureCanvasFreeImageData();
   const parserWarnings: string[] = [];
-  const psd = readPsd(bytes, {
-    useImageData: true, skipThumbnail: true, skipLinkedFilesData: true, logMissingFeatures: true,
-    log: (...values: unknown[]) => parserWarnings.push(values.map(String).join(' ')),
-  });
+  let psd: Psd;
+  try {
+    psd = readPsd(bytes, {
+      useImageData: true, skipThumbnail: true, skipLinkedFilesData: true, logMissingFeatures: true,
+      log: (...values: unknown[]) => parserWarnings.push(values.map(String).join(' ')),
+    });
+  } catch (error) {
+    return rawCompositeFallback(bytes, error);
+  }
   if (psd.width > MAX_SIDE || psd.height > MAX_SIDE || psd.width * psd.height > MAX_PIXELS) {
     throw new RangeError(`PSD size ${psd.width}×${psd.height} exceeds the document limit`);
   }
   const unsupported: PsdUnsupportedFeature[] = parserWarnings.map((message) => ({
-    code: 'ag-psd-parser', message, impact: 'not-rendered',
+    code: 'ag-psd-parser', message, impact: parserWarningImpact(message),
   }));
   const bitsPerChannel = psd.bitsPerChannel ?? 8, colorMode = psd.colorMode ?? 3;
   if (bitsPerChannel !== 8) unsupported.push({ code: `bit-depth:${bitsPerChannel}`,
@@ -560,14 +612,52 @@ export function readPsdDocument(bytes: Uint8Array): PsdReadResult {
   const state: ImportState = { nextId: 1, documentWidth: psd.width, documentHeight: psd.height, unsupported, resources: [] };
   const layers = importSiblings(psd.children ?? [], null, '', state);
   if (layers.length > MAX_LAYERS) throw new RangeError(`PSD has ${layers.length} layers; the document limit is ${MAX_LAYERS}`);
-  const document: CanvasDocument = {
-    id: 'psd-document', width: psd.width, height: psd.height, resolution: resolution(psd),
-    globalLightAngle: psd.imageResources?.globalAngle ?? 120, layers, resources: state.resources, selection: null,
-  };
   const oracle = psd.imageData
     ? Raster.fromPixels(psd.imageData.width, psd.imageData.height, 4, pixelDataToRgba8(psd.imageData)) : null;
   if (!oracle) unsupported.push({ code: 'composite-image', message: 'PSD has no decodable embedded composite image.',
     impact: 'not-rendered' });
+  let documentLayers = layers;
+  if (oracle && unsupported.some((feature) => feature.impact === 'not-rendered')) {
+    documentLayers = layers.map((layer) => ({ ...layer, visible: false }));
+    documentLayers.push(newLayer({
+      id: `psd-layer-${state.nextId++}`, name: 'PSD compatibility preview', kind: 'pixel',
+      transform: transform(0, 0, psd.width, psd.height), raster: oracle,
+    }));
+    unsupported.push({
+      code: 'compatibility-preview',
+      message: 'Unsupported PSD rendering features use the saved composite preview; source layers remain available but hidden.',
+      impact: 'editability-only',
+    });
+  }
+  const document: CanvasDocument = {
+    id: 'psd-document', width: psd.width, height: psd.height, resolution: resolution(psd),
+    globalLightAngle: psd.imageResources?.globalAngle ?? 120, layers: documentLayers, resources: state.resources, selection: null,
+  };
   return { document, oracle, unsupported, parserWarnings,
     source: { width: psd.width, height: psd.height, bitsPerChannel, colorMode, isPsb: bytes[5] === 2 } };
+}
+
+/** Product open path: apply embedded/default gray or CMYK profiles lazily through the existing Little CMS WASM. */
+export async function readPsdDocumentManaged(bytes: Uint8Array): Promise<PsdReadResult> {
+  const imported = readPsdDocument(bytes);
+  if (!imported.unsupported.some((feature) => feature.code === 'compatibility-preview')
+    || (imported.source.colorMode !== 1 && imported.source.colorMode !== 4)) return imported;
+  const raw = readRawPsdComposite(bytes);
+  if (!raw.managedSamples || (raw.bitsPerChannel !== 8 && raw.bitsPerChannel !== 16)) return imported;
+  try {
+    const { loadLittleCms } = await import('../../wasm/lcms');
+    const lcms = await loadLittleCms(), model = raw.colorMode === 4 ? 'cmyk' as const : 'gray' as const;
+    const profile = raw.iccProfile ?? (model === 'cmyk' ? lcms.createCmykProfile()
+      : lcms.createGrayProfile([0.3127, 0.329], 2.2));
+    const rgba = lcms.transform(profile, raw.managedSamples, model, raw.bitsPerChannel, raw.managedAlpha);
+    const raster = Raster.fromPixels(raw.width, raw.height, 4, rgba);
+    const layers = imported.document.layers.map((layer) => layer.kind === 'pixel' && layer.name === 'PSD compatibility preview'
+      ? { ...layer, raster } : layer);
+    const unsupported = imported.unsupported.map((feature) => feature.code === 'embedded-icc'
+      ? { ...feature, message: 'The embedded profile was converted to sRGB through Little CMS.', impact: 'editability-only' as const }
+      : feature);
+    return { ...imported, document: { ...imported.document, layers }, oracle: raster, unsupported };
+  } catch {
+    return imported;
+  }
 }

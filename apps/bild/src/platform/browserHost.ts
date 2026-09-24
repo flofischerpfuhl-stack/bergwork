@@ -31,7 +31,9 @@ export interface FileTargetHost extends CapabilityHost, ImageDecoderHost {
 }
 
 const PICKER_TYPES = {
-  project: { description: 'Fernwork image project', accept: { 'application/zip': ['.fwimg', '.zip'] } },
+  project: { description: 'Fernwork image project or PSD', accept: {
+    'application/zip': ['.fwimg', '.zip'], 'image/vnd.adobe.photoshop': ['.psd', '.psb'],
+  } },
   png: { description: 'PNG image', accept: { 'image/png': ['.png'] } },
   jpeg: { description: 'JPEG image', accept: { 'image/jpeg': ['.jpg', '.jpeg'] } },
   webp: { description: 'WebP image', accept: { 'image/webp': ['.webp'] } },
@@ -167,7 +169,8 @@ export function createBrowserHost(): FileTargetHost {
       let handles: FileSystemFileHandle[];
       try {
         handles = await openFunction({ multiple: kind === 'images', types: kind === 'project'
-          ? [PICKER_TYPES.project] : [{ description: 'Images', accept: { 'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.avif', '.gif', '.tif', '.tiff', '.heic', '.heif'] } }] });
+          ? [PICKER_TYPES.project] : [{ description: 'Images', accept: { 'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.avif', '.gif', '.tif', '.tiff', '.heic', '.heif'],
+            'image/vnd.adobe.photoshop': ['.psd', '.psb'] } }] });
       } catch (error) { if ((error as DOMException).name === 'AbortError') return []; throw error; }
       return handles.map((handle) => { const id = `browser-handle-${nextHandle++}`; openHandles.set(id, handle); return { id, name: handle.name }; });
     },
@@ -195,9 +198,9 @@ export function createBrowserHost(): FileTargetHost {
     capabilities,
     ...targets,
     async chooseImages() {
-      return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,image/webp,image/avif,image/gif,.heic,.heif,.tif,.tiff,.webp,.avif,.gif', true);
+      return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,image/webp,image/avif,image/gif,image/vnd.adobe.photoshop,.heic,.heif,.tif,.tiff,.webp,.avif,.gif,.psd,.psb', true);
     },
-    async chooseProject() { return (await pick('.fwimg,.zip,.comp,application/zip', false))[0] ?? null; },
+    async chooseProject() { return (await pick('.fwimg,.zip,.comp,.psd,.psb,application/zip,image/vnd.adobe.photoshop', false))[0] ?? null; },
     async saveFile(blob, suggestedName) {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
