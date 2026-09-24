@@ -133,6 +133,8 @@ function transformPressLayer(session: EditorSession, pixel: Point, modifiers: Mo
 export class MoveTool implements ToolHandler {
   private drag: TransformDrag | null = null;
   private duplicatesOnDrag = false;
+  /** The press was refused by a position lock; releasing repeats the notice so it outlasts the drag. */
+  private refused = false;
 
   down(c: ToolContext): void {
     const session = c.session;
@@ -148,7 +150,11 @@ export class MoveTool implements ToolHandler {
     }
     if (!mode) return;
     this.duplicatesOnDrag = mode.kind === 'move' && c.modifiers.option;
-    if (!session.transformEdit) session.beginTransform(false);
+    if (!session.transformEdit) {
+      session.beginTransform(false);
+      // A position-locked target refuses the drag with the lock notice, like a refused brush stroke.
+      if (!session.transformEdit) { this.refused = session.refuseTransform(); return; }
+    }
     if (mode.kind === 'resize' && (c.modifiers.command || c.distortArmed || session.transformEdit?.corners)) {
       session.beginDistort();
       if (session.transformEdit?.corners) mode = { kind: 'distort', handle: mode.handle };
@@ -180,6 +186,7 @@ export class MoveTool implements ToolHandler {
   }
 
   up(c: ToolContext): void {
+    if (this.refused) { this.refused = false; c.session.refuseTransform(); return; }
     if (!this.drag) return;
     this.drag = null;
     this.duplicatesOnDrag = false;
@@ -189,6 +196,7 @@ export class MoveTool implements ToolHandler {
   }
 
   cancel(session: EditorSession): void {
+    this.refused = false;
     if (!this.drag) return;
     session.previewTransform(this.drag.original);
     if (session.transformEdit && !session.transformEdit.persistent) session.cancelTransform();

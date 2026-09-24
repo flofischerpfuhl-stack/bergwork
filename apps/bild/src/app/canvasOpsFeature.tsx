@@ -238,35 +238,35 @@ function CanvasSizeDialog({ controller, close }: { controller: EditorController;
       void applyDocumentOp(controller, session, 'Canvas Size', (doc) => ({ op: 'canvasSize', document: doc, width: w, height: h, anchor, options: { fill: fill(), extensionName: session.label('Canvas Extension') } }));
     }}>
       <h2 className={styles.dialogTitle}>{t('Canvas Size…').replace('…', '')}</h2>
-      <span>{`Current: ${document.width} × ${document.height} pixels`}</span>
-      <span className={styles.secondary}>{bytes(document.width, document.height)} uncompressed RGBA canvas</span>
-      <label className={styles.appearanceRow}><span style={{ width: 70 }}>Units</span>
+      <span>{`${t('Current:')} ${document.width} × ${document.height} ${t('pixels')}`}</span>
+      <span className={styles.secondary}>{`${bytes(document.width, document.height)} ${t('uncompressed RGBA canvas')}`}</span>
+      <label className={styles.appearanceRow}><span style={{ width: 70 }}>{t('Units')}</span>
         <select className={styles.select} value={draft.unit} onChange={(e) => setDraft({ ...draft, unit: e.target.value as CanvasUnit })}>
-          {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+          {UNITS.map((u) => <option key={u} value={u}>{t(u)}</option>)}
         </select></label>
       <NumberField label={t('Width')} value={displayedCanvasDimension(draft, true)} width={110} testId="canvasSizeWidth" onChange={(v) => setDraft(setCanvasDimension(draft, v, true))} />
       <NumberField label={t('Height')} value={displayedCanvasDimension(draft, false)} width={110} testId="canvasSizeHeight" onChange={(v) => setDraft(setCanvasDimension(draft, v, false))} />
-      <label className={styles.check}><input type="checkbox" checked={draft.relative} onChange={(e) => setDraft({ ...draft, relative: e.target.checked })} />Relative to current dimensions</label>
+      <label className={styles.check}><input type="checkbox" checked={draft.relative} onChange={(e) => setDraft({ ...draft, relative: e.target.checked })} />{t('Relative to current dimensions')}</label>
       <label className={styles.check}><input type="checkbox" checked={draft.locked} onChange={(e) => {
         const next = { ...draft, locked: e.target.checked };
         setDraft(e.target.checked ? setCanvasDimension(next, displayedCanvasDimension(next, true), true) : next);
-      }} />Lock original aspect ratio</label>
-      <span className={valid ? styles.secondary : styles.warning}>{valid ? `New: ${w} × ${h} pixels · ${bytes(w, h)} uncompressed` : 'Final dimensions must be 1–30,000 pixels per side.'}</span>
+      }} />{t('Lock original aspect ratio')}</label>
+      <span className={valid ? styles.secondary : styles.warning}>{valid ? `${t('New:')} ${w} × ${h} ${t('pixels')} · ${bytes(w, h)} ${t('uncompressed')}` : t('Final dimensions must be 1–30,000 pixels per side.')}</span>
       <div style={{ display: 'flex', gap: 24 }}>
-        <div role="radiogroup" aria-label="Anchor" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 28px)', gap: 3 }}>
+        <div role="radiogroup" aria-label={t('Anchor')} style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 28px)', gap: 3 }}>
           {ANCHORS.map((name, index) => (
-            <button key={name} type="button" role="radio" aria-checked={anchor === index} aria-label={name} title={name}
+            <button key={name} type="button" role="radio" aria-checked={anchor === index} aria-label={t(name)} title={t(name)}
               className={`${styles.iconButton} ${anchor === index ? styles.iconButtonOn : ''}`} style={{ minWidth: 28, height: 28 }}
               onClick={() => setAnchor(index)}>{anchor === index ? '●' : '○'}</button>
           ))}
         </div>
-        <div><strong>{ANCHORS[anchor]}</strong><p className={styles.dialogMessage}>Keeps this point fixed. Artwork is not scaled; cropped content remains outside the canvas.</p></div>
+        <div><strong>{t(ANCHORS[anchor]!)}</strong><p className={styles.dialogMessage}>{t('Keeps this point fixed. Artwork is not scaled; cropped content remains outside the canvas.')}</p></div>
       </div>
-      <label className={styles.appearanceRow}><span style={{ width: 120 }}>Canvas extension</span>
+      <label className={styles.appearanceRow}><span style={{ width: 120 }}>{t('Canvas extension')}</span>
         <select className={styles.select} value={extension} onChange={(e) => setExtension(e.target.value)}>
-          {['Transparent', 'Foreground', 'Background', 'Black', 'White', 'Custom'].map((x) => <option key={x}>{x}</option>)}
+          {['Transparent', 'Foreground', 'Background', 'Black', 'White', 'Custom'].map((x) => <option key={x} value={x}>{t(x)}</option>)}
         </select>
-        {extension === 'Custom' ? <input type="color" value={custom} onChange={(e) => setCustom(e.target.value)} aria-label="Extension color" /> : null}
+        {extension === 'Custom' ? <input type="color" value={custom} onChange={(e) => setCustom(e.target.value)} aria-label={t('Extension color')} /> : null}
       </label>
       <div className={styles.dialogButtons}>
         <button type="button" className={styles.pill} onClick={close}>{t('Cancel')}</button>
@@ -310,36 +310,36 @@ function ImageSizeDialog({ controller, close }: { controller: EditorController; 
         width: Math.round(width), height: Math.round(height), resolution, resample: mode }));
     }}>
       <h2 className={styles.dialogTitle}>{t('Image Size…').replace('…', '')}</h2>
-      <span className={styles.secondary}>{`Current: ${document.width} × ${document.height} pixels`}</span>
-      <label className={styles.appearanceRow}><span style={{ width: 70 }}>Units</span>
+      <span className={styles.secondary}>{`${t('Current:')} ${document.width} × ${document.height} ${t('pixels')}`}</span>
+      <label className={styles.appearanceRow}><span style={{ width: 70 }}>{t('Units')}</span>
         <select className={styles.select} value={unit} onChange={(e) => setUnit(e.target.value as CanvasUnit)}>
-          {UNITS.filter((u) => resample || (u !== 'Pixels' && u !== 'Percent')).map((u) => <option key={u}>{u}</option>)}
+          {UNITS.filter((u) => resample || (u !== 'Pixels' && u !== 'Percent')).map((u) => <option key={u} value={u}>{t(u)}</option>)}
         </select></label>
       <NumberField label={t('Width')} value={display(width, document.width)} width={110} testId="imageSizeWidth" onChange={(v) => set(v, true)} />
       <NumberField label={t('Height')} value={display(height, document.height)} width={110} testId="imageSizeHeight" onChange={(v) => set(v, false)} />
-      <label className={styles.check}><input type="checkbox" checked={locked} disabled={!resample} onChange={(e) => setLocked(e.target.checked)} />Lock aspect ratio</label>
-      <NumberField label="Resolution" suffix="pixels/inch" value={resolution} width={90} onChange={(v) => {
+      <label className={styles.check}><input type="checkbox" checked={locked} disabled={!resample} onChange={(e) => setLocked(e.target.checked)} />{t('Lock aspect ratio')}</label>
+      <NumberField label={t('Resolution')} suffix={t('pixels/inch')} value={resolution} width={90} onChange={(v) => {
         if (resample && (unit === 'Inches' || unit === 'Centimeters') && resolution > 0 && v > 0) { setWidth(width * v / resolution); setHeight(height * v / resolution); }
         setResolution(v);
       }} />
       <label className={styles.check}><input type="checkbox" checked={resample} onChange={(e) => {
         setResample(e.target.checked);
         if (!e.target.checked) { setWidth(document.width); setHeight(document.height); setLocked(true); if (unit === 'Pixels' || unit === 'Percent') setUnit('Inches'); }
-      }} />Resample</label>
+      }} />{t('Resample')}</label>
       {resample ? (
         <>
           <label className={styles.appearanceRow}><span style={{ width: 70 }}>{t('Sampling')}</span>
             <select className={styles.select} value={sampling} onChange={(e) => setSampling(e.target.value as LayerSampling)}>
               {LAYER_SAMPLINGS.map((s) => <option key={s} value={s}>{t(s)}</option>)}
             </select></label>
-          <span className={styles.secondary}>Resizes layer pixels and applies existing transforms. Undo restores the originals.</span>
+          <span className={styles.secondary}>{t('Resizes layer pixels and applies existing transforms. Undo restores the originals.')}</span>
         </>
-      ) : <span className={styles.secondary}>Only print dimensions and resolution change. Pixels stay unchanged.</span>}
-      <span className={valid ? styles.secondary : styles.warning}>{valid ? `Result: ${Math.round(width)} × ${Math.round(height)} pixels`
-        : 'Use 1–30,000 pixels per side, up to 100 megapixels, and 1–9,600 pixels/inch.'}</span>
+      ) : <span className={styles.secondary}>{t('Only print dimensions and resolution change. Pixels stay unchanged.')}</span>}
+      <span className={valid ? styles.secondary : styles.warning}>{valid ? `${t('Result:')} ${Math.round(width)} × ${Math.round(height)} ${t('pixels')}`
+        : t('Use 1–30,000 pixels per side, up to 100 megapixels, and 1–9,600 pixels/inch.')}</span>
       <div className={styles.dialogButtons}>
         <button type="button" className={styles.pill} onClick={close}>{t('Cancel')}</button>
-        <button type="submit" className={`${styles.pill} ${styles.pillPrimary}`} disabled={!valid} data-testid="imageSizeOK">Resize</button>
+        <button type="submit" className={`${styles.pill} ${styles.pillPrimary}`} disabled={!valid} data-testid="imageSizeOK">{t('Resize')}</button>
       </div>
     </form>
   );

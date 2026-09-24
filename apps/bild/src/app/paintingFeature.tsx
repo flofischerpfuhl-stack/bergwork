@@ -85,7 +85,11 @@ class BrushTool implements ToolHandler {
     const session = c.session;
     ensurePreviewSources(session);
     if (session.tool === 'cloneStamp' && c.modifiers.option) { setCloneSource(session, c.pixel); session.notify('document'); return; }
-    const update = beginBrushStroke(session, c.pixel, { shift: c.modifiers.shift });
+    // Photoshop: the Eraser on a transparency-locked layer paints the background colour instead of clearing alpha.
+    const erasesLocked = session.tool === 'brush' && !session.isMaskSelected && getBrushSettings(session).mode === 'erase'
+      && !!session.activeLayerId && session.lockState(session.activeLayerId).transparency;
+    const update = beginBrushStroke(session, c.pixel, erasesLocked
+      ? { shift: c.modifiers.shift, mode: 'paint', background: true } : { shift: c.modifiers.shift });
     if (!update) return;
     this.axisAnchor = c.modifiers.shift ? c.pixel : null;
     this.horizontal = null;
