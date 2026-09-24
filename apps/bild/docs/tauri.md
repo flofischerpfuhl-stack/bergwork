@@ -8,8 +8,8 @@ Fernwork Bildeditor uses one engine and two host entries: the ordinary browser e
 the only paths passed to the filesystem plugin. No updater, telemetry, background service, or
 runtime network call is included.
 
-The native File menu owns Ctrl/⌘+N and Ctrl/⌘+W and forwards them to the existing editor command
-dispatcher. Quit exits the application. `.fwimg`, `.psd`, and common raster extensions are declared
+The editor draws its own menu bar on Linux and Windows. Only macOS gets a native File menu (it is the global
+menu bar there); it forwards ⌘N and ⌘W to the existing editor command dispatcher, and Quit exits the application. `.fwimg`, `.psd`, and common raster extensions are declared
 as associations; OS-delivered open events are intentionally not wired in A1.
 
 ## Commands
@@ -20,6 +20,10 @@ npm run tauri:build
 npm run tauri:build -- --no-bundle
 bash scripts/tauri-webview-matrix.sh /tmp/fernwork-webkitgtk-matrix.json
 ```
+
+`npm run tauri:*` goes through `scripts/tauri.mjs`: on Linux it runs `scripts/tauri-{dev,build}.sh` (rootless
+WebKitGTK environment), on Windows and macOS it calls the Tauri CLI directly, so no bash is needed there (a fresh
+Windows checkout otherwise picks WSL's `bash.exe`). `.gitattributes` keeps `*.sh` with LF endings.
 
 `tauri:build` creates `.deb` and `.rpm` bundles on Linux; `-- --no-bundle` stops after the release binary. The Linux
 binary is `src-tauri/target/release/fernwork-bildeditor`. The scripts source

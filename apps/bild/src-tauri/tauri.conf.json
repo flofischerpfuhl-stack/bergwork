@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "de.fernwork.bildeditor",
   "build": {
-    "beforeDevCommand": "bash scripts/tauri-vite.sh dev",
+    "beforeDevCommand": "node node_modules/vite/bin/vite.js --config src-tauri/frontend/vite.config.ts",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "bash scripts/tauri-vite.sh build",
+    "beforeBuildCommand": "node node_modules/vite/bin/vite.js build --config src-tauri/frontend/vite.config.ts",
     "frontendDist": "../dist-tauri"
   },
   "app": {
