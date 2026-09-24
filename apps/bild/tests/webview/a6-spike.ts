@@ -8,6 +8,7 @@ import { makeTransform } from '../../src/core/geometry';
 import { Raster } from '../../src/core/raster';
 import { EditorRoot } from '../../src/ui/EditorRoot';
 import { EditorController } from '../../src/ui/controller';
+import { GpuCompositor } from '../../src/render/gpuCompositor';
 
 interface Distribution { p95: number; median: number; max: number }
 interface FrameSplit {
@@ -26,6 +27,7 @@ interface RuntimeSettings {
   forceDmabufShm: boolean;
   showDamage: boolean;
   renderOnly: boolean;
+  runLabel: string;
 }
 
 interface NativeDecodeReport {
@@ -40,6 +42,36 @@ interface NativeDecodeReport {
   tileCopyMs: number;
   binaryChannelMs: number;
   nativeTotalMs: number;
+}
+
+interface PresentedFrames {
+  samples: number;
+  presentationTimestamps: number;
+  intervalMs: Distribution;
+  droppedFrames: number;
+  refreshIntervalMs: number;
+  source: string;
+}
+
+interface BatchDecodeReport {
+  width: number;
+  height: number;
+  encodedBytes: number;
+  fileReadMs: number;
+  decodeAndYcbcrMs: number;
+  rgbToRgbaMs: number;
+  ipcToResponseMs: number;
+  rasterTilingMs: number;
+  totalToRasterMs: number;
+  firstUploadMs: number;
+  totalToFirstFrameMs: number;
+}
+
+interface JpegBatchResult {
+  encodedMB: number;
+  browser: Record<string, number>;
+  native: BatchDecodeReport;
+  parity: { comparedChannels: number; maximumChannelDelta: number; meanChannelDifference: number };
 }
 
 interface A6Tauri {
@@ -59,12 +91,7 @@ export interface A6SpikeResult {
   userAgent: string;
   settings: RuntimeSettings;
   viewport: { width: number; height: number; dpr: number };
-  jpeg46MP: {
-    encodedMB: number;
-    browser: Record<string, number>;
-    native: NativeDecodeReport & { ipcToRasterMs: number; firstUploadMs: number };
-    parity: { sampleCount: number; maximumChannelDelta: number };
-  } | null;
+  jpeg46MP: { compressible: JpegBatchResult; noisy: JpegBatchResult } | null;
   rendering: {
     renderer: string;
     canvasSizes: Array<{
@@ -72,9 +99,12 @@ export interface A6SpikeResult {
       actual: { cssWidth: number; cssHeight: number; backingWidth: number; backingHeight: number; dpr: number };
       zoomUninstrumentedMs: Distribution;
       zoomSplit: FrameSplit;
+      presented: PresentedFrames;
     }>;
     brushUninstrumentedMs: Distribution;
     brushSplit: FrameSplit;
+    brushPresented: PresentedFrames;
+    captures: { window: { zoom: string; brush: string }; canvas: { zoom: string; brush: string } };
     notes: string[];
     error?: string;
   };
@@ -144,6 +174,33 @@ async function generatedJpeg(): Promise<Blob> {
     : reject(new Error('46 MP JPEG encoding failed')), 'image/jpeg', 0.88));
 }
 
+async function noisyJpeg(): Promise<Blob> {
+  const width = 10_109, height = 4_542;
+  const canvas = Object.assign(document.createElement('canvas'), { width, height });
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas 2D is unavailable');
+  let seed = 0x6d2b79f5;
+  const random = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return seed >>> 0; };
+  const stripHeight = 32;
+  for (let top = 0; top < height; top += stripHeight) {
+    const rows = Math.min(stripHeight, height - top);
+    const image = context.createImageData(width, rows);
+    const data = image.data;
+    for (let y = 0; y < rows; y++) for (let x = 0; x < width; x++) {
+      const value = random(), at = (y * width + x) * 4;
+      const sky = Math.round(45 + 125 * (top + y) / height);
+      data[at] = Math.min(255, sky + (value & 63));
+      data[at + 1] = Math.min(255, 55 + ((value >>> 8) & 127) + (x % 701 < 350 ? 22 : 0));
+      data[at + 2] = Math.min(255, 35 + ((value >>> 16) & 127));
+      data[at + 3] = 255;
+    }
+    context.putImageData(image, 0, top);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob)
+    : reject(new Error('noisy 46 MP JPEG encoding failed')), 'image/jpeg', 0.9));
+}
+
 async function firstUpload(root: HTMLElement, raster: Raster, status: (message: string) => void): Promise<number> {
   status('First upload: mounting WebGL compositor…');
   const mounted = await mount(root);
@@ -171,9 +228,9 @@ function toBytes(value: unknown): Uint8Array {
   throw new TypeError(`Unexpected binary channel payload: ${Object.prototype.toString.call(value)}`);
 }
 
-async function jpegProbe(root: HTMLElement, status: (message: string) => void): Promise<A6SpikeResult['jpeg46MP']> {
-  const blob = await generatedJpeg();
-  status('46 MP JPEG generated; storing native fixture…');
+async function jpegBatchFixture(root: HTMLElement, status: (message: string) => void, label: string,
+  blob: Blob): Promise<JpegBatchResult> {
+  status(`${label} 46 MP JPEG generated; storing native fixture…`);
   const fixtureBytes = new Uint8Array(await blob.arrayBuffer());
   const path = await tauri().core.invoke<string>('a6_store_jpeg', fixtureBytes);
 
@@ -198,43 +255,60 @@ async function jpegProbe(root: HTMLElement, status: (message: string) => void): 
   status('Browser RGBA ready; tiling raster…');
   stage = performance.now();
   const browserRaster = Raster.fromPixels(canvas.width, canvas.height, 4, rgba);
-  const rasterTilingMs = performance.now() - stage;
+  const browserRasterTilingMs = performance.now() - stage;
+  const browserTotalToRasterMs = fileReadMs + decodeMs + colorConversionAndReadbackMs + browserRasterTilingMs;
   status('Browser raster ready; measuring first GPU upload…');
   const browserFirstUploadMs = await firstUpload(root, browserRaster, status);
 
-  status('Browser upload complete; decoding and streaming native tiles…');
-  const nativeTiles: Uint8Array[] = [];
-  const channel = new (tauri().core.Channel)<unknown>();
-  let tileSignal: (() => void) | null = null;
-  channel.onmessage = (message) => { nativeTiles.push(toBytes(message)); tileSignal?.(); };
+  status('Browser upload complete; decoding one native binary response…');
   const nativeStart = performance.now();
-  const native = await tauri().core.invoke<NativeDecodeReport>('a6_decode_jpeg', { path, onTile: channel });
-  status(`Native command complete; received ${nativeTiles.length}/${native.tileCount} tiles…`);
-  while (nativeTiles.length < native.tileCount) await new Promise<void>((resolve) => { tileSignal = resolve; });
-  tileSignal = null;
-  const nativeRaster = new Raster(native.width, native.height, 4, nativeTiles);
-  const ipcToRasterMs = performance.now() - nativeStart;
+  const response = toBytes(await tauri().core.invoke<unknown>('a6_decode_jpeg_batch', { path }));
+  const ipcToResponseMs = performance.now() - nativeStart;
+  const header = new DataView(response.buffer, response.byteOffset, 40);
+  if (String.fromCharCode(...response.subarray(0, 4)) !== 'FWJ1') throw new Error('invalid native JPEG batch header');
+  const width = header.getUint32(4, true), height = header.getUint32(8, true), encodedBytes = header.getUint32(12, true);
+  const micros = (offset: number) => Number(header.getBigUint64(offset, true)) / 1_000;
+  if (response.byteLength !== 40 + width * height * 4) throw new Error('native JPEG batch has the wrong byte count');
+  stage = performance.now();
+  const nativeRaster = Raster.fromPixels(width, height, 4, response.subarray(40));
+  const nativeRasterTilingMs = performance.now() - stage;
+  const totalToRasterMs = performance.now() - nativeStart;
   const nativeFirstUploadMs = await firstUpload(root, nativeRaster, status);
   status('Native raster upload complete; checking pixel parity…');
 
-  const samples = [[0, 0], [127, 511], [4096, 2048], [9000, 4000], [native.width - 1, native.height - 1]] as const;
-  let maximumChannelDelta = 0;
-  for (const [x, y] of samples) {
-    const browserPixel = browserRaster.pixel(x, y), nativePixel = nativeRaster.pixel(x, y);
-    for (let channelIndex = 0; channelIndex < 4; channelIndex++) {
-      maximumChannelDelta = Math.max(maximumChannelDelta, Math.abs(browserPixel[channelIndex]! - nativePixel[channelIndex]!));
+  let maximumChannelDelta = 0, difference = 0, comparedChannels = 0;
+  for (let tileIndex = 0; tileIndex < browserRaster.tiles.length; tileIndex++) {
+    const browserTile = browserRaster.tiles[tileIndex], nativeTile = nativeRaster.tiles[tileIndex];
+    if (!browserTile || !nativeTile) {
+      if (browserTile !== nativeTile) maximumChannelDelta = 255;
+      continue;
+    }
+    for (let channel = 0; channel < browserTile.length; channel++) {
+      const delta = Math.abs(browserTile[channel]! - nativeTile[channel]!);
+      maximumChannelDelta = Math.max(maximumChannelDelta, delta); difference += delta; comparedChannels++;
     }
   }
   return {
     encodedMB: blob.size / 1_048_576,
     browser: {
-      fileReadMs, decodeMs, colorConversionAndReadbackMs, rasterTilingMs,
+      fileReadMs, decodeMs, colorConversionAndReadbackMs, rasterTilingMs: browserRasterTilingMs,
       firstUploadMs: browserFirstUploadMs,
-      totalToRasterMs: fileReadMs + decodeMs + colorConversionAndReadbackMs + rasterTilingMs,
+      totalToRasterMs: browserTotalToRasterMs,
+      totalToFirstFrameMs: browserTotalToRasterMs + browserFirstUploadMs,
     },
-    native: { ...native, ipcToRasterMs, firstUploadMs: nativeFirstUploadMs },
-    parity: { sampleCount: samples.length, maximumChannelDelta },
+    native: { width, height, encodedBytes, fileReadMs: micros(16), decodeAndYcbcrMs: micros(24),
+      rgbToRgbaMs: micros(32), ipcToResponseMs, rasterTilingMs: nativeRasterTilingMs,
+      totalToRasterMs, firstUploadMs: nativeFirstUploadMs,
+      totalToFirstFrameMs: totalToRasterMs + nativeFirstUploadMs },
+    parity: { comparedChannels, maximumChannelDelta,
+      meanChannelDifference: comparedChannels ? difference / comparedChannels : maximumChannelDelta },
   };
+}
+
+async function jpegProbe(root: HTMLElement, status: (message: string) => void): Promise<NonNullable<A6SpikeResult['jpeg46MP']>> {
+  const compressible = await jpegBatchFixture(root, status, 'compressible', await generatedJpeg());
+  const noisy = await jpegBatchFixture(root, status, 'noisy camera-like', await noisyJpeg());
+  return { compressible, noisy };
 }
 
 interface GlCounters { submissionMs: number; finishMs: number; calls: number }
@@ -330,7 +404,42 @@ async function brushFeedback(
   return measurementDistribution(values);
 }
 
-async function renderingProbe(root: HTMLElement): Promise<A6SpikeResult['rendering']> {
+async function nativePresented(frames: number, renderNow: () => number, step: (index: number) => void,
+  cadence: 'raf' | 'task'): Promise<PresentedFrames> {
+  await tauri().core.invoke<void>('a6_frame_clock_reset');
+  for (let index = 0; index < frames; index++) {
+    if (cadence === 'raf') await waitFrame();
+    step(index); renderNow();
+    if (cadence === 'task') await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  await waitFrame(); await waitFrame();
+  return tauri().core.invoke<PresentedFrames>('a6_frame_clock_take');
+}
+
+function captureSuffix(settings: RuntimeSettings): string {
+  const renderer = settings.forceDmabufShm ? 'shm' : settings.disableDmabufRenderer ? 'no-dmabuf' : 'default';
+  return `${settings.runLabel}-${renderer}-dpr${devicePixelRatio.toFixed(2).replace('.', '_')}`;
+}
+
+async function captureCanvas(gl: WebGL2RenderingContext): Promise<string> {
+  gl.finish();
+  const width = gl.drawingBufferWidth, height = gl.drawingBufferHeight;
+  const bottomFirst = new Uint8Array(width * height * 4);
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, bottomFirst);
+  const topFirst = new Uint8ClampedArray(bottomFirst.length), stride = width * 4;
+  for (let row = 0; row < height; row++) {
+    topFirst.set(bottomFirst.subarray((height - row - 1) * stride, (height - row) * stride), row * stride);
+  }
+  const canvas = new OffscreenCanvas(width, height), context = canvas.getContext('2d');
+  if (!context) throw new Error('2D canvas is unavailable for capture');
+  context.putImageData(new ImageData(topFirst, width, height), 0, 0);
+  const png = await canvas.convertToBlob({ type: 'image/png' });
+  return tauri().core.invoke<string>('a6_store_capture', new Uint8Array(await png.arrayBuffer()));
+}
+
+async function renderingProbe(root: HTMLElement, settings: RuntimeSettings): Promise<A6SpikeResult['rendering']> {
+  const emptyPresented = (): PresentedFrames => ({ samples: 0, presentationTimestamps: 0,
+    intervalMs: measurementDistribution([]), droppedFrames: 0, refreshIntervalMs: 0, source: 'unavailable' });
   const failure: A6SpikeResult['rendering'] = {
     renderer: 'unavailable', canvasSizes: [],
     brushUninstrumentedMs: measurementDistribution([]), brushSplit: {
@@ -338,13 +447,26 @@ async function renderingProbe(root: HTMLElement): Promise<A6SpikeResult['renderi
       webglSubmissionMs: measurementDistribution([]), glFinishMs: measurementDistribution([]),
       presentationProxyMs: measurementDistribution([]), glCallsMedian: 0,
     },
+    brushPresented: emptyPresented(), captures: { window: { zoom: '', brush: '' }, canvas: { zoom: '', brush: '' } },
     notes: [],
   };
   let mounted: Awaited<ReturnType<typeof mount>> | null = null;
   try {
     mounted = await mount(root);
     const { controller } = mounted, session = controller.session, view = controller.canvasView!;
-    if (view.rendererKind !== 'webgl2' || !view.gpu) throw new Error(`renderer is ${view.rendererKind}`);
+    if (view.rendererKind !== 'webgl2' || !view.gpu) {
+      const probeCanvas = document.createElement('canvas');
+      const basic = probeCanvas.getContext('webgl2');
+      let compositorError = 'not attempted';
+      if (basic) {
+        basic.getExtension('WEBGL_lose_context')?.loseContext();
+        try {
+          const probe = await GpuCompositor.create(document.createElement('canvas'), 1, 1);
+          probe.destroy(); compositorError = 'none';
+        } catch (error) { compositorError = String(error); }
+      }
+      throw new Error(`renderer is ${view.rendererKind}; basic WebGL2=${!!basic}; compositor=${compositorError}`);
+    }
     session.createDocument(4096, 4096, false);
     const modes: readonly BlendMode[] = ['normal', 'multiply', 'screen', 'overlay', 'normal', 'darken', 'lighten', 'normal', 'difference', 'normal'];
     const layers = [];
@@ -375,12 +497,17 @@ async function renderingProbe(root: HTMLElement): Promise<A6SpikeResult['renderi
       const zoomUninstrumentedMs = uninstrumented(90, () => view.renderNow(), zoomStep);
       session.fit();
       const zoomSplit = await splitFrames(gl, () => view.renderNow(), 30, zoomStep);
+      session.fit();
+      const presented = await nativePresented(60, () => view.renderNow(), zoomStep, 'raf');
       const rect = view.element.getBoundingClientRect();
       const canvas = view.element.querySelector<HTMLCanvasElement>('[data-testid="editor-canvas"]');
       canvasSizes.push({ requested, actual: { cssWidth: rect.width, cssHeight: rect.height,
         backingWidth: canvas?.width ?? 0, backingHeight: canvas?.height ?? 0, dpr: devicePixelRatio },
-      zoomUninstrumentedMs, zoomSplit });
+      zoomUninstrumentedMs, zoomSplit, presented });
     }
+    await waitFrame(); await waitFrame();
+    const zoomCanvasCapture = await captureCanvas(gl);
+    const zoomCapture = await tauri().core.invoke<string>('a6_capture_window', { name: `zoom-${captureSuffix(settings)}` });
 
     session.fit(); session.replaceDocument({ ...session.document!, layers: layers.slice(0, 5) });
     session.notify('document'); view.renderNow(); session.selectLayer('P4'); session.selectTool('brush');
@@ -395,8 +522,18 @@ async function renderingProbe(root: HTMLElement): Promise<A6SpikeResult['renderi
       brush.extendBrushStroke(session, { x: 500 + (index + 1) * 40, y: 500 + (index + 1) * 30 });
     }, 'task');
     brush.cancelBrushStroke(session);
+    brush.beginBrushStroke(session, { x: 500, y: 500 });
+    const brushPresented = await nativePresented(60, () => view.renderNow(), (index) => {
+      brush.extendBrushStroke(session, { x: 500 + (index + 1) * 40, y: 500 + (index + 1) * 30 });
+    }, 'task');
+    await waitFrame(); await waitFrame();
+    const brushCanvasCapture = await captureCanvas(gl);
+    const brushCapture = await tauri().core.invoke<string>('a6_capture_window', { name: `brush-${captureSuffix(settings)}` });
+    brush.cancelBrushStroke(session);
     return {
-      renderer, canvasSizes, brushUninstrumentedMs, brushSplit,
+      renderer, canvasSizes, brushUninstrumentedMs, brushSplit, brushPresented,
+      captures: { window: { zoom: zoomCapture, brush: brushCapture },
+        canvas: { zoom: zoomCanvasCapture, brush: brushCanvasCapture } },
       notes: [
         'Uninstrumented p95 is comparable to A1 because renderNow includes gl.finish.',
         'The split wraps WebGL calls and therefore has observer overhead; JS is residual wall time after wrapped WebGL calls and gl.finish.',
@@ -409,13 +546,15 @@ async function renderingProbe(root: HTMLElement): Promise<A6SpikeResult['renderi
 
 export async function runA6Spike(root: HTMLElement, status: (message: string) => void = () => {}): Promise<A6SpikeResult> {
   const settings = await tauri().core.invoke<RuntimeSettings>('a6_runtime_settings');
+  // Measure presentation before the two 46-MP upload probes. WebKitGTK may deliberately fall back
+  // after the JPEG probes' temporary contexts place nearly a gigabyte of textures under pressure.
+  status('Measuring WebKit/WebGL zoom and brush frame splits…');
+  const rendering = await renderingProbe(root, settings);
   let jpeg46MP: A6SpikeResult['jpeg46MP'] = null;
   if (!settings.renderOnly) {
     status('Measuring 46 MP browser and native JPEG paths…');
     jpeg46MP = await jpegProbe(root, status);
   }
-  status('Measuring WebKit/WebGL zoom and brush frame splits…');
-  const rendering = await renderingProbe(root);
   return {
     timestamp: new Date().toISOString(), userAgent: navigator.userAgent, settings,
     viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio }, jpeg46MP, rendering,

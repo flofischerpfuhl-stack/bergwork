@@ -4,7 +4,7 @@ const port = Number(process.env.WEBVIEW_PORT ?? 5207);
 
 export default defineConfig({
   testDir: '.',
-  testMatch: /matrix\.spec\.ts/,
+  testMatch: /(matrix|a6b-brush)\.spec\.ts/,
   workers: 1,
   timeout: 900_000,
   reporter: 'line',

@@ -1,11 +1,107 @@
 //! Measurement-only A6 prototypes. This module is unreachable without `--features a6-spike`.
 
 use serde::Serialize;
-use std::{env, fs, path::PathBuf, time::Instant};
+use std::{
+    env, fs,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+    time::Instant,
+};
 use tauri::ipc::{Channel, InvokeBody, Request, Response};
+use tauri::Manager;
 use tauri_plugin_fs::FsExt;
 
 const TILE: usize = 256;
+const BATCH_HEADER: usize = 40;
+static CAPTURE_SEQUENCE: AtomicUsize = AtomicUsize::new(1);
+
+#[derive(Clone, Default)]
+pub(crate) struct FrameClockProbe(Arc<Mutex<FrameClockState>>);
+
+#[derive(Default)]
+struct FrameClockState {
+    active: bool,
+    samples: Vec<FrameClockSample>,
+}
+
+#[derive(Clone)]
+struct FrameClockSample {
+    counter: i64,
+    frame_time_us: i64,
+    presentation_time_us: Option<u64>,
+    refresh_interval_us: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PresentedFrames {
+    samples: usize,
+    presentation_timestamps: usize,
+    interval_ms: Distribution,
+    dropped_frames: u64,
+    refresh_interval_ms: f64,
+    source: &'static str,
+}
+
+#[tauri::command]
+pub(crate) fn a6_frame_clock_reset(probe: tauri::State<'_, FrameClockProbe>) {
+    if let Ok(mut state) = probe.0.lock() {
+        state.samples.clear();
+        state.active = true;
+    }
+}
+
+#[tauri::command]
+pub(crate) fn a6_frame_clock_take(probe: tauri::State<'_, FrameClockProbe>) -> PresentedFrames {
+    let samples = if let Ok(mut state) = probe.0.lock() {
+        state.active = false;
+        std::mem::take(&mut state.samples)
+    } else {
+        Vec::new()
+    };
+    summarize_presented_frames(&samples)
+}
+
+fn summarize_presented_frames(samples: &[FrameClockSample]) -> PresentedFrames {
+    let presentation_timestamps = samples
+        .iter()
+        .filter(|sample| sample.presentation_time_us.is_some())
+        .count();
+    let source = if presentation_timestamps > 0 {
+        "GdkFrameClock.after-paint/frame_time (presentation timestamps diagnostic only)"
+    } else {
+        "GdkFrameClock.after-paint/frame_time"
+    };
+    let timestamp = |sample: &FrameClockSample| -> u64 { sample.frame_time_us.max(0) as u64 };
+    let mut intervals = Vec::with_capacity(samples.len().saturating_sub(1));
+    let mut dropped_by_time = 0_u64;
+    let mut dropped_by_counter = 0_u64;
+    let refresh_us = samples
+        .iter()
+        .filter_map(|sample| sample.refresh_interval_us)
+        .next()
+        .unwrap_or(16_667);
+    for pair in samples.windows(2) {
+        let delta = timestamp(&pair[1]).saturating_sub(timestamp(&pair[0]));
+        if delta > 0 {
+            intervals.push(delta as f64 / 1_000.0);
+            dropped_by_time +=
+                (delta.saturating_add(refresh_us / 2) / refresh_us).saturating_sub(1);
+        }
+        dropped_by_counter += pair[1].counter.saturating_sub(pair[0].counter + 1).max(0) as u64;
+    }
+    PresentedFrames {
+        samples: samples.len(),
+        presentation_timestamps,
+        interval_ms: distribution(intervals),
+        dropped_frames: dropped_by_time.max(dropped_by_counter),
+        refresh_interval_ms: refresh_us as f64 / 1_000.0,
+        source,
+    }
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +112,7 @@ pub(crate) struct RuntimeSettings {
     force_dmabuf_shm: bool,
     show_damage: bool,
     render_only: bool,
+    run_label: String,
 }
 
 #[tauri::command]
@@ -28,6 +125,7 @@ pub(crate) fn a6_runtime_settings() -> RuntimeSettings {
         force_dmabuf_shm: env::var_os("WEBKIT_DMABUF_RENDERER_FORCE_SHM").is_some(),
         show_damage: env::var_os("WEBKIT_SHOW_DAMAGE").is_some(),
         render_only: env::var_os("FERNWORK_A6_RENDER_ONLY").is_some(),
+        run_label: env::var("FERNWORK_A6_RUN_LABEL").unwrap_or_else(|_| "manual".to_string()),
     }
 }
 
@@ -55,6 +153,31 @@ pub(crate) fn a6_store_jpeg(request: Request<'_>, app: tauri::AppHandle) -> Resu
     Ok(path.to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+pub(crate) fn a6_store_capture(request: Request<'_>) -> Result<String, String> {
+    let InvokeBody::Raw(bytes) = request.body() else {
+        return Err("a6_store_capture requires a raw byte body".to_string());
+    };
+    if !bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) {
+        return Err("a6_store_capture requires PNG bytes".to_string());
+    }
+    let label = env::var("FERNWORK_A6_RUN_LABEL").unwrap_or_else(|_| "manual".to_string());
+    if !label
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err("FERNWORK_A6_RUN_LABEL contains unsafe filename characters".to_string());
+    }
+    let directory = env::var_os("FERNWORK_A6_RESULT")
+        .map(PathBuf::from)
+        .and_then(|path| path.parent().map(PathBuf::from))
+        .unwrap_or_else(env::temp_dir);
+    let sequence = CAPTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let path = directory.join(format!("canvas-{label}-{sequence}.png"));
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NativeDecodeReport {
@@ -79,6 +202,60 @@ pub(crate) async fn a6_decode_jpeg(
     tauri::async_runtime::spawn_blocking(move || decode_and_stream_tiles(path, on_tile))
         .await
         .map_err(|error| error.to_string())?
+}
+
+/// One raw IPC response: a 40-byte little-endian header followed by row-major RGBA8.
+#[tauri::command]
+pub(crate) async fn a6_decode_jpeg_batch(path: String) -> Result<Response, String> {
+    tauri::async_runtime::spawn_blocking(move || decode_jpeg_batch(path))
+        .await
+        .map_err(|error| error.to_string())?
+        .map(Response::new)
+}
+
+fn decode_jpeg_batch(path: String) -> Result<Vec<u8>, String> {
+    use zune_jpeg::{
+        zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions},
+        JpegDecoder,
+    };
+
+    let stage = Instant::now();
+    let encoded = fs::read(path).map_err(|error| error.to_string())?;
+    let file_us = stage.elapsed().as_micros() as u64;
+    let stage = Instant::now();
+    let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
+    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(encoded.as_slice()), options);
+    let rgb = decoder.decode().map_err(|error| error.to_string())?;
+    let (width, height) = decoder
+        .dimensions()
+        .ok_or_else(|| "zune-jpeg returned no dimensions".to_string())?;
+    let decode_us = stage.elapsed().as_micros() as u64;
+    if rgb.len() != width * height * 3 {
+        return Err(format!("unexpected decoded byte count: {}", rgb.len()));
+    }
+    let stage = Instant::now();
+    let rgba_len = width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| "decoded JPEG is too large".to_string())?;
+    let mut response = vec![0_u8; BATCH_HEADER + rgba_len];
+    for pixel in 0..width * height {
+        let source = pixel * 3;
+        let target = BATCH_HEADER + pixel * 4;
+        response[target] = rgb[source];
+        response[target + 1] = rgb[source + 1];
+        response[target + 2] = rgb[source + 2];
+        response[target + 3] = 255;
+    }
+    let rgba_us = stage.elapsed().as_micros() as u64;
+    response[0..4].copy_from_slice(b"FWJ1");
+    response[4..8].copy_from_slice(&(width as u32).to_le_bytes());
+    response[8..12].copy_from_slice(&(height as u32).to_le_bytes());
+    response[12..16].copy_from_slice(&(encoded.len() as u32).to_le_bytes());
+    response[16..24].copy_from_slice(&file_us.to_le_bytes());
+    response[24..32].copy_from_slice(&decode_us.to_le_bytes());
+    response[32..40].copy_from_slice(&rgba_us.to_le_bytes());
+    Ok(response)
 }
 
 fn decode_and_stream_tiles(
@@ -156,8 +333,48 @@ fn decode_and_stream_tiles(
         binary_channel_ms: binary_channel_ms.max(0.0),
         native_total_ms: ms(total_start.elapsed()),
     };
-    let _ = fs::remove_file(path);
     Ok(report)
+}
+
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub(crate) fn a6_capture_window(name: String, app: tauri::AppHandle) -> Result<String, String> {
+    use gtk::prelude::*;
+
+    if !name
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err("capture name must contain only letters, numbers, '-' or '_'".to_string());
+    }
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window is unavailable".to_string())?;
+    let gtk_window = window.gtk_window().map_err(|error| error.to_string())?;
+    let gdk_window = gtk_window
+        .window()
+        .ok_or_else(|| "GTK window is not realised".to_string())?;
+    let width = gtk_window.allocated_width();
+    let height = gtk_window.allocated_height();
+    let pixbuf = gdk_window
+        .pixbuf(0, 0, width, height)
+        .ok_or_else(|| "GDK window capture failed".to_string())?;
+    let bytes = pixbuf
+        .save_to_bufferv("png", &[])
+        .map_err(|error| error.to_string())?;
+    let directory = env::var_os("FERNWORK_A6_RESULT")
+        .map(PathBuf::from)
+        .and_then(|path| path.parent().map(PathBuf::from))
+        .unwrap_or_else(env::temp_dir);
+    let path = directory.join(format!("{name}.png"));
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+pub(crate) fn a6_capture_window(_name: String, _app: tauri::AppHandle) -> Result<String, String> {
+    Err("native capture is implemented only for the Linux A6 harness".to_string())
 }
 
 fn ms(duration: std::time::Duration) -> f64 {
@@ -166,6 +383,7 @@ fn ms(duration: std::time::Duration) -> f64 {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn configure_webkit(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    use gtk::prelude::*;
     use webkit2gtk::{HardwareAccelerationPolicy, SettingsExt, WebViewExt};
 
     let policy = match env::var("FERNWORK_A6_HARDWARE_POLICY").as_deref() {
@@ -174,11 +392,40 @@ pub(crate) fn configure_webkit(window: &tauri::WebviewWindow) -> tauri::Result<(
         _ => HardwareAccelerationPolicy::OnDemand,
     };
     let accelerated_2d = env::var("FERNWORK_A6_ACCELERATED_2D").as_deref() != Ok("0");
+    let probe = window.state::<FrameClockProbe>().inner().clone();
     window.with_webview(move |webview| {
-        if let Some(settings) = webview.inner().settings() {
+        if let Some(settings) = WebViewExt::settings(&webview.inner()) {
             settings.set_hardware_acceleration_policy(policy);
             #[allow(deprecated)]
             settings.set_enable_accelerated_2d_canvas(accelerated_2d);
+        }
+        if let Some(clock) = webview.inner().frame_clock() {
+            clock.connect_after_paint(move |clock| {
+                let Ok(mut state) = probe.0.lock() else {
+                    return;
+                };
+                if !state.active {
+                    return;
+                }
+                let current_counter = clock.frame_counter();
+                let timings = clock.current_timings();
+                let previous = clock.timings(current_counter - 1);
+                let measured = timings
+                    .as_ref()
+                    .filter(|value| value.presentation_time().is_some())
+                    .or(previous.as_ref())
+                    .or(timings.as_ref());
+                state.samples.push(FrameClockSample {
+                    counter: current_counter,
+                    frame_time_us: clock.frame_time(),
+                    presentation_time_us: measured
+                        .and_then(|value| value.presentation_time())
+                        .map(u64::from),
+                    refresh_interval_us: measured
+                        .and_then(|value| value.refresh_interval())
+                        .map(u64::from),
+                });
+            });
         }
     })
 }
