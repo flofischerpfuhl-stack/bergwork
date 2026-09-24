@@ -53,8 +53,17 @@ export const ALL_ADJUSTMENT_KINDS: readonly LayerAdjustmentKind[] = [
 
 export const MAX_SIDE = 30_000;
 export const MAX_PIXELS = 100_000_000;
+export const PRO_MAX_SIDE = 60_000;
+export const PRO_MAX_PIXELS = 300_000_000;
 export const MAX_LAYERS = 10_000;
 export const MAX_DEPTH = 64;
+
+export interface DocumentLimits { readonly maxSide: number; readonly maxPixels: number }
+export const LITE_DOCUMENT_LIMITS: DocumentLimits = { maxSide: MAX_SIDE, maxPixels: MAX_PIXELS };
+export const PRO_DOCUMENT_LIMITS: DocumentLimits = { maxSide: PRO_MAX_SIDE, maxPixels: PRO_MAX_PIXELS };
+export function documentLimits(profile: 'lite' | 'pro'): DocumentLimits {
+  return profile === 'pro' ? PRO_DOCUMENT_LIMITS : LITE_DOCUMENT_LIMITS;
+}
 
 export function validDimension(value: string | number): number | null {
   const n = typeof value === 'number' ? value : Number(value.trim());

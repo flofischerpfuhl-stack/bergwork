@@ -1,7 +1,6 @@
 import type { Layer } from '../document';
 import { Raster, TILE } from '../raster';
 import type { LayerTransfer, RasterTransfer } from '../transfer';
-import type { PixelArray } from '../pixel/format';
 import { apply, invert, type Affine, type Rect } from '../geometry';
 import type { BeginStrokeOptions, BrushSegment, StrokeResult } from './stroke';
 import type { BrushWorkerRequest, BrushWorkerResponse } from './workerProtocol';
@@ -194,12 +193,12 @@ export class BrushRasterWorker {
   private receive(message: BrushWorkerResponse, worker: Worker): void {
     if (message.type === 'error') { this.fail(new Error(message.message)); return; }
     const base = !message.reset && this.latest?.width === message.width && this.latest.height === message.height
-      && this.latest.channels === message.channels ? this.latest.tiles.slice()
-      : new Array(Math.ceil(message.width / 256) * Math.ceil(message.height / 256)).fill(null) as (PixelArray | null)[];
-    for (const tile of message.tiles) {
-      base[tile.index] = tile.data ? (message.format === 'rgba16' ? new Uint16Array(tile.data) : new Uint8Array(tile.data)) : null;
-    }
-    this.latest = new Raster(message.width, message.height, message.channels, base, { format: message.format });
+      && this.latest.channels === message.channels && this.latest.format === message.format
+      ? this.latest : Raster.blank(message.width, message.height, message.channels, { format: message.format });
+    this.latest = base.withTileUpdates(message.tiles.map((tile) => ({
+      index: tile.index,
+      tile: tile.data ? (message.format === 'rgba16' ? new Uint16Array(tile.data) : new Uint8Array(tile.data)) : null,
+    })));
     if (message.type !== 'finished') return;
     this.finalMetadata = { transform: message.transform, bounds: message.bounds, sourceRect: message.sourceRect };
     this.timings.push(message.timing);

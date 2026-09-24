@@ -140,12 +140,10 @@ export function beginBrushStroke(session: EditorSession, point: Point, options: 
       ? { offset, sample: options.allLayersSample }
       : cloneSample(document!, layer!, offset, value.clone.settings.sampleAllLayers);
   }
-  const used = document!.layers.reduce((total, item) => item.id === layer!.id ? total
-    : total + (mask ? item.mask?.raster.width ?? 0 : item.raster?.width ?? 0)
-      * (mask ? item.mask?.raster.height ?? 0 : item.raster?.height ?? 0), 0);
   const strokeOptions = { layer: layer!, canvas: { width: document!.width, height: document!.height }, settings,
     target: mask ? 'mask' as const : 'pixels' as const, selection: document!.selection, clone,
-    pixelLimit: Math.max(0, 100_000_000 - used) };
+    // Repainting replaces this raster; other layers do not consume its per-raster allocation ceiling.
+    pixelLimit: session.limits.maxPixels };
   // MetalBrushCoverage.swift keeps ordinary Brush/Eraser geometry on the GPU during the gesture.
   // Clone and selection-limited strokes need source/selection sampling and retain the CPU preview.
   const recorded = session.tool === 'brush' && !document!.selection && !clone ? new RecordedBrushStroke(strokeOptions) : null;

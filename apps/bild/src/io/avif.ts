@@ -1,6 +1,9 @@
-import { MAX_SIDE } from '../core/document';
+import { MAX_PIXELS, MAX_SIDE } from '../core/document';
 import { orientRgba } from './heic';
 import { IccError, loadLittleCms } from '../wasm/lcms';
+
+export interface AvifLimits { readonly maxSide: number; readonly maxPixels: number }
+const DEFAULT_LIMITS: AvifLimits = { maxSide: MAX_SIDE, maxPixels: MAX_PIXELS };
 
 const AVIF_BRANDS = new Set(['avif', 'avis']);
 
@@ -30,14 +33,14 @@ export function isAvif(bytes: Uint8Array): boolean {
 }
 
 /** Reads the primary AVIF item's ispe/irot association before loading a decoder. */
-export function avifDimensions(bytes: Uint8Array): { width: number; height: number } {
+export function avifDimensions(bytes: Uint8Array, limits: AvifLimits = DEFAULT_LIMITS): { width: number; height: number } {
   if (!isAvif(bytes)) throw new AvifError('not-avif');
   const properties = primaryProperties(bytes);
   const size = properties?.find((property) => property.type === 'ispe');
   if (!size?.width || !size.height) throw new AvifError('unreadable');
   const rotated = properties!.some((property) => property.type === 'irot' && (property.value! & 1) !== 0);
   const width = rotated ? size.height : size.width, height = rotated ? size.width : size.height;
-  validateDimensions(width, height);
+  validateDimensions(width, height, limits);
   return { width, height };
 }
 
@@ -143,9 +146,9 @@ function boxes(bytes: Uint8Array, start: number, end: number): Box[] {
   }
   return result;
 }
-function validateDimensions(width: number, height: number): void {
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > MAX_SIDE || height > MAX_SIDE
-    || width * height > 100_000_000) throw new AvifError('dimensions');
+function validateDimensions(width: number, height: number, limits: AvifLimits = DEFAULT_LIMITS): void {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > limits.maxSide || height > limits.maxSide
+    || width * height > limits.maxPixels) throw new AvifError('dimensions');
 }
 function fraction(value: number, name: string): number {
   if (!Number.isFinite(value) || value < 0 || value > 1) throw new AvifError('option', `AVIF ${name} must be between 0 and 1.`); return value;

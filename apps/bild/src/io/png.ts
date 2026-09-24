@@ -1,9 +1,10 @@
-import { unzlibSync, zlibSync } from 'fflate';
+import { unzlibSync, Zlib, zlibSync } from 'fflate';
 import type { Chromaticities, IccColorModel } from '../wasm/lcms';
+import { TILE, type Raster } from '../core/raster';
+import type { RasterResidency } from '../core/storage';
 
 const SIGNATURE = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-const MAX_SIDE = 30_000;
-const MAX_PIXELS = 100_000_000;
+const DEFAULT_LIMITS: PngLimits = { maxSide: 30_000, maxPixels: 100_000_000 };
 
 export class PngError extends Error {
   readonly code: string;
@@ -76,15 +77,19 @@ export interface PngEncodeOptions {
   level?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
   /** Emits PNG16 and requires a Uint16Array. Defaults to the legacy PNG8 path. */
   bitDepth?: 8 | 16;
+  /** The editor profile owns the limit; direct codec callers retain Lite defaults. */
+  limits?: PngLimits;
 }
+
+export interface PngLimits { readonly maxSide: number; readonly maxPixels: number }
 
 /**
  * Lossless PNG decoder used instead of canvas/ImageBitmap, which may premultiply
  * semi-transparent pixels. Mask PNGs stay scalar, matching LayerMask.isValid
  * (Compositor/Document/LayerMask.swift).
  */
-export function decodePng(bytes: Uint8Array): PngResult {
-  const parsed = parsePng(bytes, true);
+export function decodePng(bytes: Uint8Array, limits: PngLimits = DEFAULT_LIMITS): PngResult {
+  const parsed = parsePng(bytes, true, limits);
   const h = parsed.header;
   const samples = samplesPerPixel(h.colorType);
   const expected = inflatedSize(h.width, h.height, h.bitDepth, samples, h.interlace);
@@ -130,8 +135,8 @@ export function decodePng(bytes: Uint8Array): PngResult {
   };
 }
 
-export function decodePngRGBA(bytes: Uint8Array): Omit<PngResult, 'channels'> & { channels: 4 } {
-  const result = decodePng(bytes);
+export function decodePngRGBA(bytes: Uint8Array, limits: PngLimits = DEFAULT_LIMITS): Omit<PngResult, 'channels'> & { channels: 4 } {
+  const result = decodePng(bytes, limits);
   if (result.channels === 4) return result as Omit<PngResult, 'channels'> & { channels: 4 };
   const rgba = new Uint8Array(result.width * result.height * 4);
   for (let src = 0, dst = 0; src < result.data.length; src++, dst += 4) {
@@ -144,20 +149,20 @@ export function decodePngRGBA(bytes: Uint8Array): Omit<PngResult, 'channels'> & 
   return { ...result, channels: 4, data: rgba };
 }
 
-export function pngDimensions(bytes: Uint8Array): { width: number; height: number } {
+export function pngDimensions(bytes: Uint8Array, limits: PngLimits = DEFAULT_LIMITS): { width: number; height: number } {
   checkSignature(bytes);
   if (bytes.length < 33 || readU32(bytes, 8) !== 13 || chunkType(bytes, 12) !== 'IHDR') {
     throw new PngError('header', 'PNG does not begin with a valid IHDR chunk');
   }
   checkChunkCrc(bytes, 12, 13);
   const width = readU32(bytes, 16), height = readU32(bytes, 20);
-  validateDimensions(width, height);
+  validateDimensions(width, height, limits);
   return { width, height };
 }
 
 /** Extracts ICC/cHRM/gAMA metadata and unquantized color samples for ImageImporter.swift's sRGB conversion. */
-export function decodePngColorSamples(bytes: Uint8Array): PngColorSamples {
-  const parsed = parsePng(bytes, true), h = parsed.header;
+export function decodePngColorSamples(bytes: Uint8Array, limits: PngLimits = DEFAULT_LIMITS): PngColorSamples {
+  const parsed = parsePng(bytes, true, limits), h = parsed.header;
   const samples = samplesPerPixel(h.colorType), expected = inflatedSize(h.width, h.height, h.bitDepth, samples, h.interlace);
   let inflated: Uint8Array;
   try { inflated = unzlibSync(concat(parsed.idat)); }
@@ -189,8 +194,8 @@ export function decodePngColorSamples(bytes: Uint8Array): PngColorSamples {
 }
 
 /** Decodes color channels without the legacy RGBA8 quantization step. */
-export function decodePngNativeRGBA(bytes: Uint8Array): PngNativeRgba {
-  const samples = decodePngColorSamples(bytes), count = samples.width * samples.height;
+export function decodePngNativeRGBA(bytes: Uint8Array, limits: PngLimits = DEFAULT_LIMITS): PngNativeRgba {
+  const samples = decodePngColorSamples(bytes, limits), count = samples.width * samples.height;
   const data = samples.bits === 16 ? new Uint16Array(count * 4) : new Uint8Array(count * 4);
   const maximum = samples.bits === 16 ? 65535 : 255;
   for (let pixel = 0; pixel < count; pixel++) {
@@ -221,7 +226,7 @@ export function encodePng(
   channels: 1 | 4,
   options: PngEncodeOptions = {},
 ): Uint8Array {
-  validateDimensions(width, height);
+  validateDimensions(width, height, options.limits);
   if (channels !== 1 && channels !== 4) throw new PngError('pixels', 'PNG channels must be 1 or 4');
   const bitDepth = options.bitDepth ?? 8;
   const expected = width * height * channels;
@@ -276,7 +281,99 @@ export function encodePng(
   return concat(chunks);
 }
 
-function parsePng(bytes: Uint8Array, requireData: boolean): ParsedPng {
+export interface PngRasterStreamOptions extends PngEncodeOptions {
+  readonly residency?: RasterResidency;
+  readonly bandRows?: number;
+  readonly filter?: 'adaptive' | 'none';
+  readonly drain?: () => Promise<void>;
+}
+
+export interface PngBandStreamOptions extends PngEncodeOptions {
+  readonly bandRows?: number;
+  /** Stored rows avoid five full byte scans per row and are preferable for photo-like large data. */
+  readonly filter?: 'adaptive' | 'none';
+  /** Optional output backpressure hook, awaited after each row band. */
+  readonly drain?: () => Promise<void>;
+}
+
+/** Streams PNG rows supplied by a compositor/exporter without constructing a full image buffer. */
+export async function encodePngBandStream(width: number, height: number, channels: 1 | 4,
+  readBand: (top: number, height: number) => Promise<Uint8Array | Uint16Array>,
+  emit: (chunk: Uint8Array) => void, options: PngBandStreamOptions = {}): Promise<void> {
+  validateDimensions(width, height, options.limits);
+  const bitDepth = options.bitDepth ?? 8, level = options.level ?? 6, rows = options.bandRows ?? TILE;
+  if (bitDepth !== 8 && bitDepth !== 16) throw new PngError('option', 'PNG bit depth must be 8 or 16');
+  if (!Number.isInteger(level) || level < 0 || level > 9) throw new PngError('option', 'PNG compression level must be 0…9');
+  if (!Number.isInteger(rows) || rows < 1) throw new PngError('option', 'PNG band height must be positive');
+  const ihdr = new Uint8Array(13);
+  writeU32(ihdr, 0, width); writeU32(ihdr, 4, height);
+  ihdr[8] = bitDepth; ihdr[9] = channels === 1 ? 0 : 6;
+  emit(SIGNATURE); emit(makeChunk('IHDR', ihdr));
+  if (channels === 4) emit(makeChunk('sRGB', new Uint8Array([0])));
+  if (options.dpi !== undefined) {
+    if (!Number.isFinite(options.dpi) || options.dpi <= 0) throw new PngError('option', 'PNG DPI must be a positive finite number');
+    const ppm = Math.round(options.dpi / 0.0254);
+    if (ppm < 1 || ppm > 0xffff_ffff) throw new PngError('option', 'PNG DPI is outside the pHYs range');
+    const phys = new Uint8Array(9); writeU32(phys, 0, ppm); writeU32(phys, 4, ppm); phys[8] = 1;
+    emit(makeChunk('pHYs', phys));
+  }
+  const deflater = new Zlib({ level }, (chunk) => { if (chunk.byteLength) emit(makeChunk('IDAT', chunk)); });
+  const bytesPerSample = bitDepth / 8, stride = width * channels * bytesPerSample;
+  let previous = new Uint8Array(stride), hasPrevious = false;
+  for (let top = 0; top < height; top += rows) {
+    const bandHeight = Math.min(rows, height - top), native = await readBand(top, bandHeight);
+    const expected = width * bandHeight * channels;
+    if (native.length !== expected || (bitDepth === 16) !== (native instanceof Uint16Array)) {
+      throw new PngError('pixels', 'PNG band pixel data has the wrong length or depth');
+    }
+    let raw: Uint8Array;
+    if (native instanceof Uint16Array) {
+      raw = new Uint8Array(native.length * 2);
+      for (let i = 0; i < native.length; i++) { const value = native[i]!; raw[i * 2] = value >>> 8; raw[i * 2 + 1] = value; }
+    } else raw = native;
+    const filtered = new Uint8Array((stride + 1) * bandHeight);
+    if (options.filter === 'none') {
+      for (let row = 0; row < bandHeight; row++) {
+        const target = row * (stride + 1); filtered[target] = 0;
+        filtered.set(raw.subarray(row * stride, (row + 1) * stride), target + 1);
+      }
+    } else {
+      const source = new Uint8Array(stride + raw.byteLength);
+      source.set(previous); source.set(raw, stride);
+      for (let row = 0; row < bandHeight; row++) {
+        const at = stride + row * stride, before = row ? at - stride : 0, target = row * (stride + 1);
+        const filter = chooseFilter(source, at, before, stride, channels * bytesPerSample, hasPrevious || row > 0);
+        filtered[target] = filter;
+        writeFiltered(source, at, before, stride, channels * bytesPerSample, hasPrevious || row > 0,
+          filter, filtered, target + 1);
+      }
+    }
+    previous = raw.slice(raw.byteLength - stride);
+    hasPrevious = true;
+    deflater.push(filtered, top + bandHeight === height);
+    await options.drain?.();
+  }
+  emit(makeChunk('IEND', new Uint8Array(0)));
+}
+
+/**
+ * Emits a deterministic PNG while retaining only one tile-row band. A4's archive path uses this
+ * instead of `Raster.toPixels()`, hydrating and releasing each local band independently.
+ */
+export async function encodePngRasterStream(raster: Raster, emit: (chunk: Uint8Array) => void,
+  options: PngRasterStreamOptions = {}): Promise<void> {
+  const bitDepth = options.bitDepth ?? (raster.format === 'rgba16' ? 16 : 8);
+  if (bitDepth === 16 && raster.format !== 'rgba16') throw new PngError('pixels', 'PNG16 requires an rgba16 raster');
+  if (bitDepth === 8 && raster.format === 'rgba16') throw new PngError('pixels', 'An rgba16 raster requires PNG16');
+  await encodePngBandStream(raster.width, raster.height, raster.channels, async (top, height) => {
+    const lease = options.residency
+      ? await options.residency.ensureResident([raster], { x: 0, y: top, width: raster.width, height }) : null;
+    try { return raster.readRegionNative(0, top, raster.width, height); }
+    finally { lease?.release(); }
+  }, emit, { ...options, bitDepth });
+}
+
+function parsePng(bytes: Uint8Array, requireData: boolean, limits: PngLimits): ParsedPng {
   checkSignature(bytes);
   let offset = 8;
   let header: Header | null = null;
@@ -304,7 +401,7 @@ function parsePng(bytes: Uint8Array, requireData: boolean): ParsedPng {
       case 'IHDR': {
         if (header !== null || length !== 13) throw new PngError('header', 'Invalid PNG IHDR');
         const width = readU32(bytes, start), height = readU32(bytes, start + 4);
-        validateDimensions(width, height);
+        validateDimensions(width, height, limits);
         const bitDepth = bytes[start + 8]!, colorType = bytes[start + 9]!;
         if (!validDepth(colorType, bitDepth)) throw new PngError('format', `Unsupported PNG color type ${colorType} / depth ${bitDepth}`);
         if (bytes[start + 10] !== 0 || bytes[start + 11] !== 0 || (bytes[start + 12] !== 0 && bytes[start + 12] !== 1)) {
@@ -635,9 +732,9 @@ function validDepth(colorType: number, depth: number): boolean {
     || ((colorType === 4 || colorType === 6) && (depth === 8 || depth === 16));
 }
 
-function validateDimensions(width: number, height: number): void {
+function validateDimensions(width: number, height: number, limits: PngLimits = DEFAULT_LIMITS): void {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1
-    || width > MAX_SIDE || height > MAX_SIDE || width * height > MAX_PIXELS) {
+    || width > limits.maxSide || height > limits.maxSide || width * height > limits.maxPixels) {
     // Same canvas guard as ImageExporter.render (Compositor/IO/ImageExporter.swift).
     throw new PngError('dimensions', 'PNG dimensions must be 1…30000 per side and at most 100 megapixels');
   }

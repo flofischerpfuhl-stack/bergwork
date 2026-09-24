@@ -73,6 +73,7 @@ export async function browserDecode(bytes: Uint8Array, mime: string): Promise<{ 
 export interface ImageDecodeOptions extends HeicDecodeOptions {
   /** Replacement/disable hook for the measured native WebP/AVIF/GIF path. */
   readonly nativeDecoder?: ((bytes: Uint8Array, mime: string) => Promise<{ width: number; height: number; data: Uint8Array } | null>) | null;
+  readonly maxSide?: number;
 }
 
 export interface DecodedImageAsset {
@@ -88,10 +89,11 @@ const SRGB_CHROMATICITIES: Chromaticities = {
   white: [0.3127, 0.3290], red: [0.64, 0.33], green: [0.30, 0.60], blue: [0.15, 0.06],
 };
 
-async function decodeManagedPng(bytes: Uint8Array): Promise<{
+async function decodeManagedPng(bytes: Uint8Array,
+  limits: { readonly maxSide: number; readonly maxPixels: number }): Promise<{
   width: number; height: number; data: Uint8Array | Uint16Array; bitDepth?: 8 | 16;
 }> {
-  const png = decodePngColorSamples(bytes), lcms = await loadLittleCms();
+  const png = decodePngColorSamples(bytes, limits), lcms = await loadLittleCms();
   let profile = png.iccProfile;
   if (!profile) {
     const gamma = png.gamma === null ? 2.2 : 1 / png.gamma;
@@ -141,45 +143,47 @@ export async function decodeImageAsset(bytes: Uint8Array, remainingPixels: numbe
   options: ImageDecodeOptions = {}): Promise<DecodedImageAsset> {
   const kind = sniffImage(bytes);
   if (!kind) throw new ImageImportError('unsupported');
+  const maxSide = options.maxSide ?? MAX_SIDE;
+  const limits = { maxSide, maxPixels: remainingPixels };
   let width = 0, height = 0;
   let jpegInfo: JpegInfo | null = null;
   try {
-    if (kind === 'image/png') ({ width, height } = pngDimensions(bytes));
+    if (kind === 'image/png') ({ width, height } = pngDimensions(bytes, limits));
     else if (kind === 'image/jpeg') {
       jpegInfo = readJpegInfo(bytes);
       ({ width, height } = orientedSize(jpegInfo));
     }
-    else if (kind === 'image/tiff') ({ width, height } = tiffDimensions(bytes));
+    else if (kind === 'image/tiff') ({ width, height } = tiffDimensions(bytes, limits));
     else if (kind === 'image/heic') ({ width, height } = heicDimensions(bytes));
-    else if (kind === 'image/webp') ({ width, height } = (await import('./webp')).webpDimensions(bytes));
-    else if (kind === 'image/avif') ({ width, height } = (await import('./avif')).avifDimensions(bytes));
-    else ({ width, height } = (await import('./gif')).gifDimensions(bytes));
+    else if (kind === 'image/webp') ({ width, height } = (await import('./webp')).webpDimensions(bytes, limits));
+    else if (kind === 'image/avif') ({ width, height } = (await import('./avif')).avifDimensions(bytes, limits));
+    else ({ width, height } = (await import('./gif')).gifDimensions(bytes, limits));
   } catch (error) {
     if ((error instanceof TiffError && error.code === 'dimensions') || errorCode(error) === 'dimensions') throw new ImageImportError('too-large');
     throw new ImageImportError('unreadable');
   }
-  if (width && height && (width > MAX_SIDE || height > MAX_SIDE || width * height > remainingPixels)) throw new ImageImportError('too-large');
+  if (width && height && (width > maxSide || height > maxSide || width * height > remainingPixels)) throw new ImageImportError('too-large');
   let pixels: { width: number; height: number; data: Uint8Array | Uint16Array; bitDepth?: 8 | 16 };
   if (kind === 'image/png') {
     let png: ReturnType<typeof decodePng>;
-    try { png = decodePng(bytes); } catch { throw new ImageImportError('unreadable'); }
+    try { png = decodePng(bytes, limits); } catch { throw new ImageImportError('unreadable'); }
     const managed = managedPngColor(png.colorInfo);
     // ImageImporter.swift renders into an sRGB CIContext. Do the equivalent explicitly so
     // workers and browsers agree, and so 16-bit sources reach ColorSync/lcms before RGBA8 quantization.
     if (managed) {
-      try { pixels = await decodeManagedPng(bytes); }
+      try { pixels = await decodeManagedPng(bytes, limits); }
       catch (error) {
         if (!(error instanceof IccError) && !(error instanceof RangeError)) throw error;
-        const native = decodePngNativeRGBA(bytes);
+        const native = decodePngNativeRGBA(bytes, limits);
         pixels = { width: native.width, height: native.height, data: native.data, bitDepth: native.bitDepth };
       }
     }
     else {
-      const native = decodePngNativeRGBA(bytes);
+      const native = decodePngNativeRGBA(bytes, limits);
       pixels = { width: native.width, height: native.height, data: native.data, bitDepth: native.bitDepth };
     }
   } else if (kind === 'image/tiff') {
-    try { pixels = await decodeTiffNative(bytes); }
+    try { pixels = await decodeTiffNative(bytes, limits); }
     catch (error) {
       if (error instanceof TiffError && error.code === 'dimensions') throw new ImageImportError('too-large');
       if (error instanceof TiffError && error.code === 'unsupported') throw new ImageImportError('unsupported', error.message);
@@ -201,7 +205,7 @@ export async function decodeImageAsset(bytes: Uint8Array, remainingPixels: numbe
     const webp = await import('./webp');
     // Canvas/ImageBitmap implementations may premultiply before exposing pixels, irreversibly
     // losing RGB under low alpha. libwebp emits straight RGBA and is bit-exact for lossless files.
-    try { pixels = await webp.decodeManagedWebp(bytes); }
+    try { pixels = await webp.decodeManagedWebp(bytes, limits); }
     catch { throw new ImageImportError('unreadable'); }
   } else if (kind === 'image/avif') {
     const avif = await import('./avif');
@@ -214,7 +218,7 @@ export async function decodeImageAsset(bytes: Uint8Array, remainingPixels: numbe
     // GIF/WebP frame and identical sampled straight-alpha sRGB pixels through ImageBitmap.
     pixels = await decodeMeasuredNative(bytes, kind, options.nativeDecoder);
   }
-  if (pixels.width > MAX_SIDE || pixels.height > MAX_SIDE || pixels.width * pixels.height > remainingPixels) throw new ImageImportError('too-large');
+  if (pixels.width > maxSide || pixels.height > maxSide || pixels.width * pixels.height > remainingPixels) throw new ImageImportError('too-large');
   return { width: pixels.width, height: pixels.height, channels: 4, data: pixels.data,
     bitDepth: pixels.bitDepth === 16 ? 16 : 8, mime: kind };
 }

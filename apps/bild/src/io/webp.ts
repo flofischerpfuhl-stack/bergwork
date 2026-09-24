@@ -1,5 +1,8 @@
-import { MAX_SIDE } from '../core/document';
+import { MAX_PIXELS, MAX_SIDE } from '../core/document';
 import { IccError, loadLittleCms } from '../wasm/lcms';
+
+export interface WebpLimits { readonly maxSide: number; readonly maxPixels: number }
+const DEFAULT_LIMITS: WebpLimits = { maxSide: MAX_SIDE, maxPixels: MAX_PIXELS };
 
 export class WebpError extends Error {
   readonly code: 'not-webp' | 'unreadable' | 'dimensions' | 'option';
@@ -23,7 +26,7 @@ export function isWebp(bytes: Uint8Array): boolean {
 }
 
 /** Parses VP8/VP8L/VP8X dimensions so the allocation gate runs before any codec. */
-export function webpDimensions(bytes: Uint8Array): { width: number; height: number } {
+export function webpDimensions(bytes: Uint8Array, limits: WebpLimits = DEFAULT_LIMITS): { width: number; height: number } {
   if (!isWebp(bytes)) throw new WebpError('not-webp');
   let canvas: { width: number; height: number } | null = null, animated = false;
   for (const chunk of chunks(bytes)) {
@@ -31,7 +34,7 @@ export function webpDimensions(bytes: Uint8Array): { width: number; height: numb
     if (chunk.type === 'VP8X') {
       if (chunk.size < 10) throw new WebpError('unreadable');
       width = u24le(bytes, chunk.data + 4) + 1; height = u24le(bytes, chunk.data + 7) + 1;
-      validateDimensions(width, height);
+      validateDimensions(width, height, limits);
       canvas = { width, height }; animated = (bytes[chunk.data]! & 2) !== 0;
       if (!animated) return canvas;
       continue;
@@ -39,7 +42,7 @@ export function webpDimensions(bytes: Uint8Array): { width: number; height: numb
       if (!canvas || chunk.size < 16) throw new WebpError('unreadable');
       const x = u24le(bytes, chunk.data) * 2, y = u24le(bytes, chunk.data + 3) * 2;
       width = u24le(bytes, chunk.data + 6) + 1; height = u24le(bytes, chunk.data + 9) + 1;
-      validateDimensions(width, height);
+      validateDimensions(width, height, limits);
       if (x + width > canvas.width || y + height > canvas.height) throw new WebpError('unreadable');
       return canvas; // only the first frame is imported
     } else if (chunk.type === 'VP8L') {
@@ -52,7 +55,7 @@ export function webpDimensions(bytes: Uint8Array): { width: number; height: numb
       }
       width = u16le(bytes, chunk.data + 6) & 0x3fff; height = u16le(bytes, chunk.data + 8) & 0x3fff;
     } else continue;
-    validateDimensions(width, height);
+    validateDimensions(width, height, limits);
     return { width, height };
   }
   if (animated && canvas) throw new WebpError('unreadable');
@@ -66,8 +69,8 @@ export function webpIccProfile(bytes: Uint8Array): Uint8Array | null {
 }
 
 /** Embedded WebP profiles take the same deterministic Little CMS path as PNG/JPEG. */
-export async function decodeManagedWebp(bytes: Uint8Array): Promise<WebpResult> {
-  const { width, height } = webpDimensions(bytes), profile = webpIccProfile(bytes);
+export async function decodeManagedWebp(bytes: Uint8Array, limits: WebpLimits = DEFAULT_LIMITS): Promise<WebpResult> {
+  const { width, height } = webpDimensions(bytes, limits), profile = webpIccProfile(bytes);
   const { decodeWebpWasm } = await import('../wasm/webp');
   const rgba = await decodeWebpWasm(bytes, width, height);
   if (!profile) return { width, height, data: rgba };
@@ -136,9 +139,9 @@ function validatePixels(data: Uint8Array, width: number, height: number): void {
   validateDimensions(width, height);
   if (data.byteLength !== width * height * 4) throw new WebpError('option', 'WebP pixels must be straight-alpha RGBA8.');
 }
-function validateDimensions(width: number, height: number): void {
+function validateDimensions(width: number, height: number, limits: WebpLimits = DEFAULT_LIMITS): void {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1
-    || width > MAX_SIDE || height > MAX_SIDE || width * height > 100_000_000) throw new WebpError('dimensions');
+    || width > limits.maxSide || height > limits.maxSide || width * height > limits.maxPixels) throw new WebpError('dimensions');
 }
 function fraction(value: number, name: string): number {
   if (!Number.isFinite(value) || value < 0 || value > 1) throw new WebpError('option', `WebP ${name} must be between 0 and 1.`);

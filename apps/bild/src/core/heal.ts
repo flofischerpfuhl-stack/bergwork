@@ -237,11 +237,9 @@ export function beginSpotHealing(session: EditorSession, point: Point,
     mode: options.mode ?? state.mode,
     ...(options.seed === undefined ? {} : { seed: options.seed }),
   };
-  const used = document!.layers.reduce((total, item) => item.id === layer!.id ? total
-    : total + (item.raster?.width ?? 0) * (item.raster?.height ?? 0), 0);
   try {
     const stroke = createSpotHealingStroke({ layer: layer!, canvas: document!, settings,
-      selection: document!.selection, pixelLimit: Math.max(0, 100_000_000 - used), kernels: options.kernels });
+      selection: document!.selection, pixelLimit: session.limits.maxPixels, kernels: options.kernels });
     const update = stroke.addPoints([point]);
     state.active = { stroke, sourceRaster: layer!.raster!, sourceTransform: layer!.transform,
       layerId: layer!.id, changed: update.dirty.length > 0 };

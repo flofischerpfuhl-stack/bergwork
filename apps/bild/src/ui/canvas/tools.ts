@@ -3,7 +3,7 @@
  * ports of EditorCanvas.swift's mouseDown/mouseDragged/mouseUp branches.
  */
 
-import { dragCorners, dragUpdated, HANDLES, radians, roundedTransform, unitPoint, type Point, type TransformDrag } from '../../core/geometry';
+import { dragCorners, dragUpdated, HANDLES, radians, roundedTransform, unitPoint, type Point, type Rect, type TransformDrag } from '../../core/geometry';
 import { effectiveVisibleIds, renderLayers } from '../../core/document';
 import { containsPoint } from '../../core/geometry';
 import type { EditorSession, Tool } from '../../core/session';
@@ -40,6 +40,8 @@ export interface ToolHandler {
   move(context: ToolContext): void;
   up(context: ToolContext): void;
   cancel(session: EditorSession): void;
+  /** Document-pixel input bounds for one pointer sample, including the tool kernel's read margin. */
+  hydrationBounds?(context: ToolContext): Rect;
   /** Cursor while hovering without a button pressed. */
   hover?(context: ToolContext): string;
   /** Whether the last move changed only the overlay, so the composite need not be redrawn (CropTests.cropDraggingRedrawsOnlyTheOverlay). */
