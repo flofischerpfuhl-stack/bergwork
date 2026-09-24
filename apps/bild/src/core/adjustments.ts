@@ -97,7 +97,8 @@ export function defaultColour(): ColourSettings {
 }
 export function defaultBrightnessContrast(): BrightnessContrastSettings { return { brightness: 0, contrast: 0, legacy: false }; }
 export function defaultPhotoFilter(): PhotoFilterSettings {
-  return { color: { red: 1, green: 0.55, blue: 0.16 }, density: 25, preserveLuminosity: true };
+  // Photoshop's default preset, Warming Filter (85): RGB 236, 138, 0.
+  return { color: { red: 236 / 255, green: 138 / 255, blue: 0 }, density: 25, preserveLuminosity: true };
 }
 export function defaultMixerChannel(red: number, green: number, blue: number): ChannelMixerChannel {
   return { red, green, blue, constant: 0 };

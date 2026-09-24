@@ -17,7 +17,7 @@ import type { Point } from '../core/geometry';
 import {
   beginBrushStroke, cancelBrushStroke, changeBrushHardness, changeBrushSize, cloneSamplePoint, currentCpuBrushPreview,
   extendBrushStroke, finishBrushStroke, getBrushSettings, getCloneSettings, isBrushStrokeActive, setBrushSettings,
-  setCloneSettings, setCloneSource, waitForBrushStroke, brushOutlineRadius, type BrushSettings,
+  setCloneSettings, setCloneSource, waitForBrushStroke, brushOutlineRadius, type BrushSettings, type BrushMode,
 } from '../core/brush';
 import { beginRetouch, cancelRetouch, commitRetouch, currentRetouchPreview, updateRetouch, type RetouchMode } from '../core/retouch';
 import {
@@ -25,6 +25,7 @@ import {
   pendingGradientPreview, refreshGradient, updateGradient, type GradientSettings, type GradientShape, type GradientStyle,
 } from '../core/gradient';
 import type { ToolContext, ToolHandler } from '../ui/canvas/tools';
+import type { BrushRange } from '../core/brush/settings';
 import type { CanvasView } from '../ui/canvas/CanvasView';
 
 // MARK: Per-project tool state
@@ -86,7 +87,8 @@ class BrushTool implements ToolHandler {
     const erasesLocked = session.tool === 'brush' && !session.isMaskSelected && getBrushSettings(session).mode === 'erase'
       && !!session.activeLayerId && session.lockState(session.activeLayerId).transparency;
     const update = beginBrushStroke(session, c.pixel, erasesLocked
-      ? { shift: c.modifiers.shift, mode: 'paint', background: true } : { shift: c.modifiers.shift });
+      ? { shift: c.modifiers.shift, mode: 'paint', background: true }
+      : toningStroke(session) ? { shift: c.modifiers.shift, settings: { ...getBrushSettings(session), opacity: 1 } } : { shift: c.modifiers.shift });
     if (!update) return;
     this.axisAnchor = c.modifiers.shift ? c.pixel : null;
     this.horizontal = null;
@@ -332,15 +334,55 @@ function Swatch({ color, onClick, label }: { color: PaletteColor; onClick: () =>
   );
 }
 
-function PercentField({ label, value, min = 0, onChange }: { label: string; value: number; min?: number; onChange: (v: number) => void }) {
+function PercentField({ label, value, min = 0, onChange, testId }: { label: string; value: number; min?: number; onChange: (v: number) => void; testId?: string }) {
   return (
     <>
       <span className={styles.secondary} style={{ flex: 'none' }}>{label}</span>
       <input className={styles.slider} style={{ width: 100, flex: 'none' }} type="range" min={min} max={1} step={0.01} value={value}
-        aria-label={label} onChange={(e) => onChange(Number(e.target.value))} onKeyDown={(e) => e.stopPropagation()} />
-      <NumberField label="" suffix="%" width={42} value={Math.round(value * 100)} onChange={(v) => onChange(Math.min(1, Math.max(min, v / 100)))} />
+        aria-label={label} data-testid={testId ? `${testId}-slider` : undefined} onChange={(e) => onChange(Number(e.target.value))} onKeyDown={(e) => e.stopPropagation()} />
+      <NumberField label="" suffix="%" width={42} value={Math.round(value * 100)} testId={testId} onChange={(v) => onChange(Math.min(1, Math.max(min, v / 100)))} />
     </>
   );
+}
+
+/** Brush modes (PRODUCT-PLAN 6.3: Dodge/Burn/Sponge are modes of the one Brush tool, not three tools). */
+const BRUSH_MODES: readonly { mode: BrushMode; label: string }[] = [
+  { mode: 'paint', label: 'Paint' }, { mode: 'erase', label: 'Erase' }, { mode: 'dodge', label: 'Dodge' }, { mode: 'burn', label: 'Burn' }, { mode: 'sponge', label: 'Sponge' },
+];
+const BRUSH_TITLES: Record<BrushMode, string> = { paint: 'Brush', erase: 'Eraser', dodge: 'Dodge', burn: 'Burn', sponge: 'Sponge' };
+const toning = (mode: BrushMode) => mode === 'dodge' || mode === 'burn' || mode === 'sponge';
+/** A toning stroke's strength is its Exposure or Flow alone; the paint opacity does not apply to it. */
+const toningStroke = (session: EditorSession) => session.tool === 'brush' && !session.isMaskSelected && toning(getBrushSettings(session).mode);
+
+/** Range and Exposure for Dodge/Burn, Saturate/Desaturate, Flow and Vibrance for Sponge (Photoshop's option bars). */
+function ToningControls({ controller, brush, update }: { controller: EditorController; brush: BrushSettings; update: (patch: Partial<BrushSettings>) => void }) {
+  const t = controller.t;
+  if (brush.mode === 'dodge' || brush.mode === 'burn') return (
+    <>
+      <span className={styles.secondary} style={{ flex: 'none' }}>{t('Range')}</span>
+      <select className={styles.select} value={brush.range ?? 'midtones'} aria-label={t('Range')} data-testid="brush-range"
+        onChange={(e) => update({ range: e.target.value as BrushRange })}>
+        <option value="shadows">{t('Shadows')}</option>
+        <option value="midtones">{t('Midtones')}</option>
+        <option value="highlights">{t('Highlights')}</option>
+      </select>
+      <PercentField label={t('Exposure')} min={0.01} value={brush.exposure ?? 0.5} testId="brush-exposure" onChange={(exposure) => update({ exposure })} />
+    </>
+  );
+  if (brush.mode === 'sponge') return (
+    <>
+      <select className={styles.select} value={brush.spongeMode ?? 'saturate'} aria-label={t('Mode')} data-testid="brush-sponge-mode"
+        onChange={(e) => update({ spongeMode: e.target.value as 'saturate' | 'desaturate' })}>
+        <option value="saturate">{t('Saturate')}</option>
+        <option value="desaturate">{t('Desaturate')}</option>
+      </select>
+      <PercentField label={t('Flow')} min={0.01} value={brush.flow ?? 0.5} testId="brush-flow" onChange={(flow) => update({ flow })} />
+      <label className={styles.check} title={t('Vibrance')}>
+        <input type="checkbox" checked={!!brush.vibrance} data-testid="brush-vibrance" onChange={(e) => update({ vibrance: e.target.checked })} />{t('Vibrance')}
+      </label>
+    </>
+  );
+  return null;
 }
 
 function BrushBar({ controller, session }: { controller: EditorController; session: EditorSession }) {
@@ -356,7 +398,8 @@ function BrushBar({ controller, session }: { controller: EditorController; sessi
   };
   const brush = getBrushSettings(session);
   const clone = getCloneSettings(session);
-  const title = tool === 'spotHealing' ? t('Spot Healing') : tool === 'cloneStamp' ? t('Clone Stamp') : smear ? t('Smear') : brush.mode === 'erase' ? t('Eraser') : t('Brush');
+  const title = tool === 'spotHealing' ? t('Spot Healing') : tool === 'cloneStamp' ? t('Clone Stamp') : smear ? t('Smear') : t(BRUSH_TITLES[brush.mode]);
+  const toningMode = tool === 'brush' && !session.isMaskSelected && toning(brush.mode);
   const seg = <T extends string>(values: readonly T[], value: T, set: (v: T) => void, label: string) => (
     <div className={styles.segmented} role="radiogroup" aria-label={t(label)}>
       {values.map((v) => <button key={v} type="button" role="radio" aria-checked={v === value} className={`${styles.segment} ${v === value ? styles.segmentOn : ''}`} onClick={() => set(v)}>{t(v)}</button>)}
@@ -365,7 +408,8 @@ function BrushBar({ controller, session }: { controller: EditorController; sessi
   return (
     <>
       <span className={styles.headerTitle}>{title}</span>
-      {tool === 'brush' ? seg(['Paint', 'Erase'] as const, brush.mode === 'erase' ? 'Erase' : 'Paint', (v) => update({ mode: v === 'Erase' ? 'erase' : 'paint' }), 'Mode') : null}
+      {tool === 'brush' ? seg(BRUSH_MODES.map((m) => m.label), BRUSH_MODES.find((m) => m.mode === brush.mode)?.label ?? 'Paint',
+        (v) => update({ mode: BRUSH_MODES.find((m) => m.label === v)?.mode ?? 'paint' }), 'Brush mode') : null}
       {smear ? seg(['Liquify', 'Blur', 'Smudge'] as const, (state.smearMode[0]!.toUpperCase() + state.smearMode.slice(1)) as 'Liquify' | 'Blur' | 'Smudge',
         (v) => { state.smearMode = v.toLowerCase() as RetouchMode; session.notify('ui'); }, 'Mode') : null}
       {controller.spotHealingControls && tool === 'spotHealing' ? controller.spotHealingControls(session) : null}
@@ -379,14 +423,16 @@ function BrushBar({ controller, session }: { controller: EditorController; sessi
       ) : null}
       <NumberField label={t('Size')} suffix="px" width={48} value={settings.diameter} onChange={(v) => update({ diameter: Math.min(2000, Math.max(1, Math.round(v))) })} />
       <PercentField label={t('Hardness')} value={settings.hardness} onChange={(v) => update({ hardness: v })} />
-      <PercentField label={smear ? t('Strength') : t('Opacity')} min={0.01} value={settings.opacity} onChange={(v) => update({ opacity: v })} />
+      {/* Toning modes have no opacity (Photoshop): their strength is Exposure or Flow. */}
+      {toningMode ? null : <PercentField label={smear ? t('Strength') : t('Opacity')} min={0.01} value={settings.opacity} onChange={(v) => update({ opacity: v })} />}
+      {toningMode ? <ToningControls controller={controller} brush={brush} update={update} /> : null}
       {session.isMaskSelected ? (
         <select className={styles.select} value={session.maskPaintWhite ? 'white' : 'black'} aria-label="Paint"
           onChange={(e) => { session.maskPaintWhite = e.target.value === 'white'; session.notify('ui'); }}>
           <option value="black">{t('Black · Hide')}</option>
           <option value="white">{t('White · Reveal')}</option>
         </select>
-      ) : tool !== 'cloneStamp' && !smear ? (
+      ) : tool !== 'cloneStamp' && !smear && !toningMode ? (
         <>
           <span className={styles.secondary}>{t('Color')}</span>
           <Swatch color={session.foregroundColor} label={t('Foreground color')} onClick={() => controller.openColorPicker?.(false)} />
@@ -629,7 +675,14 @@ export function installPainting(controller: EditorController): void {
   controller.contextBars.gradient = (session) => <GradientBar controller={controller} session={session} />;
   controller.contextBars.eyedropper = (session) => <EyedropperBar controller={controller} session={session} />;
   const t = controller.t;
-  controller.statusHints.brush = (s) => `${getBrushSettings(s).mode === 'erase' ? t('Drag to erase') : t('Drag to paint')} · ${t('[ ] size · Shift-[ ] hardness · 1–0 opacity · Escape cancel · Space to pan')}`;
+  const brushHints: Record<BrushMode, string> = { paint: 'Drag to paint', erase: 'Drag to erase', dodge: 'Drag to dodge', burn: 'Drag to burn', sponge: 'Drag to change saturation' };
+  controller.statusHints.brush = (s) => {
+    const mode = getBrushSettings(s).mode;
+    const keys = !toningStroke(s) ? '[ ] size · Shift-[ ] hardness · 1–0 opacity · Escape cancel · Space to pan'
+      : mode === 'sponge' ? '[ ] size · Shift-[ ] hardness · 1–0 flow · Escape cancel · Space to pan'
+      : '[ ] size · Shift-[ ] hardness · 1–0 exposure · Escape cancel · Space to pan';
+    return `${t(brushHints[mode])} · ${t(keys)}`;
+  };
   controller.statusHints.blur = (s) => `${paintState(s).smearMode === 'blur' ? t('Drag to soften') : paintState(s).smearMode === 'smudge' ? t('Drag to smudge') : t('Drag to push pixels')} · ${t('[ ] size · Shift-[ ] hardness · 1–0 strength · Space to pan')}`;
   controller.statusHints.cloneStamp = () => t('Option-click to set the source · Drag to clone · [ ] size · Shift-[ ] hardness · 1–0 opacity · Space to pan');
   controller.statusHints.gradient = () => t('Drag to draw · Drag ends to adjust · Shift 45° · 1–0 opacity · Enter apply · Escape cancel');
@@ -649,6 +702,8 @@ export function installPainting(controller: EditorController): void {
     const value = percent / 100;
     if (session.tool === 'gradient') { pending.gradient = { ...pending.gradient, opacity: value }; refreshGradient(session, gradientSettingsFor(session)); syncPreview(session); }
     else if (session.tool === 'blur') { pending.smear = { ...pending.smear, opacity: value }; session.notify('ui'); }
+    // Photoshop: the number keys set a toning tool's Exposure (Dodge/Burn) or Flow (Sponge).
+    else if (toningStroke(session)) setBrushSettings(session, { ...getBrushSettings(session), ...(getBrushSettings(session).mode === 'sponge' ? { flow: value } : { exposure: value }) });
     else setBrushSettings(session, { ...getBrushSettings(session), opacity: value });
     return true;
   };
