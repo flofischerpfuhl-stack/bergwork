@@ -25,22 +25,29 @@ export function levelsTables(settings: LevelsSettings): Float32Array {
   return tables;
 }
 
-function curveSlope(points: readonly CurvePoint[], deltas: readonly number[], index: number): number {
-  if (index === 0) return deltas[0]!;
-  if (index === points.length - 1) return deltas.at(-1)!;
-  if (deltas[index - 1]! * deltas[index]! <= 0) return 0;
-  return 2 / (1 / deltas[index - 1]! + 1 / deltas[index]!);
-}
 export function curveValue(x: number, settings: CurvesSettings, channel: number): number {
   const points = settings.channels[channel]!;
+  if (x <= points[0]!.x) return points[0]!.y;
+  if (x >= points.at(-1)!.x) return points.at(-1)!.y;
   let index = 0;
   for (let j = points.length - 2; j >= 0; j--) if (points[j]!.x <= x) { index = j; break; }
   index = Math.min(points.length - 2, Math.max(0, index));
-  const deltas = new Array<number>(points.length - 1);
-  for (let j = 0; j < deltas.length; j++) deltas[j] = (points[j + 1]!.y - points[j]!.y) / (points[j + 1]!.x - points[j]!.x);
-  const a = points[index]!, b = points[index + 1]!, h = b.x - a.x, t = Math.min(1, Math.max(0, (x - a.x) / h));
-  const y = (2 * t ** 3 - 3 * t ** 2 + 1) * a.y + (t ** 3 - 2 * t ** 2 + t) * h * curveSlope(points, deltas, index)
-    + (-2 * t ** 3 + 3 * t ** 2) * b.y + (t ** 3 - t ** 2) * h * curveSlope(points, deltas, index + 1);
+  // Photoshop's point curve uses a natural cubic spline, including overshoot around extrema;
+  // the previous monotone Hermite curve could not reproduce the PSD Curves oracle.
+  const second = new Float64Array(points.length), work = new Float64Array(points.length - 1);
+  for (let i = 1; i < points.length - 1; i++) {
+    const before = points[i - 1]!, current = points[i]!, after = points[i + 1]!;
+    const span = after.x - before.x, sigma = (current.x - before.x) / span;
+    const pivot = sigma * second[i - 1]! + 2;
+    second[i] = (sigma - 1) / pivot;
+    work[i] = (6 * ((after.y - current.y) / (after.x - current.x)
+      - (current.y - before.y) / (current.x - before.x)) / span - sigma * work[i - 1]!) / pivot;
+  }
+  for (let i = points.length - 2; i >= 0; i--) second[i] = second[i]! * second[i + 1]! + work[i]!;
+  const left = points[index]!, right = points[index + 1]!, h = right.x - left.x;
+  const a = (right.x - x) / h, b = (x - left.x) / h;
+  const y = a * left.y + b * right.y + ((a ** 3 - a) * second[index]!
+    + (b ** 3 - b) * second[index + 1]!) * h * h / 6;
   return Math.min(255, Math.max(0, y));
 }
 export function curvesTables(settings: CurvesSettings): Float32Array {

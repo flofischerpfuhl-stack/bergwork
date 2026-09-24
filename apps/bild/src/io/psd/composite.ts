@@ -57,6 +57,18 @@ function mergedTransparency(section: Uint8Array, isPsb: boolean): boolean {
   return length >= 2 && section.length >= lengthBytes + 2 && view.getInt16(lengthBytes) < 0;
 }
 
+/** Reads only the signed layer-count convention; it never touches merged image pixels. */
+export function psdHasMergedTransparency(bytes: Uint8Array): boolean {
+  const reader = new Reader(bytes);
+  if (ascii(reader.take(4), 0, 4) !== '8BPS') throw new Error('Invalid PSD signature');
+  const version = reader.u16(); if (version !== 1 && version !== 2) throw new Error(`Invalid PSD version ${version}`);
+  reader.skip(20);
+  reader.skip(reader.u32());
+  reader.skip(reader.u32());
+  const layerBytes = version === 2 ? reader.u64() : reader.u32();
+  return mergedTransparency(reader.take(layerBytes), version === 2);
+}
+
 function decodePackBits(source: Uint8Array, output: Uint8Array, target: number, expected: number): void {
   let input = 0, written = 0;
   while (input < source.length && written < expected) {

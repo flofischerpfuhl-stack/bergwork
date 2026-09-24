@@ -354,9 +354,9 @@ export class GpuCompositor {
       group: [GROUP_FRAGMENT, {
         uMode: { value: 0, type: 'i32' }, uDissolveSeed: { value: 0, type: 'i32' },
         uOpacity: { value: 1, type: 'f32' }, uFillOpacity: { value: 1, type: 'f32' },
-        uKnockout: { value: 0, type: 'i32' },
+        uKnockout: { value: 0, type: 'i32' }, uHasClip: { value: 0, type: 'i32' },
         uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
-      }, ['uBackdrop', 'uSurface', 'uKnockoutBase']],
+      }, ['uBackdrop', 'uSurface', 'uKnockoutBase', 'uClip']],
       unpremultiply: [UNPREMULTIPLY_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uSource']],
       present: [PRESENT_FRAGMENT, {
         uCanvasRect: { value: new Float32Array(4), type: 'vec4<f32>' },
@@ -423,8 +423,9 @@ export class GpuCompositor {
     this.pool.push(rt);
     while (this.pool.length > 12) this.pool.shift()!.destroy(true);
   }
-  private clear(rt: RenderTexture): void {
-    this.renderer.renderTarget.bind({ target: rt, clear: true, clearColor: [0, 0, 0, 0] });
+  private clear(rt: RenderTexture, opaqueWhite = false): void {
+    this.renderer.renderTarget.bind({ target: rt, clear: true,
+      clearColor: opaqueWhite ? [1, 1, 1, 1] : [0, 0, 0, 0] });
   }
 
   // MARK: Textures
@@ -889,7 +890,7 @@ export class GpuCompositor {
     }
     const isolated = (layer: Layer): boolean => layer.kind === 'group'
       && ((layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === true
-        || layer.opacity !== 1 || layer.fillOpacity !== 1 || layer.blendMode !== 'normal');
+        || layer.opacity !== 1 || layer.fillOpacity !== 1 || layer.blendMode !== 'normal' || !!layer.maskSourceId);
     const sequence = (parent: string | null): Layer[] => {
       const output: Layer[] = [];
       for (const layer of children.get(parent) ?? []) {
@@ -942,7 +943,8 @@ export class GpuCompositor {
     };
 
     const renderSequence = (layers: readonly Layer[], root = false): RenderTexture => {
-      let surface = this.acquire(width, height); this.clear(surface);
+      let surface = this.acquire(width, height); this.clear(surface, root
+        && (document as CanvasDocument & { readonly psdOpaqueCanvas?: boolean }).psdOpaqueCanvas === true);
       let knockoutBase: RenderTexture | null = null;
       const stacks = new Map<string, Layer[]>(), stacked = new Set<string>();
       layers.forEach((base, index) => {
@@ -958,7 +960,10 @@ export class GpuCompositor {
         if (stacked.has(layer.id)) continue;
         if (layer.kind === 'group') {
           const groupSurface = renderSequence(sequence(layer.id));
-          const next = this.drawGroupSurface(surface, groupSurface, knockoutBase, layer, view, hooks.blendMode(layer));
+          const groupClip = layer.maskSourceId ? coverageOf(layer.maskSourceId, 1) : null;
+          if (layer.maskSourceId && !groupClip) { this.release(groupSurface); continue; }
+          const next = this.drawGroupSurface(surface, groupSurface, knockoutBase, groupClip,
+            layer, view, hooks.blendMode(layer));
           this.release(surface); this.release(groupSurface); surface = next; continue;
         }
         const clip = folderClip(layer.id);
@@ -1306,14 +1311,16 @@ export class GpuCompositor {
     return out;
   }
 
-  private drawGroupSurface(backdrop: RenderTexture, surface: RenderTexture, knockoutBase: RenderTexture | null, group: Layer,
-    view: ViewSpec, mode: BlendMode): RenderTexture {
+  private drawGroupSurface(backdrop: RenderTexture, surface: RenderTexture, knockoutBase: RenderTexture | null,
+    clip: RenderTexture | null, group: Layer, view: ViewSpec, mode: BlendMode): RenderTexture {
     const out = this.acquire(view.width, view.height);
     this.run(this.pass('group'), out, view.width, view.height, {
       uBackdrop: backdrop.source, uSurface: surface.source, uKnockoutBase: knockoutBase?.source ?? this.white,
+      uClip: clip?.source ?? this.white,
     }, { uMode: BLEND_INDEX[mode] ?? 0, uDissolveSeed: mode === 'dissolve' ? blendSeed(group.id) : 0,
       uOpacity: group.opacity, uFillOpacity: group.fillOpacity,
       uKnockout: (group as Layer & { readonly psdKnockout?: boolean }).psdKnockout === true ? 1 : 0,
+      uHasClip: clip ? 1 : 0,
       uViewToDoc: mat3(view.viewToDoc) });
     return out;
   }

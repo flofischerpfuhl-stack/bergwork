@@ -55,10 +55,12 @@ vec3 adjustColor(vec3 c, vec2 documentPixel) {
 }`;
 const INVERT_GLSL = /* glsl */ `vec3 adjustColor(vec3 c, vec2 documentPixel) { return vec3(1.0) - c; }`;
 const THRESHOLD_GLSL = /* glsl */ `vec3 adjustColor(vec3 c, vec2 documentPixel) {
-  return vec3(dot(c,vec3(0.2126,0.7152,0.0722))*255.0 >= uParams[0].x ? 1.0 : 0.0);
+  float lightness=dot(c,vec3(0.299,0.587,0.114))*255.0;
+  return vec3(lightness >= uParams[0].x ? 1.0 : 0.0);
 }`;
 const POSTERIZE_GLSL = /* glsl */ `vec3 adjustColor(vec3 c, vec2 documentPixel) {
-  float steps=max(1.0,uParams[0].x-1.0); return floor(clamp(c,0.0,1.0)*steps+0.5)/steps;
+  float levels=max(2.0,uParams[0].x),steps=levels-1.0;
+  return min(vec3(steps),floor(clamp(c,0.0,1.0)*levels))/steps;
 }`;
 const LOOKUP_GLSL = /* glsl */ `
 vec3 lookupFetch(ivec3 p) { int columns=int(uParams[0].y); return texelFetch(uLut,

@@ -142,11 +142,13 @@ function rgbaFromChannels(channels: readonly RawChannel[], width: number, height
     }
     const profile = context.iccProfile ?? (context.colorMode === 4 ? context.lcms.createCmykProfile()
       : context.lcms.createGrayProfile([0.3127, 0.329], 2.2));
-    const converted = context.lcms.transform(profile, input, context.colorMode === 4 ? 'cmyk' : 'gray', bits, alpha);
-    if (bits !== 16) return { width, height, data: converted };
-    const sixteen = new Uint16Array(converted.length);
-    for (let index = 0; index < converted.length; index++) sixteen[index] = converted[index]! * 257;
-    return { width, height, data: sixteen };
+    // A3 requires source precision to survive import. Little CMS exposes a native 16-bit output
+    // path; expanding an 8-bit transform here used to discard nearly all PSD16 precision.
+    const model = context.colorMode === 4 ? 'cmyk' as const : 'gray' as const;
+    const converted = bits === 16
+      ? context.lcms.transform16(profile, input as Uint16Array, model, alpha as Uint16Array | null)
+      : context.lcms.transform(profile, input, model, bits, alpha);
+    return { width, height, data: converted };
   }
   const output = bits === 16 ? new Uint16Array(pixels * 4) : new Uint8ClampedArray(pixels * 4);
   for (let pixel = 0, target = 0; pixel < pixels; pixel++, target += 4) {
