@@ -10,6 +10,7 @@ import type { Raster } from '../core/raster';
 import { floatToRgba16, rgba16To8 } from '../core/pixel/format';
 import { downsampleLevel, prepareSampler, type RasterSampler } from '../core/resample';
 import { DEFAULT_HOOKS, type CompositeHooks, type ViewSpec } from './gpuCompositor';
+import { liveFilterHooks } from './liveFilterPasses';
 
 export interface SoftwareSurface {
   readonly width: number;
@@ -83,6 +84,7 @@ export class SoftwareCompositor {
   }
 
   private options(hooks: CompositeHooks): CompositeOptions {
+    hooks = liveFilterHooks(hooks);
     return {
       transform: hooks.transform, maskPlacement: hooks.maskPlacement, blendMode: hooks.blendMode,
       raster: hooks.raster, maskRaster: hooks.maskRaster, adjust: this.adjustmentPrograms,
@@ -103,7 +105,7 @@ export class SoftwareCompositor {
     if (typeof OffscreenCanvas === 'undefined') return null;
     const layers = renderLayers(document.layers);
     if (document.layers.some((layer) => layer.kind === 'group' && layer.mask?.enabled)
-      || layers.some((layer) => layer.adjustment || layer.maskSourceId || layer.mask?.enabled
+      || layers.some((layer) => layer.adjustment || layer.filters.length || layer.maskSourceId || layer.mask?.enabled
       || hooks.blendMode(layer) !== 'normal')) return null;
     const documentToTarget = invert(view.viewToDoc);
     const commands: SoftwareDrawCommand[] = [];

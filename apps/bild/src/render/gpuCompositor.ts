@@ -28,6 +28,7 @@ import {
   IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT, STACK_FRAGMENT,
   UNPREMULTIPLY_FRAGMENT, VERTEX,
 } from './shaders';
+import { liveFilterHooks } from './liveFilterPasses';
 
 export interface CompositeHooks {
   transform(layer: Layer): LayerTransform;
@@ -66,7 +67,7 @@ export interface AdjustmentProgram {
   params(layer: Layer): Float32Array; // up to 8 vec4
   lut?(layer: Layer): { data: Uint8Array | Float32Array; width: number; height: number } | null;
 }
-export type AdjustmentProgramProvider = (layer: Layer) => AdjustmentProgram | null;
+export type AdjustmentProgramProvider = (layer: Layer, document?: CanvasDocument) => AdjustmentProgram | null;
 
 type Uniforms = Record<string, { value: unknown; type: string; size?: number }>;
 
@@ -170,7 +171,7 @@ export class GpuCompositor {
   private readonly brushTargetPool: BrushTargets[] = [];
   /** The LUT samples last uploaded per layer, so an unchanged adjustment is not re-uploaded every frame. */
   private lutUploaded = new Map<string, Uint8Array | Float32Array>();
-  private highPrecisionLuts = false;
+  private activeDocument: CanvasDocument | undefined;
   adjustmentPrograms: AdjustmentProgramProvider = adjustmentProgram;
   /** Adjustment layers drawn without a GPU implementation in the last composite. */
   skippedAdjustments = 0;
@@ -331,8 +332,10 @@ export class GpuCompositor {
         uBaseTextureSize: { value: new Float32Array(2), type: 'vec2<f32>' },
         uBaseApron: { value: 0, type: 'f32' }, uHasBase: { value: 0, type: 'i32' },
         uMask: { value: 0, type: 'i32' }, uHard: { value: 0, type: 'i32' },
-        uErase: { value: 0, type: 'i32' }, uColor: { value: new Float32Array(3), type: 'vec3<f32>' },
-        uOpacity: { value: 1, type: 'f32' },
+        uErase: { value: 0, type: 'i32' }, uBrushMode: { value: 0, type: 'i32' },
+        uRange: { value: 1, type: 'i32' }, uExposure: { value: 0.5, type: 'f32' },
+        uSpongeDirection: { value: 1, type: 'i32' }, uFlow: { value: 0.5, type: 'f32' }, uVibrance: { value: 0, type: 'i32' },
+        uColor: { value: new Float32Array(3), type: 'vec3<f32>' }, uOpacity: { value: 1, type: 'f32' },
       }, ['uBase', 'uPermanent', 'uTail']],
       brushMax: [BRUSH_MAX_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uFirst', 'uSecond']],
       brushMask: [BRUSH_MASK_FRAGMENT, {
@@ -816,6 +819,10 @@ export class GpuCompositor {
       uBaseTextureSize: new Float32Array([baseWidth, baseHeight]), uBaseApron: baseApron, uHasBase: hasBase,
       uMask: preview.target === 'mask' ? 1 : 0, uHard: preview.settings.hardness >= 1 ? 1 : 0,
       uErase: preview.settings.mode === 'erase' ? 1 : 0,
+      uBrushMode: preview.settings.mode === 'dodge' ? 1 : preview.settings.mode === 'burn' ? 2 : preview.settings.mode === 'sponge' ? 3 : 0,
+      uRange: preview.settings.range === 'shadows' ? 0 : preview.settings.range === 'highlights' ? 2 : 1,
+      uExposure: preview.settings.exposure ?? 0.5, uSpongeDirection: preview.settings.spongeMode === 'desaturate' ? -1 : 1,
+      uFlow: preview.settings.flow ?? 0.5, uVibrance: preview.settings.vibrance ? 1 : 0,
       uColor: new Float32Array([preview.settings.red, preview.settings.green, preview.settings.blue]),
       uOpacity: preview.settings.opacity,
     });
@@ -830,11 +837,10 @@ export class GpuCompositor {
    * with `releaseTarget`.
    */
   composite(document: CanvasDocument, view: ViewSpec, hooks: CompositeHooks = DEFAULT_HOOKS): RenderTexture {
+    this.activeDocument = document;
+    hooks = liveFilterHooks(hooks);
     this.frame++;
     this.skippedAdjustments = 0;
-    // Preserve the byte-exact legacy LUT path for RGBA8-only documents. A 16-bit source opts the
-    // whole document into float LUTs so adjustment layers never introduce an 8-bit bottleneck.
-    this.highPrecisionLuts = document.layers.some((layer) => hooks.raster(layer)?.format === 'rgba16');
     const { width, height } = view;
     const activeBrush = hooks.brush ?? null;
     let brushState: BrushGpuState | null = null;
@@ -1196,7 +1202,7 @@ export class GpuCompositor {
   }
 
   private adjust(backdrop: RenderTexture, layer: Layer, view: ViewSpec, hooks: CompositeHooks, clip: RenderTexture | null): RenderTexture {
-    const program = this.adjustmentPrograms(layer);
+    const program = this.adjustmentPrograms(layer, this.activeDocument);
     if (!program) this.skippedAdjustments++;
     const key = program ? `adjust:${program.key}` : 'adjust:identity';
     const pass = this.pass(key, adjustFragment(program?.glsl ?? IDENTITY_ADJUST));
@@ -1204,7 +1210,7 @@ export class GpuCompositor {
     let lut: TextureSource = this.white;
     const lutData = program?.lut?.(layer);
     if (lutData) {
-      const useFloat = this.highPrecisionLuts && lutData.data instanceof Float32Array;
+      const useFloat = this.floatTargets && lutData.data instanceof Float32Array;
       const uploadData = useFloat || lutData.data instanceof Uint8Array ? lutData.data : byteLut(lutData.data);
       const lutKey = `${layer.id}:${useFloat ? 'float' : 'byte'}`;
       let source = this.lutSources.get(lutKey);

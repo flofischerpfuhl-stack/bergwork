@@ -12,14 +12,15 @@ function coverageAt(selection: DocumentSelection | null, x: number, y: number): 
 
 export function rasterToFloat(raster: Raster): Float32Array {
   if (raster.channels !== 4) throw new RangeError('RGBA raster required');
-  const bytes = raster.toPixels(), out = new Float32Array(bytes.length);
-  for (let i = 0; i < bytes.length; i++) out[i] = bytes[i]! / 255;
+  const bytes = raster.toPixelsNative(), out = new Float32Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) out[i] = bytes[i]! / raster.maximum;
   return out;
 }
-export function floatToRaster(width: number, height: number, rgba: Float32Array): Raster {
-  const bytes = new Uint8Array(rgba.length);
-  for (let i = 0; i < bytes.length; i++) bytes[i] = Math.round(Math.min(1, Math.max(0, rgba[i]!)) * 255);
-  return Raster.fromPixels(width, height, 4, bytes);
+export function floatToRaster(width: number, height: number, rgba: Float32Array, format: 'rgba8' | 'rgba16' = 'rgba8'): Raster {
+  const maximum = format === 'rgba16' ? 65535 : 255;
+  const bytes = format === 'rgba16' ? new Uint16Array(rgba.length) : new Uint8Array(rgba.length);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = Math.round(Math.min(1, Math.max(0, rgba[i]!)) * maximum);
+  return Raster.fromPixels(width, height, 4, bytes, { format });
 }
 
 /** PixelAdjust.blend, with the selection mapped through the layer transform. */
@@ -34,18 +35,19 @@ export function adjustRaster(raster: Raster, transform: LayerTransform, adjustme
     const i = (y * raster.width + x) * 4;
     for (let k = 0; k < 4; k++) adjusted[i + k] = original[i + k]! + (adjusted[i + k]! - original[i + k]!) * c;
   }
-  return floatToRaster(raster.width, raster.height, adjusted);
+  return floatToRaster(raster.width, raster.height, adjusted, raster.format === 'rgba16' ? 'rgba16' : 'rgba8');
 }
 
 export function invertRaster(raster: Raster, transform: LayerTransform, selection: DocumentSelection | null = null): Raster {
-  const source = raster.toPixels(), out = source.slice(), mapping = pixelToDocument(transform, raster.width, raster.height);
+  const source = raster.toPixelsNative(), out = source.slice(), maximum = raster.maximum;
+  const mapping = pixelToDocument(transform, raster.width, raster.height);
   for (let y = 0; y < raster.height; y++) for (let x = 0; x < raster.width; x++) {
     const point = apply(mapping, { x: x + 0.5, y: y + 0.5 }), c = coverageAt(selection, point.x, point.y);
     const i = (y * raster.width + x) * raster.channels;
-    if (raster.channels === 1) out[i] = Math.round(source[i]! + ((255 - source[i]!) - source[i]!) * c);
-    else for (let k = 0; k < 3; k++) out[i + k] = Math.round(source[i + k]! + ((255 - source[i + k]!) - source[i + k]!) * c);
+    if (raster.channels === 1) out[i] = Math.round(source[i]! + ((maximum - source[i]!) - source[i]!) * c);
+    else for (let k = 0; k < 3; k++) out[i + k] = Math.round(source[i + k]! + ((maximum - source[i + k]!) - source[i + k]!) * c);
   }
-  return Raster.fromPixels(raster.width, raster.height, raster.channels, out);
+  return Raster.fromPixels(raster.width, raster.height, raster.channels, out, { format: raster.format });
 }
 
 /** Four 256-bin arrays: RGB mean, red, green, blue (`levels_histogram`). */

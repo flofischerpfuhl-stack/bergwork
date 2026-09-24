@@ -774,6 +774,14 @@ class ContinuousBrushStroke implements Stroke {
       state.output[offset + 3] = clampByte(outA * 255);
       return;
     }
+    if (this.settings.mode === 'dodge' || this.settings.mode === 'burn' || this.settings.mode === 'sponge') {
+      if (ba <= 0) { state.output.fill(0, offset, offset + 4); return; }
+      const adjusted = brushModeColor((base?.[offset] ?? 0) / 255, (base?.[offset + 1] ?? 0) / 255,
+        (base?.[offset + 2] ?? 0) / 255, this.settings, alpha);
+      state.output[offset] = clampByte(adjusted[0] * 255); state.output[offset + 1] = clampByte(adjusted[1] * 255);
+      state.output[offset + 2] = clampByte(adjusted[2] * 255); state.output[offset + 3] = base?.[offset + 3] ?? 0;
+      return;
+    }
     let sr = this.settings.red * 255, sg = this.settings.green * 255, sb = this.settings.blue * 255, sa = alpha;
     if (this.clone) {
       const sampled = this.clone.sample({ x: px + this.clone.offset.width, y: py + this.clone.offset.height });
@@ -808,6 +816,24 @@ class ContinuousBrushStroke implements Stroke {
     state.output[offset + 2] = clampByte((sb * sa + (base?.[offset + 2] ?? 0) * keep) / outA);
     state.output[offset + 3] = clampByte(outA * 255);
   }
+}
+
+/** Deterministic Dodge/Burn/Sponge replay shared conceptually with the GPU preview shader. */
+export function brushModeColor(r: number, g: number, b: number, settings: BrushSettings, coverage: number): [number, number, number] {
+  const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const range = settings.range === 'shadows' ? (1 - luma) * (1 - luma)
+    : settings.range === 'highlights' ? luma * luma : Math.max(0, 1 - Math.abs(luma * 2 - 1));
+  if (settings.mode === 'dodge' || settings.mode === 'burn') {
+    const strength = Math.min(1, Math.max(0, coverage * (settings.exposure ?? 0.5) * range));
+    if (settings.mode === 'dodge') return [1 - (1 - r) * (1 - strength), 1 - (1 - g) * (1 - strength), 1 - (1 - b) * (1 - strength)];
+    return [r * (1 - strength), g * (1 - strength), b * (1 - strength)];
+  }
+  const maximum = Math.max(r, g, b), minimum = Math.min(r, g, b), chroma = maximum - minimum;
+  let strength = Math.min(1, Math.max(0, coverage * (settings.flow ?? 0.5)));
+  if (settings.vibrance && settings.spongeMode === 'saturate') strength *= 1 - chroma;
+  const factor = settings.spongeMode !== 'desaturate' ? 1 + strength : 1 - strength;
+  return [Math.min(1, Math.max(0, luma + (r - luma) * factor)),
+    Math.min(1, Math.max(0, luma + (g - luma) * factor)), Math.min(1, Math.max(0, luma + (b - luma) * factor))];
 }
 
 export function brushSegment(a: Point, b: Point, pressure: number): BrushSegment {

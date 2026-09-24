@@ -9,7 +9,8 @@ import {
 import { beginFilterEdit, filterEditState } from '../filters/editing';
 
 export type AdjustmentCommandName = 'levels' | 'curves' | 'hueSaturation' | 'exposure' | 'gradientMap' | 'grain'
-  | 'invert' | 'gaussianBlur' | 'motionBlur' | 'noise' | 'lensCorrection' | 'editAdjustment' | 'adjustmentLayers';
+  | 'invert' | 'gaussianBlur' | 'motionBlur' | 'noise' | 'lensCorrection' | 'unsharpMask' | 'smartSharpen'
+  | 'highPass' | 'denoise' | 'editAdjustment' | 'adjustmentLayers';
 export interface AdjustmentCommand { enabled(): boolean; run(): void }
 export type AdjustmentCommandRegistry = Record<AdjustmentCommandName, AdjustmentCommand>;
 
@@ -42,6 +43,8 @@ export function adjustmentCommands(session: EditorSession): AdjustmentCommandReg
     } },
     gaussianBlur: filter(session, 'Gaussian Blur'), motionBlur: filter(session, 'Motion Blur'),
     noise: filter(session, 'Add Noise'), lensCorrection: filter(session, 'Lens Correction'),
+    unsharpMask: filter(session, 'Unsharp Mask'), smartSharpen: filter(session, 'Smart Sharpen'),
+    highPass: filter(session, 'High Pass'), denoise: filter(session, 'Denoise'),
     editAdjustment: { enabled: () => !!session.activeLayer?.adjustment
       && !session.editBlocker(session.activeLayer.id, 'appearance') && !adjustmentLayerEditState(session),
       run: () => { beginAdjustmentLayerEdit(session); } },

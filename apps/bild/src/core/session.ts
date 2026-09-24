@@ -8,11 +8,11 @@
  */
 
 import {
-  ADJUSTMENT_KINDS, adoptClipping, descendantIds, documentsEqual, effectiveVisibleIds, hierarchyEntries,
+  adoptClipping, descendantIds, documentsEqual, effectiveVisibleIds, hierarchyEntries,
   isValidStructure, layerPixelHeight, layerPixelWidth, maskTransform, MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
   releaseDetachedClipping, renderLayers as renderLayersOf, uniqueName, usedPixels, withLayerRaster,
-  type AdjustmentKind, type BlendMode, type CanvasDocument, type HierarchyEntry, type Layer, type LayerAdjustment,
-  type LayerMask, BLEND_MODES,
+  ALL_ADJUSTMENT_KINDS, type AdjustmentKind, type LayerAdjustmentKind, type BlendMode, type CanvasDocument, type HierarchyEntry, type Layer, type LayerAdjustment,
+  type LayerMask, type LiveFilter, BLEND_MODES,
   type Guide, } from './document';
 import type { ColorLabel, LayerLocks } from './model';
 import {
@@ -130,6 +130,7 @@ export class EditorSession {
   fillOpacityEditLayerIds: readonly string[] | null = null;
   renamingLayerId: string | null = null;
   adjustmentEditingId: string | null = null;
+  private liveFilterEdit: { readonly layerId: string; readonly original: readonly LiveFilter[] } | null = null;
   foregroundColor: PaletteColor = BLACK;
   backgroundColor: PaletteColor = WHITE;
   maskPaintWhite = false;
@@ -1505,9 +1506,11 @@ export class EditorSession {
 
   addAdjustment(kind: AdjustmentKind): void {
     const document = this.document;
-    if (!this.canEditLayers || !document || document.layers.length >= MAX_LAYERS || !ADJUSTMENT_KINDS.includes(kind)) return;
+    if (!this.canEditLayers || !document || document.layers.length >= MAX_LAYERS
+      || !ALL_ADJUSTMENT_KINDS.includes(kind as LayerAdjustmentKind)) return;
     const active = this.activeLayer;
-    const adjustment: LayerAdjustment = defaultAdjustment(kind, this.foregroundColor, this.backgroundColor);
+    const strictKind = kind as LayerAdjustmentKind;
+    const adjustment: LayerAdjustment = defaultAdjustment(strictKind, this.foregroundColor, this.backgroundColor);
     const layer = newLayer({
       id: uuid(), name: this.label(kind), adjustment,
       transform: makeTransform({ x: 0, y: 0 }, { width: document.width, height: document.height }),
@@ -1530,6 +1533,60 @@ export class EditorSession {
     if (this.layer(id)?.kind !== 'adjustment') return;
     this.updateLayer(id, (l) => l.kind === 'adjustment' ? { ...l, adjustment: value } : l);
     this.notify('document');
+  }
+
+  // MARK: Live filter stacks (PRODUCT-PLAN 6.4)
+
+  addLayerLiveFilter(filter: LiveFilter, id = this.activeLayerId): boolean {
+    const layer = id ? this.layer(id) : null;
+    if (!id || !layer || layer.kind === 'group' || this.editBlocker(id, 'appearance')) return false;
+    this.edit('Add Live Filter', () => this.updateLayer(id, (value) => ({ ...value, filters: [...value.filters, filter] })));
+    return true;
+  }
+
+  updateLayerLiveFilter(index: number, filter: LiveFilter, id = this.activeLayerId, live = false): boolean {
+    const layer = id ? this.layer(id) : null;
+    if (!id || !layer || index < 0 || index >= layer.filters.length || this.editBlocker(id, 'appearance')) return false;
+    const apply = () => this.updateLayer(id, (value) => { const filters = value.filters.slice(); filters[index] = filter; return { ...value, filters }; });
+    if (live) { if (this.liveFilterEdit?.layerId !== id) return false; apply(); this.changed(); }
+    else this.edit('Edit Live Filter', apply);
+    return true;
+  }
+
+  removeLayerLiveFilter(index: number, id = this.activeLayerId): boolean {
+    const layer = id ? this.layer(id) : null;
+    if (!id || !layer || index < 0 || index >= layer.filters.length || this.editBlocker(id, 'appearance')) return false;
+    this.edit('Remove Live Filter', () => this.updateLayer(id, (value) => {
+      const filters = value.filters.slice(); filters.splice(index, 1); return { ...value, filters };
+    })); return true;
+  }
+
+  moveLayerLiveFilter(from: number, to: number, id = this.activeLayerId): boolean {
+    const layer = id ? this.layer(id) : null;
+    if (!id || !layer || from < 0 || from >= layer.filters.length || to < 0 || to >= layer.filters.length
+      || this.editBlocker(id, 'appearance')) return false;
+    this.edit('Reorder Live Filters', () => this.updateLayer(id, (value) => {
+      const filters = value.filters.slice(), moved = filters.splice(from, 1)[0]!; filters.splice(to, 0, moved);
+      return { ...value, filters };
+    })); return true;
+  }
+
+  beginLayerLiveFilterEdit(id = this.activeLayerId): boolean {
+    const layer = id ? this.layer(id) : null;
+    if (!id || !layer || this.liveFilterEdit || this.editBlocker(id, 'appearance')) return false;
+    this.liveFilterEdit = { layerId: id, original: layer.filters }; this.beginEdit('Edit Live Filter'); return true;
+  }
+
+  endLayerLiveFilterEdit(commit = true): boolean {
+    const edit = this.liveFilterEdit; if (!edit) return false;
+    if (!commit) this.updateLayer(edit.layerId, (layer) => ({ ...layer, filters: edit.original }));
+    this.liveFilterEdit = null; this.endEdit(); return true;
+  }
+
+  async applyLayerLiveFilters(id = this.activeLayerId): Promise<boolean> {
+    if (!id) return false;
+    const { bakeLiveFilters } = await import('./filters/live');
+    return bakeLiveFilters(this, id);
   }
 
   // MARK: Merge
