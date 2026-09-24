@@ -45,7 +45,7 @@ export function adjustmentLayerEditState(session: EditorSession): AdjustmentLaye
 function editableRaster(session: EditorSession) {
   const layer = session.activeLayer;
   return session.canEditLayers && session.selectedLayerIds.size === 1 && layer && layer.kind !== 'group' && !layer.adjustment
-    && !session.isMaskSelected && layer.raster ? layer : null;
+    && !session.isMaskSelected && layer.raster && !session.editBlocker(layer.id, 'pixels') ? layer : null;
 }
 
 export function beginLevelsEdit(session: EditorSession): LevelsEditState | null {
@@ -130,7 +130,7 @@ export async function applyHueSaturationEdit(session: EditorSession): Promise<bo
 
 /** Opens the metadata edit as one transaction; previews change only layer settings. */
 export function beginAdjustmentLayerEdit(session: EditorSession, id = session.adjustmentEditingId ?? session.activeLayerId): AdjustmentLayerEditState | null {
-  if (!id || layerEdits.has(session)) return null;
+  if (!id || layerEdits.has(session) || session.editBlocker(id, 'appearance')) return null;
   const original = session.layer(id)?.adjustment; if (!original) return null;
   const state = { layerId: id, original, value: original, preview: true };
   layerEdits.set(session, state); session.adjustmentEditingId = id; session.beginEdit(`Edit ${original.kind} Adjustment`); session.notify('ui'); return state;

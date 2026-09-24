@@ -117,7 +117,8 @@ export class SoftwareCompositor {
       const selected = this.rasterSurface(raster, transform.sampling, drawnWidth);
       const sourceToDocument = pixelToDocument(transform, selected.width, selected.height);
       const sourceToTarget = concat(sourceToDocument, documentToTarget);
-      commands.push({ source: selected, transform: sourceToTarget, opacity: Math.min(1, Math.max(0, layer.opacity)),
+      commands.push({ source: selected, transform: sourceToTarget,
+        opacity: Math.min(1, Math.max(0, layer.opacity * layer.fillOpacity)),
         smoothing: transform.sampling !== 'Nearest' && !view.snap,
         quality: transform.sampling === 'High quality' ? 'high' : 'medium' });
     }
