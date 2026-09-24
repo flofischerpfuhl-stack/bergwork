@@ -3,7 +3,8 @@ import {
   blendRgbInto, blendSeed as seedForBlend, clamp01, compositePremultiplied,
   compositePremultipliedWithFill, dissolveNoise,
 } from './blend';
-import { ancestorIds, renderLayers, type BlendMode, type CanvasDocument, type Layer, type LayerAdjustment } from './document';
+import { ancestorIds, descendantIds, hierarchyEntries,
+  type BlendMode, type CanvasDocument, type Layer, type LayerAdjustment } from './document';
 import type { Affine, LayerSampling, LayerTransform, Rect } from './geometry';
 import { concat, invert, pixelToDocument, samePlacement } from './geometry';
 import { alphaBounds, Raster, TILE } from './raster';
@@ -56,13 +57,24 @@ class BandRenderer {
   private readonly blendScratch = new Float64Array(6);
   private readonly blendSeeds = new Map<string, number>();
   private readonly documentToOutput: Affine | undefined;
+  private readonly order: readonly Layer[];
   skippedAdjustment = false;
 
   constructor(private readonly document: CanvasDocument, private readonly options: CompositeOptions,
-    private readonly outputToDocument?: Affine) {
+    private readonly outputToDocument?: Affine, private readonly rootKnockout = true) {
     this.documentToOutput = outputToDocument ? invert(outputToDocument) : undefined;
     this.byId = new Map(document.layers.map((layer) => [layer.id, layer]));
-    const ids = renderLayers(document.layers);
+    const isolated = document.layers.filter((layer) => layer.kind === 'group'
+      && ((layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === true
+        || layer.opacity !== 1 || layer.fillOpacity !== 1 || layer.blendMode !== 'normal'));
+    const isolatedIds = new Set(isolated.map((layer) => layer.id));
+    const insideIsolated = new Set<string>();
+    for (const group of isolated) for (const id of descendantIds(document.layers, group.id)) insideIsolated.add(id);
+    this.order = hierarchyEntries(document.layers).filter((entry) => entry.visible
+      && ((entry.layer.kind === 'group' && !insideIsolated.has(entry.layer.id)
+          && isolatedIds.has(entry.layer.id))
+        || (entry.layer.kind !== 'group' && !insideIsolated.has(entry.layer.id)))).map((entry) => entry.layer);
+    const ids = this.order.filter((layer) => layer.kind !== 'group');
     for (let index = 0; index < ids.length; index++) {
       const base = ids[index]!;
       if (base.maskSourceId || base.adjustment) continue;
@@ -151,7 +163,8 @@ class BandRenderer {
     if (!mask?.enabled || !raster || raster.channels !== 1) return 1;
     const layerTransform = this.transform(layer);
     // LiveMaskRenderer.adjust uses FolderMaskClip(mask, layer.transform), not LayerMask.clipImage.
-    const candidate = adjustment ? layerTransform : this.maskPlacement(layer);
+    const psdMask = (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault !== undefined;
+    const candidate = adjustment && !psdMask ? layerTransform : this.maskPlacement(layer);
     const placement = candidate && !samePlacement(candidate, layerTransform) ? candidate : null;
     const transform = { ...(placement ?? layerTransform), sampling: 'High quality' as const };
     const prepared = this.preparedPlacement(`${adjustment ? 'adjustment-mask' : 'mask'}:${layer.id}`,
@@ -160,11 +173,16 @@ class BandRenderer {
     const sampler = this.maskSampler(raster, transform, documentToOutput);
     const sampled = sampleMask(sampler, this.location[0]!, this.location[1]!);
     if (!placement && !adjustment) return sampled;
-    if (adjustment) return sampled * this.location[2]!;
+    if (adjustment) {
+      const background = ((layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault ?? 0) / 255;
+      return background + (sampled - background) * this.location[2]!;
+    }
     let background = this.backgrounds.get(raster);
     if (background === undefined) {
       // Upstream reads the <=96 px thumbnail; the browser core has only the full raster.
-      background = maskBackground(raster); this.backgrounds.set(raster, background);
+      background = (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault === undefined
+        ? maskBackground(raster) : (layer as Layer & { readonly psdMaskDefault: number }).psdMaskDefault / 255;
+      this.backgrounds.set(raster, background);
     }
     return background + (sampled - background) * this.location[2]!;
   }
@@ -431,9 +449,44 @@ class BandRenderer {
     }
   }
 
+  private drawIsolatedGroup(groupLayer: Layer, target: Float32Array, width: number, height: number,
+    originX: number, originY: number, knockoutBase: Float32Array | null): void {
+    const ids = descendantIds(this.document.layers, groupLayer.id);
+    const layers = this.document.layers.filter((layer) => ids.has(layer.id)).map((layer) =>
+      layer.parentId === groupLayer.id ? { ...layer, parentId: null } : layer);
+    if (!layers.length) return;
+    const nested = new BandRenderer({ ...this.document, layers }, this.options, this.outputToDocument, false).render(
+      width, height, originX, originY);
+    const mode = this.blendMode(groupLayer), seed = mode === 'dissolve' ? this.blendSeed(groupLayer) : 0;
+    const knockout = (groupLayer as Layer & { readonly psdKnockout?: boolean }).psdKnockout === true;
+    for (let py = 0; py < height; py++) for (let px = 0; px < width; px++) {
+      const offset = (py * width + px) * 4, alpha = nested[offset + 3]!;
+      if (alpha <= 0) continue;
+      const ox = originX + px + 0.5, oy = originY + py + 0.5, map = this.outputToDocument;
+      const x = map ? map.a * ox + map.c * oy + map.tx : ox;
+      const y = map ? map.b * ox + map.d * oy + map.ty : oy;
+      const coverage = this.ownMask(groupLayer, x, y, false, this.documentToOutput)
+        * this.folderCoverage(groupLayer, x, y);
+      if (coverage <= 0) continue;
+      if (knockout) {
+        const cut = alpha * coverage;
+        for (let channel = 0; channel < 4; channel++) {
+          target[offset + channel] = target[offset + channel]! * (1 - cut)
+            + (knockoutBase?.[offset + channel] ?? 0) * cut;
+        }
+      }
+      compositePremultipliedWithFill(target, offset, nested[offset]!, nested[offset + 1]!, nested[offset + 2]!, alpha,
+        coverage, groupLayer.opacity, groupLayer.fillOpacity, mode, this.blendScratch,
+        mode === 'dissolve' ? dissolveNoise(Math.floor(x), Math.floor(y), seed) : 0);
+    }
+  }
+
   render(width: number, height: number, originX: number, originY: number): Float32Array {
     const target = new Float32Array(width * height * 4);
-    for (const layer of renderLayers(this.document.layers)) {
+    let knockoutBase: Float32Array | null = null;
+    for (const layer of this.order) {
+      if (layer.kind === 'group') { this.drawIsolatedGroup(layer, target, width, height, originX, originY,
+        this.rootKnockout ? knockoutBase : null); continue; }
       if (this.stacked.has(layer.id)) continue;
       const stack = this.stacks.get(layer.id);
       if (stack) this.drawStack(stack, target, width, height, originX, originY);
@@ -441,6 +494,7 @@ class BandRenderer {
         // LiveMaskRenderer skips adjustment layers linked outside a clipping stack.
         if (!layer.maskSourceId) this.adjust(layer, target, width, height, originX, originY, true);
       } else this.drawLayer(layer, target, width, height, originX, originY, true, true);
+      if (this.rootKnockout && !knockoutBase && layer.locks.transparency) knockoutBase = target.slice();
     }
     return target;
   }

@@ -302,7 +302,7 @@ export class EditorController {
 
   private psdNotices(imported: PsdReadResult): void {
     const notices = imported.unsupported.filter((feature) => feature.impact !== 'editability-only'
-      || feature.code === 'compatibility-preview');
+      || feature.code === 'compatibility-preview' || feature.code === 'flattened-composite');
     if (!notices.length) return;
     this.host.reportError({ code: 'psd-import-notice', message: notices.map((notice) =>
       `${notice.layerPath ? `${notice.layerPath}: ` : ''}${notice.message}`).join('\n') });

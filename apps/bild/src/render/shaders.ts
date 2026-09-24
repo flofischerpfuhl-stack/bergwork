@@ -599,6 +599,30 @@ void main() {
 }
 `;
 
+/** An isolated PSD group surface composited once with the group's opacity and blend mode. */
+export const GROUP_FRAGMENT = /* glsl */ `${COMMON}
+in vec2 vPos;
+out vec4 finalColor;
+uniform sampler2D uBackdrop;
+uniform sampler2D uSurface;
+uniform sampler2D uKnockoutBase;
+uniform int uMode;
+uniform int uDissolveSeed;
+uniform float uOpacity;
+uniform float uFillOpacity;
+uniform int uKnockout;
+uniform mat3 uViewToDoc;
+void main() {
+  ivec2 p = ivec2(vPos);
+  vec4 dst = texelFetch(uBackdrop, p, 0);
+  vec4 group = texelFetch(uSurface, p, 0);
+  if (uKnockout == 1) dst = mix(dst, texelFetch(uKnockoutBase, p, 0), group.a);
+  vec4 src = group * (uOpacity * uFillOpacity);
+  ivec2 documentPixel = ivec2(floor((uViewToDoc * vec3(vPos, 1.0)).xy));
+  finalColor = composite(uMode, dst, src, documentPixel, uDissolveSeed);
+}
+`;
+
 /**
  * Adjustment layer (LiveMaskRenderer.adjust): adjusted colour, optional blend at full coverage with
  * the original alpha restored, opacity lerp (CIBlendWithMask), then a copy through

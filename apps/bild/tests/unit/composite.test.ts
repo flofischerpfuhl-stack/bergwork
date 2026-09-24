@@ -102,12 +102,13 @@ describe('masks and hierarchy (LayerMaskTests, GroupTests)', () => {
     expect(alphas(render(document(3, 1, [{ ...folder, visible: false }, red])))).toEqual([0, 0, 0]);
   });
 
-  it('multiplies folder and layer masks while ignoring group opacity and blend mode', () => {
-    const folder = layer('folder', null, transform(0, 0, 1, 1), { isGroup: true, opacity: 0, blendMode: 'difference',
+  it('multiplies folder and layer masks before isolated group opacity', () => {
+    // PSD group semantics: the children form one isolated surface, then folder opacity is applied once.
+    const folder = layer('folder', null, transform(0, 0, 1, 1), { isGroup: true, opacity: 0.5,
       mask: { raster: mask(1, 1, [128]), enabled: true, placement: null, linked: true } });
     const red = layer('red', rgba(1, 1, [255, 0, 0, 255]), transform(0, 0, 1, 1), { parentId: 'folder',
       mask: { raster: mask(1, 1, [128]), enabled: true, placement: null, linked: true } });
-    expect(alphas(render(document(1, 1, [folder, red])))).toEqual([64]);
+    expect(alphas(render(document(1, 1, [folder, red])))).toEqual([32]);
   });
 });
 

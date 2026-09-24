@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { writePsdUint8Array, type Layer as AgLayer, type Psd } from 'ag-psd';
 import type { HostAdapter } from '../../contracts';
 import { readRawPsdComposite } from '../../src/io/psd/composite';
+import { decodePsdLayerChannels } from '../../src/io/psd/layerChannels';
 import { readPsdDocument, readPsdDocumentManaged } from '../../src/io/psd';
 import { cpuCompositeRegion } from '../../src/render/cpuRender';
 import { EditorController } from '../../src/ui/controller';
@@ -22,11 +23,20 @@ function image(values: readonly number[]): { width: number; height: number; data
 }
 
 describe('PSD colour modes and product wiring', () => {
+  it('decodes CMYK pixels from layer-owned channels without consulting the merged composite', () => {
+    const layer = { name: 'CMYK layer', top: 0, left: 0, bottom: 1, right: 1,
+      rawData: { channels: [255, 128, 64, 200].map((value, id) =>
+        ({ id, compression: 0, data: new Uint8Array([value]) })) } } as AgLayer;
+    decodePsdLayerChannels(layer, { colorMode: 4, bitsPerChannel: 8, isPsb: false,
+      palette: null, iccProfile: null, lcms: null });
+    expect(layer.imageData?.data).toEqual(new Uint8ClampedArray([200, 100, 50, 255]));
+  });
+
   it('decodes raw CMYK and indexed merged channels when ag-psd cannot parse the colour mode', () => {
     const cmyk = rawPsd(4, [new Uint8Array([255]), new Uint8Array([128]), new Uint8Array([64]), new Uint8Array([200])]);
     expect(readRawPsdComposite(cmyk).rgba).toEqual(new Uint8Array([200, 100, 50, 255]));
     const imported = readPsdDocument(cmyk);
-    expect(imported.document.layers.map((layer) => layer.name)).toEqual(['PSD compatibility preview']);
+    expect(imported.document.layers.map((layer) => layer.name)).toEqual(['Photoshop composite (flattened)']);
     expect(cpuCompositeRegion(imported.document, { x: 0, y: 0, width: 1, height: 1 })).toEqual(imported.oracle!.toPixels());
 
     const palette = new Uint8Array(768); palette[7] = 12; palette[256 + 7] = 34; palette[512 + 7] = 56;

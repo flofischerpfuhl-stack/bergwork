@@ -118,7 +118,7 @@ export function adjustHueColor(red: number, green: number, blue: number, setting
   let lightnessAmount: number;
   if (settings.colorize) {
     const a = settings.adjustments[settings.range] ?? defaultRangeAdjustment();
-    hue = a.hue % 360; saturation = Math.min(1, Math.max(0, a.saturation / 100)); lightnessAmount = a.lightness / 100;
+    hue = wrapHue(a.hue); saturation = Math.min(1, Math.max(0, a.saturation / 100)); lightnessAmount = a.lightness / 100;
   } else {
     const sampled = response[Math.min(response.length - 1, Math.max(0, Math.round(hue)))]!;
     lightnessAmount = sampled.lightness / 100; hue = wrapHue(hue + sampled.shift);

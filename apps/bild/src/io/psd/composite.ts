@@ -9,6 +9,7 @@ export interface RawPsdComposite {
   readonly isPsb: boolean;
   readonly rgba: Uint8Array;
   readonly iccProfile: Uint8Array | null;
+  readonly palette: Uint8Array | null;
   /** Interleaved, host-endian samples for the Little CMS path; CMYK samples use ordinary ink polarity. */
   readonly managedSamples: Uint8Array | Uint16Array | null;
   readonly managedAlpha: Uint8Array | Uint16Array | null;
@@ -177,5 +178,6 @@ export function readRawPsdComposite(bytes: Uint8Array): RawPsdComposite {
     }
   }
   return { width, height, channels, bitsPerChannel: bits as 1 | 8 | 16 | 32, colorMode,
-    isPsb: version === 2, rgba, iccProfile, managedSamples, managedAlpha };
+    isPsb: version === 2, rgba, iccProfile, palette: colorMode === 2 && colorData.length >= 768 ? colorData.slice(0, 768) : null,
+    managedSamples, managedAlpha };
 }
