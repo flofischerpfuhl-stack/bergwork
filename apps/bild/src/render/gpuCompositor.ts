@@ -9,10 +9,12 @@
  * adjustment layers applied to everything below.
  */
 
-import { adjustmentProgram } from './adjustPrograms';
+// Pixi's counterintuitively named module installs static synchronisers; it does not relax CSP.
+import 'pixi.js/unsafe-eval';
 import {
   Mesh, MeshGeometry, RenderTexture, Shader, State, Texture, TextureSource, WebGLRenderer,
 } from 'pixi.js';
+import { adjustmentProgram } from './adjustPrograms';
 import {
   ancestorIds, maskTransform as storedMaskTransform, renderLayers, type BlendMode, type CanvasDocument, type Layer,
 } from '../core/document';
