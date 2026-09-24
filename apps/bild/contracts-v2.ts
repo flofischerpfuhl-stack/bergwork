@@ -14,7 +14,44 @@ export interface AssetRecordV2 {
   height?: number;
   channels?: 1 | 4;
   sha256: string;
-  role: 'image' | 'mask' | 'pattern' | 'embedded' | 'history-tile';
+  role: 'image' | 'mask' | 'pattern' | 'embedded' | 'font' | 'history-tile';
+}
+
+export interface TextRunStyleRecordV2 {
+  schemaVersion: 1;
+  fontFamily: string;
+  fontStyle: 'normal' | 'italic' | 'oblique';
+  fontWeight: number;
+  fontSize: number;
+  color: RGBV2 & { alpha?: number };
+  tracking: number;
+  kerning: 'metric' | 'optical' | 'none';
+  leading: number | null;
+  baselineShift: number;
+  features: Partial<Record<'liga' | 'dlig' | 'tnum' | 'lnum' | 'onum' | 'smcp', boolean>>;
+  axes: Record<string, number>;
+}
+export interface TextRunRecordV2 { from: number; to: number; style: TextRunStyleRecordV2 }
+export interface TextParagraphStyleRecordV2 {
+  schemaVersion: 1;
+  alignment: 'left' | 'center' | 'right' | 'justify';
+  direction: 'auto' | 'ltr' | 'rtl';
+  firstLineIndent: number;
+  startIndent: number;
+  endIndent: number;
+  spaceBefore: number;
+  spaceAfter: number;
+}
+export interface TextParagraphRecordV2 { from: number; to: number; style: TextParagraphStyleRecordV2 }
+export interface DocumentFontRecordV2 {
+  id: string;
+  family: string;
+  style: string;
+  weight: number;
+  source: 'bundled' | 'system' | 'local' | 'embedded';
+  postscriptName?: string;
+  resourceId?: AssetIdV2;
+  embeddingAllowed: boolean;
 }
 
 export interface LayerTransformV2 {
@@ -100,7 +137,10 @@ export type LayerRecordV2 =
   | (LayerCommonV2 & { kind: 'fill'; fill: FillRecordV2 })
   | (LayerCommonV2 & { kind: 'vector'; paths: readonly VectorPathRecordV2[]; style: { fill: FillRecordV2 | null; stroke: { color: RGBV2; width: number; alignment: 'inside' | 'center' | 'outside' } | null }; previewAssetId: AssetIdV2 | null;
       sourceShape: { kind: 'Rectangle' | 'Ellipse'; red: number; green: number; blue: number; cornerRadius: number } | null })
-  | (LayerCommonV2 & { kind: 'text'; text: string; runs: readonly { from: number; to: number; fontFamily: string; fontSize: number; color: RGBV2 }[]; box: { width: number; height: number } | null; alignment: 'left' | 'center' | 'right' | 'justify'; previewAssetId: AssetIdV2 | null })
+  | (LayerCommonV2 & { kind: 'text'; textSchemaVersion: 1; text: string; runs: readonly TextRunRecordV2[];
+      paragraphs: readonly TextParagraphRecordV2[]; box: { width: number; height: number } | null;
+      alignment: 'left' | 'center' | 'right' | 'justify'; previewAssetId: AssetIdV2 | null;
+      previewTransform: LayerTransformV2 | null })
   | (LayerCommonV2 & { kind: 'embedded'; content: { mode: 'embedded' | 'linked'; mediaType: 'image' | 'svg' | 'pdf' | 'project'; assetId?: AssetIdV2; uri?: string; sourceName: string }; previewAssetId: AssetIdV2 | null });
 
 export interface ArtboardRecordV2 {
@@ -142,6 +182,7 @@ export interface ProjectManifestV2 {
   /** Ruler guides (optional; absent in files written before guides existed). */
   guides?: readonly { id: string; orientation: 'horizontal' | 'vertical'; position: number }[];
   assets: readonly AssetRecordV2[];
+  fonts?: readonly DocumentFontRecordV2[];
   history?: ProjectHistoryV2;
   extensions?: Record<string, unknown>;
 }

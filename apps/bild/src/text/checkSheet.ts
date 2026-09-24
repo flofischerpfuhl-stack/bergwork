@@ -120,6 +120,13 @@ export interface PerformanceResult {
   readonly medianMs: number;
   readonly p95Ms: number;
   readonly maxMs: number;
+  readonly layoutP95Ms: number;
+  readonly rasterP95Ms: number;
+}
+
+function percentile95(samples: readonly number[]): number {
+  const sorted = samples.slice().sort((a, b) => a - b);
+  return sorted[Math.ceil(sorted.length * 0.95) - 1]!;
 }
 
 export function measureParagraphPerformance(engine: TextEngine, runs = 50): PerformanceResult {
@@ -129,20 +136,29 @@ export function measureParagraphPerformance(engine: TextEngine, runs = 50): Perf
     fontFamilies: ['Noto Sans', 'Noto Sans Arabic', 'Noto Sans Devanagari'], fontSize: 16,
     heightMultiplier: 1.25, fontFeatures: [{ name: 'kern', value: 1 }, { name: 'liga', value: 1 }],
   };
-  const run = () => {
+  const layoutSamples = new Array<number>(runs), rasterSamples = new Array<number>(runs);
+  const run = (index = -1) => {
     const started = performance.now();
     const layout = engine.layoutParagraph(request);
+    const laidOut = performance.now();
     try { engine.rasterizeParagraph(layout); } finally { layout.dispose(); }
-    return performance.now() - started;
+    const finished = performance.now();
+    if (index >= 0) {
+      layoutSamples[index] = laidOut - started;
+      rasterSamples[index] = finished - laidOut;
+    }
+    return finished - started;
   };
   for (let i = 0; i < 5; i++) run();
   const samples = new Array<number>(runs);
-  for (let i = 0; i < runs; i++) samples[i] = run();
+  for (let i = 0; i < runs; i++) samples[i] = run(i);
   const sorted = samples.slice().sort((a, b) => a - b);
   return {
     runs, characterCount: PERFORMANCE_PARAGRAPH.length, samplesMs: samples,
     medianMs: sorted[Math.floor(sorted.length / 2)]!,
     p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1]!,
     maxMs: sorted[sorted.length - 1]!,
+    layoutP95Ms: percentile95(layoutSamples),
+    rasterP95Ms: percentile95(rasterSamples),
   };
 }

@@ -41,7 +41,7 @@ export interface CompositeHooks {
 }
 
 export const DEFAULT_HOOKS: CompositeHooks = {
-  transform: (l) => l.transform,
+  transform: (l) => l.kind === 'text' ? l.renderedTransform ?? l.transform : l.transform,
   maskPlacement: (l) => l.mask?.placement ?? null,
   blendMode: (l) => l.blendMode,
   raster: (l) => l.raster ?? null,

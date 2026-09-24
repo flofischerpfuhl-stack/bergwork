@@ -11,13 +11,14 @@ import type { LayerTransform, Point } from './geometry';
 import { transformsEqual } from './geometry';
 import type {
   AdjustmentKind, BlendMode, CanvasDocument, ColorLabel, CropParameters, EmbeddedLayer, FillParameters, Layer,
-  LayerAdjustment, LayerEffect, LayerLocks, LayerMask, LayerShape, LiveFilter, TextRun, VectorMask, VectorPath,
-  VectorStyle, WarpQuad,
+  LayerAdjustment, LayerEffect, LayerLocks, LayerMask, LayerShape, LegacyTextRun, LiveFilter, TextParagraph,
+  TextRun, TextRunStyle, VectorMask, VectorPath, VectorStyle, WarpQuad,
 } from './model';
 export type {
-  AdjustmentKind, Artboard, Guide, BlendMode, CanvasDocument, ColorLabel, CropParameters, DocumentResource, EmbeddedLayer,
+  AdjustmentKind, Artboard, Guide, BlendMode, CanvasDocument, ColorLabel, CropParameters, DocumentFont, DocumentResource, EmbeddedLayer,
   FillLayer, FillParameters, GroupLayer, Layer, LayerAdjustment, LayerEffect, LayerLocks, LayerMask, ModelLayer,
-  LayerShape, LiveFilter, PixelLayer, TextLayer, VectorLayer, VectorMask, WarpQuad,
+  LayerShape, LegacyTextRun, LiveFilter, PixelLayer, TextLayer, TextParagraph, TextParagraphStyle, TextRun, TextRunStyle,
+  TextKerning, TextOpenTypeFeature, VectorLayer, VectorMask, WarpQuad,
 } from './model';
 
 /** Photoshop menu groups; the first 13 modes came from upstream LayerBlendMode.allCases. */
@@ -83,7 +84,8 @@ export function documentsEqual(a: CanvasDocument | null, b: CanvasDocument | nul
   if (a === b) return true;
   if (!a || !b) return false;
   if (a.id !== b.id || a.width !== b.width || a.height !== b.height || a.resolution !== b.resolution
-    || !jsonEqual(a.artboards ?? [], b.artboards ?? []) || !jsonEqual(a.guides ?? [], b.guides ?? []) || !resourcesEqual(a.resources ?? [], b.resources ?? [])) return false;
+    || !jsonEqual(a.artboards ?? [], b.artboards ?? []) || !jsonEqual(a.guides ?? [], b.guides ?? [])
+    || !jsonEqual(a.fonts ?? [], b.fonts ?? []) || !resourcesEqual(a.resources ?? [], b.resources ?? [])) return false;
   if (a.selection !== b.selection) return false;
   if (a.layers.length !== b.layers.length) return false;
   return a.layers.every((layer, i) => layersEqual(layer, b.layers[i]!));
@@ -133,10 +135,54 @@ export interface NewLayerFields {
   paths?: readonly VectorPath[];
   style?: VectorStyle;
   text?: string;
-  runs?: readonly TextRun[];
+  runs?: readonly (TextRun | LegacyTextRun)[];
+  paragraphs?: readonly TextParagraph[];
   box?: { readonly width: number; readonly height: number } | null;
   alignment?: 'left' | 'center' | 'right' | 'justify';
+  renderedTransform?: LayerTransform | null;
   content?: EmbeddedLayer['content'];
+}
+
+export const DEFAULT_TEXT_STYLE: TextRunStyle = {
+  schemaVersion: 1, fontFamily: 'Noto Sans', fontStyle: 'normal', fontWeight: 400, fontSize: 12,
+  color: { red: 0, green: 0, blue: 0, alpha: 1 }, tracking: 0, kerning: 'metric', leading: null,
+  baselineShift: 0, features: { liga: true }, axes: {},
+};
+
+export function defaultTextParagraphStyle(alignment: TextParagraph['style']['alignment'] = 'left'): TextParagraph['style'] {
+  return { schemaVersion: 1, alignment, direction: 'auto', firstLineIndent: 0, startIndent: 0, endIndent: 0,
+    spaceBefore: 0, spaceAfter: 0 };
+}
+
+/** Migrates the minimal Phase-1 run shape into the schema-versioned P2 representation. */
+export function normalizeTextRuns(text: string, values: readonly (TextRun | LegacyTextRun)[]): TextRun[] {
+  const result: TextRun[] = [];
+  for (const value of values) {
+    const from = Math.max(0, Math.min(text.length, Math.trunc(value.from)));
+    const to = Math.max(from, Math.min(text.length, Math.trunc(value.to)));
+    if (to <= from) continue;
+    const style = 'style' in value ? value.style : {
+      ...DEFAULT_TEXT_STYLE, fontFamily: value.fontFamily, fontSize: value.fontSize,
+      color: { ...value.color, alpha: 1 },
+    };
+    result.push({ from, to, style });
+  }
+  if (!result.length && text.length) result.push({ from: 0, to: text.length, style: DEFAULT_TEXT_STYLE });
+  return result.sort((a, b) => a.from - b.from || a.to - b.to);
+}
+
+export function defaultTextParagraphs(text: string,
+  alignment: TextParagraph['style']['alignment'] = 'left'): TextParagraph[] {
+  const result: TextParagraph[] = [];
+  let from = 0;
+  for (;;) {
+    const newline = text.indexOf('\n', from);
+    const to = newline < 0 ? text.length : newline + 1;
+    result.push({ from, to, style: defaultTextParagraphStyle(alignment) });
+    if (newline < 0) break;
+    from = newline + 1;
+  }
+  return result;
 }
 
 export function newLayer(fields: NewLayerFields): import('./model').ModelLayer {
@@ -162,8 +208,13 @@ export function newLayer(fields: NewLayerFields): import('./model').ModelLayer {
       ?? { kind: 'solid', schemaVersion: 1, color: { red: 0, green: 0, blue: 0 } } };
     case 'vector': return { ...base, kind, raster: fields.raster ?? null, paths: fields.paths ?? [],
       style: fields.style ?? { fill: null, stroke: null }, sourceShape: fields.sourceShape ?? null };
-    case 'text': return { ...base, kind, raster: fields.raster ?? null, text: fields.text ?? '', runs: fields.runs ?? [],
-      box: fields.box ?? null, alignment: fields.alignment ?? 'left' };
+    case 'text': {
+      const text = fields.text ?? '';
+      const alignment = fields.alignment ?? 'left';
+      return { ...base, kind, raster: fields.raster ?? null, text, runs: normalizeTextRuns(text, fields.runs ?? []),
+        paragraphs: fields.paragraphs ?? defaultTextParagraphs(text, alignment), box: fields.box ?? null, alignment,
+        renderedTransform: fields.renderedTransform ?? null };
+    }
     case 'embedded': return { ...base, kind, raster: fields.raster ?? null,
       content: fields.content ?? { mode: 'embedded', mediaType: 'image', sourceName: '' } };
   }
@@ -204,7 +255,8 @@ function kindPayload(layer: Layer): unknown {
     case 'fill': return (model as import('./model').FillLayer).fill;
     case 'vector': { const value = model as import('./model').VectorLayer;
       return { paths: value.paths, style: value.style, sourceShape: value.sourceShape }; }
-    case 'text': { const value = model as import('./model').TextLayer; return { text: value.text, runs: value.runs, box: value.box, alignment: value.alignment }; }
+    case 'text': { const value = model as import('./model').TextLayer; return { text: value.text, runs: value.runs,
+      paragraphs: value.paragraphs, box: value.box, alignment: value.alignment, renderedTransform: value.renderedTransform }; }
     case 'embedded': return (model as import('./model').EmbeddedLayer).content;
     default: return null;
   }

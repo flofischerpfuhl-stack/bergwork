@@ -1,7 +1,8 @@
 export type {
   FillPaint, FontFeature, FontRegistration, FontVariation, LinearGradientPaint, LoadTextEngineOptions,
-  ParagraphLayout, ParagraphMetrics, ParagraphRequest, PathOperation, PathRasterRequest, RasterizedOutput,
+  ParagraphBlock, ParagraphLayout, ParagraphMetrics, ParagraphRequest, ParagraphSpan, PathOperation, PathRasterRequest, RasterizedOutput,
   RegisteredFont, RgbaColor, SolidPaint, StrokePaint, TextAlignment, TextDirection, TextEngine, TextEngineMemory,
+  TextRect,
 } from './types';
 
 import type { LoadTextEngineOptions, TextEngine } from './types';
@@ -14,4 +15,3 @@ export async function loadTextEngine(options: LoadTextEngineOptions = {}): Promi
   const { createCanvasKitTextEngine } = await import('./engine');
   return createCanvasKitTextEngine(options);
 }
-
