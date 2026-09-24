@@ -1,9 +1,12 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
 const PSD = path.resolve('tests/fixtures/psd/corpus/1layer.psd');
 
 test('opens a corpus PSD through Open as a layered document', async ({ page }) => {
+  // The psd-tools corpus is fetched by scripts/fetch-psd-corpus.sh and not committed (E5); without it there is nothing to open.
+  test.skip(!fs.existsSync(PSD), 'PSD corpus not fetched (scripts/fetch-psd-corpus.sh)');
   await page.goto('/');
   const chooserPromise = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Open project' }).click();
