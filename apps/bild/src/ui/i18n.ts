@@ -393,6 +393,37 @@ const de: Record<string, string> = {
   'Uniform': 'Gleichmäßig',
   'White': 'Weiß',
   'Yellows': 'Gelbtöne',
+  // Type tool (PRODUCT-PLAN A5, 6.6, P11), Photoshop's German terms
+  'Horizontal Type (T)': 'Horizontales Textwerkzeug (T)', 'Text': 'Text',
+  'Click to add text · Drag for a text box · Click text to edit it · Escape or ⌘Enter commits':
+    'Klicken für Punkttext · Ziehen für Absatztext · Auf Text klicken, um ihn zu bearbeiten · Esc oder ⌘Eingabe bestätigt',
+  'Text can’t be drawn': 'Text kann nicht dargestellt werden',
+  'Edit Text': 'Text bearbeiten', 'Format Text': 'Text formatieren', 'Format Paragraph': 'Absatz formatieren',
+  'Replace Font': 'Schrift ersetzen', 'New Point Text': 'Neuer Punkttext', 'New Area Text': 'Neuer Absatztext',
+  'Convert to Area Text': 'In Absatztext umwandeln', 'Convert to Point Text': 'In Punkttext umwandeln', 'Rasterize Text': 'Text rastern',
+  'Font Family': 'Schriftart', 'Font Style': 'Schriftschnitt', 'Font Size': 'Schriftgrad', 'Missing font': 'Fehlende Schrift',
+  'Search fonts': 'Schriften suchen', 'In This Document': 'In diesem Dokument', 'Bundled Fonts': 'Mitgelieferte Schriften',
+  'Installed Fonts': 'Installierte Schriften', 'Missing': 'Fehlt', 'No fonts match.': 'Keine passende Schrift.',
+  'Asking for installed fonts…': 'Installierte Schriften werden abgefragt …', 'Show Installed Fonts…': 'Installierte Schriften anzeigen …',
+  'This browser doesn’t share its installed fonts. The bundled fonts are always available.':
+    'Dieser Browser gibt seine installierten Schriften nicht frei. Die mitgelieferten Schriften sind immer verfügbar.',
+  'Left Align Text': 'Text links ausrichten', 'Center Text': 'Text zentrieren', 'Right Align Text': 'Text rechts ausrichten',
+  'Justify': 'Blocksatz', 'Alignment': 'Ausrichtung', 'Ligatures': 'Ligaturen', 'Discretionary Ligatures': 'Bedingte Ligaturen',
+  'Tabular Figures': 'Tabellenziffern', 'Lining Figures': 'Versalziffern', 'Oldstyle Figures': 'Mediävalziffern', 'Small Caps': 'Kapitälchen',
+  'pt': 'Pt', 'Character & Paragraph': 'Zeichen & Absatz', 'Character': 'Zeichen', 'Paragraph': 'Absatz', 'Leading': 'Zeilenabstand',
+  'Kerning': 'Kerning', 'Metrics': 'Metrisch', 'Optical': 'Optisch', 'Tracking': 'Laufweite', 'Automatic leading': 'Automatischer Zeilenabstand',
+  'Baseline Shift': 'Grundlinienversatz',
+  'Baseline shift is kept with the text but not drawn yet: the text engine cannot render it.':
+    'Der Grundlinienversatz bleibt im Text gespeichert, wird aber noch nicht gezeichnet: Die Text-Engine kann ihn nicht darstellen.',
+  'Left Indent': 'Einzug links', 'Right Indent': 'Einzug rechts', 'First Line Indent': 'Einzug erste Zeile',
+  'Space Before': 'Abstand davor', 'Space After': 'Abstand danach', 'Direction': 'Textrichtung', 'Automatic': 'Automatisch',
+  'Left to Right': 'Links nach rechts', 'Right to Left': 'Rechts nach links', 'Text Color': 'Textfarbe', 'Loading fonts…': 'Schriften werden geladen …',
+  'Commit': 'Bestätigen', 'text layer': 'Textebene', 'text layers': 'Textebenen', 'shown as': 'dargestellt als', 'Replace with': 'Ersetzen durch',
+  'Replace': 'Ersetzen', 'Missing Fonts': 'Fehlende Schriften', 'Keep': 'Beibehalten',
+  'This document uses fonts that aren’t available here. Their text is drawn with a substitute until you replace them; imported text keeps its saved preview until you edit it.':
+    'Dieses Dokument verwendet Schriften, die hier nicht verfügbar sind. Ihr Text wird mit einem Ersatz gezeichnet, bis du sie ersetzt; importierter Text behält seine gespeicherte Vorschau, bis du ihn bearbeitest.',
+  'Look in Installed Fonts': 'In installierten Schriften suchen', 'Text layer': 'Textebene',
+  'Double-click to edit the text': 'Doppelklick bearbeitet den Text',
 };
 
 const isApple = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);

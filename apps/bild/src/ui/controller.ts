@@ -116,6 +116,9 @@ export class EditorController {
   /** Number keys for tools with their own opacity (brushes, gradient); true when handled. */
   opacityKey: ((digit: number) => boolean) | null = null;
   clipboardImageSize: (() => Promise<{ width: number; height: number } | null>) | null = null;
+  /** Lazily loaded renderers (text) that must finish shaping before pixels are read for export or merges. */
+  renderPreparers: ((session: EditorSession) => Promise<void>)[] = [];
+  private async prepareRender(): Promise<void> { for (const prepare of this.renderPreparers) await prepare(this.session); }
 
   /** Tool keys: some keys also switch a tool's mode (E erases, Shift-U switches shapes). */
   selectToolByKey(tool: Tool, key: string, shift: boolean): void {
@@ -233,6 +236,7 @@ export class EditorController {
 
   private async flatten(document: CanvasDocument): Promise<Raster> {
     const canvas = await this.readyCanvas();
+    await this.prepareRender();
     const pixels = canvas.readRegion(document, 0, 0, document.width, document.height);
     return Raster.fromPixels(document.width, document.height, 4, pixels);
   }
@@ -562,6 +566,7 @@ export class EditorController {
   /** The canvas compositor as export renderer (GPU where available, the same pixels as the canvas). */
   private async exportRenderer(): Promise<ExportRenderer> {
     const canvas = await this.readyCanvas();
+    await this.prepareRender();
     if (canvas.readView) {
       return {
         readView: (document, width, height, view, scale) => canvas.readView!(document, width, height, view, scale),

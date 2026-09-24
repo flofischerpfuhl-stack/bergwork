@@ -11,9 +11,10 @@ function pointsToPixels(points: number, resolution: number, scale: number): numb
 function direction(paragraph: TextParagraph, text: string): 'ltr' | 'rtl' {
   if (paragraph.style.direction !== 'auto') return paragraph.style.direction;
   // Unicode bidi layout itself remains HarfBuzz/SkParagraph's responsibility. This only selects
-  // the paragraph base direction when the model requests auto direction.
-  const value = text.slice(paragraph.from, paragraph.to);
-  return /[\u0590-\u08ff]/u.test(value) ? 'rtl' : 'ltr';
+  // the paragraph base direction when the model requests auto direction: the first strong (letter)
+  // character decides (UAX #9 P2/P3), so a Latin paragraph ending in Arabic stays left-to-right.
+  const first = /\p{L}/u.exec(text.slice(paragraph.from, paragraph.to))?.[0] ?? '';
+  return /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/u.test(first) ? 'rtl' : 'ltr';
 }
 
 function span(run: TextRun, document: CanvasDocument, scale: number, fonts: TextFontRegistry): ParagraphSpan {

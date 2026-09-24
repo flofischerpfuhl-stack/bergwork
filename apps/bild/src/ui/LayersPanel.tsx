@@ -221,6 +221,10 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
         if ((event.target as HTMLElement).closest('button:not([data-thumb])')) return;
         if (!session.canEditLayers) return;
         if (layer.adjustment && controller.features.editAdjustment) { session.selectLayer(layer.id); controller.features.editAdjustment.run(); return; }
+        // Photoshop: double-clicking a text layer's thumbnail edits its text with everything selected.
+        if (layer.kind === 'text' && (event.target as HTMLElement).closest('[data-text-thumb]') && controller.features.editActiveText) {
+          session.selectLayer(layer.id); controller.features.editActiveText.run(); return;
+        }
         session.selectLayer(layer.id);
         setRenaming(true);
       }}
@@ -249,7 +253,13 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
         <Icon name={session.collapsedGroupIds.has(layer.id) ? 'chevronRight' : 'chevronDown'} size={12} />
       </button>
       <div className={styles.thumbSlot}>
-        {framed ? (
+        {layer.kind === 'text' ? (
+          <button type="button" data-thumb data-text-thumb className={`${styles.thumb} ${active && !session.isMaskSelected ? styles.thumbTarget : ''}`}
+            style={{ width: 30, height: 30, display: 'grid', placeItems: 'center' }} aria-label={`${t('Text layer')}: ${layer.name}`}
+            title={t('Double-click to edit the text')} data-testid="text-thumb" onClick={() => session.selectLayerTarget(layer.id, false)}>
+            <Icon name="text" size={20} />
+          </button>
+        ) : framed ? (
           <button type="button" data-thumb className={`${styles.thumb} ${active && !session.isMaskSelected ? styles.thumbTarget : ''}`}
             style={fittedSize(canvasSize, 36)} aria-label={`${t('Select image')}: ${layer.name}`} title={t('Select image pixels')}
             onClick={(event) => {
