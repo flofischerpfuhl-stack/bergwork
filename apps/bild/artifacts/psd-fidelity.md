@@ -7,21 +7,19 @@ alpha (so undefined straight RGB below transparency is ignored): mean over all c
 percentile. A file passes only when both limits for its primary feature folder pass.
 The runner is a measurement baseline: fidelity failures are reported but do not make the command itself fail.
 
-Overall: 300/300 parsed, 300/300 rendered, 198/300 passed (66.0%).
+Overall: 300/300 parsed, 300/300 rendered, 201/300 passed (67.0%).
 The Product Plan A7 acceptance target of at least 90% is **not met** by this baseline.
 
-Second-round input baseline: 181/300 (60.3%). Current native result: 198/300 (66.0%), a net gain of 17 files.
-Per-folder pass-count changes: blend modes 30→28, adjustments 13→18, layers 29→32, group clipping 0→1,
-and root 58→68; effects 11, paths 12, masks 0, transparency 13, colour modes 5, colour profiles 1,
-gradients 4, and descriptors 5 are unchanged. The overlapping 16/32-bit and PSB tags changed 7→16 and
-22→27 respectively. The two blend-mode regressions are the RGB and grayscale artboard fixtures; their
-editable artboard/vector-mask structure still lacks a faithful canvas model.
+Third-round input baseline: 198/300 (66.0%). Current native result: 201/300 (67.0%), a net gain of 3 files.
+Per-folder pass-count changes: root 68→71; all other primary folders are unchanged. The overlapping
+16/32-bit and PSB tags remain 16 and 27 respectively. The gains are `artboard.psd`, `artboard-bgcolor.psd`,
+and `passthrough_clipping_mask_blendmode.psd`.
 
 ## Thresholds and feature summary
 
 | Feature | Limits (mean / p99) | Files | Parsed | Rendered | Passed | Pass rate | Top failure causes |
 |---|---:|---:|---:|---:|---:|---:|---|
-| blend-modes | ≤ 2 / ≤ 8 | 32 | 32 | 32 | 28 | 87.5% | unsupported: artboards (3); wrong math/order/colour conversion (1) |
+| blend-modes | ≤ 2 / ≤ 8 | 32 | 32 | 32 | 28 | 87.5% | wrong math/order/colour conversion (4) |
 | adjustments | ≤ 8 / ≤ 64 | 39 | 39 | 39 | 18 | 46.2% | unsupported: ag-psd-parser (19); wrong math/order/colour conversion (2) |
 | layers | ≤ 2 / ≤ 16 | 36 | 36 | 36 | 32 | 88.9% | wrong math/order/colour conversion (4) |
 | effects | ≤ 8 / ≤ 64 | 15 | 15 | 15 | 11 | 73.3% | unsupported: advanced-blending (3); unsupported: ag-psd-parser (1) |
@@ -35,7 +33,7 @@ editable artboard/vector-mask structure still lacks a faithful canvas model.
 | descriptors | ≤ 2 / ≤ 16 | 6 | 6 | 6 | 5 | 83.3% | wrong math/order/colour conversion (1) |
 | 16/32-bit | ≤ 3 / ≤ 24 | 29 | 29 | 29 | 16 | 55.2% | unsupported: ag-psd-parser (5); unsupported: bit-depth:16 (4); unsupported: bit-depth:32 (3) |
 | PSB | ≤ 2 / ≤ 16 | 37 | 37 | 37 | 27 | 73.0% | wrong math/order/colour conversion (5); unsupported: advanced-blending (2); unsupported: ag-psd-parser (1) |
-| root | ≤ 2 / ≤ 16 | 120 | 120 | 120 | 68 | 56.7% | unsupported: ag-psd-parser (15); wrong math/order/colour conversion (14); unsupported: advanced-blending (8) |
+| root | ≤ 2 / ≤ 16 | 120 | 120 | 120 | 71 | 59.2% | unsupported: ag-psd-parser (14); wrong math/order/colour conversion (12); unsupported: advanced-blending (9) |
 
 Files in the `16/32-bit` and `PSB` rows are also counted in their feature/root row.
 
@@ -85,7 +83,7 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | Impact and feature | Occurrences |
 |---|---:|
 | editability-only: ag-psd-parser | 170 |
-| editability-only: compatibility-preview | 150 |
+| editability-only: compatibility-preview | 145 |
 | not-rendered: advanced-blending | 136 |
 | not-rendered: mask-pixels | 104 |
 | not-rendered: ag-psd-parser | 80 |
@@ -102,8 +100,8 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | approximated: vector-fill:pattern | 10 |
 | not-rendered: pattern-overlay | 9 |
 | not-rendered: bevel | 8 |
+| editability-only: artboards | 6 |
 | editability-only: flattened-composite | 6 |
-| not-rendered: artboards | 6 |
 | not-rendered: mask-feather | 6 |
 | approximated: color-mode:9 | 5 |
 | not-rendered: orphan-clipping | 5 |
@@ -142,8 +140,8 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 
 ## Per-file results
 
-Every remaining failing file is listed below. In a failing row, `—` means that no unsupported record was detected;
-the remaining cause is therefore rendering math, ordering, or colour conversion rather than a discarded feature.
+All 99 remaining failing files are present below. In a failing row, `—` means that no unsupported record was
+detected; the remaining cause is rendering math, ordering, or colour conversion rather than a discarded feature.
 
 | File | Primary feature | Parsed | Rendered | Pass | Mean | p99 | Max | Unsupported (non-editability) / error |
 |---|---|---:|---:|---:|---:|---:|---:|---|
@@ -169,7 +167,7 @@ the remaining cause is therefore rendering math, ordering, or colour conversion 
 | adjustment-mask.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | adjustments/adjustment_backdrop_test.psd | adjustments | yes | yes | yes | 0.921 | 17 | 26 | ag-psd-parser, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels |
 | adjustments/adjustment_clipping.psd | adjustments | yes | yes | no | 22.142 | 33 | 34 | ag-psd-parser, mask-pixels, mask-pixels, mask-pixels, mask-pixels |
-| adjustments/adjustment_nested_composition_1.psd | adjustments | yes | yes | no | 49.697 | 255 | 255 | ag-psd-parser, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels |
+| adjustments/adjustment_nested_composition_1.psd | adjustments | yes | yes | no | 50.727 | 255 | 255 | ag-psd-parser, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels |
 | adjustments/adjustment_nested_composition_2.psd | adjustments | yes | yes | yes | 0.242 | 1 | 3 | ag-psd-parser, mask-pixels, mask-pixels |
 | adjustments/adjustment_nested_composition_3.psd | adjustments | yes | yes | yes | 0.153 | 1 | 2 | ag-psd-parser, mask-pixels |
 | adjustments/adjustment_nested_composition_4.psd | adjustments | yes | yes | yes | 1.483 | 2 | 17 | ag-psd-parser, mask-pixels, mask-default, mask-default, mask-pixels, mask-default, mask-pixels, mask-default, mask-pixels |
@@ -206,12 +204,12 @@ the remaining cause is therefore rendering math, ordering, or colour conversion 
 | adjustments/threshold_cmyk.psd | adjustments | yes | yes | no | 26.430 | 255 | 255 | ag-psd-parser |
 | adjustments/threshold_grayscale.psd | adjustments | yes | yes | no | 20.062 | 255 | 255 | ag-psd-parser |
 | adjustments/threshold_rgb.psd | adjustments | yes | yes | yes | 0.454 | 0 | 255 | ag-psd-parser |
-| advanced-blending.psd | root | yes | yes | no | 75.588 | 255 | 255 | artboards, advanced-blending |
-| artboard-bgcolor.psd | root | yes | yes | no | 64.513 | 255 | 255 | — |
-| artboard.psd | root | yes | yes | no | 67.391 | 255 | 255 | — |
+| advanced-blending.psd | root | yes | yes | no | 5.134 | 22 | 255 | advanced-blending |
+| artboard-bgcolor.psd | root | yes | yes | yes | 0.000 | 0 | 1 | — |
+| artboard.psd | root | yes | yes | yes | 0.110 | 0 | 40 | — |
 | background-red-opacity-80.psd | root | yes | yes | yes | 0.000 | 0 | 1 | — |
 | blend-and-clipping.psd | root | yes | yes | no | 34.123 | 255 | 255 | advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending |
-| blend-modes/cmyk-blend-modes.psd | blend-modes | yes | yes | no | 188.197 | 255 | 255 | artboards |
+| blend-modes/cmyk-blend-modes.psd | blend-modes | yes | yes | no | 188.197 | 255 | 255 | — |
 | blend-modes/color-burn.psd | blend-modes | yes | yes | yes | 0.129 | 1 | 1 | — |
 | blend-modes/color-dodge.psd | blend-modes | yes | yes | yes | 0.089 | 1 | 2 | — |
 | blend-modes/color.psd | blend-modes | yes | yes | yes | 0.250 | 2 | 2 | — |
@@ -221,7 +219,7 @@ the remaining cause is therefore rendering math, ordering, or colour conversion 
 | blend-modes/dissolve.psd | blend-modes | yes | yes | no | 56.095 | 255 | 255 | — |
 | blend-modes/divide.psd | blend-modes | yes | yes | yes | 0.130 | 1 | 2 | — |
 | blend-modes/exclusion.psd | blend-modes | yes | yes | yes | 0.048 | 1 | 2 | — |
-| blend-modes/gray-blend-modes.psd | blend-modes | yes | yes | no | 16.733 | 242 | 255 | artboards |
+| blend-modes/gray-blend-modes.psd | blend-modes | yes | yes | no | 16.733 | 242 | 255 | — |
 | blend-modes/group-divider-blend-mode.psd | blend-modes | yes | yes | yes | 0.000 | 0 | 0 | — |
 | blend-modes/hard-light.psd | blend-modes | yes | yes | yes | 0.131 | 1 | 2 | — |
 | blend-modes/hard-mix.psd | blend-modes | yes | yes | yes | 0.129 | 1 | 1 | — |
@@ -237,7 +235,7 @@ the remaining cause is therefore rendering math, ordering, or colour conversion 
 | blend-modes/overlay.psd | blend-modes | yes | yes | yes | 0.128 | 1 | 1 | — |
 | blend-modes/pass-through.psd | blend-modes | yes | yes | yes | 0.088 | 1 | 1 | — |
 | blend-modes/pin-light.psd | blend-modes | yes | yes | yes | 0.088 | 1 | 2 | — |
-| blend-modes/rgb-blend-modes.psd | blend-modes | yes | yes | no | 1.297 | 27 | 255 | artboards |
+| blend-modes/rgb-blend-modes.psd | blend-modes | yes | yes | no | 1.297 | 27 | 255 | — |
 | blend-modes/saturation.psd | blend-modes | yes | yes | yes | 0.173 | 2 | 2 | — |
 | blend-modes/screen.psd | blend-modes | yes | yes | yes | 0.048 | 1 | 2 | — |
 | blend-modes/soft-light.psd | blend-modes | yes | yes | yes | 0.129 | 1 | 1 | — |
@@ -301,8 +299,8 @@ the remaining cause is therefore rendering math, ordering, or colour conversion 
 | fill_adjustments.psd | root | yes | yes | no | 25.827 | 200 | 206 | advanced-blending, advanced-blending, pattern-overlay, advanced-blending, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, adjustment:color lookup, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels |
 | gradient-fill.psb | root | yes | yes | yes | 0.047 | 1 | 2 | bit-depth:32 |
 | gradient-fill.psd | root | yes | yes | yes | 0.047 | 1 | 2 | bit-depth:32 |
-| gradient-sizes.psd | root | yes | yes | yes | 0.183 | 1 | 1 | artboards |
-| gradient-styles.psd | root | yes | yes | yes | 0.087 | 1 | 2 | artboards |
+| gradient-sizes.psd | root | yes | yes | yes | 0.183 | 1 | 1 | — |
+| gradient-styles.psd | root | yes | yes | yes | 0.087 | 1 | 2 | — |
 | gradients/noise-gradient-cmyk.psd | gradients | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser |
 | gradients/noise-gradient-grayscale.psd | gradients | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser |
 | gradients/noise-gradient-lab.psd | gradients | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, color-mode:9 |
@@ -378,7 +376,7 @@ the remaining cause is therefore rendering math, ordering, or colour conversion 
 | masks.psd | root | yes | yes | no | 1.673 | 22 | 65 | mask-pixels, mask-pixels, advanced-blending, gradient-overlay, advanced-blending, advanced-blending, real-mask, advanced-blending |
 | masks2.psb | root | yes | yes | yes | 0.108 | 0 | 40 | real-mask |
 | masks2.psd | root | yes | yes | yes | 0.108 | 0 | 40 | real-mask |
-| masks3.psd | root | yes | yes | no | 14.509 | 142 | 174 | — |
+| masks3.psd | root | yes | yes | no | 22.417 | 241 | 249 | — |
 | metadata.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | metadata.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | multichannel-pattern-fill.psd | root | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, mask-pixels |
@@ -388,12 +386,12 @@ the remaining cause is therefore rendering math, ordering, or colour conversion 
 | passthrough_blendmodes1.psd | root | yes | yes | yes | 0.033 | 1 | 1 | ag-psd-parser, mask-pixels, mask-default, mask-default, mask-default, mask-default |
 | passthrough_blendmodes2.psd | root | yes | yes | yes | 0.061 | 1 | 2 | ag-psd-parser, mask-pixels, mask-default, mask-default, mask-default, mask-default |
 | passthrough_blendmodes3.psd | root | yes | yes | yes | 0.156 | 1 | 2 | ag-psd-parser, mask-default, mask-default, mask-default, mask-default |
-| passthrough_clipping_mask_adjustment.psd | root | yes | yes | no | 54.709 | 198 | 233 | ag-psd-parser, mask-pixels, mask-default, mask-pixels, mask-default, mask-pixels, orphan-clipping |
-| passthrough_clipping_mask_blendmode.psd | root | yes | yes | no | 3.004 | 32 | 33 | ag-psd-parser, mask-pixels, mask-default, mask-default, orphan-clipping |
+| passthrough_clipping_mask_adjustment.psd | root | yes | yes | no | 33.261 | 146 | 171 | ag-psd-parser, mask-pixels, mask-default, mask-pixels, mask-default, mask-pixels, orphan-clipping |
+| passthrough_clipping_mask_blendmode.psd | root | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, mask-pixels, mask-default, mask-default, orphan-clipping |
 | passthrough_fill_adjustment.psd | root | yes | yes | yes | 0.021 | 1 | 1 | ag-psd-parser, mask-default, mask-default, mask-pixels |
 | passthrough_fill_blendmode.psd | root | yes | yes | no | 1.974 | 26 | 33 | ag-psd-parser |
 | passthrough_opacity.psd | root | yes | yes | no | 54.199 | 86 | 86 | ag-psd-parser, mask-default, mask-default, mask-pixels |
-| passthrough_vector_mask.psd | root | yes | yes | no | 13.413 | 77 | 127 | ag-psd-parser, mask-pixels, mask-pixels |
+| passthrough_vector_mask.psd | root | yes | yes | no | 10.998 | 73 | 122 | ag-psd-parser, mask-pixels, mask-pixels |
 | path-operations/combine-group.psd | path-operations | yes | yes | yes | 0.000 | 0 | 0 | — |
 | path-operations/combine.psd | path-operations | yes | yes | yes | 0.000 | 0 | 0 | — |
 | path-operations/exclude-first.psd | path-operations | yes | yes | yes | 0.000 | 0 | 0 | — |
@@ -446,26 +444,23 @@ the remaining cause is therefore rendering math, ordering, or colour conversion 
 | vector-mask.psb | root | yes | yes | yes | 0.000 | 0 | 0 | bit-depth:32 |
 | vector-mask.psd | root | yes | yes | no | 31.796 | 218 | 218 | bit-depth:32 |
 | vector-mask2.psd | root | yes | yes | no | 0.000 | 0 | 0 | embedded-icc |
-| vector-mask3.psd | root | yes | yes | no | 56.063 | 184 | 184 | real-mask, mask-default, mask-pixels |
+| vector-mask3.psd | root | yes | yes | no | 77.695 | 255 | 255 | real-mask, mask-default, mask-pixels |
 
 ## Known deviations and next work
 
 - CMYK and grayscale layer channels use Little CMS with an embedded profile when present and deterministic default profiles
   otherwise. Lab uses a D50 Lab-to-sRGB conversion; duotone/multichannel use their available channel values because the
   proprietary Photoshop ink curves are not present in the parsed data.
-- RGBA16 layer data is retained through Little CMS's 16-bit transform rather than round-tripping through RGBA8. The 32-bit
-  path now reconstructs cache-less solid/gradient vector fills from their editable layer descriptors, but still clamps other
-  floating samples instead of reproducing Photoshop's document-specific HDR preview/tone-mapping transform.
+- RGBA16 layer data is retained through Little CMS's 16-bit transform. The 32-bit path clamps floating samples to display range; it does not reproduce Photoshop’s
+  document-specific 32-bit preview/tone-mapping transform, which remains a major corpus failure source.
 - Isolated groups, group opacity/fill, nested group order, and the corpus knockout cases are composited natively on CPU and GPU.
   ag-psd exposes knockout as a boolean but not the shallow/deep selector; the pass-through shallow nested case remains ambiguous.
-- Threshold uses Photoshop's Rec.601 decision luminance, Posterize uses Photoshop bin boundaries, and Curves uses a natural
-  cubic spline; their RGB corpus fixtures now pass. Remaining adjustment mismatches are listed per file above: modern
-  Brightness/Contrast, non-colorize Hue/Saturation ranges, and non-RGB adjustment/CMS ordering still differ.
-- Vector/group masks without pixel channels, smart filters, blend-if, and pattern/bevel effects remain unsupported. A clipped
-  isolated group is now composited against its preceding sibling's live alpha on both CPU and GPU.
+- Remaining adjustment mismatches are listed per file above: modern Brightness/Contrast, curve interpolation, non-colorize
+  Hue/Saturation ranges, non-RGB Levels/Invert, Posterize, and Threshold differ from Photoshop’s proprietary kernels.
+- Modern artboard rectangles, transparent/white/black/custom backgrounds, and child clipping are native. Early two-byte
+  `artb` records have no rectangle, so their clip is inferred from bounded children and off-canvas children are treated as bleed.
+- Vector/group masks without pixel channels, smart filters, blend-if, pattern/bevel effects, and some group clipping remain unsupported.
   Text, vector, and smart-object layers use their layer-owned saved pixel caches; never the document merged composite.
-- Generated fills without a pixel cache are rasterized from the editable path and fill descriptor. Photoshop's classic gradient
-  interpolation is approximated by the response measured from the corpus because its proprietary interpolation kernel is absent.
 - Bounded raster masks retain the PSD outside-mask default. Density is baked into mask samples; feather is still unsupported.
 - Dissolve uses a deterministic local dither because the PSD layer data contains neither Photoshop’s process-local random
   table nor a seed. Its probability/opaque-pixel semantics match, but individual saved-composite dots do not.

@@ -159,6 +159,9 @@ class BandRenderer {
   }
 
   private ownMask(layer: Layer, x: number, y: number, adjustment = false, documentToOutput?: Affine): number {
+    const artboard = (layer as Layer & { readonly psdArtboardRect?: Rect }).psdArtboardRect;
+    if (artboard && !adjustment) return x >= artboard.x && y >= artboard.y
+      && x < artboard.x + artboard.width && y < artboard.y + artboard.height ? 1 : 0;
     const mask = layer.mask, raster = this.maskRaster(layer);
     if (!(mask?.enabled || layer.vectorMask?.enabled) || !raster || raster.channels !== 1) return 1;
     const layerTransform = this.transform(layer);
@@ -195,9 +198,15 @@ class BandRenderer {
     }
     let coverage = 1;
     for (const folder of folders) {
+      const artboard = (folder as Layer & { readonly psdArtboardRect?: Rect }).psdArtboardRect;
+      if (artboard) {
+        if (x < artboard.x || y < artboard.y || x >= artboard.x + artboard.width || y >= artboard.y + artboard.height) return 0;
+        continue;
+      }
       const mask = folder.mask, raster = this.maskRaster(folder);
       if (!(mask?.enabled || folder.vectorMask?.enabled) || !raster || raster.channels !== 1) continue;
-      const transform = { ...this.transform(folder), sampling: 'High quality' as const };
+      const placement = this.maskPlacement(folder) ?? this.transform(folder);
+      const transform = { ...placement, sampling: 'High quality' as const };
       const prepared = this.preparedPlacement(`folder:${folder.id}`, transform, raster.width, raster.height, documentToOutput);
       mapPlacement(prepared, x, y, this.location);
       if (this.location[2]! <= 0) return 0;

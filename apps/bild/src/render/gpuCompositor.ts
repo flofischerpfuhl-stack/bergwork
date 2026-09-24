@@ -964,7 +964,8 @@ export class GpuCompositor {
       for (const folder of folders) {
         const raster = hooks.maskRaster(folder);
         if (!raster) continue;
-        clip = this.multiplyMask(clip, raster, `mask:${folder.id}`, hooks.transform(folder), view, temporaries);
+        clip = this.multiplyMask(clip, raster, `mask:${folder.id}`,
+          hooks.maskPlacement(folder) ?? hooks.transform(folder), view, temporaries);
       }
       folderClips.set(key, clip);
       return clip;

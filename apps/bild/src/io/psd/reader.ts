@@ -772,6 +772,22 @@ function psdTextTransform(data: LayerTextData, fallback: LayerTransform,
   { rotation: Math.atan2(b, a) * 180 / Math.PI, flipX: a < 0, flipY: d < 0, sampling: 'High quality' });
 }
 
+function legacyArtboard(source: AgLayer, state: ImportState): AgLayer['artboard'] {
+  if (source.artboard || source.nameSource !== 'artb' || !source.children?.length) return source.artboard;
+  let top = Infinity, left = Infinity, bottom = -Infinity, right = -Infinity;
+  for (const child of source.children) {
+    if (child.top == null || child.left == null || child.bottom == null || child.right == null
+      || child.right <= child.left || child.bottom <= child.top || child.left < 0 || child.top < 0
+      || child.right > state.documentWidth || child.bottom > state.documentHeight) continue;
+    top = Math.min(top, child.top); left = Math.min(left, child.left);
+    bottom = Math.max(bottom, child.bottom); right = Math.max(right, child.right);
+  }
+  if (!Number.isFinite(left)) return undefined;
+  // Early Photoshop artboards can contain only the two-byte `artb` marker. Their bounded
+  // descendants still define the native clip rectangle; off-canvas children are the bleed.
+  return { rect: { top, left, bottom, right }, backgroundType: 3 };
+}
+
 function importSiblings(sources: readonly AgLayer[], parentId: string | null, parentPath: string,
   state: ImportState): Layer[] {
   const result: Layer[] = [];
@@ -830,7 +846,16 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     // runtime resolves. Decodable embedded PNGs use their true original grid and the PlLd/SoLd transform directly.
     const placement = placed && placedPixels ? placedTransform(source, layerTransform) : { transform: vectorTransform, warp: null };
     const vectorMask = vectorContent ? null : psdVectorMask(source, editableTransform.origin);
-    const importedMask = maskFor(source, placement.transform, state, layerPath);
+    let importedMask = maskFor(source, placement.transform, state, layerPath);
+    const artboard = isGroup ? legacyArtboard(source, state) : undefined;
+    if (artboard && !importedMask) {
+      const rect = artboard.rect;
+      const width = Math.max(1, rect.right - rect.left), height = Math.max(1, rect.bottom - rect.top);
+      // Photoshop artboards clip their descendants to the artboard rectangle. A one-sample mask
+      // preserves that native group semantic without allocating a document-sized raster.
+      importedMask = { raster: Raster.fromPixels(1, 1, 1, new Uint8Array([255])), enabled: true,
+        placement: transform(rect.left, rect.top, width, height), linked: false };
+    }
     let imported: Layer = newLayer({
       id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : placed ? 'embedded' : textData ? 'text' : vectorContent ? 'vector' : adjustment ? 'adjustment' : 'pixel',
       visible: source.hidden !== true, opacity, fillOpacity, blendMode: mappedMode,
@@ -856,10 +881,26 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
         & { readonly psdIsolated: boolean; readonly psdKnockout: boolean };
     if (source.mask) imported = { ...imported, psdMaskDefault: source.mask.defaultColor ?? 0 } as Layer
       & { readonly psdMaskDefault: number };
+    else if (artboard) imported = { ...imported, psdMaskDefault: 0 } as Layer
+      & { readonly psdMaskDefault: number };
+    if (artboard) imported = { ...imported, psdArtboardRect: { x: artboard.rect.left, y: artboard.rect.top,
+      width: artboard.rect.right - artboard.rect.left, height: artboard.rect.bottom - artboard.rect.top } } as Layer
+        & { readonly psdArtboardRect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number } };
     if (vectorRaster) imported = { ...imported, psdGeneratedStyle: vectorStyle } as Layer
       & { readonly psdGeneratedStyle: VectorStyle };
     result.push(imported);
     if (isGroup) {
+      if (artboard && (artboard.backgroundType ?? 1) !== 3) {
+        const rect = artboard.rect, kind = artboard.backgroundType ?? 1;
+        const color = kind === 2 ? { red: 0, green: 0, blue: 0 } : kind === 4 ? rgb(artboard.color)
+          : { red: 1, green: 1, blue: 1 };
+        result.push(newLayer({ id: `psd-layer-${state.nextId++}`, name: 'Artboard background', parentId: id,
+          kind: 'pixel', locks: { transparency: false, pixels: true, position: true, all: true },
+          transform: transform(rect.left, rect.top, Math.max(1, rect.right - rect.left), Math.max(1, rect.bottom - rect.top)),
+          raster: Raster.fromPixels(1, 1, 4, new Uint8Array([
+            Math.round(color.red * 255), Math.round(color.green * 255), Math.round(color.blue * 255), 255,
+          ])) }));
+      }
       // Photoshop permits a whole group to be a clipping member. Keep the preceding base alive
       // across that group; an unclipped group starts a new sibling stack but is not yet a live-mask base.
       if (!source.clipping) clippingBaseId = null;
@@ -995,7 +1036,9 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
     impact: colorMode === 1 || colorMode === 4 ? 'editability-only' : 'approximated' });
   if (oracleOverride && colorMode === 4 && !lcms) unsupported.push({ code: 'embedded-icc',
     message: 'The synchronous CMYK path uses a deterministic fallback; product open applies Little CMS.', impact: 'approximated' });
-  if (psd.artboards) unsupported.push({ code: 'artboards', message: 'Artboard metadata is not represented.', impact: 'not-rendered' });
+  if (psd.artboards) unsupported.push({ code: 'artboards',
+    message: 'Artboard rectangles and backgrounds are rendered as locked group masks and background layers; layout metadata is not editable.',
+    impact: 'editability-only' });
   const documentResolution = resolution(psd);
   const state: ImportState = { nextId: 1, documentWidth: psd.width, documentHeight: psd.height,
     bitsPerChannel, artboards: !!psd.artboards, resolution: documentResolution,

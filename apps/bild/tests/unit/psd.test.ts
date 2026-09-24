@@ -136,6 +136,40 @@ describe('PSD colour modes and product wiring', () => {
       .toEqual(new Uint8Array(expected.data));
   });
 
+  it('A7: renders a custom artboard background and clips children to its independent rectangle', () => {
+    const pixels = { width: 3, height: 1, data: new Uint8ClampedArray([
+      0, 0, 0, 0, 255, 0, 0, 255, 0, 0, 255, 255,
+    ]) };
+    const artboard: AgLayer = { name: 'Board', blendMode: 'pass through', artboard: {
+      rect: { top: 0, left: 0, bottom: 1, right: 2 }, color: { r: 10, g: 20, b: 30 }, backgroundType: 4,
+    }, children: [{ name: 'Paint', top: 0, left: 0, bottom: 1, right: 3, imageData: pixels }] };
+    const expected = { width: 3, height: 1, data: new Uint8ClampedArray([
+      10, 20, 30, 255, 255, 0, 0, 255, 0, 0, 0, 0,
+    ]) };
+    const imported = readPsdDocument(writePsdUint8Array({ width: 3, height: 1,
+      children: [artboard], imageData: expected }, { generateThumbnail: false }));
+    expect(imported.document.layers.map((layer) => layer.name))
+      .toEqual(['Board', 'Artboard background', 'Paint']);
+    expect(imported.document.layers[0]?.mask).toMatchObject({ enabled: true, linked: false,
+      placement: { origin: { x: 0, y: 0 }, size: { width: 2, height: 1 } } });
+    expect(cpuCompositeRegion(imported.document, { x: 0, y: 0, width: 3, height: 1 }))
+      .toEqual(new Uint8Array(expected.data));
+
+    const bleed = { width: 6, height: 1, data: new Uint8ClampedArray(Array(6).fill([255, 255, 255, 255]).flat()) };
+    const content = image([255, 0, 0, 255, 255, 0, 0, 255]);
+    const legacyExpected = { width: 4, height: 1, data: new Uint8ClampedArray([
+      0, 0, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 0, 0,
+    ]) };
+    const legacy = readPsdDocument(writePsdUint8Array({ width: 4, height: 1, children: [{
+      name: 'Legacy board', nameSource: 'artb', blendMode: 'pass through', children: [
+        { name: 'Bleed', top: 0, left: -1, bottom: 1, right: 5, imageData: bleed },
+        { name: 'Content', top: 0, left: 1, bottom: 1, right: 3, imageData: content },
+      ],
+    }], imageData: legacyExpected }, { generateThumbnail: false }));
+    expect(cpuCompositeRegion(legacy.document, { x: 0, y: 0, width: 4, height: 1 }))
+      .toEqual(new Uint8Array(legacyExpected.data));
+  });
+
   it('places an adjustment mask from its PSD bounds instead of the empty adjustment-layer bounds', () => {
     const base: AgLayer = { name: 'Base', top: 0, left: 0, bottom: 1, right: 2,
       imageData: image([10, 20, 30, 255, 40, 50, 60, 255]) };
