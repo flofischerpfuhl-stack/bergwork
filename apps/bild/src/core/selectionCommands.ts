@@ -9,6 +9,7 @@ import {
   type Affine, type LayerTransform, type Point, type Rect,
 } from './geometry';
 import { uuid } from './ids';
+import { noteColorUsed } from './color/recent';
 import { Raster, TILE, alphaBounds, cropRaster } from './raster';
 import { makePixelArray, type PixelArray } from './pixel/format';
 import type { EditorSession, TransformEdit } from './session';
@@ -201,7 +202,9 @@ export function fillSelection(session: EditorSession, source: FillSource): boole
   const color = target.mask
     ? [Math.round(palette.red * 255)]
     : [Math.round(palette.red * 255), Math.round(palette.green * 255), Math.round(palette.blue * 255), 255];
-  return installEdit(session, target, editRaster(target.raster, target.transform, session.selection, 'fill', color), target.mask ? 'Fill Mask' : 'Fill');
+  const filled = installEdit(session, target, editRaster(target.raster, target.transform, session.selection, 'fill', color), target.mask ? 'Fill Mask' : 'Fill');
+  if (filled && !target.mask && source === 'foreground') noteColorUsed(session, palette);
+  return filled;
 }
 
 export function clearSelectedPixels(session: EditorSession): boolean {

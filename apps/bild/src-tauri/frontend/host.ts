@@ -1,6 +1,6 @@
 import type { FileTargetHost, SaveTarget } from '../../src/platform/browserHost';
 import { sha256Hex } from '../../src/io/sha256';
-import type { ColorHost, ComputeHost, FileSystemHost, FontHost, HostCapabilityMap, HostFileReference, ModelHost } from '../../src/platform/hosts';
+import type { ColorHost, ComputeHost, FileSystemHost, FontHost, HostCapabilityMap, HostFileReference, ModelHost, ScreenColorHost } from '../../src/platform/hosts';
 import { bindCapabilityRegistry } from '../../src/platform/hosts';
 
 interface NativeTarget extends SaveTarget { readonly path: string }
@@ -87,10 +87,19 @@ const color: ColorHost = {
   },
 };
 
+/** Screen eyedropper in Rust (X11 XGetImage, Windows GetPixel); WebView2 usually has the EyeDropper API first. */
+const screenColor: ScreenColorHost = {
+  version: 1,
+  async pickScreenColor() {
+    const rgb = await window.__TAURI__.core.invoke<[number, number, number] | null>('pick_screen_color');
+    return rgb ? { red: rgb[0], green: rgb[1], blue: rgb[2] } : null;
+  },
+};
+
 /** Tauri implementation of the same optional capability registry as the browser host. */
 export function createTauriHost(): FileTargetHost {
   const files = nativeFiles();
-  const capabilities: HostCapabilityMap = { files, fonts, codecs: { version: 1 }, compute, models, color };
+  const capabilities: HostCapabilityMap = { files, fonts, codecs: { version: 1 }, compute, models, color, screenColor };
   const host: FileTargetHost = {
     defaultProfile: 'pro', capabilities,
     async chooseImages() {

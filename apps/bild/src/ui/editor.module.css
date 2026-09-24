@@ -562,3 +562,9 @@
 .artboardRow.layerRowSelected { background: var(--cmp-accent-soft); }
 .artboardSpacer { width: 32px; flex: none; }
 .compact .artboardSpacer, .compactLandscape .artboardSpacer { width: 48px; }
+
+/* Module tabs (Colour) make three side-panel tabs: in a narrow panel they tighten instead of running into the layer count. */
+.layersHeader { container-type: inline-size; }
+@container (max-width: 200px) { .panelTabs { gap: 0; } .panelTab { padding: 4px 3px; } }
+/* The colour picker with the colour module's column (recent colours, swatches, readouts) beside the fields. */
+.floatingPanelWide { width: min(660px, calc(100% - 16px)); }

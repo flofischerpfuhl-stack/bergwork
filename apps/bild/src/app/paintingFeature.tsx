@@ -27,6 +27,8 @@ import {
 import type { ToolContext, ToolHandler } from '../ui/canvas/tools';
 import type { BrushRange } from '../core/brush/settings';
 import type { CanvasView } from '../ui/canvas/CanvasView';
+import { sampleColor, type SampleSize } from '../core/color/sample';
+import { colorState } from './color/state';
 
 // MARK: Per-project tool state
 
@@ -201,13 +203,15 @@ class GradientTool implements ToolHandler {
 
 // MARK: Eyedropper
 
-/** ColorPalette.sampleCompositeColor: the visible composite at a document pixel, or null where transparent. */
-function sampleComposite(controller: EditorController, point: Point): PaletteColor | null {
-  const session = controller.session, document = session.document;
-  if (!document || !controller.canvas || point.x < 0 || point.y < 0 || point.x >= document.width || point.y >= document.height) return null;
-  const pixel = controller.canvas.readRegion(document, Math.floor(point.x), Math.floor(point.y), 1, 1);
-  if (!pixel[3]) return null;
-  return { red: pixel[0]! / 255, green: pixel[1]! / 255, blue: pixel[2]! / 255 };
+/**
+ * ColorPalette.sampleCompositeColor, with Photoshop's eyedropper options: the visible composite (All Layers) or the
+ * current layer, one pixel or the 3×3 / 5×5 average; null where transparent.
+ */
+export function sampleComposite(controller: EditorController, point: Point): PaletteColor | null {
+  const session = controller.session, document = session.document, canvas = controller.canvas;
+  if (!document) return null;
+  return sampleColor(session, point, colorState(controller).getState().eyedropper,
+    canvas ? (x, y, width, height) => canvas.readRegion(document, x, y, width, height) : null);
 }
 
 class EyedropperTool implements ToolHandler {
@@ -219,7 +223,8 @@ class EyedropperTool implements ToolHandler {
     const picker = this.controller.colorPickerTarget;
     if (color) {
       if (picker) picker.set(color);
-      else if (session.canEditPalette && !session.isMaskSelected) session.setPaletteColor(color, false);
+      // Photoshop: Alt-click with the Eyedropper tool sets the background colour.
+      else if (session.canEditPalette && !session.isMaskSelected) session.setPaletteColor(color, session.tool === 'eyedropper' && c.modifiers.option);
     }
     state.sampling = state.sampling ? { ...state.sampling, point: c.point, sampled: picker?.get() ?? session.foregroundColor }
       : { point: c.point, original: picker?.get() ?? session.foregroundColor, sampled: picker?.get() ?? session.foregroundColor };
@@ -492,9 +497,25 @@ function GradientBar({ controller, session }: { controller: EditorController; se
 function EyedropperBar({ controller, session }: { controller: EditorController; session: EditorSession }) {
   useSession(session);
   const state = paintState(session);
+  const t = controller.t;
+  const store = colorState(controller);
+  const options = useSyncExternalStore(store.subscribe, () => store.getState().eyedropper);
+  const sizes: [SampleSize, string][] = [[1, 'Point Sample'], [3, '3 by 3 Average'], [5, '5 by 5 Average']];
   return (
     <>
-      <span className={styles.headerTitle}>{controller.t('Eyedropper')}</span>
+      <span className={styles.headerTitle}>{t('Eyedropper')}</span>
+      <span className={styles.secondary} style={{ flex: 'none' }}>{t('Sample Size')}</span>
+      <select className={styles.select} value={options.size} aria-label={t('Sample Size')} data-testid="eyedropper-size"
+        onChange={(e) => store.setState({ eyedropper: { ...options, size: Number(e.target.value) as SampleSize } })}>
+        {sizes.map(([size, label]) => <option key={size} value={size}>{t(label)}</option>)}
+      </select>
+      <div className={styles.segmented} role="radiogroup" aria-label={t('Sample')}>
+        {[false, true].map((all) => (
+          <button key={String(all)} type="button" role="radio" aria-checked={options.allLayers === all} data-testid={`eyedropper-${all ? 'all' : 'current'}`}
+            className={`${styles.segment} ${options.allLayers === all ? styles.segmentOn : ''}`}
+            onClick={() => store.setState({ eyedropper: { ...options, allLayers: all } })}>{t(all ? 'All Layers' : 'Current Layer')}</button>
+        ))}
+      </div>
       <label className={styles.check}><input type="checkbox" checked={state.showsSampleRing}
         onChange={(e) => { state.showsSampleRing = e.target.checked; session.notify('ui'); }} />{controller.t('Sample Ring')}</label>
     </>
@@ -591,7 +612,8 @@ function ColorPicker({ controller, request }: { controller: EditorController; re
       onChange={(v) => setHsb((h) => hsbKeeping({ ...color, [key]: Math.min(255, Math.max(0, Math.round(v))) / 255 }, h))} />
   );
   return (
-    <FloatingPanel name="colorPicker" title={request.title} onClose={() => finish(false)} closeLabel={t('Cancel')} testId="color-picker" secondary>
+    <FloatingPanel name="colorPicker" title={request.title} onClose={() => finish(false)} closeLabel={t('Cancel')} testId="color-picker" secondary
+      className={controller.colorPickerExtras ? styles.floatingPanelWide : undefined}>
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}
         onKeyDown={(event) => { if (event.key === 'Escape') finish(false); else if (event.key === 'Enter' && !(event.target as Element).closest('input')) finish(true); }}>
         <div role="slider" aria-label="Saturation and brightness" aria-valuetext={`${Math.round(hsb.saturation * 100)}%, ${Math.round(hsb.brightness * 100)}%`} tabIndex={0}
@@ -626,6 +648,7 @@ function ColorPicker({ controller, request }: { controller: EditorController; re
               }} />
           </label>
         </div>
+        {controller.colorPickerExtras?.(color, (c) => setHsb((h) => hsbKeeping(c, h)))}
       </div>
       <span className={styles.panelNote}>{t('Click the canvas to sample')}</span>
       <div className={styles.dialogButtons}>
@@ -686,7 +709,7 @@ export function installPainting(controller: EditorController): void {
   controller.statusHints.blur = (s) => `${paintState(s).smearMode === 'blur' ? t('Drag to soften') : paintState(s).smearMode === 'smudge' ? t('Drag to smudge') : t('Drag to push pixels')} · ${t('[ ] size · Shift-[ ] hardness · 1–0 strength · Space to pan')}`;
   controller.statusHints.cloneStamp = () => t('Option-click to set the source · Drag to clone · [ ] size · Shift-[ ] hardness · 1–0 opacity · Space to pan');
   controller.statusHints.gradient = () => t('Drag to draw · Drag ends to adjust · Shift 45° · 1–0 opacity · Enter apply · Escape cancel');
-  controller.statusHints.eyedropper = () => t('Click or drag to sample the canvas colour');
+  controller.statusHints.eyedropper = () => `${t('Click or drag to sample the canvas colour')} · ${t('Option-click sets the background colour')}`;
 
   controller.toolKeyHandlers.b = () => { controller.session.selectTool('brush'); setBrushSettings(controller.session, { ...getBrushSettings(controller.session), mode: 'paint' }); };
   controller.toolKeyHandlers.e = () => { controller.session.selectTool('brush'); setBrushSettings(controller.session, { ...getBrushSettings(controller.session), mode: 'erase' }); };

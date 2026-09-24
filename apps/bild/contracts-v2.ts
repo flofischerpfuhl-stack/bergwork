@@ -255,6 +255,8 @@ export interface ProjectManifestV2 {
   guides?: readonly { id: string; orientation: 'horizontal' | 'vertical'; position: number }[];
   assets: readonly AssetRecordV2[];
   fonts?: readonly DocumentFontRecordV2[];
+  /** Document swatch groups (optional; absent in files written before swatches existed). sRGB floats 0…1. */
+  swatches?: readonly SwatchGroupRecordV2[];
   history?: ProjectHistoryV2;
   extensions?: Record<string, unknown>;
 }
@@ -275,3 +277,9 @@ export type MountEditorV2 = (root: HTMLElement, options: MountEditorOptionsV2) =
 
 /** Migration readers may use v1 affine matrices while reconstructing semantic transforms. */
 export type LegacyMatrixV1 = Matrix2D;
+
+export interface SwatchGroupRecordV2 {
+  id: string;
+  name: string;
+  swatches: readonly { id: string; name: string; color: { red: number; green: number; blue: number } }[];
+}

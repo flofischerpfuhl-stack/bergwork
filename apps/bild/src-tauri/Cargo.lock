@@ -1077,6 +1077,7 @@ dependencies = [
  "webkit2gtk",
  "wgpu",
  "windows-sys 0.61.2",
+ "x11-dl",
  "zune-jpeg",
 ]
 

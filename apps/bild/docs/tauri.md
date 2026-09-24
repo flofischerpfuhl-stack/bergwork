@@ -199,6 +199,22 @@ FERNWORK_HOST_SMOKE=1 src-tauri/target/release/fernwork-bildeditor
 It logs the system-font count and display-profile result. Absence of an ICC
 payload is valid only when the returned `assumed` flag is true.
 
+## Screen eyedropper (`ScreenColorHost`)
+
+The colour picker and the Colour panel sample from anywhere on the screen (PRODUCT-PLAN 6.1). The editor uses
+the browser EyeDropper API when the webview has it (WebView2 on Windows), otherwise the `screenColor` capability
+(`pick_screen_color`, `src-tauri/src/screen_color.rs`): the next left click anywhere picks one desktop pixel;
+right click, Escape or 60 s cancel.
+
+- Linux X11: pointer and keyboard grab on the root window with a crosshair cursor, then `XGetImage` of one
+  pixel. libX11 is opened at run time (`x11-dl`), so systems without it still start.
+- Windows: low-level mouse/keyboard hooks swallow the picking click, then `GetPixel` on the desktop DC. Only
+  `cargo check` on Linux has compiled this module; the `cfg(windows)` branch must be checked by the Windows lane.
+- Wayland: clients cannot read other clients' pixels or grab the pointer globally, and under XWayland the root
+  window shows X clients only. The command refuses with `wayland-unsupported` and the editor falls back to the
+  canvas eyedropper. The proper route is the xdg-desktop-portal `Screenshot.PickColor` call (D-Bus client and
+  response-signal listener), not implemented yet.
+
 ## Current scope
 
 The host reads and writes whole files through plugin byte arrays; A6 binary channels, scratch mmap,

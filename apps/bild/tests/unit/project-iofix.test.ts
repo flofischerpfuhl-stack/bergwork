@@ -37,6 +37,8 @@ describe('.fwimg data preservation', () => {
     expect(restoredBefore.selection?.mask.toPixels()).toEqual(new Uint8Array([255, 0]));
     expect(restoredAfter).toMatchObject({ globalLightAngle: 125, guides: [{ id: 'guide', orientation: 'vertical', position: 35 }] });
     expect(restoredAfter.resources?.map((resource) => resource.id)).toEqual(['after-resource']);
+    expect(restoredBefore.swatches?.[0]?.swatches[0]?.color.red).toBe(0.1);
+    expect(restoredAfter.swatches?.[0]?.name).toBe('Group after-resource');
     expect(restoredAfter.selection?.mask.toPixels()).toEqual(new Uint8Array([0, 255]));
     expect(documentsEqual(restoredAfter, loaded.document)).toBe(true);
   });
@@ -67,6 +69,8 @@ function completeDocument(resourceId: string, globalLightAngle: number, guidePos
     resources: [{ id: resourceId, role: 'font', mime: 'font/woff2', bytes: new Uint8Array([1, 2, guidePosition]) }],
     fonts: [{ id: `font-${resourceId}`, family: 'Fixture Sans', style: 'normal', weight: 400, source: 'embedded',
       resourceId, embeddingAllowed: true }],
+    swatches: [{ id: `group-${resourceId}`, name: `Group ${resourceId}`, swatches: [{ id: `swatch-${resourceId}`, name: 'Ink',
+      color: { red: guidePosition / 100, green: 0.5, blue: 1 } }] }],
     selection: { mask: selectionMask, x: guidePosition, y: -2, antialiased: true },
   };
 }

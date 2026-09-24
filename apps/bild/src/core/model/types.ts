@@ -363,6 +363,11 @@ export interface DocumentFont {
   readonly embeddingAllowed: boolean;
 }
 
+/** A named colour in the working space (sRGB floats, A3). */
+export interface Swatch { readonly id: string; readonly name: string; readonly color: RGB }
+/** A group of swatches: the document's own groups and the app-wide library use the same shape. */
+export interface SwatchGroup { readonly id: string; readonly name: string; readonly swatches: readonly Swatch[] }
+
 export interface CanvasDocument {
   readonly id: string;
   readonly width: number;
@@ -376,6 +381,8 @@ export interface CanvasDocument {
   readonly guides?: readonly Guide[];
   readonly resources?: readonly DocumentResource[];
   readonly fonts?: readonly DocumentFont[];
+  /** The document's swatch groups (PRODUCT-PLAN 6.1); absent when it has none. */
+  readonly swatches?: readonly SwatchGroup[];
   readonly selection: DocumentSelection | null;
 }
 

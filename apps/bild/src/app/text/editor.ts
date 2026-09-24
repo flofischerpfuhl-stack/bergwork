@@ -11,6 +11,7 @@ import {
   type CanvasDocument, type TextLayer, type TextParagraphStyle, type TextRunStyle,
 } from '../../core/document';
 import { styleAt, type ParagraphStylePatch, type TextStylePatch } from '../../core/text';
+import { noteColorUsed } from '../../core/color/recent';
 import { apply, containsPoint, invert, radians, unitPoint, type LayerTransform, type Point, type Rect, type Size } from '../../core/geometry';
 import type { EditorController } from '../../ui/controller';
 import type { ToolContext, ToolHandler } from '../../ui/canvas/tools';
@@ -171,6 +172,7 @@ export class TextEditor {
     if (!document || !session.canEditLayers) return false;
     const settings = textDefaults(session);
     const style: TextRunStyle = { ...settings.style, color: { ...session.foregroundColor, alpha: 1 } };
+    noteColorUsed(session, session.foregroundColor);
     const active = session.activeLayerId;
     session.beginEdit('Edit Text');
     let id: string | null = null;
@@ -589,6 +591,7 @@ export class TextEditor {
     if (patch.fontFamily) await this.runtime.ensureFamily(patch.fontFamily);
     const settings = textDefaults(session);
     const { color, ...rest } = patch;
+    if (color) noteColorUsed(session, color);
     settings.style = { ...settings.style, ...rest };
     const e = this.editing;
     if (e && e.session === session) {

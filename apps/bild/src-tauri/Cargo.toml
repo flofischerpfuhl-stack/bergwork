@@ -32,6 +32,8 @@ zune-jpeg = { version = "0.5.15", optional = true }
 gdk = { version = "0.18", optional = true }
 gtk = { version = "0.18", optional = true }
 webkit2gtk = { version = "2", optional = true }
+# Screen eyedropper (ScreenColorHost): libX11 is opened at run time, so Wayland-only systems still start.
+x11-dl = "2.21"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_ColorSystem"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_ColorSystem", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }

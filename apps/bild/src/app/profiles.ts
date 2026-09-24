@@ -3,14 +3,14 @@ import type { CapabilityName, HostCapabilityMap } from '../platform/hosts';
 
 export type EditorProfileId = 'pro' | 'lite';
 export type FeatureModuleId = 'canvas' | 'selection' | 'painting' | 'retouch' | 'adjustments' | 'subject' | 'guides' | 'styles' | 'artboards'
-  | 'text' | 'vector';
+  | 'text' | 'vector' | 'color';
 
 export interface EditorProfile {
   readonly id: EditorProfileId;
   readonly documentLimits: { readonly maximumPixels: number; readonly maximumSide: number };
   readonly modules: readonly FeatureModuleId[];
   readonly tools: readonly Tool[];
-  readonly panels: readonly ('layers' | 'history' | 'adjustments')[];
+  readonly panels: readonly ('layers' | 'history' | 'adjustments' | 'color')[];
   readonly menuFeatures: readonly string[];
   readonly aiModels: readonly ('fast' | 'best')[];
   /** Features in this table are exposed only when the named host capability is present. */
@@ -23,20 +23,20 @@ const CURRENT_TOOLS: readonly Tool[] = [
   'text', 'pen', 'directSelect',
 ];
 const CURRENT_MODULES: readonly FeatureModuleId[] = ['canvas', 'selection', 'painting', 'retouch', 'adjustments', 'subject', 'guides', 'styles', 'artboards',
-  'text', 'vector'];
+  'text', 'vector', 'color'];
 
 /** PRODUCT-PLAN sections 5, 6 and A10: one configuration per product profile, never an engine fork. */
 export const EDITOR_PROFILES: Readonly<Record<EditorProfileId, EditorProfile>> = {
   pro: {
     id: 'pro', documentLimits: { maximumPixels: 300_000_000, maximumSide: 60_000 },
-    modules: CURRENT_MODULES, tools: CURRENT_TOOLS, panels: ['layers', 'history', 'adjustments'],
+    modules: CURRENT_MODULES, tools: CURRENT_TOOLS, panels: ['layers', 'history', 'adjustments', 'color'],
     menuFeatures: ['current', 'raw', 'softproof', 'cmyk-export', 'text-on-path', 'local-generative-fill', 'upscale'],
     aiModels: ['fast', 'best'],
     hostFeatures: { raw: 'codecs', 'system-fonts': 'fonts', 'monitor-profile': 'color', 'native-compute': 'compute' },
   },
   lite: {
     id: 'lite', documentLimits: { maximumPixels: 100_000_000, maximumSide: 30_000 },
-    modules: CURRENT_MODULES, tools: CURRENT_TOOLS, panels: ['layers', 'history', 'adjustments'],
+    modules: CURRENT_MODULES, tools: CURRENT_TOOLS, panels: ['layers', 'history', 'adjustments', 'color'],
     menuFeatures: ['current'], aiModels: ['fast', 'best'],
     hostFeatures: { 'local-fonts': 'fonts', 'file-system-access': 'files' },
   },
