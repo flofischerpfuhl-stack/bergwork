@@ -149,6 +149,10 @@ export class EditorController {
   renderPreparers: ((session: EditorSession) => Promise<void>)[] = [];
   /** Feature-owned documents (for example Edit Contents tabs) can consume Save without writing a top-level file. */
   saveInterceptors: ((session: EditorSession, saveAs: boolean) => Promise<boolean>)[] = [];
+  /** Extra tabs of the side panel after Layers and History (the Colour panel), provided by feature modules. */
+  sidePanels: { readonly id: string; readonly label: string; render(): ReactNode }[] = [];
+  /** Extra rows inside the colour picker (recent colours, swatches, screen eyedropper), provided by the colour module. */
+  colorPickerExtras: ((color: { red: number; green: number; blue: number }, set: (color: { red: number; green: number; blue: number }) => void) => ReactNode) | null = null;
   /** Optional embedded-content drop bridge. Alt-drop places instead of opening/importing. */
   placeContentFiles: ((files: readonly File[], point: Point | null) => Promise<readonly string[]>) | null = null;
   private async prepareRender(): Promise<void> { for (const prepare of this.renderPreparers) await prepare(this.session); }

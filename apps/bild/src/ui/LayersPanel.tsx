@@ -587,6 +587,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
   };
 
   const side = useUi(controller, (state) => state.sidePanel);
+  const sidePanel = controller.sidePanels.find((panel) => panel.id === side);
   const deleteLabel = session.isMaskSelected ? t('Delete layer mask') : session.selectedLayerIds.size > 1 ? t('Delete selected layers') : t('Delete selected layer');
   const adjustmentsAvailable = !!controller.features.adjustmentLayers;
   return (
@@ -616,10 +617,16 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
             className={`${styles.panelTab} ${side === 'history' ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: 'history' })}>
             {t('History')}
           </button>
+          {controller.sidePanels.map((panel) => (
+            <button key={panel.id} type="button" role="tab" aria-selected={side === panel.id} data-testid={`tab-${panel.id}`}
+              className={`${styles.panelTab} ${side === panel.id ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: panel.id })}>
+              {panel.label}
+            </button>
+          ))}
         </span>
         <span className={styles.layerCount} data-testid="layerCount">{document?.layers.length ?? 0}</span>
       </div>
-      {side === 'history' ? <HistoryPanel controller={controller} /> : (<>
+      {side === 'history' ? <HistoryPanel controller={controller} /> : sidePanel ? sidePanel.render() : (<>
       <Appearance controller={controller} session={session} />
       {document ? (
         <div className={styles.layerFilter}>

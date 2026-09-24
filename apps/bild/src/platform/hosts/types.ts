@@ -84,6 +84,19 @@ export interface ColorHost extends VersionedCapability {
   displayProfile(): Promise<DisplayColorProfile>;
 }
 
+/** 8-bit sRGB from the screen. */
+export interface ScreenColor { readonly red: number; readonly green: number; readonly blue: number }
+/**
+ * Screen eyedropper outside the webview (PRODUCT-PLAN 6.1, A0). The next left click anywhere on the screen picks a
+ * pixel; null when the user cancelled (right click, Escape, timeout). Rejects with `wayland-unsupported`,
+ * `unsupported` or `busy` when this system cannot pick. Fallback: the browser EyeDropper API, then the canvas
+ * eyedropper.
+ */
+export interface ScreenColorHost extends VersionedCapability {
+  readonly version: 1;
+  pickScreenColor(): Promise<ScreenColor | null>;
+}
+
 /** Scratch is structural so the concurrently-developed A4 interface can register without an import cycle. */
 export interface ScratchCapability extends VersionedCapability { readonly version: number }
 
@@ -95,6 +108,7 @@ export interface HostCapabilityMap {
   readonly models?: ModelHost;
   readonly color?: ColorHost;
   readonly scratch?: ScratchCapability;
+  readonly screenColor?: ScreenColorHost;
   /** Optional lazy PDFium adapter; absent hosts expose PDF placement as unavailable. */
   readonly pdf?: PdfPlacementHost;
 }

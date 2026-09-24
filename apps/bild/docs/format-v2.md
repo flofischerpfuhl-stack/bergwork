@@ -52,6 +52,7 @@ from uncompressed sizes.
 | `layers` | Flat bottom-to-top layer list. `parentId` supplies hierarchy. |
 | `artboards` | Document-level artboards, painted/exported above the layer model. May be empty. |
 | `assets` | Asset table described below. |
+| `swatches` | Optional document swatch groups: `[{id, name, swatches: [{id, name, color: {red, green, blue}}]}]`, colours as sRGB floats 0–1 (working space). Absent or empty means none. Also written into every history snapshot. |
 | `history` | Optional saved command history. |
 | `extensions` | Optional JSON object. Unknown namespaced members must be preserved when possible. |
 

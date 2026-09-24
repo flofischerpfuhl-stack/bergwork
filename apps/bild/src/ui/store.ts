@@ -23,8 +23,8 @@ export interface UiState {
   compact: boolean;
   spaceHeld: boolean;
   pointerOverCanvas: boolean;
-  /** Which tab of the side panel shows: layers or history. */
-  sidePanel: 'layers' | 'history';
+  /** Which tab of the side panel shows: layers, history, or a module's tab (controller.sidePanels, e.g. 'color'). */
+  sidePanel: 'layers' | 'history' | (string & {});
 }
 
 export type UiStore = ReturnType<typeof createUiStore>;

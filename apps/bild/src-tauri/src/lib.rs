@@ -10,6 +10,7 @@ use tauri::{
 };
 
 mod host;
+mod screen_color;
 
 #[cfg(feature = "a6-spike")]
 mod a6_spike;
@@ -99,6 +100,8 @@ pub fn run() {
             host::read_cached_model,
             host::write_cached_model,
             host::display_icc_profile,
+            screen_color::pick_screen_color,
+            screen_color::screen_color_support,
             #[cfg(feature = "a6-spike")]
             a6_spike::a6_write_result,
             #[cfg(feature = "a6-spike")]

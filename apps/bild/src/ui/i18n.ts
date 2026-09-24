@@ -3,10 +3,12 @@
  */
 
 import { ADJUST_P2_DE, ADJUST_P2_EN } from '../app/adjust/strings';
+import { COLOR_DE } from '../app/color/strings';
 
 export type Locale = 'de' | 'en';
 
 const de: Record<string, string> = {
+  ...COLOR_DE,
   ...ADJUST_P2_DE,
   'Layers': 'Ebenen', 'Blend': 'Modus', 'Opacity': 'Deckkraft', 'No layers yet': 'Noch keine Ebenen',
   'Create a canvas or import an image.': 'Erstelle eine Leinwand oder importiere ein Bild.',

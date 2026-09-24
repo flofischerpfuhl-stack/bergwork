@@ -8,6 +8,7 @@ import { MAX_LAYERS, newLayer, uniqueName, type CanvasDocument, type Layer, type
   type VectorStyle } from '../../core/document';
 import { apply, invert, makeTransform, pixelToDocument, type Affine, type LayerTransform, type Point, type Rect } from '../../core/geometry';
 import { uuid } from '../../core/ids';
+import { noteColorUsed } from '../../core/color/recent';
 import type { EditorSession } from '../../core/session';
 import { applySelection } from '../../core/selectionCommands';
 import { Raster } from '../../core/raster';
@@ -144,6 +145,10 @@ function insertLayer(session: EditorSession, layer: Layer, name: string): string
     session.replaceDocument({ ...session.document!, layers });
     session.setActiveLayer(layer.id);
   });
+  // Recent colours: the new shape's fill (or stroke) colour.
+  const style = layer.kind === 'vector' ? layer.style : null;
+  const used = style?.fill?.kind === 'solid' ? style.fill.color : style?.stroke?.color;
+  if (used) noteColorUsed(session, used);
   return layer.id;
 }
 

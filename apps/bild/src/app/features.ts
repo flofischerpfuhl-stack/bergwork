@@ -16,6 +16,7 @@ import { installArtboards } from './artboardFeature';
 import { installText } from './textFeature';
 import { installVector } from './vectorFeature';
 import { installEmbedded } from './embeddedFeature';
+import { installColor } from './color/colorFeature';
 import type { EditorProfile } from './profiles';
 
 export function installFeatures(controller: EditorController, profile: EditorProfile = controller.profile): void {
@@ -32,6 +33,7 @@ export function installFeatures(controller: EditorController, profile: EditorPro
   if (enabled.has('artboards')) installArtboards(controller);
   if (enabled.has('text')) installText(controller);
   if (enabled.has('vector')) installVector(controller);
+  if (enabled.has('color')) installColor(controller);
   const tools = new Set(profile.tools);
   for (const tool of controller.availableTools) if (!tools.has(tool)) controller.availableTools.delete(tool);
 }

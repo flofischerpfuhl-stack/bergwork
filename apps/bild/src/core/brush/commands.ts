@@ -9,6 +9,7 @@ import {
 } from './settings';
 import { beginStroke, type CloneSample, type Stroke, type StrokeResult, type StrokeUpdate } from './stroke';
 import { RecordedBrushStroke, type GpuBrushPreview } from './gpuPreview';
+import { noteColorUsed } from '../color/recent';
 
 interface LastPoint { readonly point: Point; readonly layerId: string; readonly mask: boolean }
 interface ActiveStroke {
@@ -158,6 +159,8 @@ export function beginBrushStroke(session: EditorSession, point: Point, options: 
   const update = stroke.addPoints(start ? [start, point] : [point]);
   value.active!.changed ||= update.dirty.length > 0;
   value.last = { point: { ...point }, layerId: layer!.id, mask };
+  // Recent colours: a paint stroke in the foreground colour.
+  if (!mask && !options.settings && !options.background && settings.mode === 'paint' && session.tool === 'brush') noteColorUsed(session, session.foregroundColor);
   session.notify('ui');
   return update;
 }

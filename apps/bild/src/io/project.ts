@@ -34,6 +34,7 @@ import { vectorPathsForShape } from '../core/shape';
 import { decodePng, decodePngNativeRGBA, encodePng } from './png';
 import { sha256Hex } from './sha256';
 import { normalizeArtboards } from '../core/artboards';
+import { normalizeSwatchGroups, validSwatchGroups } from '../core/color/swatches';
 import { parseCubeLut } from '../core/adjust/cube';
 import { pngNeedsColorConversion } from './imageImport';
 
@@ -257,11 +258,12 @@ interface V2DocumentExtras {
   readonly resources: readonly string[];
   readonly fonts: NonNullable<CanvasDocument['fonts']>;
   readonly selection: SerializedSelectionV2 | null;
+  readonly swatches: NonNullable<CanvasDocument['swatches']>;
 }
 
 type V2DocumentSource = Pick<ProjectManifestV2,
   'id' | 'width' | 'height' | 'resolution' | 'globalLightAngle' | 'layers' | 'artboards'>
-  & Partial<Pick<ProjectManifestV2, 'guides' | 'fonts'>>
+  & Partial<Pick<ProjectManifestV2, 'guides' | 'fonts' | 'swatches'>>
   & Partial<Pick<V2DocumentExtras, 'resources' | 'selection'>>;
 
 function addV2Asset(context: V2BuildContext, raster: Raster, role: AssetRecordV2['role']): string {
@@ -284,6 +286,7 @@ function v2DocumentExtras(document: CanvasDocument, context: V2BuildContext): V2
     fonts: document.fonts ?? [],
     selection: document.selection ? { assetId: addV2Asset(context, document.selection.mask, 'mask'),
       x: document.selection.x, y: document.selection.y, antialiased: document.selection.antialiased } : null,
+    swatches: document.swatches ?? [],
   };
 }
 
@@ -392,6 +395,7 @@ interface HistorySnapshotFile {
 function historyDocument(document: CanvasDocument, built: ProjectManifestV2): SerializedHistoryDocumentV2 {
   const supported = new Set<keyof CanvasDocument>([
     'id', 'width', 'height', 'resolution', 'globalLightAngle', 'layers', 'artboards', 'guides', 'resources', 'fonts', 'selection',
+    'swatches',
   ]);
   // A newly added document field must fail loudly until its archive representation is defined.
   for (const key of Object.keys(document) as (keyof CanvasDocument)[]) {
@@ -400,7 +404,7 @@ function historyDocument(document: CanvasDocument, built: ProjectManifestV2): Se
   const source = built as ProjectManifestV2 & V2DocumentExtras;
   return { id: built.id, width: built.width, height: built.height, resolution: built.resolution,
     globalLightAngle: built.globalLightAngle, layers: built.layers, artboards: built.artboards,
-    guides: source.guides, resources: source.resources, fonts: source.fonts, selection: source.selection };
+    guides: source.guides, resources: source.resources, fonts: source.fonts, selection: source.selection, swatches: source.swatches };
 }
 
 function writeHistory(state: PersistedHistoryState, name: string, context: V2BuildContext, files: Zippable): ProjectHistoryV2 {
@@ -888,10 +892,13 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
       selectionValues.set(key, selection);
     }
     if (source.globalLightAngle !== undefined && (!num(source.globalLightAngle) || Math.abs(source.globalLightAngle) > 360_000)) invalid('global light');
+    const swatchGroups = source.swatches ?? manifest.swatches;
+    if (swatchGroups !== undefined && !validSwatchGroups(swatchGroups)) invalid('swatches');
     return { id: source.id, width: source.width, height: source.height, resolution: source.resolution,
       globalLightAngle: source.globalLightAngle ?? 120,
       layers, artboards: normalizeArtboards(source.artboards), ...(guides?.length ? { guides: (guides as Guide[]).map((g) => ({ id: g.id, orientation: g.orientation, position: g.position })) } : {}),
-      resources, ...(fontRecords?.length ? { fonts: fontRecords } : {}), selection };
+      resources, ...(fontRecords?.length ? { fonts: fontRecords } : {}),
+      ...(swatchGroups?.length ? { swatches: normalizeSwatchGroups(swatchGroups) } : {}), selection };
   };
 
   const document = await parseDocument(manifest);
