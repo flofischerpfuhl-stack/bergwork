@@ -1,6 +1,6 @@
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { compositeRegion } from '../../src/core/composite';
+import { cpuCompositeRegion } from '../../src/render/cpuRender';
 import { PSD_BLEND_MODES, readPsdDocument, type PsdUnsupportedFeature } from '../../src/io/psd';
 
 export interface FidelityThreshold { readonly mean: number; readonly p99: number }
@@ -102,8 +102,9 @@ export async function measureFile(absolute: string, corpusRoot: string): Promise
     if (!imported.oracle) return { file, categories, parsed: true, rendered: false, passed: false,
       threshold, unsupported: imported.unsupported, bitsPerChannel: imported.source.bitsPerChannel,
       error: 'No embedded composite image' };
-    const rendered = compositeRegion(imported.document,
-      { x: 0, y: 0, width: imported.document.width, height: imported.document.height }).rgba;
+    // The product's CPU path (live filters, effects, adjustments), not the bare core compositor.
+    const rendered = cpuCompositeRegion(imported.document,
+      { x: 0, y: 0, width: imported.document.width, height: imported.document.height });
     const expected = imported.oracle.toPixels();
     const metrics = differenceMetrics(rendered, expected);
     return { file, categories, parsed: true, rendered: true,

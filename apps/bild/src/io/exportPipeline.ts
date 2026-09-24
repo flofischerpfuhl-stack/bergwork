@@ -6,9 +6,8 @@
  * `runExport` (render, back, matte, encode off the main thread). Loaded on first export.
  */
 
-import { applyAdjustment } from '../core/adjust/apply';
 import { artboardUnits, findArtboard, type ArtboardBackground } from '../core/artboards';
-import { compositeView, compositeViewFloat } from '../core/composite';
+import { cpuCompositeView, cpuCompositeViewFloat } from '../render/cpuRender';
 import { ancestorIds, type CanvasDocument, type Layer } from '../core/document';
 import { concat as concatAffine, type Rect } from '../core/geometry';
 import type { RGB } from '../core/model';
@@ -234,10 +233,10 @@ export async function estimateExportSize(document: CanvasDocument | null, reques
 
 // MARK: Renderers
 
-/** CPU renderer (core compositor with the CPU adjustment programs). Used headless and in unit tests. */
+/** CPU renderer (the shared CPU path: live filters, layer effects, adjustments). Used headless and in unit tests. */
 export function cpuExportRenderer(): ExportRenderer {
   return {
-    readView: (document, width, height, viewToDoc) => compositeView(document, width, height, viewToDoc, { adjust: applyAdjustment }).rgba,
-    readViewFloat: (document, width, height, viewToDoc) => compositeViewFloat(document, width, height, viewToDoc, { adjust: applyAdjustment }).rgba,
+    readView: (document, width, height, viewToDoc) => cpuCompositeView(document, width, height, viewToDoc),
+    readViewFloat: (document, width, height, viewToDoc) => cpuCompositeViewFloat(document, width, height, viewToDoc),
   };
 }
