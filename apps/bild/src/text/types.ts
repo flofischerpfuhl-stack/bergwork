@@ -132,6 +132,7 @@ export interface StrokePaint {
   readonly dash?: readonly number[];
   readonly dashPhase?: number;
   readonly join?: 'miter' | 'round' | 'bevel';
+  readonly miterLimit?: number;
   readonly cap?: 'butt' | 'round' | 'square';
 }
 
@@ -139,6 +140,7 @@ export interface PathRasterRequest {
   readonly width: number;
   readonly height: number;
   readonly svgPath: string;
+  readonly fillRule?: 'nonzero' | 'evenodd';
   readonly fill?: FillPaint;
   readonly stroke?: StrokePaint;
   readonly background?: RgbaColor;

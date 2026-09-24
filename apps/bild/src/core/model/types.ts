@@ -110,11 +110,18 @@ export type LayerAdjustment =
   | { readonly kind: 'Channel Mixer'; readonly schemaVersion: 1; readonly parameters: ChannelMixerSettings };
 
 export interface LayerShape {
-  readonly kind: 'Rectangle' | 'Ellipse';
+  /** Absent on files created before the Phase-2 vector model. */
+  readonly schemaVersion?: 1;
+  readonly kind: 'Rectangle' | 'Ellipse' | 'Polygon' | 'Star' | 'Line';
   readonly red: number;
   readonly green: number;
   readonly blue: number;
   readonly cornerRadius: number;
+  /** Rectangle radii in top-left, top-right, bottom-right, bottom-left order. */
+  readonly cornerRadii?: readonly [number, number, number, number];
+  readonly sides?: number;
+  readonly innerRatio?: number;
+  readonly lineWidth?: number;
 }
 
 export interface LayerLocks {
@@ -132,14 +139,27 @@ export interface LayerMask {
 }
 
 export interface VectorPath {
+  /** Absent in early v2 files; readers migrate those records to version 1. */
+  readonly schemaVersion?: 1;
   readonly closed: boolean;
+  readonly fillRule?: 'nonzero' | 'evenodd';
   readonly points: readonly {
     readonly anchor: Point;
     readonly in: Point;
     readonly out: Point;
+    readonly kind?: 'corner' | 'smooth';
   }[];
 }
-export interface VectorMask { readonly enabled: boolean; readonly inverted: boolean; readonly paths: readonly VectorPath[] }
+export interface VectorMask {
+  readonly schemaVersion?: 1;
+  readonly enabled: boolean;
+  readonly inverted: boolean;
+  /** Photoshop-compatible strength, 0..1. */
+  readonly density?: number;
+  /** Gaussian feather radius in document pixels. */
+  readonly feather?: number;
+  readonly paths: readonly VectorPath[];
+}
 export interface CropParameters { readonly rect: Rect; readonly feather: number }
 export interface WarpQuad { readonly kind: 'quad'; readonly schemaVersion: 1; readonly corners: readonly [Point, Point, Point, Point] }
 
@@ -216,8 +236,23 @@ export interface FillLayer extends LayerCommon, WithoutAdjustment, WithoutRaster
   readonly kind: 'fill'; readonly fill: FillParameters;
 }
 export interface VectorStyle {
+  readonly schemaVersion?: 1;
   readonly fill: FillParameters | null;
-  readonly stroke: { readonly color: RGB; readonly width: number; readonly alignment: 'inside' | 'center' | 'outside' } | null;
+  readonly stroke: {
+    readonly paint?: FillParameters;
+    /** Compatibility colour for early v2 records. `paint` is authoritative when present. */
+    readonly color: RGB;
+    readonly width: number;
+    readonly alignment: 'inside' | 'center' | 'outside';
+    readonly cap?: 'butt' | 'round' | 'square';
+    readonly join?: 'miter' | 'round' | 'bevel';
+    readonly miterLimit?: number;
+    readonly dash?: readonly number[];
+    readonly dashOffset?: number;
+    readonly startMarker?: 'none' | 'arrow' | 'openArrow' | 'circle' | 'square';
+    readonly endMarker?: 'none' | 'arrow' | 'openArrow' | 'circle' | 'square';
+    readonly markerSize?: number;
+  } | null;
 }
 export interface VectorLayer extends LayerCommon, WithoutAdjustment {
   readonly kind: 'vector';

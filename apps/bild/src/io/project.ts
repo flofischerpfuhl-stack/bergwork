@@ -264,7 +264,8 @@ function v2Layer(layer: Layer, context: V2BuildContext): LayerRecordV2 {
     colorLabel: layer.colorLabel, transform: layer.transform, warp: layer.warp ?? null, crop: layer.crop ?? null,
     mask: layer.mask ? { assetId: addV2Asset(context, layer.mask.raster, 'mask'), transform: layer.mask.placement,
       linked: layer.mask.linked, enabled: layer.mask.enabled } : null,
-    vectorMask: layer.vectorMask ?? null, clippedTo: layer.maskSourceId,
+    vectorMask: layer.vectorMask ? { ...layer.vectorMask, schemaVersion: 1, density: layer.vectorMask.density ?? 1,
+      feather: layer.vectorMask.feather ?? 0, paths: layer.vectorMask.paths.map(v2VectorPath) } : null, clippedTo: layer.maskSourceId,
     effects: layer.effects ?? [], filters: layer.filters ?? [],
   };
   const preview = layer.raster ? addV2Asset(context, layer.raster, 'image') : null;
@@ -277,10 +278,9 @@ function v2Layer(layer: Layer, context: V2BuildContext): LayerRecordV2 {
     case 'vector': {
       const value = layer as Partial<import('../core/model').VectorLayer>;
       const shape = layer.sourceShape;
-      const sourceShape = shape && (shape.kind === 'Rectangle' || shape.kind === 'Ellipse')
-        && num(shape.red) && num(shape.green) && num(shape.blue) && num(shape.cornerRadius)
-        ? { kind: shape.kind, red: shape.red, green: shape.green, blue: shape.blue, cornerRadius: shape.cornerRadius } : null;
-      return { ...common, kind: 'vector', paths: value.paths ?? [], style: value.style ?? { fill: null, stroke: null },
+      const sourceShape = shape ? { ...shape, schemaVersion: 1 as const } : null;
+      const style = value.style ?? { fill: null, stroke: null };
+      return { ...common, kind: 'vector', paths: (value.paths ?? []).map(v2VectorPath), style: { ...style, schemaVersion: 1 },
         previewAssetId: preview, sourceShape };
     }
     case 'text': {
@@ -295,6 +295,12 @@ function v2Layer(layer: Layer, context: V2BuildContext): LayerRecordV2 {
     }
     default: return { ...common, kind: 'pixel', assetId: preview };
   }
+}
+
+function v2VectorPath(path: import('../core/model').VectorPath): import('../../contracts-v2').VectorPathRecordV2 {
+  return { schemaVersion: 1, closed: path.closed, fillRule: path.fillRule ?? 'nonzero', points: path.points.map((point) => ({
+    anchor: point.anchor, in: point.in, out: point.out, kind: point.kind ?? 'corner',
+  })) };
 }
 
 function manifestV2WithContext(document: CanvasDocument, name: string, activeLayerId: string | null,
@@ -626,7 +632,22 @@ function validLegacyShape(parameters: unknown): LayerShape {
   const value = legacyRecord(parameters);
   if ((value.kind !== 'Rectangle' && value.kind !== 'Ellipse') || !num(value.red) || !num(value.green)
     || !num(value.blue) || !num(value.cornerRadius)) invalid('shape parameters');
-  return value as unknown as LayerShape;
+  return { ...(value as unknown as LayerShape), schemaVersion: 1 };
+}
+
+function validParametricShape(parameters: unknown): LayerShape {
+  const value = legacyRecord(parameters);
+  if (!['Rectangle', 'Ellipse', 'Polygon', 'Star', 'Line'].includes(String(value.kind))
+    || !num(value.red) || !num(value.green) || !num(value.blue) || !num(value.cornerRadius)
+    || ![value.red, value.green, value.blue].every((part) => (part as number) >= 0 && (part as number) <= 1)
+    || (value.schemaVersion !== undefined && value.schemaVersion !== 1)) invalid('parametric shape');
+  if (value.cornerRadii !== undefined && (!Array.isArray(value.cornerRadii) || value.cornerRadii.length !== 4
+    || !value.cornerRadii.every((part) => num(part) && part >= 0))) invalid('rectangle radii');
+  if ((value.kind === 'Polygon' || value.kind === 'Star') && (!num(value.sides) || !Number.isInteger(value.sides)
+    || value.sides < (value.kind === 'Star' ? 2 : 3) || value.sides > 1000)) invalid('shape sides');
+  if (value.kind === 'Star' && (!num(value.innerRatio) || value.innerRatio <= 0 || value.innerRatio >= 1)) invalid('star ratio');
+  if (value.kind === 'Line' && (!num(value.lineWidth) || value.lineWidth <= 0)) invalid('line width');
+  return { ...(value as unknown as LayerShape), schemaVersion: 1 };
 }
 
 async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string, Uint8Array>,
@@ -712,7 +733,8 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
         || !BLEND_MODE_SET.has(record.blendMode) || !isLayerTransform(record.transform)
         || !validLocks(record.locks) || !['none', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray'].includes(record.colorLabel)
         || !Array.isArray(record.effects) || !record.effects.every(validEffect)
-        || !Array.isArray(record.filters) || !record.filters.every(validLiveFilter)) invalid('v2 layer');
+        || !Array.isArray(record.filters) || !record.filters.every(validLiveFilter)
+        || !validVectorMaskRecord(record.vectorMask)) invalid('v2 layer');
       ids.add(record.id);
       if (!['pixel', 'group', 'adjustment', 'fill', 'vector', 'text', 'embedded'].includes(record.kind)) invalid('v2 layer kind');
       const assetId = record.kind === 'pixel' ? record.assetId
@@ -726,7 +748,7 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
         parentId: record.parentId, opacity: record.opacity, fillOpacity: record.fillOpacity,
         blendMode: record.blendMode as BlendMode, locks: record.locks, colorLabel: record.colorLabel,
         transform: record.transform, warp: record.warp, crop: record.crop, raster, mask,
-        vectorMask: record.vectorMask, maskSourceId: record.clippedTo, effects: record.effects, filters: record.filters,
+        vectorMask: normalizeVectorMaskRecord(record.vectorMask), maskSourceId: record.clippedTo, effects: record.effects, filters: record.filters,
       };
       switch (record.kind) {
         case 'group': layers.push(newLayer({ ...common, kind: 'group' })); break;
@@ -746,10 +768,12 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
           break;
         case 'vector':
           if (!Array.isArray(record.paths) || !record.paths.every(validVectorPath) || !record.style
-            || (record.style.fill !== null && !validFill(record.style.fill, records))) invalid('vector parameters');
-          if (record.sourceShape !== null) validLegacyShape(record.sourceShape);
-          layers.push(newLayer({ ...common, kind: 'vector', paths: record.paths, style: record.style,
-            sourceShape: record.sourceShape })); break;
+            || (record.style.schemaVersion !== undefined && record.style.schemaVersion !== 1)
+            || (record.style.fill !== null && !validFill(record.style.fill, records))
+            || !validVectorStroke(record.style.stroke, records)) invalid('vector parameters');
+          layers.push(newLayer({ ...common, kind: 'vector', paths: record.paths.map(normalizeVectorPath),
+            style: { ...record.style, schemaVersion: 1 },
+            sourceShape: record.sourceShape === null ? null : validParametricShape(record.sourceShape) })); break;
         case 'text':
           if (typeof record.text !== 'string' || !Array.isArray(record.runs)
             || !record.runs.every((run: unknown) => validTextRun(run, record.text.length))
@@ -844,8 +868,46 @@ function validTextParagraph(value: unknown, length: number): boolean {
 }
 
 function validVectorPath(value: import('../../contracts-v2').VectorPathRecordV2): boolean {
-  return !!value && typeof value.closed === 'boolean' && Array.isArray(value.points)
-    && value.points.every((point) => [point?.anchor, point?.in, point?.out].every((part) => num(part?.x) && num(part?.y)));
+  return !!value && (value.schemaVersion === undefined || value.schemaVersion === 1)
+    && typeof value.closed === 'boolean' && (value.fillRule === undefined || value.fillRule === 'nonzero' || value.fillRule === 'evenodd')
+    && Array.isArray(value.points) && value.points.length <= 1_000_000
+    && value.points.every((point) => (point.kind === undefined || point.kind === 'corner' || point.kind === 'smooth')
+      && [point?.anchor, point?.in, point?.out].every((part) => num(part?.x) && num(part?.y)));
+}
+
+function normalizeVectorPath(value: import('../../contracts-v2').VectorPathRecordV2): import('../core/model').VectorPath {
+  return { schemaVersion: 1, closed: value.closed, fillRule: value.fillRule ?? 'nonzero', points: value.points.map((point) => ({
+    anchor: point.anchor, in: point.in, out: point.out, kind: point.kind ?? 'corner',
+  })) };
+}
+
+function validVectorMaskRecord(value: import('../../contracts-v2').VectorMaskRecordV2 | null): boolean {
+  return value === null || (!!value && (value.schemaVersion === undefined || value.schemaVersion === 1)
+    && typeof value.enabled === 'boolean' && typeof value.inverted === 'boolean'
+    && (value.density === undefined || (num(value.density) && value.density >= 0 && value.density <= 1))
+    && (value.feather === undefined || (num(value.feather) && value.feather >= 0 && value.feather <= 10_000))
+    && Array.isArray(value.paths) && value.paths.every(validVectorPath));
+}
+
+function normalizeVectorMaskRecord(value: import('../../contracts-v2').VectorMaskRecordV2 | null): import('../core/model').VectorMask | null {
+  return value ? { schemaVersion: 1, enabled: value.enabled, inverted: value.inverted, density: value.density ?? 1,
+    feather: value.feather ?? 0, paths: value.paths.map(normalizeVectorPath) } : null;
+}
+
+function validVectorStroke(value: import('../../contracts-v2').VectorStrokeRecordV2 | null,
+  assets: ReadonlyMap<string, AssetRecordV2>): boolean {
+  if (value === null) return true;
+  return !!value && validRgb(value.color) && num(value.width) && value.width > 0
+    && ['inside', 'center', 'outside'].includes(value.alignment)
+    && (value.paint === undefined || validFill(value.paint, assets))
+    && (value.cap === undefined || ['butt', 'round', 'square'].includes(value.cap))
+    && (value.join === undefined || ['miter', 'round', 'bevel'].includes(value.join))
+    && (value.miterLimit === undefined || (num(value.miterLimit) && value.miterLimit >= 1))
+    && (value.dash === undefined || (Array.isArray(value.dash) && value.dash.length % 2 === 0 && value.dash.every((part) => num(part) && part > 0)))
+    && (value.dashOffset === undefined || num(value.dashOffset))
+    && [value.startMarker, value.endMarker].every((marker) => marker === undefined
+      || ['none', 'arrow', 'openArrow', 'circle', 'square'].includes(marker))
+    && (value.markerSize === undefined || (num(value.markerSize) && value.markerSize > 0));
 }
 
 function validFill(value: import('../../contracts-v2').FillRecordV2, assets: ReadonlyMap<string, AssetRecordV2>): boolean {

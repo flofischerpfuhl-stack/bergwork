@@ -18,7 +18,7 @@ export type {
   LayerAdjustmentKind, Artboard, Guide, BlendMode, CanvasDocument, ColorLabel, CropParameters, DocumentFont, DocumentResource, EmbeddedLayer,
   FillLayer, FillParameters, GroupLayer, Layer, LayerAdjustment, LayerEffect, LayerLocks, LayerMask, ModelLayer,
   LayerShape, LegacyTextRun, LiveFilter, PixelLayer, TextLayer, TextParagraph, TextParagraphStyle, TextRun, TextRunStyle,
-  TextKerning, TextOpenTypeFeature, VectorLayer, VectorMask, WarpQuad,
+  TextKerning, TextOpenTypeFeature, VectorLayer, VectorMask, VectorPath, VectorStyle, WarpQuad,
 } from './model';
 
 /** Compatibility type for the legacy UI icon registry; engine records use `LayerAdjustmentKind`. */

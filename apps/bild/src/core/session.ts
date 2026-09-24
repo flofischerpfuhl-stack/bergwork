@@ -29,6 +29,7 @@ import { Raster } from './raster';
 import { CanvasViewport } from './viewport';
 import { defaultAdjustment } from './adjustments';
 import { cancelShape, redrawShapeLayer } from './shape';
+import { vectorLayerWithTransform } from './vector/transform';
 import { cancelGradient, hasPendingGradient, refreshGradientPalette, resolveGradient } from './gradient';
 import { distortLayer, groupDistortTarget, maskBackground, warpMask } from './distort';
 import {
@@ -1111,7 +1112,7 @@ export class EditorSession {
     const parents = new Map(document.layers.map((l) => [l.id, l.parentId]));
     const visible = effectiveVisibleIds(document.layers);
     return document.layers.filter((layer) => {
-      if (!layer.raster || !visible.has(layer.id)) return false;
+      if ((!layer.raster && layer.kind !== 'vector') || !visible.has(layer.id)) return false;
       let current: string | null = layer.id;
       for (let i = 0; i < 64 && current; i++) {
         if (this.selectedLayerIds.has(current)) return true;
@@ -1136,7 +1137,7 @@ export class EditorSession {
       return members.length > 0 && !members.some((layer) => this.editBlocker(layer.id, 'position'));
     }
     const layer = this.activeLayer;
-    return !!layer?.raster && effectiveVisibleIds(this.document!.layers).has(layer.id)
+    return !!layer && (!!layer.raster || layer.kind === 'vector') && effectiveVisibleIds(this.document!.layers).has(layer.id)
       && !this.editBlocker(layer.id, 'position');
   }
 
@@ -1192,7 +1193,7 @@ export class EditorSession {
       for (const guide of document.guides ?? []) (guide.orientation === 'vertical' ? xs : ys).push(guide.position);
     }
     for (const layer of renderLayersOf(document.layers)) {
-      if (!layer.raster || excluding.has(layer.id)) continue;
+      if ((!layer.raster && layer.kind !== 'vector') || excluding.has(layer.id)) continue;
       const box = boundingBox(this.displayedTransform(layer));
       xs.push(Math.round(box.x), Math.round(box.x + box.width / 2), Math.round(box.x + box.width));
       ys.push(Math.round(box.y), Math.round(box.y + box.height / 2), Math.round(box.y + box.height));
@@ -1215,8 +1216,8 @@ export class EditorSession {
     if (!this.transformEdit && this.transformsAsGroup) return this.groupTransformBox?.size ?? null;
     if (this.transformTargetsMask) return null;
     if (this.transformEdit?.floating) return this.transformEdit.floating.pixelSize;
-    const raster = this.activeLayer?.raster;
-    return raster ? { width: raster.width, height: raster.height } : null;
+    const layer = this.activeLayer, raster = layer?.raster;
+    return raster ? { width: raster.width, height: raster.height } : layer?.kind === 'vector' ? layer.transform.size : null;
   }
 
   /** A layer's transform under the pending edit, or null when the edit doesn't move it. */
@@ -1300,8 +1301,8 @@ export class EditorSession {
           for (const [id, original] of edit.group!.originals) {
             const moved = following(original, edit.group!.box, edit.draft);
             if (!isValidTransform(moved)) continue;
-            this.updateLayer(id, (l) => redrawShapeLayer({ ...l, transform: moved,
-              mask: l.mask ? { ...l.mask, placement: maskPlacementMoving(l.mask, original, moved) } : null }));
+            this.updateLayer(id, (l) => redrawShapeLayer(vectorLayerWithTransform({ ...l,
+              mask: l.mask ? { ...l.mask, placement: maskPlacementMoving(l.mask, original, moved) } : null }, moved)));
           }
         });
         return;
@@ -1312,8 +1313,8 @@ export class EditorSession {
         || edit.draft.rotation !== layer.transform.rotation || edit.draft.flipX !== layer.transform.flipX
         || edit.draft.flipY !== layer.transform.flipY;
       if (this.refuseLayerEdit(layer.id, 'position') || (resamples && this.refuseLayerEdit(layer.id, 'pixels'))) return;
-      this.edit('Transform Layer', () => this.updateLayer(edit.layerId, (l) => redrawShapeLayer({ ...l, transform: edit.draft,
-        mask: l.mask ? { ...l.mask, placement: maskPlacementMoving(l.mask, l.transform, edit.draft) } : null })));
+      this.edit('Transform Layer', () => this.updateLayer(edit.layerId, (l) => redrawShapeLayer(vectorLayerWithTransform({ ...l,
+        mask: l.mask ? { ...l.mask, placement: maskPlacementMoving(l.mask, l.transform, edit.draft) } : null }, edit.draft))));
     } finally {
       if (this.transformDuplicate) { this.transformDuplicate = null; this.endEdit(); }
       this.notify('document');

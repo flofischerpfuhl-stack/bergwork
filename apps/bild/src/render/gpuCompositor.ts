@@ -878,7 +878,8 @@ export class GpuCompositor {
     const temporaries: RenderTexture[] = [];
 
     const folderClip = (id: string): RenderTexture | null => {
-      const folders = ancestorIds(document.layers, id).map((f) => byId.get(f)!).filter((f) => f?.mask?.enabled);
+      const folders = ancestorIds(document.layers, id).map((f) => byId.get(f)!)
+        .filter((f) => f?.mask?.enabled || f?.vectorMask?.enabled);
       if (!folders.length) return null;
       const key = folders.map((f) => f.id).join('/');
       if (folderClips.has(key)) return folderClips.get(key)!;
@@ -1002,8 +1003,9 @@ export class GpuCompositor {
     const pixelBrush = brush?.target === 'pixels' ? brush : null;
     const out = this.acquire(view.width, view.height);
     let maskTarget: RenderTexture | null = null;
-    const maskRaster = layer.mask?.enabled ? hooks.maskRaster(layer) : null;
-    if (layer.mask && maskRaster) {
+    const maskEnabled = layer.mask?.enabled || layer.vectorMask?.enabled;
+    const maskRaster = maskEnabled ? hooks.maskRaster(layer) : null;
+    if (maskEnabled && maskRaster) {
       const placement = hooks.maskPlacement(layer);
       const maskPlace = placement ?? hooks.transform(layer);
       maskTarget = this.renderMask(null, maskRaster, `mask:${layer.id}`, maskPlace, view,
@@ -1183,7 +1185,7 @@ export class GpuCompositor {
   /** The clip for an adjustment layer: its own enabled mask (outside → 0) times its folders' masks. */
   private adjustmentClip(layer: Layer, folderClip: RenderTexture | null, view: ViewSpec, hooks: CompositeHooks,
     temporaries: RenderTexture[]): RenderTexture | null {
-    const raster = layer.mask?.enabled ? hooks.maskRaster(layer) : null;
+    const raster = layer.mask?.enabled || layer.vectorMask?.enabled ? hooks.maskRaster(layer) : null;
     if (!raster) return folderClip;
     return this.multiplyMask(folderClip, raster, `mask:${layer.id}`, hooks.transform(layer), view, temporaries);
   }

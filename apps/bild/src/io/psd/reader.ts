@@ -1,9 +1,11 @@
 import {
   initializeCanvas, readPsd, type BlendMode as AgBlendMode, type Layer as AgLayer,
-  type Color as AgColor, type EffectSolidGradient, type LayerEffectsInfo, type LayerTextData, type PixelData, type Psd, type UnitsValue,
+  type BezierPath, type Color as AgColor, type EffectSolidGradient, type LayerEffectsInfo, type LayerTextData, type PixelData, type Psd,
+  type UnitsValue, type VectorContent,
 } from 'ag-psd';
 import {
-  type BlendMode, type CanvasDocument, type ColorLabel, type Layer, type LayerAdjustment, type LayerEffect, type LayerLocks,
+  type BlendMode, type CanvasDocument, type ColorLabel, type FillParameters, type Layer, type LayerAdjustment, type LayerEffect,
+  type LayerLocks, type VectorMask, type VectorPath, type VectorStyle,
   DEFAULT_TEXT_STYLE, defaultTextParagraphStyle, MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
 } from '../../core/document';
 import { makeTransform, samePlacement, type LayerTransform } from '../../core/geometry';
@@ -106,6 +108,7 @@ interface ImportState {
   nextId: number;
   readonly documentWidth: number;
   readonly documentHeight: number;
+  readonly resolution: number;
   readonly unsupported: PsdUnsupportedFeature[];
   readonly resources: NonNullable<CanvasDocument['resources']>[number][];
 }
@@ -246,13 +249,8 @@ function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportS
 }
 
 function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportState, layerPath: string): void {
-  if (source.vectorMask) issue(state, 'vector-mask', source.imageData
-    ? 'Vector mask uses the layer pixel cache and is not editable.' : 'Vector mask is parsed but not rendered.',
-    source.imageData ? 'editability-only' : 'not-rendered', layerPath);
   if (source.text?.orientation === 'vertical') issue(state, 'vertical-text', 'Vertical PSD text is imported as horizontal text.', 'approximated', layerPath);
   if (source.text?.warp?.style && source.text.warp.style !== 'none') issue(state, 'text-warp', 'Warped PSD text remains editable but its warp is not rendered.', 'not-rendered', layerPath);
-  if (source.vectorFill || source.vectorStroke) issue(state, 'vector-content',
-    'Vector content uses its saved pixel cache and is not editable.', 'editability-only', layerPath);
   if (source.placedLayer) issue(state, 'smart-object',
     'Smart object uses its saved pixel cache and is not editable.', 'editability-only', layerPath);
   if (source.realMask) issue(state, 'real-mask', 'The real/vector-derived mask channel is not rendered.', 'not-rendered', layerPath);
@@ -385,6 +383,67 @@ function importedAdjustment(source: AgLayer, state: ImportState, layerPath: stri
   return null;
 }
 
+function unitPixels(value: UnitsValue | undefined, resolution: number): number {
+  if (!value) return 0;
+  switch (value.units) {
+    case 'Points': return value.value * resolution / 72;
+    case 'Picas': return value.value * resolution / 6;
+    case 'Inches': return value.value * resolution;
+    case 'Centimeters': return value.value * resolution / 2.54;
+    case 'Millimeters': return value.value * resolution / 25.4;
+    default: return value.value;
+  }
+}
+
+function psdVectorPaths(paths: readonly BezierPath[], origin: { x: number; y: number }): readonly VectorPath[] {
+  return paths.filter((path) => path.knots.length > 0).map((path) => ({
+    schemaVersion: 1 as const, closed: !path.open, fillRule: path.fillRule === 'even-odd' ? 'evenodd' as const : 'nonzero' as const,
+    points: path.knots.map((knot) => ({
+      // ag-psd readBezierKnot: preceding control, anchor, leaving control.
+      in: { x: knot.points[0]! - origin.x, y: knot.points[1]! - origin.y },
+      anchor: { x: knot.points[2]! - origin.x, y: knot.points[3]! - origin.y },
+      out: { x: knot.points[4]! - origin.x, y: knot.points[5]! - origin.y },
+      kind: knot.linked ? 'smooth' as const : 'corner' as const,
+    })),
+  }));
+}
+
+function psdFill(content: VectorContent | undefined, state: ImportState, layerPath: string): FillParameters | null {
+  if (!content) return null;
+  if (content.type === 'color') return { kind: 'solid', schemaVersion: 1, color: psdTextColor(content.color) };
+  if (content.type === 'solid') {
+    const stops = content.colorStops.map((stop) => ({ offset: Math.max(0, Math.min(1, stop.location)),
+      color: psdTextColor(stop.color), opacity: 1 }));
+    for (const opacity of content.opacityStops) {
+      const nearest = stops.reduce((best, value) => Math.abs(value.offset - opacity.location) < Math.abs(best.offset - opacity.location) ? value : best, stops[0]!);
+      nearest.opacity = Math.max(0, Math.min(1, opacity.opacity));
+    }
+    if (stops.length >= 2) return { kind: 'gradient', schemaVersion: 1, angle: content.angle ?? 0, stops };
+  }
+  issue(state, `vector-fill:${content.type}`, `PSD ${content.type} vector paint uses the saved preview.`, 'approximated', layerPath);
+  return null;
+}
+
+function psdVectorStyle(source: AgLayer, resolution: number, state: ImportState, layerPath: string): VectorStyle {
+  const stroke = source.vectorStroke, strokePaint = psdFill(stroke?.content, state, layerPath);
+  const fallback = strokePaint?.kind === 'solid' ? strokePaint.color : { red: 0, green: 0, blue: 0 };
+  return { schemaVersion: 1, fill: stroke?.fillEnabled === false ? null : psdFill(source.vectorFill, state, layerPath),
+    stroke: stroke?.strokeEnabled === true ? {
+      color: fallback, ...(strokePaint ? { paint: strokePaint } : {}), width: Math.max(0.01, unitPixels(stroke.lineWidth, resolution)),
+      alignment: stroke.lineAlignment ?? 'center', cap: stroke.lineCapType ?? 'butt', join: stroke.lineJoinType ?? 'miter',
+      miterLimit: Math.max(1, stroke.miterLimit ?? 4), dash: stroke.lineDashSet?.map((value) => unitPixels(value, resolution)),
+      dashOffset: unitPixels(stroke.lineDashOffset, resolution), startMarker: 'none', endMarker: 'none', markerSize: 3,
+    } : null };
+}
+
+function psdVectorMask(source: AgLayer, origin: { x: number; y: number }): VectorMask | null {
+  const mask = source.vectorMask;
+  if (!mask) return null;
+  return { schemaVersion: 1, enabled: mask.disable !== true, inverted: mask.invert === true,
+    density: source.mask?.vectorMaskDensity ?? 1, feather: source.mask?.vectorMaskFeather ?? 0,
+    paths: psdVectorPaths(mask.paths, origin) };
+}
+
 const COLOR_LABELS: ReadonlySet<string> = new Set(['none', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray']);
 
 function importedColorLabel(source: AgLayer, state: ImportState, layerPath: string): ColorLabel {
@@ -507,15 +566,19 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const editableText = textData?.text.replace(/\r/g, '\n') ?? '';
     const textBox = textData ? psdTextBox(textData, width, height) : null;
     const editableTransform = textData ? psdTextTransform(textData, layerTransform, textBox) : layerTransform;
+    const vectorContent = !isGroup && !textData && !!(source.vectorFill || source.vectorStroke) && !!source.vectorMask?.paths.length;
+    const vectorPaths = vectorContent ? psdVectorPaths(source.vectorMask!.paths, editableTransform.origin) : [];
     const imported = newLayer({
-      id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : textData ? 'text' : adjustment ? 'adjustment' : 'pixel',
+      id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : textData ? 'text' : vectorContent ? 'vector' : adjustment ? 'adjustment' : 'pixel',
       visible: source.hidden !== true, opacity, fillOpacity, blendMode: mappedMode,
       locks: importedLocks(source), colorLabel: importedColorLabel(source, state, layerPath), transform: editableTransform,
       raster: image ? Raster.fromPixels(image.width, image.height, 4, pixelDataToRgba8(image)) : null,
       ...(textData ? { text: editableText, runs: psdTextRuns(textData, editableText),
         paragraphs: psdParagraphs(textData, editableText), box: textBox,
         alignment: psdAlignment(textData.paragraphStyle?.justification), renderedTransform: layerTransform } : {}),
+      ...(vectorContent ? { paths: vectorPaths, style: psdVectorStyle(source, state.resolution, state, layerPath), sourceShape: null } : {}),
       mask: maskFor(source, editableTransform, state, layerPath),
+      vectorMask: vectorContent ? null : psdVectorMask(source, editableTransform.origin),
       maskSourceId: source.clipping && !isGroup ? clippingBaseId : null,
       effects: importEffects(source, state, layerPath),
       ...(adjustment ? { adjustment } : {}),
@@ -557,11 +620,13 @@ export function readPsdDocument(bytes: Uint8Array): PsdReadResult {
   if (colorMode !== 3) unsupported.push({ code: `color-mode:${colorMode}`,
     message: `PSD color mode ${colorMode} uses ag-psd's conversion to sRGB-like RGBA.`, impact: 'approximated' });
   if (psd.artboards) unsupported.push({ code: 'artboards', message: 'Artboard metadata is not represented.', impact: 'not-rendered' });
-  const state: ImportState = { nextId: 1, documentWidth: psd.width, documentHeight: psd.height, unsupported, resources: [] };
+  const documentResolution = resolution(psd);
+  const state: ImportState = { nextId: 1, documentWidth: psd.width, documentHeight: psd.height, resolution: documentResolution,
+    unsupported, resources: [] };
   const layers = importSiblings(psd.children ?? [], null, '', state);
   if (layers.length > MAX_LAYERS) throw new RangeError(`PSD has ${layers.length} layers; the document limit is ${MAX_LAYERS}`);
   const document: CanvasDocument = {
-    id: 'psd-document', width: psd.width, height: psd.height, resolution: resolution(psd),
+    id: 'psd-document', width: psd.width, height: psd.height, resolution: documentResolution,
     globalLightAngle: psd.imageResources?.globalAngle ?? 120, layers, resources: state.resources, selection: null,
   };
   const oracle = psd.imageData
