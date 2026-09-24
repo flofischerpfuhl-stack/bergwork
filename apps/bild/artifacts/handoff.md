@@ -79,6 +79,51 @@ capability (`artifacts/benchmarks.md`).
 - perf-gpu: passed;
 - runner gates including acceptance: green; `contracts.ts` unchanged.
 
+## Phase 1 (PRODUCT-PLAN.md), 2026-09-24
+
+Status per row: `artifacts/roadmap-status.md`. New measurement findings M9–M11 are in PRODUCT-PLAN.md under
+"Änderungen nach Messung".
+
+**Done, green on `integration`** (Chromium, Firefox and WebKit e2e, perf-gpu on the real GPU):
+- **A2:** strict layer model v2 with typed adjustments; `.fwimg` format v2 with migration from v1 and `.comp`; history
+  saved in the project. Evidence: `tests/unit/model-v2.test.ts`, `model-compat.test.ts`, `format-v2.test.ts`.
+- **A3:** RGBA16 rasters and a float pipeline on GPU and CPU. The banding test is green in all browsers, including
+  semi-transparent 16-bit (a WebKit half-float upload bug was fixed). ICC for 16-bit sources still runs at 8-bit
+  precision.
+- **A8:** all 27 blend modes. The 26 deterministic modes pass against Photoshop's composite; dissolve follows
+  Photoshop's rule. PSD blend-modes folder: 93.8 %.
+- **Files:** WebP, AVIF and GIF import, checked with unseen files in all three browsers.
+- **Guides:** rulers, guides (create, move, delete, lock, numeric), snapping to guides, align/distribute
+  (6 edges, 4 modes).
+- **History panel:** jump between states; history optionally saved with the project.
+- **Layers:** locks (transparency, pixels, position, all; inherited from folders) with a notice that names the locked
+  layer; fill opacity including Photoshop's eight special fill modes (GPU = CPU within 1/255); colour labels; search
+  and filter. PSD import covers all three.
+- **A0:** a test enforces the engine boundary, plus a headless engine test. Versioned host capabilities (files, fonts,
+  codecs, compute, models, colour, scratch) run in the browser and in Tauri. Pro/Lite profiles.
+- **Offline (M8):** the hardened WebView2 build made 0 connections in 5 min. On Windows the real app was driven over
+  CDP: menus and shortcuts pass, and no browser accelerator leaks through.
+- **A6/A6b:** the brush preview renders only the dirty region. p95 in Chromium went from 12.9 to 5.7 ms, in WebKitGTK
+  from 32–39 to 25–35 ms. The CSP no longer turns off the GPU renderer (M9). Forced SHM and native JPEG decoding were
+  measured and not adopted (M10).
+
+**Fixes from the integrator's own checks:**
+- the CSP turned off the GPU renderer (M9);
+- OS-opened files were outside the Tauri fs scope (M11);
+- the save picker depended on the open picker (Firefox/WebKit);
+- the Windows build needed Git Bash / LF; `<html lang>` was wrong;
+- `.fwimg` could not be opened by drag and drop;
+- test harness: tab selectors, base64 pixel transfer, separate Playwright output directories.
+
+**Open at the end of Phase 1:**
+- **A4 (swapping + journal):** A4b delivered residency, LOD and a granular journal, but lost brush strokes (3 e2e
+  regressions in all browsers). It is not merged. Lane A4c fixes this and runs the 200-MP / 20-layer acceptance
+  (Chromium 1.5 GiB, Tauri 4 GiB). This is the last Phase-1 exit criterion.
+- **Runner gates:** the two time-measured gates (`test:e2e` perf-gpu under SwiftShader, `test:perf` CPU brush) were red
+  at load 5–24. `master` fails the same way under the same load. A rerun on an idle machine is pending.
+- **Nutzertest (A9):** collected later, by owner decision. Phase 1 counts as technically done.
+- **WebKitGTK:** the brush Pro budget of 16 ms is still not reached (M10).
+
 ## Tests (current master)
 
 | Suite | Result |

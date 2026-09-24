@@ -163,7 +163,7 @@ export function StatusBar({ controller }: { controller: EditorController }) {
       {document ? (
         <>
           <span style={{ width: 62 }} data-testid="zoomStatus">{zoom >= 10 ? Math.round(zoom * 10) / 10 : Math.round(zoom * 100) / 100}%</span>
-          <span data-testid="canvasDimensions">{document.width.toLocaleString()} × {document.height.toLocaleString()} px</span>
+          <span data-testid="canvasDimensions">{document.width.toLocaleString(controller.locale)} × {document.height.toLocaleString(controller.locale)} px</span>
           <span>sRGB · Transparent</span>
         </>
       ) : <span>{t('Ready when you are')}</span>}

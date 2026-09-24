@@ -176,7 +176,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
   const dropInto = drag?.moved && (drag.maskFrom ? drag.maskTarget === layer.id : drag.target?.into && drag.target.index === index);
   const source = layer.maskSourceId ? session.layer(layer.maskSourceId) : null;
   const meta = source ? `${t('Clipped to')} ${source.name}` : layer.adjustment ? t('Adjustment · Double-click to edit') : layer.kind === 'group' ? t('Folder')
-    : `${Math.round(layer.transform.size.width).toLocaleString()} × ${Math.round(layer.transform.size.height).toLocaleString()} px`;
+    : `${Math.round(layer.transform.size.width).toLocaleString(controller.locale)} × ${Math.round(layer.transform.size.height).toLocaleString(controller.locale)} px`;
   const indent = Math.min(entry.depth, 8) * 24 + (layer.maskSourceId ? 24 : 0);
 
   const onRowPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {

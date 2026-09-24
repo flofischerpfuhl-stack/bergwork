@@ -5,7 +5,7 @@ Status: ✅ done · 🟡 partial · ❌ missing · 🔬 Phase-0 spike measured (
 Each row names its evidence: a test, a measurement, or a screenshot path. "Green" counts only on the integration
 branch.
 
-Last update: 2026-09-24, Phase 1 (wave 1 merged: A2, A3, A8, WebP/AVIF/GIF, guides, history panel, offline WebView2).
+Last update: 2026-09-24, end of Phase 1 (A4 swap still in lane A4c).
 
 ## 6.1 Document, layers, view
 
@@ -85,7 +85,7 @@ Last update: 2026-09-24, Phase 1 (wave 1 merged: A2, A3, A8, WebP/AVIF/GIF, guid
 | PSD read | 🔬 | `artifacts/psd-fidelity.md`: 276/300 parsed, 43.3 % under threshold (target ≥ 90 % in Phase 2) |
 | PSD write, RAW | ❌ | Phase 3 |
 | Mac `.comp` read | ✅ | `tests/unit/compPackage.test.ts`, `tests/e2e/workspace.spec.ts` |
-| Mac `.comp` write | ✅ (removed from the menu, E2) | code stays until A2 |
+| Mac `.comp` write | ✅ (removed from the menu, E2) | writer code still present, used by reader tests; removal proposed in the Phase-1 cleanup (needs frozen fixtures) |
 
 ## Architecture (section 4)
 
@@ -94,12 +94,12 @@ Last update: 2026-09-24, Phase 1 (wave 1 merged: A2, A3, A8, WebP/AVIF/GIF, guid
 | A1 Tauri shell + WebView matrix | 🔬 | `artifacts/tauri-webview-matrix.md` (see there) |
 | A5 CanvasKit | 🔬 all abort criteria passed | `artifacts/canvaskit-check.md` |
 | A7 PSD corpus + oracle | 🔬 baseline | `artifacts/psd-fidelity.md`, `scripts/fetch-psd-corpus.sh` |
-| A9 core-task benchmarks | 🔬 skeleton: 1 green / 19 red at the first missing capability | `tests/benchmarks/`, `artifacts/benchmarks.md` |
+| A9 core-task benchmarks | 🟡 Phase 1: 2 green / 18 red (task 20 crash recovery now green), each red task at its first missing capability; user test with real Photoshop users collected later (owner decision) | `tests/benchmarks/`, `artifacts/benchmarks.md` |
 | A2 model v2 + format v2 + migration | ✅ strict discriminated layer union and typed adjustments in the engine; legacy shapes only at the v1/.comp/PSD readers | `tests/unit/model-v2.test.ts`, `tests/unit/model-compat.test.ts`, `tests/unit/format-v2.test.ts` |
 | A3 pixel formats, float pipeline | ✅ rgba16 rasters, float compositing on GPU and CPU; ICC for 16-bit sources still at 8-bit precision | `tests/e2e/banding.spec.ts` (Chromium, Firefox, WebKit; incl. semi-transparent 16-bit), `tests/unit/raster16.test.ts` |
 | A8 blend modes | ✅ | see 6.1 |
 | A4 swap + journal | 🟡 residency, swapping, LOD navigation and granular journal exist on `p1-a4b` but lose brush strokes (3 e2e regressions in all browsers) and the 200-MP run is unproven → lane A4c; not merged | `tests/unit/storage.test.ts`, `tests/e2e/journal.spec.ts` (Chromium) |
-| A6 WebKitGTK spike | 🔬 forced SHM fixes zoom (7–9 ms), native wgpu slower, native JPEG decode only helps with batched IPC → lane A6b | `artifacts/a6-spike.md` |
+| A6 WebKitGTK / native compute | ✅ measured and decided: dirty-region brush preview adopted (Chromium p95 12.9 → 5.7 ms, WebKitGTK 32–39 → 25–35 ms), forced SHM and native JPEG not adopted (M10); WebKitGTK brush Pro budget still open | `artifacts/a6-spike.md`, `artifacts/a6b-webkit.md`, `tests/webview/a6b-brush.spec.ts` |
 | Windows WebView2 UI (menus, shortcuts, no browser accelerators) | ✅ | real app driven over CDP: all checks pass (`artifacts/tauri-webview-matrix.md`) |
 | Offline WebView2 (M8) | ✅ | hardened Windows build: 0 connections in 5 min (`artifacts/tauri-webview-matrix.md`) |
-| A0 engine/UI/host separation | ❌ | after A2b/A4b |
+| A0 engine/UI/host separation | ✅ engine boundary test, headless engine test, versioned host capabilities (browser + Tauri; Windows fonts/ICC/single instance verified), Pro/Lite profiles | `tests/unit/engine-boundary.test.ts`, `tests/unit/hosts.test.ts`, `tests/unit/profiles.test.ts`, `artifacts/a0-hosts.md` |
