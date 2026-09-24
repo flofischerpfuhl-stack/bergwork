@@ -3,7 +3,7 @@ import type { DocumentSelection, SelectionMode } from '../selection';
 import { applySelection } from '../selectionCommands';
 import type { EditorSession } from '../session';
 
-export type ColourRangePreset = 'sampled' | 'skinTones' | 'midtones';
+export type ColourRangePreset = 'sampled' | 'skinTones' | 'midtones' | 'highlights' | 'shadows';
 export interface SampledColour { readonly red: number; readonly green: number; readonly blue: number }
 export interface ColourRangeSettings {
   readonly preset: ColourRangePreset;
@@ -29,6 +29,9 @@ export function colourRangeMask(rgba: Uint8Array, width: number, height: number,
     let coverage: number;
     if (settings.preset === 'skinTones') coverage = skinCoverage(rgba[p]!, rgba[p + 1]!, rgba[p + 2]!, fuzziness);
     else if (settings.preset === 'midtones') coverage = midtoneCoverage(rgba[p]!, rgba[p + 1]!, rgba[p + 2]!, fuzziness);
+    else if (settings.preset === 'highlights' || settings.preset === 'shadows') {
+      coverage = toneCoverage(rgba[p]!, rgba[p + 1]!, rgba[p + 2]!, fuzziness, settings.preset === 'highlights');
+    }
     else {
       const lab = rgbToLab(rgba[p]!, rgba[p + 1]!, rgba[p + 2]!); let distance = Infinity;
       for (const sample of labs) distance = Math.min(distance, deltaE(lab, sample));
@@ -84,4 +87,10 @@ function midtoneCoverage(red: number, green: number, blue: number, fuzziness: nu
   const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
   const halfWidth = 0.22 + fuzziness / 1000;
   return 1 - smoothstep(halfWidth * 0.55, halfWidth, Math.abs(luminance - 0.5));
+}
+/** Photoshop's Highlights/Shadows ranges: the bright or dark quarter of luminance, widened by fuzziness. */
+function toneCoverage(red: number, green: number, blue: number, fuzziness: number, highlights: boolean): number {
+  const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255, tone = highlights ? luminance : 1 - luminance;
+  const edge = 0.75 - fuzziness / 1000;
+  return smoothstep(edge - 0.12, edge, tone);
 }

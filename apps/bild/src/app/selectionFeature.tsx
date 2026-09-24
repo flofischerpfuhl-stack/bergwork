@@ -33,14 +33,6 @@ import type { ToolContext, ToolHandler } from '../ui/canvas/tools';
 import { pixelClipboard } from '../core/clipboard';
 import { encodePng } from '../io/png';
 import { sha256Hex } from '../io/sha256';
-import { resolveObjectSelectModels } from '../core/objectSelect/models';
-import { selectObject } from '../core/objectSelect/selection';
-import type { ObjectPrompt, ObjectSelectStage } from '../core/objectSelect/types';
-import { objectSelectInference } from '../workers/objectSelectClient';
-import { refineEdgeWorker } from '../workers/refineClient';
-import { applyRefineEdgeResult } from '../core/refine/commands';
-import { colourRangeSelection } from '../core/refine/colourRange';
-import { selectionMaskOnCanvas } from '../core/refine/quickMask';
 
 interface LassoDraft { points: Point[]; cursor: Point | null; mode: SelectionMode; kind: LassoKind; anchor: Point | null }
 
@@ -66,79 +58,8 @@ export function selectionState(session: EditorSession): SelectionToolState {
   return state;
 }
 
-type ObjectToolMode = 'magic' | 'point' | 'box';
-interface ObjectToolState {
-  mode: ObjectToolMode;
-  urls: { encoder: string; decoder: string } | null;
-  phase: 'idle' | 'downloading' | ObjectSelectStage | 'ready' | 'error';
-  progress: number;
-  error: string | null;
-  prompts: ObjectPrompt[];
-  quickMask: boolean;
-  abort: AbortController | null;
-}
-const objectStates = new WeakMap<EditorSession, ObjectToolState>();
-function objectState(session: EditorSession): ObjectToolState {
-  let state = objectStates.get(session);
-  if (!state) {
-    state = { mode: 'magic', urls: null, phase: 'idle', progress: 0, error: null, prompts: [], quickMask: false, abort: null };
-    objectStates.set(session, state);
-  }
-  return state;
-}
-
-async function enableObjectSelection(controller: EditorController): Promise<void> {
-  const session = controller.session, state = objectState(session), host = controller.capabilities.models;
-  if (!host || state.phase === 'downloading') return;
-  state.abort?.abort(); state.abort = new AbortController(); state.phase = 'downloading'; state.error = null; session.notify('ui');
-  try {
-    const resolved = await resolveObjectSelectModels(host, ({ part, loaded, total }) => {
-      state.progress = total ? loaded / total : 0; state.phase = 'downloading'; state.error = null;
-      void part; session.notify('ui');
-    }, state.abort.signal);
-    state.urls = {
-      encoder: URL.createObjectURL(new Blob([resolved.encoder.bytes as BlobPart], { type: 'application/octet-stream' })),
-      decoder: URL.createObjectURL(new Blob([resolved.decoder.bytes as BlobPart], { type: 'application/octet-stream' })),
-    };
-    state.phase = 'ready'; state.progress = 1;
-  } catch (error) {
-    if (!(error instanceof DOMException && error.name === 'AbortError')) { state.phase = 'error'; state.error = error instanceof Error ? error.message : String(error); }
-  } finally { state.abort = null; session.notify('ui'); }
-}
-
-class ObjectSelectionTool implements ToolHandler {
-  private start: Point | null = null;
-  constructor(private readonly controller: EditorController) {}
-  down(c: ToolContext): void { this.start = c.pixel; if (objectState(c.session).mode === 'point') this.runPoint(c); }
-  move(_c: ToolContext): void {}
-  up(c: ToolContext): void {
-    const start = this.start; this.start = null;
-    if (!start || objectState(c.session).mode !== 'box' || Math.hypot(c.pixel.x - start.x, c.pixel.y - start.y) < 2) return;
-    void this.run(c.session, [{ kind: 'box', x0: start.x, y0: start.y, x1: c.pixel.x, y1: c.pixel.y }], selectionState(c.session).modeChoice);
-  }
-  cancel(session: EditorSession): void { this.start = null; objectState(session).abort?.abort(); }
-  hover(c: ToolContext): string { return c.modifiers.option ? 'alias' : c.modifiers.shift ? 'copy' : 'crosshair'; }
-  private runPoint(c: ToolContext): void {
-    const state = objectState(c.session), positive = !c.modifiers.option;
-    const point: ObjectPrompt = { kind: 'point', x: c.pixel.x, y: c.pixel.y, positive };
-    state.prompts = c.modifiers.shift || c.modifiers.option ? [...state.prompts, point] : [point];
-    void this.run(c.session, state.prompts, 'New');
-  }
-  private async run(session: EditorSession, prompts: readonly ObjectPrompt[], mode: SelectionMode): Promise<void> {
-    const state = objectState(session); if (!state.urls || state.phase === 'downloading') return;
-    state.abort?.abort(); state.abort = new AbortController(); state.error = null;
-    try {
-      await selectObject(session, prompts, { mode, modelUrls: state.urls, inference: objectSelectInference,
-        progress: (stage, value) => { state.phase = stage; state.progress = value; session.notify('ui'); }, signal: state.abort.signal });
-      state.phase = 'ready'; state.progress = 1;
-    } catch (error) {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) { state.phase = 'error'; state.error = error instanceof Error ? error.message : String(error); }
-    } finally { state.abort = null; session.notify('document'); }
-  }
-}
-
 /** Shift adds, Option (with or without Shift) subtracts; otherwise the options-bar mode. */
-function modeFor(state: SelectionToolState, shift: boolean, option: boolean): SelectionMode {
+export function modeFor(state: SelectionToolState, shift: boolean, option: boolean): SelectionMode {
   return option ? 'Subtract' : shift ? 'Add' : state.modeChoice;
 }
 
@@ -290,21 +211,12 @@ function outlineOf(selection: DocumentSelection): SelectionPolyline[] {
   return cached;
 }
 
-function paintSelection(context: CanvasRenderingContext2D, session: EditorSession, time: number): void {
+function paintSelection(context: CanvasRenderingContext2D, session: EditorSession, time: number, antsHidden: boolean): void {
   const document = session.document;
   if (!document) return;
   const selection = displayedSelection(session);
   const view = (p: Point) => session.viewport.viewPoint(p, document);
-  if (objectState(session).quickMask && selection) {
-    const overlay = new Path2D(), topLeft = view({ x: 0, y: 0 }), bottomRight = view({ x: document.width, y: document.height });
-    overlay.rect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
-    for (const line of outlineOf(selection)) {
-      line.forEach((p, i) => { const v = view(p); if (i) overlay.lineTo(v.x, v.y); else overlay.moveTo(v.x, v.y); });
-      overlay.closePath();
-    }
-    context.fillStyle = 'rgba(255,0,0,0.5)'; context.fill(overlay, 'evenodd');
-  }
-  if (selection && !selectionIsEmpty(selection)) {
+  if (selection && !selectionIsEmpty(selection) && !antsHidden) {
     const path = new Path2D();
     for (const line of outlineOf(selection)) {
       line.forEach((p, i) => { const v = view(p); if (i) path.lineTo(v.x, v.y); else path.moveTo(v.x, v.y); });
@@ -357,7 +269,6 @@ function SelectionBar({ controller, session }: { controller: EditorController; s
   const tool = session.tool;
   const shown = state.draft?.mode ?? state.heldMode ?? state.modeChoice;
   const selection = session.selection;
-  const object = objectState(session);
   const disabled = session.isProjectBusy || !session.document;
   const segmented = <T extends string>(values: readonly T[], value: T, set: (v: T) => void, label: string) => (
     <div className={styles.segmented} role="radiogroup" aria-label={t(label)}>
@@ -369,33 +280,14 @@ function SelectionBar({ controller, session }: { controller: EditorController; s
   );
   return (
     <>
-      <span className={styles.headerTitle}>{tool === 'marquee' ? t('Marquee') : tool === 'wand' ? t('Magic Wand') : t('Lasso')}</span>
+      <span className={styles.headerTitle}>{tool === 'marquee' ? t('Marquee') : tool === 'wand' ? t('Magic Wand') : tool === 'objectSelect' ? t('Object Selection Tool') : t('Lasso')}</span>
       {tool === 'marquee' ? segmented(['Rectangle', 'Ellipse'] as const, state.marqueeKind as 'Rectangle' | 'Ellipse',
         (v) => { cancelLasso(session); state.marqueeKind = v; session.notify('ui'); }, 'Shape') : null}
       {tool === 'lasso' ? segmented(['Freehand', 'Polygonal'] as const, state.lassoKind as 'Freehand' | 'Polygonal',
         (v) => { cancelLasso(session); state.lassoKind = v; session.notify('ui'); }, 'Lasso') : null}
       {segmented(['New', 'Add', 'Subtract'] as const, shown, (v) => { state.modeChoice = v; session.notify('ui'); }, 'Mode')}
-      {controller.wandControls && tool === 'wand' && object.mode === 'magic' ? controller.wandControls(session) : null}
-      {tool === 'wand' ? (
-        <>
-          <div className={styles.segmented} role="radiogroup" aria-label={t('Selection engine')}>
-            {([['magic', 'Magic Wand'], ['point', 'Object Point'], ['box', 'Object Rectangle']] as const).map(([value, label]) => (
-              <button key={value} type="button" role="radio" aria-checked={object.mode === value}
-                className={`${styles.segment} ${object.mode === value ? styles.segmentOn : ''}`}
-                onClick={() => { object.mode = value; object.prompts = []; session.notify('ui'); }}>{t(label)}</button>
-            ))}
-          </div>
-          {object.mode !== 'magic' && !object.urls ? (
-            <button type="button" className={styles.pill} disabled={!controller.capabilities.models || object.phase === 'downloading'}
-              data-testid="enable-object-selection" onClick={() => void enableObjectSelection(controller)}>{t('Enable Object Select')}</button>
-          ) : null}
-          {object.mode !== 'magic' && object.phase !== 'idle' && object.phase !== 'ready' ? (
-            <span className={object.phase === 'error' ? styles.panelError : styles.secondary} role="status">
-              {object.error ?? `${t(object.phase === 'downloading' ? 'Downloading the model…' : 'Selecting object…')} ${Math.round(object.progress * 100)}%`}
-            </span>
-          ) : null}
-        </>
-      ) : null}
+      {controller.wandControls && tool === 'wand' ? controller.wandControls(session) : null}
+      {controller.objectSelectControls && tool === 'objectSelect' ? controller.objectSelectControls(session) : null}
       {tool === 'lasso' || tool === 'wand' || (tool === 'marquee' && state.marqueeKind === 'Ellipse') ? (
         <label className={styles.check}><input type="checkbox" checked={state.antialiased} disabled={disabled}
           onChange={(e) => { state.antialiased = e.target.checked; session.notify('ui'); }} />{t('Anti-alias')}</label>
@@ -406,13 +298,17 @@ function SelectionBar({ controller, session }: { controller: EditorController; s
           <button type="button" className={`${styles.pill} ${styles.pillPrimary}`} onClick={() => finishLasso(session)}>{t('Close Outline')}</button>
         </>
       ) : null}
-      <button type="button" className={styles.pill} disabled={!canModifySelection(session)} onClick={() => expandSelection(session, state.expandAmount)}>{t('Expand')}</button>
-      <NumberField label="" suffix="px" width={44} value={state.expandAmount} onChange={(v) => { state.expandAmount = Math.min(500, Math.max(1, Math.round(v))); session.notify('ui'); }} />
-      <button type="button" className={styles.pill} disabled={!canModifySelection(session)} onClick={() => contractSelection(session, state.contractAmount)}>{t('Contract')}</button>
-      <NumberField label="" suffix="px" width={44} value={state.contractAmount} onChange={(v) => { state.contractAmount = Math.min(500, Math.max(1, Math.round(v))); session.notify('ui'); }} />
+      {tool !== 'objectSelect' ? (
+        <>
+          <button type="button" className={styles.pill} disabled={!canModifySelection(session)} onClick={() => expandSelection(session, state.expandAmount)}>{t('Expand')}</button>
+          <NumberField label="" suffix="px" width={44} value={state.expandAmount} onChange={(v) => { state.expandAmount = Math.min(500, Math.max(1, Math.round(v))); session.notify('ui'); }} />
+          <button type="button" className={styles.pill} disabled={!canModifySelection(session)} onClick={() => contractSelection(session, state.contractAmount)}>{t('Contract')}</button>
+          <NumberField label="" suffix="px" width={44} value={state.contractAmount} onChange={(v) => { state.contractAmount = Math.min(500, Math.max(1, Math.round(v))); session.notify('ui'); }} />
+        </>
+      ) : null}
       <span className={styles.spacer} />
       <button type="button" className={styles.pill} disabled={!selection} data-testid="refine-edge"
-        onClick={() => controller.features.refineEdge?.run()}>{t('Refine Edge')}</button>
+        onClick={() => controller.features.refineEdge?.run()}>{t('Refine Edge…')}</button>
       {selection ? (
         <>
           {selectionIsEmpty(selection) ? <span className={styles.secondary}>{t('Empty selection')}</span> : null}
@@ -489,13 +385,13 @@ export function installSelection(controller: EditorController): void {
   controller.canvasSetups.push((view) => {
     view.tools.marquee = new SelectionTool(controller, true);
     view.tools.lasso = new SelectionTool(controller, false);
-    view.painters.push(paintSelection);
+    view.painters.push((context, session, time) => paintSelection(context, session, time,
+      controller.selectionOverlayHidden.some((hidden) => hidden(session))));
   });
-  const objectTool = new ObjectSelectionTool(controller);
-  controller.canvasInterceptors.push((session) => session.tool === 'wand' && objectState(session).mode !== 'magic' ? objectTool : null);
   controller.contextBars.marquee = (session) => <SelectionBar controller={controller} session={session} />;
   controller.contextBars.lasso = (session) => <SelectionBar controller={controller} session={session} />;
   controller.contextBars.wand = (session) => <SelectionBar controller={controller} session={session} />;
+  controller.contextBars.objectSelect = (session) => <SelectionBar controller={controller} session={session} />;
   const t = controller.t;
   controller.statusHints.marquee = (session) => selectionState(session).marqueeKind === 'Ellipse'
     ? t('Drag an ellipse · Shift add · Option subtract · Shift again mid-drag circle · Drag inside to move · Delete clears · ⌘D deselect')
@@ -513,37 +409,6 @@ export function installSelection(controller: EditorController): void {
   f.loadMaskSelection = { enabled: () => !!s().activeLayer?.mask && canEditSelection(s()), run: () => { const id = s().activeLayerId; if (id) loadMaskSelection(s(), id); } };
   f.expandSelection = { enabled: () => canModifySelection(s()), run: () => expandSelection(s(), selectionState(s()).expandAmount) };
   f.contractSelection = { enabled: () => canModifySelection(s()), run: () => contractSelection(s(), selectionState(s()).contractAmount) };
-  f.quickMask = {
-    enabled: () => !!s().document,
-    checked: () => objectState(s()).quickMask,
-    run: () => { const state = objectState(s()); state.quickMask = !state.quickMask; s().notify('document'); },
-  };
-  f.refineEdge = {
-    enabled: () => !!s().selection && !!s().services?.flatten && s().canEditLayers,
-    run: () => { void (async () => {
-      const session = s(), document = session.document, selection = session.selection;
-      if (!document || !selection || !session.services?.flatten) return;
-      try {
-        const image = await session.services.flatten({ ...document, selection: null });
-        const result = await refineEdgeWorker.refine(image.toPixels(), document.width, document.height,
-          selectionMaskOnCanvas(selection, document.width, document.height), { radius: 8, smartRadius: true });
-        applyRefineEdgeResult(session, result, 'selection');
-      } catch (error) { controller.reportError('refine-edge-failed', error); }
-    })(); },
-  };
-  f.colourRange = {
-    enabled: () => !!s().document && !!s().services?.flatten && s().canEditLayers,
-    run: () => { void (async () => {
-      const session = s(), document = session.document; if (!document || !session.services?.flatten) return;
-      try {
-        const image = await session.services.flatten({ ...document, selection: null }), color = session.foregroundColor;
-        applySelection(session, colourRangeSelection(image.toPixels(), document.width, document.height, {
-          preset: 'sampled', samples: [{ red: color.red * 255, green: color.green * 255, blue: color.blue * 255 }],
-          fuzziness: 40, localized: false,
-        }), 'New', 'Colour Range');
-      } catch (error) { controller.reportError('colour-range-failed', error); }
-    })(); },
-  };
   f.fillForeground = { enabled: () => canEditPixels(s(), true), run: () => { if (!refusePixelCommand(s())) fillSelection(s(), 'foreground'); } };
   f.fillBackground = { enabled: () => canEditPixels(s(), true), run: () => { if (!refusePixelCommand(s())) fillSelection(s(), 'background'); } };
   f.clearSelection = { enabled: () => !!s().selection && canEditPixels(s()), run: () => clearSelectedPixels(s()) };
@@ -609,9 +474,6 @@ export function installSelection(controller: EditorController): void {
   };
   controller.keyHandlers.push((event) => {
     const session = controller.session, state = selectionState(session);
-    if (event.key.toLowerCase() === 'q' && !event.metaKey && !event.ctrlKey && !event.altKey) {
-      controller.features.quickMask?.run(); return true;
-    }
     const shiftOrOption = event.shiftKey || event.altKey;
     state.heldMode = event.altKey ? 'Subtract' : event.shiftKey ? 'Add' : null;
     void shiftOrOption;
@@ -627,7 +489,7 @@ export function installSelection(controller: EditorController): void {
       const step = event.shiftKey ? 10 : 1;
       const command = event.metaKey || event.ctrlKey;
       if (command && controller.pixelMove) { controller.pixelMove.nudge(session, arrow[0] * step, arrow[1] * step); return true; }
-      if (!command && !event.altKey && (session.tool === 'marquee' || session.tool === 'lasso' || session.tool === 'wand')) {
+      if (!command && !event.altKey && (session.tool === 'marquee' || session.tool === 'lasso' || session.tool === 'wand' || session.tool === 'objectSelect')) {
         nudgeSelection(session, arrow[0] * step, arrow[1] * step);
         return true;
       }

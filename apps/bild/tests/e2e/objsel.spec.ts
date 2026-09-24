@@ -3,16 +3,15 @@ import { mountForTest } from './helpers';
 
 test.use({ viewport: { width: 1280, height: 800 } });
 
-test('Object Select is exposed from the selection tool and never fetches a model before user enablement', async ({ page }) => {
+test('Object Selection is its own tool and never fetches a model before user enablement', async ({ page }) => {
   const requests: string[] = [];
-  page.on('request', (request) => { if (request.url().includes('efficientsam')) requests.push(request.url()); });
+  page.on('request', (request) => { if (/slimsam|huggingface/.test(request.url())) requests.push(request.url()); });
   await mountForTest(page);
   await page.getByTestId('widthInput').fill('64');
   await page.getByTestId('heightInput').fill('64');
   await page.getByTestId('createCanvas').click();
-  await page.getByTestId('tool-wand').click();
-  await expect(page.getByRole('radio', { name: 'Object Point' })).toBeVisible();
-  await page.getByRole('radio', { name: 'Object Point' }).click();
+  await page.getByTestId('tool-objectSelect').click();
+  await expect(page.getByRole('radio', { name: 'Rectangle' })).toBeVisible();
   await expect(page.getByTestId('enable-object-selection')).toBeVisible();
   expect(requests).toEqual([]);
 });
