@@ -83,6 +83,7 @@ export function documentsEqual(a: CanvasDocument | null, b: CanvasDocument | nul
   if (a === b) return true;
   if (!a || !b) return false;
   if (a.id !== b.id || a.width !== b.width || a.height !== b.height || a.resolution !== b.resolution
+    || (a.globalLightAngle ?? 120) !== (b.globalLightAngle ?? 120)
     || !jsonEqual(a.artboards ?? [], b.artboards ?? []) || !jsonEqual(a.guides ?? [], b.guides ?? []) || !resourcesEqual(a.resources ?? [], b.resources ?? [])) return false;
   if (a.selection !== b.selection) return false;
   if (a.layers.length !== b.layers.length) return false;

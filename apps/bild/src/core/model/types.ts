@@ -15,6 +15,14 @@ export type AdjustmentKind = 'Hue/Saturation' | 'Levels' | 'Curves' | 'Exposure'
 export type ColorLabel = 'none' | 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'violet' | 'gray';
 
 export interface RGB { readonly red: number; readonly green: number; readonly blue: number }
+export interface GradientStop { readonly offset: number; readonly color: RGB; readonly opacity: number }
+export interface EffectGradient {
+  readonly stops: readonly GradientStop[];
+  readonly reverse?: boolean;
+}
+export type EffectFill =
+  | { readonly kind: 'color'; readonly color: RGB }
+  | { readonly kind: 'gradient'; readonly gradient: EffectGradient; readonly angle: number; readonly scale: number };
 export type LevelsChannel = 'RGB' | 'Red' | 'Green' | 'Blue';
 export type ColorRange = 'Master' | 'Reds' | 'Yellows' | 'Greens' | 'Cyans' | 'Blues' | 'Magentas';
 export interface RangeAdjustment { readonly hue: number; readonly saturation: number; readonly lightness: number }
@@ -90,10 +98,19 @@ export interface WarpQuad { readonly kind: 'quad'; readonly schemaVersion: 1; re
 
 export type LayerEffect =
   | { readonly kind: 'dropShadow'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number;
-      readonly angle: number; readonly distance: number; readonly blur: number; readonly color: RGB }
+      readonly angle: number; readonly distance: number; readonly blur: number; readonly color: RGB;
+      readonly blendMode?: BlendMode; readonly useGlobalLight?: boolean; readonly spread?: number;
+      readonly size?: number; readonly contour?: 'linear'; readonly noise?: 0; readonly knockout?: boolean }
   | { readonly kind: 'stroke'; readonly schemaVersion: 1; readonly enabled: boolean; readonly width: number;
-      readonly position: 'inside' | 'center' | 'outside'; readonly color: RGB }
-  | { readonly kind: 'colorOverlay'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number; readonly color: RGB };
+      readonly position: 'inside' | 'center' | 'outside'; readonly color?: RGB; readonly fill?: EffectFill;
+      readonly opacity?: number; readonly blendMode?: BlendMode }
+  | { readonly kind: 'outerGlow'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number;
+      readonly color: RGB; readonly blendMode: BlendMode; readonly spread: number; readonly size: number;
+      readonly contour: 'linear'; readonly noise: 0 }
+  | { readonly kind: 'colorOverlay'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number;
+      readonly color: RGB; readonly blendMode?: BlendMode }
+  | { readonly kind: 'gradientOverlay'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number;
+      readonly blendMode: BlendMode; readonly angle: number; readonly scale: number; readonly gradient: EffectGradient };
 
 export type LiveFilter =
   | { readonly kind: 'gaussianBlur'; readonly schemaVersion: 1; readonly enabled: boolean; readonly radius: number }
@@ -198,6 +215,8 @@ export interface CanvasDocument {
   readonly width: number;
   readonly height: number;
   readonly resolution: number;
+  /** Photoshop-compatible shared lighting angle in degrees; 120 when absent in older documents. */
+  readonly globalLightAngle?: number;
   readonly layers: readonly Layer[];
   readonly artboards?: readonly Artboard[];
   /** Ruler guides in document pixels (PRODUCT-PLAN 6.1). */

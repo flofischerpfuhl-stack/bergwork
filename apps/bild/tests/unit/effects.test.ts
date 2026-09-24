@@ -1,0 +1,173 @@
+import { describe, expect, it } from 'vitest';
+import { writePsdUint8Array, type Psd } from 'ag-psd';
+import { compositeRegion } from '../../src/core/composite';
+import { documentWithLayerEffects } from '../../src/core/effects/document';
+import { renderEffectPasses } from '../../src/core/effects/render';
+import { newLayer, type CanvasDocument, type LayerEffect } from '../../src/core/document';
+import { makeTransform } from '../../src/core/geometry';
+import { Raster } from '../../src/core/raster';
+import { EditorSession } from '../../src/core/session';
+import { decodePng } from '../../src/io/png';
+import { readArchive, writeArchive } from '../../src/io/project';
+import { readPsdDocument } from '../../src/io/psd';
+
+const red = { red: 1, green: 0, blue: 0 };
+const green = { red: 0, green: 1, blue: 0 };
+const blue = { red: 0, green: 0, blue: 1 };
+
+function at(pass: ReturnType<typeof renderEffectPasses>[number], x: number, y: number): number[] {
+  return pass.raster.pixel(x - pass.sourceX, y - pass.sourceY);
+}
+
+describe('layer effects (PRODUCT-PLAN 6.7)', () => {
+  it('renders a hand-computed one-pixel drop shadow and honours knockout/global light', () => {
+    const effect: LayerEffect = { kind: 'dropShadow', schemaVersion: 1, enabled: true, opacity: 0.5,
+      angle: 90, useGlobalLight: true, distance: 1, blur: 0, size: 0, spread: 0, color: red,
+      blendMode: 'multiply', contour: 'linear', noise: 0, knockout: true };
+    const [pass] = renderEffectPasses(new Uint8Array([255]), 1, 1, [effect], { globalLightAngle: 0 });
+    expect(pass).toMatchObject({ placement: 'behind', blendMode: 'multiply', opacity: 0.5 });
+    expect(at(pass!, -1, 0)).toEqual([255, 0, 0, 255]);
+    expect(at(pass!, 0, 0)[3]).toBe(0);
+  });
+
+  it('renders inside/center/outside stroke geometry with colour and gradient fills', () => {
+    const alpha = new Uint8Array([0, 255, 0]);
+    const outside: LayerEffect = { kind: 'stroke', schemaVersion: 1, enabled: true, width: 1,
+      position: 'outside', fill: { kind: 'color', color: green }, opacity: 1, blendMode: 'normal' };
+    const [pass] = renderEffectPasses(alpha, 3, 1, [outside]);
+    expect(at(pass!, 0, 0)).toEqual([0, 255, 0, 255]);
+    expect(at(pass!, 1, 0)[3]).toBe(0);
+    expect(at(pass!, 2, 0)).toEqual([0, 255, 0, 255]);
+
+    const gradientStroke: LayerEffect = { kind: 'stroke', schemaVersion: 1, enabled: true, width: 1,
+      position: 'inside', fill: { kind: 'gradient', angle: 0, scale: 100, gradient: { stops: [
+        { offset: 0, color: red, opacity: 1 }, { offset: 1, color: blue, opacity: 1 },
+      ] } } };
+    const [gradient] = renderEffectPasses(new Uint8Array([255, 255]), 2, 1, [gradientStroke]);
+    expect(at(gradient!, 0, 0)).toEqual([255, 0, 0, 255]);
+    expect(at(gradient!, 1, 0)).toEqual([0, 0, 255, 255]);
+  });
+
+  it('renders the linear distance contour for an outer glow', () => {
+    const effect: LayerEffect = { kind: 'outerGlow', schemaVersion: 1, enabled: true, opacity: 0.75,
+      color: blue, blendMode: 'screen', spread: 0, size: 2, contour: 'linear', noise: 0 };
+    const [pass] = renderEffectPasses(new Uint8Array([255]), 1, 1, [effect]);
+    expect(pass).toMatchObject({ placement: 'behind', blendMode: 'screen', opacity: 0.75 });
+    expect(at(pass!, 1, 0)).toEqual([0, 0, 255, 128]);
+    expect(at(pass!, 2, 0)[3]).toBe(0);
+  });
+
+  it('renders colour and gradient overlays from source alpha and marks them as Fill Opacity content', () => {
+    const effects: LayerEffect[] = [
+      { kind: 'colorOverlay', schemaVersion: 1, enabled: true, opacity: 0.4, color: green, blendMode: 'normal' },
+      { kind: 'gradientOverlay', schemaVersion: 1, enabled: true, opacity: 1, blendMode: 'normal', angle: 0,
+        scale: 100, gradient: { stops: [{ offset: 0, color: red, opacity: 1 }, { offset: 1, color: blue, opacity: 0.5 }] } },
+    ];
+    const passes = renderEffectPasses(new Uint8Array([255, 128]), 2, 1, effects);
+    expect(passes[0]).toMatchObject({ scalesWithFillOpacity: true, opacity: 0.4 });
+    expect(at(passes[0]!, 1, 0)).toEqual([0, 255, 0, 128]);
+    expect(at(passes[1]!, 0, 0)).toEqual([255, 0, 0, 255]);
+    expect(at(passes[1]!, 1, 0)).toEqual([0, 0, 255, 64]);
+  });
+
+  it('enlarges render bounds and keeps stroke independent from Fill Opacity', () => {
+    const layer = newLayer({ id: 'styled', name: 'Styled', raster: Raster.fromPixels(1, 1, 4, [255, 0, 0, 255]),
+      transform: makeTransform({ x: 1, y: 0 }, { width: 1, height: 1 }, { sampling: 'Nearest' }), fillOpacity: 0,
+      effects: [{ kind: 'stroke', schemaVersion: 1, enabled: true, width: 1, position: 'outside', color: green }] });
+    const document: CanvasDocument = { id: 'doc', width: 3, height: 1, resolution: 72, selection: null, layers: [layer] };
+    const hooks = { transform: (value: typeof layer) => value.transform,
+      maskPlacement: (value: typeof layer) => value.mask?.placement ?? null,
+      raster: (value: typeof layer) => value.raster, maskRaster: (value: typeof layer) => value.mask?.raster };
+    const expanded = documentWithLayerEffects(document, hooks);
+    expect(expanded.layers).toHaveLength(2);
+    expect(compositeRegion(expanded, { x: 0, y: 0, width: 3, height: 1 }).rgba).toEqual(
+      new Uint8Array([0, 255, 0, 255, 0, 0, 0, 0, 0, 255, 0, 255]));
+  });
+
+  it('derives effects from alpha after the layer mask', () => {
+    const layer = newLayer({ id: 'masked', name: 'Masked', raster: Raster.fromPixels(2, 1, 4,
+      [255, 255, 255, 255, 255, 255, 255, 255]), transform: makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 }),
+      mask: { raster: Raster.fromPixels(2, 1, 1, [255, 0]), enabled: true, placement: null, linked: true },
+      effects: [{ kind: 'colorOverlay', schemaVersion: 1, enabled: true, opacity: 1, color: red }] });
+    const hooks = { transform: (value: typeof layer) => value.transform,
+      maskPlacement: (value: typeof layer) => value.mask?.placement ?? null,
+      raster: (value: typeof layer) => value.raster, maskRaster: (value: typeof layer) => value.mask?.raster };
+    const expanded = documentWithLayerEffects({ id: 'doc', width: 2, height: 1, resolution: 72,
+      selection: null, layers: [layer] }, hooks);
+    expect(expanded.layers[1]!.raster!.toPixels()).toEqual(new Uint8Array([255, 0, 0, 255, 255, 0, 0, 0]));
+  });
+
+  it('makes style editing, live dragging, copy/paste, clear and global light undoable', () => {
+    const transform = makeTransform({ x: 0, y: 0 }, { width: 1, height: 1 });
+    const layers = ['a', 'b'].map((id) => newLayer({ id, name: id, transform, raster: Raster.fromPixels(1, 1, 4, [1, 2, 3, 255]) }));
+    const session = new EditorSession();
+    session.installProject({ id: 'doc', width: 1, height: 1, resolution: 72, selection: null, layers }, 'a', 'Style');
+    const shadow: LayerEffect = { kind: 'dropShadow', schemaVersion: 1, enabled: true, opacity: 1,
+      angle: 120, distance: 2, blur: 3, color: red };
+    expect(session.addLayerEffect('a', shadow)).toBe(true);
+    expect(session.addLayerEffect('a', { ...shadow, opacity: Number.NaN })).toBe(false);
+    expect(session.beginLayerEffectEdit('a')).toBe(true);
+    expect(session.setLayerEffectParameters('a', 0, { distance: 5 })).toBe(true);
+    expect(session.setLayerEffectParameters('a', 0, { distance: 8 })).toBe(true);
+    session.finishLayerEffectEdit();
+    expect((session.layer('a')!.effects[0] as typeof shadow).distance).toBe(8);
+    expect(session.copyLayerStyle('a')).toHaveLength(1);
+    expect(session.pasteLayerStyle('b')).toBe(true);
+    expect(session.clearLayerStyle('a')).toBe(true);
+    expect(session.setGlobalLightAngle(725)).toBe(true);
+    expect(session.document!.globalLightAngle).toBe(5);
+    expect(session.undo()).toBe(true);
+    expect(session.document!.globalLightAngle).toBeUndefined();
+  });
+
+  it('round-trips every Phase-2 style parameter and global light in format v2', async () => {
+    const effects: LayerEffect[] = [
+      { kind: 'dropShadow', schemaVersion: 1, enabled: true, opacity: 0.8, angle: 30, useGlobalLight: true,
+        distance: 4, blur: 6, size: 6, spread: 25, color: red, blendMode: 'multiply', contour: 'linear', noise: 0, knockout: true },
+      { kind: 'stroke', schemaVersion: 1, enabled: true, width: 2, position: 'center', opacity: 0.6,
+        blendMode: 'screen', fill: { kind: 'gradient', angle: 45, scale: 80, gradient: { reverse: true, stops: [
+          { offset: 0, color: red, opacity: 1 }, { offset: 1, color: blue, opacity: 0.5 },
+        ] } } },
+      { kind: 'outerGlow', schemaVersion: 1, enabled: true, opacity: 0.5, color: green,
+        blendMode: 'screen', spread: 10, size: 7, contour: 'linear', noise: 0 },
+      { kind: 'colorOverlay', schemaVersion: 1, enabled: false, opacity: 0.4, color: blue, blendMode: 'color' },
+      { kind: 'gradientOverlay', schemaVersion: 1, enabled: true, opacity: 0.7, blendMode: 'overlay', angle: 90,
+        scale: 120, gradient: { stops: [{ offset: 0, color: red, opacity: 1 }, { offset: 1, color: green, opacity: 1 }] } },
+    ];
+    const layer = newLayer({ id: 'styled', name: 'Styled', effects,
+      raster: Raster.fromPixels(1, 1, 4, [10, 20, 30, 255]), transform: makeTransform({ x: 0, y: 0 }, { width: 1, height: 1 }) });
+    const document: CanvasDocument = { id: 'roundtrip', width: 1, height: 1, resolution: 72,
+      globalLightAngle: 215, selection: null, layers: [layer] };
+    const archive = writeArchive(document, 'Styles', 'styled');
+    const loaded = await readArchive(archive.blob, async (bytes) => {
+      const decoded = decodePng(bytes); return { width: decoded.width, height: decoded.height, channels: decoded.channels, data: decoded.data };
+    });
+    expect(loaded.document.globalLightAngle).toBe(215);
+    expect(loaded.document.layers[0]!.effects).toEqual(effects);
+  });
+
+  it('imports the Phase-2 PSD effects as live records and preserves Photoshop global light', () => {
+    const imageData = { width: 2, height: 1, data: new Uint8ClampedArray([255, 255, 255, 255, 255, 255, 255, 255]) };
+    const psd: Psd = { width: 2, height: 1, imageResources: { globalAngle: 33 }, imageData,
+      children: [{ name: 'Styled', top: 0, left: 0, bottom: 1, right: 2, imageData, effects: {
+        dropShadow: [{ enabled: true, useGlobalLight: true, opacity: 0.7, angle: 10,
+          distance: { units: 'Pixels', value: 4 }, size: { units: 'Pixels', value: 6 },
+          choke: { units: 'Pixels', value: 20 }, color: { r: 10, g: 20, b: 30 }, blendMode: 'multiply' }],
+        outerGlow: { enabled: true, opacity: 0.4, size: { units: 'Pixels', value: 3 },
+          choke: { units: 'Pixels', value: 5 }, color: { r: 20, g: 40, b: 80 }, blendMode: 'screen' },
+        solidFill: [{ enabled: true, opacity: 0.5, color: { r: 0, g: 255, b: 0 }, blendMode: 'normal' }],
+        gradientOverlay: [{ enabled: true, opacity: 0.6, angle: 45, scale: 80, blendMode: 'overlay',
+          gradient: { name: 'BW', type: 'solid', colorStops: [
+            { location: 0, midpoint: 0.5, color: { r: 0, g: 0, b: 0 } },
+            { location: 4096, midpoint: 0.5, color: { r: 255, g: 255, b: 255 } },
+          ], opacityStops: [{ location: 0, midpoint: 0.5, opacity: 1 }, { location: 4096, midpoint: 0.5, opacity: 1 }] } }],
+        stroke: [{ enabled: true, size: { units: 'Pixels', value: 2 }, position: 'outside', fillType: 'color',
+          opacity: 1, color: { r: 255, g: 0, b: 0 }, blendMode: 'normal' }],
+      } }] };
+    const imported = readPsdDocument(writePsdUint8Array(psd, { generateThumbnail: false }));
+    expect(imported.document.globalLightAngle).toBe(33);
+    expect(imported.document.layers[0]!.effects.map((effect) => effect.kind))
+      .toEqual(['dropShadow', 'outerGlow', 'colorOverlay', 'gradientOverlay', 'stroke']);
+    expect(imported.unsupported.some((issue) => issue.code === 'layer-effects')).toBe(false);
+  });
+});

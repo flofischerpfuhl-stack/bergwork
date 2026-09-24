@@ -12,7 +12,7 @@ import {
   isValidStructure, layerPixelHeight, layerPixelWidth, maskTransform, MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
   releaseDetachedClipping, renderLayers as renderLayersOf, uniqueName, usedPixels, withLayerRaster,
   type AdjustmentKind, type BlendMode, type CanvasDocument, type HierarchyEntry, type Layer, type LayerAdjustment,
-  type LayerMask, BLEND_MODES,
+  type LayerEffect, type LayerMask, BLEND_MODES,
   type Guide, } from './document';
 import type { ColorLabel, LayerLocks } from './model';
 import {
@@ -34,6 +34,7 @@ import {
   effectiveLayerLocks, layerLockBlocker, preserveLayerTransparency,
   type LayerEditKind, type LayerLockBlocker,
 } from './locks';
+import { isValidLayerEffect } from './effects/validate';
 
 export type Tool =
   | 'move' | 'marquee' | 'lasso' | 'wand' | 'crop' | 'brush' | 'spotHealing' | 'cloneStamp' | 'blur'
@@ -128,6 +129,9 @@ export class EditorSession {
   blendPreview: { layerId: string; mode: BlendMode } | null = null;
   opacityEditLayerId: string | null = null;
   fillOpacityEditLayerIds: readonly string[] | null = null;
+  layerEffectEditId: string | null = null;
+  globalLightEdit = false;
+  copiedLayerStyle: readonly LayerEffect[] | null = null;
   renamingLayerId: string | null = null;
   adjustmentEditingId: string | null = null;
   foregroundColor: PaletteColor = BLACK;
@@ -756,6 +760,114 @@ export class EditorSession {
     this.edit(changes.length === 1 ? 'Set Layer Color Label' : 'Set Layer Color Labels', () => {
       for (const target of changes) this.updateLayer(target.id, (layer) => ({ ...layer, colorLabel: label }));
     });
+  }
+
+  addLayerEffect(layerId: string, effect: LayerEffect, index?: number): boolean {
+    const layer = this.layer(layerId);
+    if (!layer || !isValidLayerEffect(effect) || !this.canEditLayers || this.refuseLayerEdit(layerId, 'appearance')) return false;
+    const at = Math.min(layer.effects.length, Math.max(0, index ?? layer.effects.length));
+    this.edit('Add Layer Effect', () => this.updateLayer(layerId, (value) => {
+      const effects = value.effects.slice(); effects.splice(at, 0, effect); return { ...value, effects };
+    }));
+    return true;
+  }
+
+  removeLayerEffect(layerId: string, index: number): boolean {
+    const layer = this.layer(layerId);
+    if (!layer || !Number.isInteger(index) || !layer.effects[index] || !this.canEditLayers
+      || this.refuseLayerEdit(layerId, 'appearance')) return false;
+    this.edit('Remove Layer Effect', () => this.updateLayer(layerId, (value) => ({ ...value,
+      effects: value.effects.filter((_effect, current) => current !== index) })));
+    return true;
+  }
+
+  setLayerEffectEnabled(layerId: string, index: number, enabled: boolean): boolean {
+    const effect = this.layer(layerId)?.effects[index];
+    if (!effect || effect.enabled === enabled) return false;
+    return this.setLayerEffectParameters(layerId, index, { enabled });
+  }
+
+  reorderLayerEffect(layerId: string, from: number, to: number): boolean {
+    const layer = this.layer(layerId);
+    if (!layer || !Number.isInteger(from) || !Number.isInteger(to) || !layer.effects[from]
+      || from === to || !this.canEditLayers || this.refuseLayerEdit(layerId, 'appearance')) return false;
+    const target = Math.min(layer.effects.length - 1, Math.max(0, to));
+    this.edit('Reorder Layer Effect', () => this.updateLayer(layerId, (value) => {
+      const effects = value.effects.slice(), moved = effects.splice(from, 1)[0]!;
+      effects.splice(target, 0, moved); return { ...value, effects };
+    }));
+    return true;
+  }
+
+  beginLayerEffectEdit(layerId: string): boolean {
+    if (this.layerEffectEditId || !this.layer(layerId) || !this.canEditLayers
+      || this.refuseLayerEdit(layerId, 'appearance')) return false;
+    this.beginEdit('Layer Effect');
+    this.layerEffectEditId = layerId;
+    return true;
+  }
+
+  finishLayerEffectEdit(): void {
+    if (!this.layerEffectEditId) return;
+    this.layerEffectEditId = null;
+    this.endEdit();
+  }
+
+  setLayerEffectParameters(layerId: string, index: number, patch: Partial<LayerEffect>): boolean {
+    const layer = this.layer(layerId), current = layer?.effects[index];
+    if (!layer || !current || !this.canEditLayers || this.refuseLayerEdit(layerId, 'appearance')) return false;
+    if (this.layerEffectEditId && this.layerEffectEditId !== layerId) return false;
+    const next = { ...current, ...patch, kind: current.kind, schemaVersion: 1 } as LayerEffect;
+    if (!isValidLayerEffect(next) || JSON.stringify(next) === JSON.stringify(current)) return false;
+    const live = this.layerEffectEditId === layerId;
+    if (!live) this.beginEdit('Layer Effect');
+    this.updateLayer(layerId, (value) => ({ ...value,
+      effects: value.effects.map((effect, currentIndex) => currentIndex === index ? next : effect) }));
+    if (live) this.changed(); else this.endEdit();
+    return true;
+  }
+
+  copyLayerStyle(layerId: string = this.activeLayerId ?? ''): readonly LayerEffect[] | null {
+    const layer = this.layer(layerId);
+    this.copiedLayerStyle = layer ? layer.effects.map((effect) => structuredClone(effect)) : null;
+    return this.copiedLayerStyle;
+  }
+
+  pasteLayerStyle(layerId: string = this.activeLayerId ?? '', style = this.copiedLayerStyle): boolean {
+    const layer = this.layer(layerId);
+    if (!layer || !style || !style.every(isValidLayerEffect) || !this.canEditLayers || this.refuseLayerEdit(layerId, 'appearance')) return false;
+    const effects = style.map((effect) => structuredClone(effect));
+    if (JSON.stringify(effects) === JSON.stringify(layer.effects)) return false;
+    this.edit('Paste Layer Style', () => this.updateLayer(layerId, (value) => ({ ...value, effects })));
+    return true;
+  }
+
+  clearLayerStyle(layerId: string = this.activeLayerId ?? ''): boolean {
+    const layer = this.layer(layerId);
+    if (!layer?.effects.length || !this.canEditLayers || this.refuseLayerEdit(layerId, 'appearance')) return false;
+    this.edit('Clear Layer Style', () => this.updateLayer(layerId, (value) => ({ ...value, effects: [] })));
+    return true;
+  }
+
+  beginGlobalLightEdit(): boolean {
+    if (this.globalLightEdit || !this.canEditLayers) return false;
+    this.beginEdit('Global Light'); this.globalLightEdit = true; return true;
+  }
+
+  finishGlobalLightEdit(): void {
+    if (!this.globalLightEdit) return;
+    this.globalLightEdit = false; this.endEdit();
+  }
+
+  setGlobalLightAngle(angle: number): boolean {
+    if (!this.document || !this.canEditLayers || !Number.isFinite(angle)) return false;
+    const normalized = ((angle % 360) + 360) % 360;
+    if ((this.document.globalLightAngle ?? 120) === normalized) return false;
+    const live = this.globalLightEdit;
+    if (!live) this.beginEdit('Global Light');
+    this.document = { ...this.document, globalLightAngle: normalized };
+    if (live) this.changed(); else this.endEdit();
+    return true;
   }
 
   beginFillOpacityEdit(ids: Iterable<string> = this.selectedLayerIds): boolean {

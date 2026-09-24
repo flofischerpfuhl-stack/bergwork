@@ -9,6 +9,7 @@ import { concat, invert, pixelToDocument, type Affine, type LayerSampling } from
 import type { Raster } from '../core/raster';
 import { floatToRgba16, rgba16To8 } from '../core/pixel/format';
 import { downsampleLevel, prepareSampler, type RasterSampler } from '../core/resample';
+import { documentWithLayerEffects } from '../core/effects';
 import { DEFAULT_HOOKS, type CompositeHooks, type ViewSpec } from './gpuCompositor';
 
 export interface SoftwareSurface {
@@ -91,6 +92,7 @@ export class SoftwareCompositor {
   }
 
   composite(document: CanvasDocument, view: ViewSpec, hooks: CompositeHooks = DEFAULT_HOOKS): SoftwareSurface {
+    document = documentWithLayerEffects(document, hooks);
     const fast = this.simpleComposite(document, view, hooks);
     if (fast) { this.skippedAdjustments = 0; return fast; }
     const result = compositeView(document, view.width, view.height, view.viewToDoc, this.options(hooks));
@@ -229,6 +231,7 @@ export class SoftwareCompositor {
 
   readRegion(document: CanvasDocument, x: number, y: number, width: number, height: number,
     hooks: CompositeHooks = DEFAULT_HOOKS): Uint8Array {
+    document = documentWithLayerEffects(document, hooks);
     const result = compositeRegion(document, { x, y, width, height }, this.options(hooks));
     this.skippedAdjustments = result.adjustmentsApplied ? 0 : 1;
     return result.rgba;
@@ -237,6 +240,7 @@ export class SoftwareCompositor {
   /** Straight-alpha float output used by 16-bit export and precision tests. */
   readRegionFloat(document: CanvasDocument, x: number, y: number, width: number, height: number,
     hooks: CompositeHooks = DEFAULT_HOOKS): Float32Array {
+    document = documentWithLayerEffects(document, hooks);
     const result = compositeRegionFloat(document, { x, y, width, height }, this.options(hooks));
     this.skippedAdjustments = result.adjustmentsApplied ? 0 : 1;
     return result.rgba;
@@ -249,6 +253,7 @@ export class SoftwareCompositor {
 
   readView(document: CanvasDocument, width: number, height: number, viewToDoc: Affine, _scale: number,
     hooks: CompositeHooks = DEFAULT_HOOKS): Uint8Array {
+    document = documentWithLayerEffects(document, hooks);
     const out = new Uint8Array(width * height * 4), step = 2048;
     for (let ty = 0; ty < height; ty += step) for (let tx = 0; tx < width; tx += step) {
       const w = Math.min(step, width - tx), h = Math.min(step, height - ty);
@@ -263,6 +268,7 @@ export class SoftwareCompositor {
 
   readViewFloat(document: CanvasDocument, width: number, height: number, viewToDoc: Affine, _scale: number,
     hooks: CompositeHooks = DEFAULT_HOOKS): Float32Array {
+    document = documentWithLayerEffects(document, hooks);
     const result = compositeViewFloat(document, width, height, viewToDoc, this.options(hooks));
     this.skippedAdjustments = result.adjustmentsApplied ? 0 : 1;
     return result.rgba;
