@@ -22,6 +22,8 @@ export interface UiState {
   compact: boolean;
   spaceHeld: boolean;
   pointerOverCanvas: boolean;
+  /** Which tab of the side panel shows: layers or history. */
+  sidePanel: 'layers' | 'history';
 }
 
 export type UiStore = ReturnType<typeof createUiStore>;
@@ -36,5 +38,6 @@ export function createUiStore() {
     compact: false,
     spaceHeld: false,
     pointerOverCanvas: false,
+    sidePanel: 'layers',
   }));
 }

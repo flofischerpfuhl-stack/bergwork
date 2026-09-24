@@ -397,3 +397,17 @@
 /* On narrow screens the secondary panel (color picker) takes the top instead of the bottom sheet position. */
 @media (max-width: 1200px) { .floatingPanelSecondary { right: 16px; top: 72px; } }
 .compact .floatingPanelSecondary, .compactLandscape .floatingPanelSecondary { top: 8px; bottom: auto; max-height: calc(100% - 16px); }
+
+/* Side panel tabs and the History panel (PRODUCT-PLAN 6.1) */
+.panelTabs { display: inline-flex; gap: 4px; }
+.panelTab { border: 0; background: none; color: var(--cmp-text-secondary); font: 600 12px/1 var(--cmp-font); padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.panelTab:hover { color: var(--cmp-text); }
+.panelTabOn { color: var(--cmp-text); background: var(--cmp-control); }
+.historyPanel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.historyList { list-style: none; margin: 0; padding: 6px; overflow: auto; flex: 1; }
+.historyRow { width: 100%; text-align: left; border: 0; background: none; color: var(--cmp-text); font: 12px/1.2 var(--cmp-font); padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+.historyRow:hover:not(:disabled) { background: var(--cmp-control-hover); }
+.historyCurrent { background: var(--cmp-accent-soft); }
+.historyFuture { color: var(--cmp-text-tertiary); }
+.historyOption { display: flex; align-items: center; gap: 6px; padding: 10px 16px; border-top: 1px solid var(--cmp-border); font-size: 12px; color: var(--cmp-text-secondary); }
+.compact .historyRow, .compactLandscape .historyRow { padding: 12px 12px; font-size: 14px; }

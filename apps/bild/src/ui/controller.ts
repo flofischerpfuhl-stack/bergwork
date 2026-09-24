@@ -407,6 +407,12 @@ export class EditorController {
     return buildManifestV2(document, session.projectName ?? this.workspace.current.title, session.activeLayerId);
   }
 
+  /** Whether saved projects carry their undo history (P7; on by default, remembered per device). Recovery copies always do. */
+  get saveHistoryWithProject(): boolean { return globalThis.localStorage?.getItem('fernwork.saveHistory') !== 'off'; }
+  set saveHistoryWithProject(value: boolean) {
+    try { globalThis.localStorage?.setItem('fernwork.saveHistory', value ? 'on' : 'off'); } catch { /* storage unavailable */ }
+  }
+
   async archive(session: EditorSession = this.session): Promise<Blob> {
     const document = session.document;
     if (!document) throw new ProjectError('no-document', 'There is no canvas to save.');
@@ -415,7 +421,7 @@ export class EditorController {
     const name = session.projectName ?? this.workspace.current.title;
     // The worker populates the encoded-raster cache; the cheap second pass adds the command/tile history.
     await encodeArchive(final, name, session.activeLayerId);
-    return writeArchive(final, name, session.activeLayerId, session.history.exportState()).blob;
+    return writeArchive(final, name, session.activeLayerId, this.saveHistoryWithProject ? session.history.exportState() : undefined).blob;
   }
 
   // MARK: Recovery copies (IndexedDB)

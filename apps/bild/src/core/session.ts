@@ -1270,6 +1270,17 @@ export class EditorSession {
     this.linkMask(below.maskSourceId ?? below.id, id);
   }
 
+  // MARK: History panel
+
+  /** Goes back or forward to the state after `steps` history entries (0 = the state before the first recorded step). */
+  jumpToHistory(steps: number): boolean {
+    if (!this.canUseHistory) return false;
+    let moved = false;
+    while (this.history.undoCount > steps && this.undo()) moved = true;
+    while (this.history.undoCount < steps && this.history.canRedo && this.redo()) moved = true;
+    return moved;
+  }
+
   // MARK: Adjustment layers
 
   addAdjustment(kind: AdjustmentKind): void {

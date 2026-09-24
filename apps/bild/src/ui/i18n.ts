@@ -260,6 +260,12 @@ const de: Record<string, string> = {
   'Keep the source moving with the brush between strokes; off starts every stroke at the source point': 'Quelle zwischen den Strichen mit dem Pinsel mitführen; ausgeschaltet beginnt jeder Strich am Quellpunkt',
   'Touch: tap to arm, then tap the canvas to set the source': 'Touch: antippen zum Aktivieren, dann auf die Leinwand tippen, um die Quelle zu setzen',
   'Linear histogram with automatic vertical scaling. Tall spikes may extend beyond the graph; all tones from 0 to 255 remain included.': 'Lineares Histogramm mit automatischer Höhenskalierung. Hohe Spitzen können über den Rand ragen; alle Tonwerte von 0 bis 255 bleiben enthalten.',
+  'History': 'Protokoll',
+  'Panels': 'Bedienfelder',
+  'Opened state': 'Ausgangszustand',
+  'History is switched off for this project.': 'Das Protokoll ist für dieses Projekt ausgeschaltet.',
+  'Save history with the project': 'Protokoll mit dem Projekt sichern',
+  'Saved projects keep their undo steps, so undo continues after reopening. Recovery copies always keep them.': 'Gesicherte Projekte behalten ihre Schritte, Rückgängig funktioniert also auch nach dem Öffnen. Wiederherstellungskopien behalten sie immer.',
   // Remove Background
   'Remove Background': 'Hintergrund entfernen',
   'Loading the subject model…': 'Motivmodell wird geladen …',
