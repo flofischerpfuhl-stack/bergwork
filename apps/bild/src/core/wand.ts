@@ -95,7 +95,7 @@ async function wandSample(session: EditorSession, allLayers: boolean): Promise<U
     return premultiply(raster.toPixels());
   }
   const layer = session.activeLayer;
-  if (!layer || layer.isGroup || !layer.raster || layer.raster.channels !== 4) {
+  if (!layer || layer.kind === 'group' || !layer.raster || layer.raster.channels !== 4) {
     return new Uint8Array(document.width * document.height * 4);
   }
   return drawLayerPremultiplied(layer.raster, session.displayedTransform(layer), document.width, document.height);

@@ -15,7 +15,7 @@ export type AdjustmentCommandRegistry = Record<AdjustmentCommandName, Adjustment
 
 function canAdjust(session: EditorSession): boolean {
   const layer = session.activeLayer;
-  return session.canEditLayers && session.selectedLayerIds.size === 1 && !!layer?.raster && !layer.isGroup && !layer.adjustment
+  return session.canEditLayers && session.selectedLayerIds.size === 1 && !!layer?.raster && !layer.adjustment
     && !session.isMaskSelected && !levelsEditState(session) && !hueSaturationEditState(session) && !filterEditState(session);
 }
 function filter(session: EditorSession, kind: Parameters<typeof beginFilterEdit>[1]): AdjustmentCommand {
@@ -31,7 +31,7 @@ export function adjustmentCommands(session: EditorSession): AdjustmentCommandReg
     invert: { enabled: () => {
       const layer = session.activeLayer;
       return session.canEditLayers && session.selectedLayerIds.size === 1 && !!layer
-        && (session.isMaskSelected ? !!layer.mask : !!layer.raster && !layer.isGroup && !layer.adjustment);
+        && (session.isMaskSelected ? !!layer.mask : !!layer.raster && !layer.adjustment);
     }, run: () => {
       const layer = session.activeLayer; if (!layer) return;
       if (session.isMaskSelected && layer.mask) session.replaceMaskPixels(layer.id,

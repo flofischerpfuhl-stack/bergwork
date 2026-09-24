@@ -10,13 +10,15 @@
  * `extensions["org.compositor.port"]`. Readers without it reconstruct them from the matrices.
  */
 
-import { isValidAdjustment } from '../core/adjustments';
+import {
+  defaultCurves, defaultExposure, defaultGradientMap, defaultGrain, defaultHueSaturation, defaultLevels,
+  isValidAdjustment,
+} from '../core/adjustments';
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 import type { AssetRecord, LayerRecord, Matrix2D, ProjectManifestV1 } from '../../contracts';
 import type {
   AdjustmentRecordV2, AssetRecordV2, LayerCommonV2, LayerRecordV2, ProjectHistoryV2, ProjectManifestV2,
 } from '../../contracts-v2';
-import { resolveAdjustment } from '../core/adjustments';
 import type { HistorySnapshot, PersistedHistoryState } from '../core/history';
 import {
   BLEND_MODE_SET, documentsEqual, hierarchyRecord, InvalidProjectError, layerPixelHeight, layerPixelWidth, MAX_LAYERS, MAX_PIXELS, MAX_SIDE,
@@ -27,6 +29,7 @@ import {
   LAYER_SAMPLINGS, type LayerTransform,
 } from '../core/geometry';
 import { Raster, TILE } from '../core/raster';
+import { vectorPathsForShape } from '../core/shape';
 import { decodePng, decodePngNativeRGBA, encodePng } from './png';
 import { sha256Hex } from './sha256';
 
@@ -48,6 +51,56 @@ interface PortExtension {
 export class ProjectError extends Error {
   readonly code: string;
   constructor(code: string, message: string) { super(message); this.code = code; this.name = 'ProjectError'; }
+}
+
+function legacyRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalid('adjustment parameters');
+  return value as Record<string, unknown>;
+}
+
+function legacySetting<T>(record: Record<string, unknown>, key: string, fallback: T): T {
+  const value = record[key];
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as T : fallback;
+}
+
+/** LayerAdjustment.swift's v1/v7 Codable shape is accepted only here, then becomes the strict live union. */
+export function migrateLegacyAdjustment(value: unknown): LayerAdjustment {
+  const record = legacyRecord(value);
+  const kind = record.kind;
+  let adjustment: LayerAdjustment;
+  switch (kind) {
+    case 'Hue/Saturation': {
+      const hue = typeof record.hue === 'number' ? record.hue : 0;
+      const saturation = typeof record.saturation === 'number' ? record.saturation : 0;
+      const lightness = typeof record.lightness === 'number' ? record.lightness : 0;
+      const colorize = typeof record.colorize === 'boolean' ? record.colorize : false;
+      adjustment = { kind, schemaVersion: 1, parameters: { hue, saturation, lightness, colorize,
+        settings: legacySetting(record, 'hsvSettings', defaultHueSaturation(hue, saturation, lightness, colorize)) } };
+      break;
+    }
+    case 'Levels': adjustment = { kind, schemaVersion: 1, parameters: legacySetting(record, 'levels', defaultLevels()) }; break;
+    case 'Curves': adjustment = { kind, schemaVersion: 1, parameters: legacySetting(record, 'curves', defaultCurves()) }; break;
+    case 'Exposure': adjustment = { kind, schemaVersion: 1,
+      parameters: legacySetting(record, 'exposureSettings', defaultExposure()) }; break;
+    case 'Gradient Map': adjustment = { kind, schemaVersion: 1,
+      parameters: legacySetting(record, 'gradientMapSettings', defaultGradientMap()) }; break;
+    case 'Grain': adjustment = { kind, schemaVersion: 1, parameters: legacySetting(record, 'grainSettings', defaultGrain()) }; break;
+    default: invalid('adjustment parameters');
+  }
+  if (!isValidAdjustment(adjustment)) invalid('adjustment parameters');
+  return adjustment;
+}
+
+export function legacyAdjustmentProjection(value: LayerAdjustment): Record<string, unknown> {
+  switch (value.kind) {
+    case 'Hue/Saturation': return { kind: value.kind, hue: value.parameters.hue, saturation: value.parameters.saturation,
+      lightness: value.parameters.lightness, colorize: value.parameters.colorize, hsvSettings: value.parameters.settings };
+    case 'Levels': return { kind: value.kind, levels: value.parameters };
+    case 'Curves': return { kind: value.kind, curves: value.parameters };
+    case 'Exposure': return { kind: value.kind, exposureSettings: value.parameters };
+    case 'Gradient Map': return { kind: value.kind, gradientMapSettings: value.parameters };
+    case 'Grain': return { kind: value.kind, grainSettings: value.parameters };
+  }
 }
 
 // MARK: Encoding assets
@@ -103,13 +156,15 @@ export function buildManifest(document: CanvasDocument, name: string, activeLaye
   };
   const extension: PortExtension = { resolution: document.resolution, activeLayerId, layers: {} };
   const layers: LayerRecord[] = document.layers.map((layer) => {
-    const kind: LayerRecord['kind'] = layer.isGroup ? 'group' : layer.adjustment ? 'adjustment' : layer.shape ? 'shape' : 'raster';
+    const kind: LayerRecord['kind'] = layer.kind === 'group' ? 'group' : layer.kind === 'adjustment' ? 'adjustment'
+      : layer.kind === 'vector' && layer.sourceShape ? 'shape' : 'raster';
     const record: LayerRecord = {
       id: layer.id, parentId: layer.parentId, name: layer.name, kind, visible: layer.visible, locked: layer.locked,
       opacity: layer.opacity, blendMode: layer.blendMode,
       transform: matrix(layer.transform, layerPixelWidth(layer), layerPixelHeight(layer)),
       clippedToBelow: layer.maskSourceId !== null,
-      parameters: (layer.adjustment ?? layer.shape ?? {}) as Record<string, unknown>,
+      parameters: (layer.kind === 'adjustment' ? legacyAdjustmentProjection(layer.adjustment)
+        : layer.kind === 'vector' ? layer.sourceShape ?? {} : {}) as Record<string, unknown>,
     };
     if (layer.raster) record.assetId = addAsset(layer.raster);
     if (layer.mask) {
@@ -130,29 +185,24 @@ export function buildManifest(document: CanvasDocument, name: string, activeLaye
 }
 
 function v2Adjustment(value: LayerAdjustment): AdjustmentRecordV2 {
-  const resolved = resolveAdjustment(value);
   switch (value.kind) {
-    case 'Hue/Saturation': return { kind: value.kind, schemaVersion: 1,
-      parameters: { hue: resolved.hue, saturation: resolved.saturation, lightness: resolved.lightness,
-        colorize: resolved.colorize, settings: resolved.hsvSettings } };
-    case 'Levels': return { kind: value.kind, schemaVersion: 1, parameters: resolved.levels };
-    case 'Curves': return { kind: value.kind, schemaVersion: 1, parameters: resolved.curves };
-    case 'Exposure': return { kind: value.kind, schemaVersion: 1, parameters: resolved.exposureSettings };
-    case 'Gradient Map': return { kind: value.kind, schemaVersion: 1, parameters: resolved.gradientMapSettings };
-    case 'Grain': return { kind: value.kind, schemaVersion: 1, parameters: resolved.grainSettings };
+    case 'Hue/Saturation': return value;
+    case 'Levels': return value;
+    case 'Curves': return value;
+    case 'Exposure': return value;
+    case 'Gradient Map': return value;
+    case 'Grain': return value;
   }
 }
 
 function liveAdjustment(value: AdjustmentRecordV2): LayerAdjustment {
   switch (value.kind) {
-    case 'Hue/Saturation': return { kind: value.kind, schemaVersion: 1, hue: value.parameters.hue,
-      saturation: value.parameters.saturation, lightness: value.parameters.lightness, colorize: value.parameters.colorize,
-      hsvSettings: value.parameters.settings };
-    case 'Levels': return { kind: value.kind, schemaVersion: 1, levels: value.parameters };
-    case 'Curves': return { kind: value.kind, schemaVersion: 1, curves: value.parameters };
-    case 'Exposure': return { kind: value.kind, schemaVersion: 1, exposureSettings: value.parameters };
-    case 'Gradient Map': return { kind: value.kind, schemaVersion: 1, gradientMapSettings: value.parameters };
-    case 'Grain': return { kind: value.kind, schemaVersion: 1, grainSettings: value.parameters };
+    case 'Hue/Saturation': return value;
+    case 'Levels': return value;
+    case 'Curves': return value;
+    case 'Exposure': return value;
+    case 'Gradient Map': return value;
+    case 'Grain': return value;
   }
 }
 
@@ -172,7 +222,6 @@ function addV2Asset(context: V2BuildContext, raster: Raster, role: AssetRecordV2
 }
 
 function v2Layer(layer: Layer, context: V2BuildContext): LayerRecordV2 {
-  const inferredKind = layer.kind ?? (layer.isGroup ? 'group' : layer.adjustment ? 'adjustment' : layer.shape ? 'vector' : 'pixel');
   const common: LayerCommonV2 = {
     id: layer.id, parentId: layer.parentId, name: layer.name, visible: layer.visible, opacity: layer.opacity,
     fillOpacity: layer.fillOpacity ?? 1, blendMode: layer.blendMode,
@@ -184,16 +233,15 @@ function v2Layer(layer: Layer, context: V2BuildContext): LayerRecordV2 {
     effects: layer.effects ?? [], filters: layer.filters ?? [],
   };
   const preview = layer.raster ? addV2Asset(context, layer.raster, 'image') : null;
-  switch (inferredKind) {
+  switch (layer.kind) {
     case 'group': return { ...common, kind: 'group' };
     case 'adjustment': {
-      if (!layer.adjustment) throw new ProjectError('invalid', 'An adjustment layer has no parameters.');
       return { ...common, kind: 'adjustment', adjustment: v2Adjustment(layer.adjustment) };
     }
     case 'fill': return { ...common, kind: 'fill', fill: (layer as import('../core/model').FillLayer).fill };
     case 'vector': {
       const value = layer as Partial<import('../core/model').VectorLayer>;
-      const shape = layer.shape;
+      const shape = layer.sourceShape;
       const sourceShape = shape && (shape.kind === 'Rectangle' || shape.kind === 'Ellipse')
         && num(shape.red) && num(shape.green) && num(shape.blue) && num(shape.cornerRadius)
         ? { kind: shape.kind, red: shape.red, green: shape.green, blue: shape.blue, cornerRadius: shape.cornerRadius } : null;
@@ -461,12 +509,21 @@ export async function readArchive(blob: Blob, decodeImage: ImageDecoder): Promis
       mask = { raster: maskRaster, enabled: record.mask.enabled !== false, linked: record.mask.linked !== false,
         placement: lext && 'maskPlacement' in lext ? lext.maskPlacement ?? null : same ? null : stated };
     }
+    const sourceShape = record.kind === 'shape' ? validLegacyShape(record.parameters) : null;
     layers.push(newLayer({
       id: record.id, name: record.name, visible: record.visible !== false, locked: record.locked === true,
-      parentId: record.parentId ?? null, isGroup, opacity: record.opacity, blendMode: record.blendMode as BlendMode, transform, raster, mask,
+      parentId: record.parentId ?? null,
+      kind: isGroup ? 'group' : record.kind === 'adjustment' ? 'adjustment' : record.kind === 'shape' ? 'vector' : 'pixel',
+      opacity: record.opacity, blendMode: record.blendMode as BlendMode, transform, raster, mask,
       maskSourceId: null,
-      adjustment: record.kind === 'adjustment' ? validAdjustment(record.parameters) : null,
-      shape: record.kind === 'shape' ? (record.parameters as LayerShape) : null,
+      ...(record.kind === 'adjustment' ? { adjustment: validAdjustment(record.parameters) } : {}),
+      ...(sourceShape ? {
+        sourceShape,
+        paths: vectorPathsForShape(sourceShape.kind, raster?.width ?? Math.max(1, Math.round(transform.size.width)),
+          raster?.height ?? Math.max(1, Math.round(transform.size.height)), sourceShape.cornerRadius),
+        style: { fill: { kind: 'solid' as const, schemaVersion: 1 as const,
+          color: { red: sourceShape.red, green: sourceShape.green, blue: sourceShape.blue } }, stroke: null },
+      } : {}),
     }));
   }
   // Live-mask sources: exact ids from the extension, else the clipping base below.
@@ -478,7 +535,7 @@ export async function readArchive(blob: Blob, decodeImage: ImageDecoder): Promis
       const siblings = layers.filter((l) => l.parentId === layers[i]!.parentId);
       const index = siblings.findIndex((l) => l.id === layers[i]!.id);
       const below = siblings[index - 1];
-      if (!below || below.isGroup) invalid('clipping mask without a base');
+      if (!below || below.kind === 'group') invalid('clipping mask without a base');
       layers[i] = { ...layers[i]!, maskSourceId: below.maskSourceId ?? below.id };
     }
   }
@@ -524,9 +581,14 @@ function isLayerTransform(value: unknown): value is LayerTransform {
 }
 
 function validAdjustment(parameters: unknown): LayerAdjustment {
-  const value = parameters as LayerAdjustment;
-  if (!value || typeof value !== 'object' || typeof value.kind !== 'string' || !isValidAdjustment(value)) invalid('adjustment parameters');
-  return value;
+  return migrateLegacyAdjustment(parameters);
+}
+
+function validLegacyShape(parameters: unknown): LayerShape {
+  const value = legacyRecord(parameters);
+  if ((value.kind !== 'Rectangle' && value.kind !== 'Ellipse') || !num(value.red) || !num(value.green)
+    || !num(value.blue) || !num(value.cornerRadius)) invalid('shape parameters');
+  return value as unknown as LayerShape;
 }
 
 async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string, Uint8Array>,
@@ -643,8 +705,9 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
         case 'vector':
           if (!Array.isArray(record.paths) || !record.paths.every(validVectorPath) || !record.style
             || (record.style.fill !== null && !validFill(record.style.fill, records))) invalid('vector parameters');
+          if (record.sourceShape !== null) validLegacyShape(record.sourceShape);
           layers.push(newLayer({ ...common, kind: 'vector', paths: record.paths, style: record.style,
-          shape: record.sourceShape })); break;
+            sourceShape: record.sourceShape })); break;
         case 'text':
           if (typeof record.text !== 'string' || !Array.isArray(record.runs)
             || !['left', 'center', 'right', 'justify'].includes(record.alignment)) invalid('text parameters');

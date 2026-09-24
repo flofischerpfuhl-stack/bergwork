@@ -331,7 +331,10 @@ function scaledLayer(layer: Layer, sx: number, sy: number, sampling: LayerSampli
     const targetToSource = concat(translation(left, top), invert(sourcePixelToScaledDocument));
     mask = { ...mask, raster: resampleAffine(mask.raster, width, height, targetToSource, sampling) };
   }
-  return { ...layer, transform, raster, mask };
+  if (layer.kind === 'pixel' || layer.kind === 'vector' || layer.kind === 'text' || layer.kind === 'embedded') {
+    return { ...layer, transform, raster: raster ?? null, mask };
+  }
+  return { ...layer, transform, mask };
 }
 
 /** ImageResizer.resize. `false` models the sheet's “Resample” toggle (resolution only). */

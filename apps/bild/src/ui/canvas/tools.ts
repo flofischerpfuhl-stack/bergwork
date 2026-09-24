@@ -78,7 +78,7 @@ export function overlayGeometry(session: EditorSession): OverlayGeometry | null 
     return box ? fromTransform(box) : null;
   }
   const layer = session.activeLayer;
-  if (!layer || !session.displayedRaster(layer) || layer.isGroup || !effectiveVisibleIds(document.layers).has(layer.id)) return null;
+  if (!layer || !session.displayedRaster(layer) || layer.kind === 'group' || !effectiveVisibleIds(document.layers).has(layer.id)) return null;
   if (edit && edit.layerId === layer.id && edit.corners) return fromCorners(edit.corners);
   return fromTransform(session.editedTransform(layer));
 }
@@ -118,7 +118,7 @@ function transformPressLayer(session: EditorSession, pixel: Point, modifiers: Mo
   const visible = effectiveVisibleIds(document.layers);
   const underPointer = [...renderLayers(document.layers)].reverse().find((l) => session.displayedRaster(l) && containsPoint(l.transform, pixel))?.id ?? null;
   const activeLayer = session.activeLayer;
-  const active = activeLayer && session.displayedRaster(activeLayer) && !activeLayer.isGroup && visible.has(activeLayer.id) ? activeLayer : null;
+  const active = activeLayer && session.displayedRaster(activeLayer) && activeLayer.kind !== 'group' && visible.has(activeLayer.id) ? activeLayer : null;
   const picks = session.transformEdit === null;
   if (modifiers.command && picks && underPointer) return { id: underPointer, picked: true };
   if (session.transformsAsGroup && session.activeLayerId) {

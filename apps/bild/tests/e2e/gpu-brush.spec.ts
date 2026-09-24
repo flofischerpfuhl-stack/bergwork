@@ -33,6 +33,7 @@ test('GPU brush coverage matches the exact CPU preview for paint, erase and mask
           bytes[i] = 0; bytes[i + 1] = 0; bytes[i + 2] = 0; bytes[i + 3] = 255;
         }
         const layer = session.activeLayer!;
+        if (layer.kind !== 'pixel') throw new Error('Expected pixel layer');
         session.replaceDocument({ ...session.document!, layers: [{ ...layer,
           raster: rasterModule.Raster.fromPixels(size, size, 4, bytes) }] });
         if (mask) session.addLayerMask(true);

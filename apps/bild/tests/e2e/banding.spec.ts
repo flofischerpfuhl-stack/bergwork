@@ -25,13 +25,13 @@ test('A3 GPU and CPU float pipelines retain a 16-bit adjusted gradient where RGB
         raster: Raster.fromPixels(width, 1, 4, pixels, { format: bits === 16 ? 'rgba16' : 'rgba8' }) });
       const levelRange = adjustments.defaultLevelRange;
       const levels = { ...adjustments.defaultAdjustment('Levels', { red: 0, green: 0, blue: 0 }, { red: 1, green: 1, blue: 1 }),
-        levels: { channel: 'RGB', ranges: [{ ...levelRange(), black: 24, gamma: 0.58, white: 238 },
+        parameters: { channel: 'RGB', ranges: [{ ...levelRange(), black: 24, gamma: 0.58, white: 238 },
           levelRange(), levelRange(), levelRange()] } };
       const points = [{ x: 0, y: 0 }, { x: 48, y: 6 }, { x: 112, y: 44 },
         { x: 176, y: 224 }, { x: 224, y: 250 }, { x: 255, y: 255 }];
       const identity = [{ x: 0, y: 0 }, { x: 255, y: 255 }];
       const curves = { ...adjustments.defaultAdjustment('Curves', { red: 0, green: 0, blue: 0 }, { red: 1, green: 1, blue: 1 }),
-        curves: { channel: 'RGB', channels: [points, identity, identity, identity] } };
+        parameters: { channel: 'RGB', channels: [points, identity, identity, identity] } };
       return { id: `banding-${bits}`, width, height: 1, resolution: 72, selection: null, layers: [base,
         newLayer({ id: `levels-${bits}`, name: 'levels', transform, adjustment: levels }),
         newLayer({ id: `curves-${bits}`, name: 'curves', transform, adjustment: curves }),

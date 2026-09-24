@@ -1,4 +1,5 @@
 import { MAX_LAYERS, MAX_PIXELS, newLayer, type Layer, type LayerShape } from './document';
+import type { VectorPath } from './model';
 import { makeTransform, roundHalfAway, type Point, type Rect } from './geometry';
 import { uuid } from './ids';
 import { Raster, TILE } from './raster';
@@ -118,12 +119,12 @@ export function isLayerShapeStyle(shape: LayerShape | null): shape is LayerShape
 
 /** Rebuilds a live shape at the rounded transform size, keeping rounded corners in document pixels. */
 export function redrawShapeLayer(layer: Layer): Layer {
-  if (!isLayerShapeStyle(layer.shape)) return layer;
+  if (layer.kind !== 'vector' || !isLayerShapeStyle(layer.sourceShape)) return layer;
   const width = Math.max(1, roundHalfAway(layer.transform.size.width));
   const height = Math.max(1, roundHalfAway(layer.transform.size.height));
   if (layer.raster?.width === width && layer.raster.height === height) return layer;
   if (width * height > MAX_SHAPE_PIXELS) return layer;
-  const style = layer.shape;
+  const style = layer.sourceShape;
   const raster = rasterizeShape(style.kind, width, height,
     { red: style.red, green: style.green, blue: style.blue }, style.cornerRadius);
   return { ...layer, raster };
@@ -180,9 +181,12 @@ export function commitShape(session: EditorSession, color: PaletteColor = sessio
   const style: LayerShapeStyle = { kind: draft.kind, red: color.red, green: color.green,
     blue: color.blue, cornerRadius: draft.cornerRadius };
   const active = session.activeLayer;
-  const layer = newLayer({ id: uuid(), name: nextShapeName(document.layers, draft.kind), raster, shape: style,
+  const layer = newLayer({ id: uuid(), name: nextShapeName(document.layers, draft.kind), kind: 'vector', raster,
+    paths: vectorPathsForShape(draft.kind, rect.width, rect.height, draft.cornerRadius),
+    style: { fill: { kind: 'solid', schemaVersion: 1, color: { red: color.red, green: color.green, blue: color.blue } }, stroke: null },
+    sourceShape: style,
     transform: makeTransform({ x: rect.x, y: rect.y }, { width: rect.width, height: rect.height }),
-    parentId: active?.isGroup ? active.id : active?.parentId ?? null });
+    parentId: active?.kind === 'group' ? active.id : active?.parentId ?? null });
   const layers = document.layers.slice();
   const index = layers.findIndex((item) => item.id === session.activeLayerId);
   session.beginEdit(draft.kind);
@@ -191,6 +195,31 @@ export function commitShape(session: EditorSession, color: PaletteColor = sessio
   session.setActiveLayer(layer.id);
   session.endEdit();
   return layer.id;
+}
+
+/** A5 consumes these paths directly; A2 keeps the existing raster cache for pixel-identical rendering. */
+export function vectorPathsForShape(kind: ShapeKind, width: number, height: number, cornerRadius: number): readonly VectorPath[] {
+  const point = (x: number, y: number, inX = x, inY = y, outX = x, outY = y) => ({
+    anchor: { x, y }, in: { x: inX, y: inY }, out: { x: outX, y: outY },
+  });
+  if (kind === 'Ellipse') {
+    const cx = width / 2, cy = height / 2, k = 0.5522847498307936;
+    return [{ closed: true, points: [
+      point(cx, 0, cx - cx * k, 0, cx + cx * k, 0),
+      point(width, cy, width, cy - cy * k, width, cy + cy * k),
+      point(cx, height, cx + cx * k, height, cx - cx * k, height),
+      point(0, cy, 0, cy + cy * k, 0, cy - cy * k),
+    ] }];
+  }
+  const radius = Math.min(Math.max(0, cornerRadius), width / 2, height / 2);
+  if (radius === 0) return [{ closed: true, points: [point(0, 0), point(width, 0), point(width, height), point(0, height)] }];
+  const handle = radius * 0.5522847498307936;
+  return [{ closed: true, points: [
+    point(radius, 0, radius - handle, 0), point(width - radius, 0, width - radius, 0, width - radius + handle, 0),
+    point(width, radius, width, radius - handle), point(width, height - radius, width, height - radius, width, height - radius + handle),
+    point(width - radius, height, width - radius + handle, height), point(radius, height, radius, height, radius - handle, height),
+    point(0, height - radius, 0, height - radius + handle), point(0, radius, 0, radius, 0, radius - handle),
+  ] }];
 }
 
 export function nextShapeName(layers: readonly Layer[], kind: ShapeKind): string {

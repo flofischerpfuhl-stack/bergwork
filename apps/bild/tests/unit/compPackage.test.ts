@@ -1,7 +1,7 @@
 import { unzipSync, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { defaultAdjustment } from '../../src/core/adjustments';
-import type { CanvasDocument, Layer } from '../../src/core/document';
+import { newLayer, type CanvasDocument, type Layer, type LayerShape } from '../../src/core/document';
 import { makeTransform, type LayerTransform } from '../../src/core/geometry';
 import { Raster } from '../../src/core/raster';
 import {
@@ -30,21 +30,30 @@ function pixels(): Uint8Array {
   ]);
 }
 
-function rgbaLayer(id = BASE, extra: Partial<Layer> = {}): Layer {
-  return {
-    id, name: 'Paint & sky 🌤', visible: false, locked: false, parentId: null, isGroup: false,
-    opacity: 0.625, blendMode: 'multiply', transform,
-    raster: Raster.fromPixels(2, 2, 4, pixels()), mask: null, maskSourceId: null,
-    adjustment: null, shape: null, ...extra,
-  };
+type LegacyTestFields = Partial<Layer> & { isGroup?: boolean; shape?: LayerShape | null };
+
+function testLayer(id: string, raster: Raster | null, defaults: LegacyTestFields, extra: LegacyTestFields): Layer {
+  const merged = { ...defaults, ...extra };
+  const { isGroup, shape, ...fields } = merged;
+  const kind = isGroup ? 'group' : fields.adjustment ? 'adjustment' : shape && raster ? 'vector' : 'pixel';
+  return newLayer({ id, name: fields.name ?? 'Blank', transform: fields.transform ?? transform, ...fields, raster, kind,
+    ...(shape && raster ? { sourceShape: shape, paths: [], style: { fill: { kind: 'solid' as const, schemaVersion: 1 as const,
+      color: { red: shape.red, green: shape.green, blue: shape.blue } }, stroke: null } } : {}) });
 }
 
-function blankLayer(id = CLIPPED, extra: Partial<Layer> = {}): Layer {
-  return {
-    id, name: 'Blank', visible: true, locked: false, parentId: null, isGroup: false,
+function rgbaLayer(id = BASE, extra: LegacyTestFields = {}): Layer {
+  return testLayer(id, Raster.fromPixels(2, 2, 4, pixels()), {
+    name: 'Paint & sky 🌤', visible: false, locked: false, parentId: null,
+    opacity: 0.625, blendMode: 'multiply', transform, mask: null, maskSourceId: null,
+  }, extra);
+}
+
+function blankLayer(id = CLIPPED, extra: LegacyTestFields = {}): Layer {
+  return testLayer(id, null, {
+    name: 'Blank', visible: true, locked: false, parentId: null,
     opacity: 1, blendMode: 'normal', transform: makeTransform({ x: 0, y: 0 }, { width: 64, height: 32 }),
-    raster: null, mask: null, maskSourceId: null, adjustment: null, shape: null, ...extra,
-  };
+    mask: null, maskSourceId: null,
+  }, extra);
 }
 
 function document(layers: readonly Layer[]): CanvasDocument {
@@ -151,13 +160,13 @@ describe('upstream .comp packages (ProjectStore.swift)', () => {
       [`${BASE}.png`]: image,
     }));
     expect(v1.document.resolution).toBe(72);
-    expect(v1.document.layers[0]).toMatchObject({ parentId: null, isGroup: false, opacity: 1, blendMode: 'normal', mask: null, maskSourceId: null });
+    expect(v1.document.layers[0]).toMatchObject({ parentId: null, kind: 'pixel', opacity: 1, blendMode: 'normal', mask: null, maskSourceId: null });
 
     const v2 = await readCompPackage(packageMap(manifest(2, [
       record(GROUP, { isGroup: true }), record(BASE, { parentID: GROUP }),
     ])));
-    expect(v2.document.layers.map((layer) => [layer.id, layer.parentId, layer.isGroup])).toEqual([
-      [GROUP, null, true], [BASE, GROUP, false],
+    expect(v2.document.layers.map((layer) => [layer.id, layer.parentId, layer.kind])).toEqual([
+      [GROUP, null, 'group'], [BASE, GROUP, 'pixel'],
     ]);
 
     const v3 = await readCompPackage(packageMap(manifest(3, [record(BASE, { opacity: 0.25, blendMode: 'Screen' })])));
@@ -178,7 +187,7 @@ describe('upstream .comp packages (ProjectStore.swift)', () => {
     const v6 = await readCompPackage(packageMap(manifest(6, [record(GROUP, {
       isGroup: true, maskFile: `${GROUP}.mask.png`, maskEnabled: true,
     })]), { [`${GROUP}.mask.png`]: mask }));
-    expect(v6.document.layers[0]!.isGroup).toBe(true);
+    expect(v6.document.layers[0]!.kind).toBe('group');
     expect(v6.document.layers[0]!.mask?.raster.toPixels()).toEqual(new Uint8Array([0, 64, 128, 255]));
   });
 
@@ -211,7 +220,8 @@ describe('upstream .comp packages (ProjectStore.swift)', () => {
     expect(loaded.document.layers[0]!.mask?.raster.toPixels()).toEqual(new Uint8Array([255, 10]));
     expect(loaded.document.layers[2]!.maskSourceId).toBe(BASE);
     expect(loaded.document.layers[3]!.adjustment?.kind).toBe('Exposure');
-    expect(loaded.document.layers[4]!.shape).toEqual(shape.shape);
+    expect(loaded.document.layers[4]!.kind === 'vector' ? loaded.document.layers[4]!.sourceShape : null)
+      .toEqual(shape.kind === 'vector' ? shape.sourceShape : null);
     expect(loaded.document.layers[4]!.raster?.toPixels()).toEqual(pixels());
   });
 
@@ -220,13 +230,14 @@ describe('upstream .comp packages (ProjectStore.swift)', () => {
     const adjustmentRecord = record(ADJUSTMENT, { name: 'Exposure', adjustment });
     const loaded = await readCompPackage(packageMap(manifest(7, [adjustmentRecord])));
     expect(loaded.document.layers[0]).toMatchObject({
-      id: ADJUSTMENT, raster: null, adjustment,
+      id: ADJUSTMENT, kind: 'adjustment', adjustment,
     });
+    expect('raster' in loaded.document.layers[0]!).toBe(false);
 
     const archive = await writeCompZip(loaded.document, { name: 'Adjustment', activeLayerId: ADJUSTMENT });
     const stored = JSON.parse(new TextDecoder().decode(unzipSync(archive)['Adjustment.comp/manifest.json'])) as CompManifest;
     expect(stored.version).toBe(7);
-    expect(stored.layers[0]!.adjustment).toEqual(adjustment);
+    expect(stored.layers[0]!.adjustment).toEqual({ kind: 'Exposure', exposureSettings: adjustment.parameters });
     expect((await readCompZip(archive)).document.layers[0]!.adjustment).toEqual(adjustment);
 
     await expect(readCompPackage(packageMap(manifest(6, [adjustmentRecord])))).rejects.toMatchObject({

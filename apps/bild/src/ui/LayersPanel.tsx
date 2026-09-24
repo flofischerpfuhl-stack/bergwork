@@ -107,7 +107,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
   const selected = session.selectedLayerIds.has(layer.id);
   const active = session.activeLayerId === layer.id && session.selectedLayerIds.size === 1;
   const enabled = session.canEditLayers;
-  const framed = !layer.adjustment && !layer.isGroup;
+  const framed = !layer.adjustment && layer.kind !== 'group';
   const [renaming, setRenaming] = useState(false);
   const renameRequested = controller.renamingLayerId === layer.id;
   useEffect(() => { if (renameRequested) { setRenaming(true); controller.renamingLayerId = null; } }, [renameRequested, controller]);
@@ -115,7 +115,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
   const dropAbove = drag?.moved && !drag.maskFrom && drag.target && !drag.target.into && drag.target.index === index;
   const dropInto = drag?.moved && (drag.maskFrom ? drag.maskTarget === layer.id : drag.target?.into && drag.target.index === index);
   const source = layer.maskSourceId ? session.layer(layer.maskSourceId) : null;
-  const meta = source ? `${t('Clipped to')} ${source.name}` : layer.adjustment ? t('Adjustment · Double-click to edit') : layer.isGroup ? t('Folder')
+  const meta = source ? `${t('Clipped to')} ${source.name}` : layer.adjustment ? t('Adjustment · Double-click to edit') : layer.kind === 'group' ? t('Folder')
     : `${Math.round(layer.transform.size.width).toLocaleString()} × ${Math.round(layer.transform.size.height).toLocaleString()} px`;
   const indent = Math.min(entry.depth, 8) * 24 + (layer.maskSourceId ? 24 : 0);
 
@@ -152,7 +152,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
 
   return (
     <div className={`${styles.layerRow} ${selected ? styles.layerRowSelected : ''} ${entry.visible ? '' : styles.layerRowDim} ${dropAbove ? styles.layerRowDropAbove : ''} ${dropInto ? styles.layerRowDropInto : ''}`}
-      role="treeitem" aria-selected={selected} aria-level={entry.depth + 1} aria-expanded={layer.isGroup ? !session.collapsedGroupIds.has(layer.id) : undefined}
+      role="treeitem" aria-selected={selected} aria-level={entry.depth + 1} aria-expanded={layer.kind === 'group' ? !session.collapsedGroupIds.has(layer.id) : undefined}
       data-layer-id={layer.id} data-testid="layer-row"
       onPointerDown={onRowPointerDown}
       onDoubleClick={(event) => {
@@ -181,7 +181,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
         <Icon name={layer.visible ? 'eye' : 'eyeSlash'} size={16} />
       </button>
       <span style={{ width: indent, flex: 'none' }} />
-      <button type="button" className={styles.disclosure} style={{ visibility: layer.isGroup ? 'visible' : 'hidden' }} disabled={!enabled}
+      <button type="button" className={styles.disclosure} style={{ visibility: layer.kind === 'group' ? 'visible' : 'hidden' }} disabled={!enabled}
         aria-label={t('Expand or collapse folder')} onClick={() => session.toggleGroupExpansion(layer.id)}>
         <Icon name={session.collapsedGroupIds.has(layer.id) ? 'chevronRight' : 'chevronDown'} size={12} />
       </button>
@@ -197,7 +197,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
           </button>
         ) : (
           <span className={`${styles.iconThumb} ${active && !session.isMaskSelected ? styles.thumbTarget : ''}`}>
-            <Icon name={layer.isGroup ? 'folder' : ADJUSTMENT_ICONS[layer.adjustment!.kind] ?? 'adjustment'} size={24} />
+            <Icon name={layer.kind === 'group' ? 'folder' : ADJUSTMENT_ICONS[layer.adjustment!.kind] ?? 'adjustment'} size={24} />
           </span>
         )}
       </div>
@@ -288,11 +288,11 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
         const r = elements[i]!.getBoundingClientRect();
         if (e.clientY < r.top + r.height / 2) {
           const row = rows[i]!;
-          const into = row.layer.isGroup && e.clientY > r.top + r.height * 0.25;
+          const into = row.layer.kind === 'group' && e.clientY > r.top + r.height * 0.25;
           target = { index: i, into };
           break;
         }
-        if (rows[i]!.layer.isGroup && e.clientY < r.bottom - r.height * 0.25) { target = { index: i, into: true }; break; }
+        if (rows[i]!.layer.kind === 'group' && e.clientY < r.bottom - r.height * 0.25) { target = { index: i, into: true }; break; }
       }
       state.target = target;
       setDrag({ ...state });
@@ -372,7 +372,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
       { label: layer.maskSourceId ? t('Release Clipping Mask') : t('Create Clipping Mask'), enabled: session.canToggleClippingMask(id), run: () => session.toggleClippingMask(id) },
       { label: t('Move Layer Up'), enabled: session.canEditLayers, run: () => { session.selectLayer(id); session.moveActiveLayer(1); } },
       { label: t('Move Layer Down'), enabled: session.canEditLayers, run: () => { session.selectLayer(id); session.moveActiveLayer(-1); } },
-      { label: t('Duplicate Layer'), enabled: session.canEditLayers && !layer.isGroup, run: () => { session.selectLayer(id); session.duplicateActiveLayer(); } },
+      { label: t('Duplicate Layer'), enabled: session.canEditLayers && layer.kind !== 'group', run: () => { session.selectLayer(id); session.duplicateActiveLayer(); } },
       { label: t('Move Out of Folder'), enabled: session.canEditLayers && !!layer.parentId, run: () => { session.selectLayer(id); session.moveActiveLayerOutOfGroup(); } },
       'separator',
       { label: t('Delete Layer / Folder'), enabled: session.canEditLayers, run: () => {

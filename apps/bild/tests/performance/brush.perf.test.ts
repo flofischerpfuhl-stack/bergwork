@@ -26,6 +26,7 @@ function sessionWith(source: Raster | null): EditorSession {
   session.createNewProject(4096, 4096);
   if (source) {
     const document = session.document!, layer = document.layers[0]!;
+    if (layer.kind !== 'pixel') throw new Error('Expected pixel layer');
     session.replaceDocument({ ...document, layers: [{ ...layer, raster: source }] });
   }
   session.tool = 'brush';

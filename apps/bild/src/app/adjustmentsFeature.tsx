@@ -92,7 +92,7 @@ function underneathDocument(document: CanvasDocument, id: string): CanvasDocumen
   const entries = hierarchyEntries(document.layers);
   const cut = entries.findIndex((e) => e.layer.id === id);
   const below = new Set(entries.slice(0, cut < 0 ? entries.length : cut).map((e) => e.layer.id));
-  return { ...document, selection: null, layers: document.layers.map((l) => (l.isGroup || below.has(l.id) ? l : { ...l, visible: false })) };
+  return { ...document, selection: null, layers: document.layers.map((l) => (l.kind === 'group' || below.has(l.id) ? l : { ...l, visible: false })) };
 }
 
 /** Longest side of the image a layer-edit histogram is measured on; the shape is what matters. */
@@ -121,7 +121,9 @@ function measureLayerHistogram(controller: EditorController, session: EditorSess
 
 function changeLevels(session: EditorSession, settings: LevelsSettings, preview?: boolean): void {
   const layerEdit = adjustmentLayerEditState(session);
-  if (layerEdit) { updateAdjustmentLayerEdit(session, { ...layerEdit.value, levels: settings }, preview ?? layerEdit.preview); return; }
+  if (layerEdit?.value.kind === 'Levels') {
+    updateAdjustmentLayerEdit(session, { ...layerEdit.value, parameters: settings }, preview ?? layerEdit.preview); return;
+  }
   const state = levelsEditState(session);
   if (state) { state.settings = settings; session.notify('ui'); void updateLevelsEdit(session, settings, preview ?? state.preview); }
 }
@@ -130,9 +132,9 @@ function changeHue(session: EditorSession, settings: HueSaturationSettings, prev
   const layerEdit = adjustmentLayerEditState(session);
   if (layerEdit) {
     const master = settings.adjustments.Master ?? defaultRangeAdjustment();
-    // The legacy top-level fields mirror Master for projects written before hsvSettings existed.
-    updateAdjustmentLayerEdit(session, { ...layerEdit.value, hsvSettings: settings, hue: master.hue, saturation: master.saturation,
-      lightness: master.lightness, colorize: settings.colorize }, preview ?? layerEdit.preview);
+    if (layerEdit.value.kind !== 'Hue/Saturation') return;
+    updateAdjustmentLayerEdit(session, { ...layerEdit.value, parameters: { settings, hue: master.hue, saturation: master.saturation,
+      lightness: master.lightness, colorize: settings.colorize } }, preview ?? layerEdit.preview);
     return;
   }
   const state = hueSaturationEditState(session);
@@ -693,10 +695,14 @@ function AdjustmentPanel({ controller }: { controller: EditorController }) {
   else if (edit.kind === 'filter') body = <FilterControls controller={controller} session={session} edit={edit} />;
   else {
     const value = resolveAdjustment(edit.value);
-    if (edit.kind === 'curves') body = <CurvesControls controller={controller} settings={value.curves} onChange={(curves) => changeLayerValue(session, (v) => ({ ...v, curves }))} />;
-    else if (edit.kind === 'exposure') body = <ExposureControls controller={controller} settings={value.exposureSettings} onChange={(exposureSettings) => changeLayerValue(session, (v) => ({ ...v, exposureSettings }))} />;
-    else if (edit.kind === 'gradientMap') body = <GradientMapControls controller={controller} settings={value.gradientMapSettings} onChange={(gradientMapSettings) => changeLayerValue(session, (v) => ({ ...v, gradientMapSettings }))} />;
-    else body = <GrainControls controller={controller} settings={value.grainSettings} onChange={(grainSettings) => changeLayerValue(session, (v) => ({ ...v, grainSettings }))} />;
+    if (edit.kind === 'curves') body = <CurvesControls controller={controller} settings={value.curves} onChange={(curves) => changeLayerValue(session,
+      (v) => v.kind === 'Curves' ? { ...v, parameters: curves } : v)} />;
+    else if (edit.kind === 'exposure') body = <ExposureControls controller={controller} settings={value.exposureSettings} onChange={(settings) => changeLayerValue(session,
+      (v) => v.kind === 'Exposure' ? { ...v, parameters: settings } : v)} />;
+    else if (edit.kind === 'gradientMap') body = <GradientMapControls controller={controller} settings={value.gradientMapSettings} onChange={(settings) => changeLayerValue(session,
+      (v) => v.kind === 'Gradient Map' ? { ...v, parameters: settings } : v)} />;
+    else body = <GrainControls controller={controller} settings={value.grainSettings} onChange={(settings) => changeLayerValue(session,
+      (v) => v.kind === 'Grain' ? { ...v, parameters: settings } : v)} />;
   }
   const onLayer = !!layerEdit;
   return (

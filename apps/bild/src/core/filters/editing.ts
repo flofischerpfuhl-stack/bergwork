@@ -30,7 +30,7 @@ export function beginFilterEdit(session: EditorSession, kind: FilterKind,
   settings: FilterSettings = defaultFilterSettings()): FilterEditState | null {
   const layer = session.activeLayer;
   if (edits.has(session) || !session.canEditLayers || session.selectedLayerIds.size !== 1 || !layer?.raster
-    || layer.isGroup || !!layer.adjustment || session.isMaskSelected) return null;
+    || !!layer.adjustment || session.isMaskSelected) return null;
   const state: FilterEditState = { kind, layerId: layer.id, originalRaster: layer.raster, originalTransform: layer.transform,
     settings: normalizeFilterSettings(settings), seed: Math.floor(Math.random() * 0x1_0000_0000), preview: true,
     committing: false, preparing: false, previewError: null, request: 0 };

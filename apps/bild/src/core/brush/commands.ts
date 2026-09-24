@@ -151,11 +151,11 @@ export function beginBrushStroke(session: EditorSession, point: Point, options: 
   const stroke = recorded ?? beginStroke(strokeOptions);
   const name = mask ? 'Paint Mask' : settings.mode === 'erase' ? 'Erase'
     : session.tool === 'cloneStamp' ? 'Clone Stamp' : 'Brush Stroke';
-  value.active = { stroke, gpu: recorded?.gpuPreview ?? null, layerId: layer!.id, sourceRaster: layer!.raster,
+  value.active = { stroke, gpu: recorded?.gpuPreview ?? null, layerId: layer!.id, sourceRaster: layer!.raster ?? null,
     sourceMaskRaster: layer!.mask?.raster ?? null, sourceTransform: layer!.transform, mask, name, changed: false };
   const start = options.shift && value.last && value.last.layerId === layer!.id && value.last.mask === mask ? value.last.point : null;
   const update = stroke.addPoints(start ? [start, point] : [point]);
-  value.active.changed ||= update.dirty.length > 0;
+  value.active!.changed ||= update.dirty.length > 0;
   value.last = { point: { ...point }, layerId: layer!.id, mask };
   session.notify('ui');
   return update;
@@ -321,7 +321,7 @@ function canPaint(session: EditorSession, layer: Layer | null, document: CanvasD
   if (!document || !layer || !session.canEditLayers || session.selectedLayerIds.size !== 1 || layer.locked) return false;
   if (!effectiveVisibleIds(document.layers).has(layer.id)) return false;
   if (session.isMaskSelected) return !!layer.mask?.enabled;
-  if (layer.isGroup || layer.adjustment) return false;
+  if (layer.kind === 'group' || layer.adjustment) return false;
   const selection = document.selection;
   return !selection || selection.mask.tiles.some((tile) => tile?.some((value) => value !== 0));
 }

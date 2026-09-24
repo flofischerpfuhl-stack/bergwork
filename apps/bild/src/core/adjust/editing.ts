@@ -44,7 +44,7 @@ export function adjustmentLayerEditState(session: EditorSession): AdjustmentLaye
 
 function editableRaster(session: EditorSession) {
   const layer = session.activeLayer;
-  return session.canEditLayers && session.selectedLayerIds.size === 1 && layer && !layer.isGroup && !layer.adjustment
+  return session.canEditLayers && session.selectedLayerIds.size === 1 && layer && layer.kind !== 'group' && !layer.adjustment
     && !session.isMaskSelected && layer.raster ? layer : null;
 }
 
@@ -67,7 +67,7 @@ export async function updateLevelsEdit(session: EditorSession, settings: LevelsS
   pixelJobs.get(session)?.cancel(); pixelJobs.delete(session);
   if (!preview) { session.rasterOverrides.delete(state.layerId); session.notify('document'); return; }
   const layer = session.layer(state.layerId); if (request !== state.request || !layer || layer.raster !== state.originalRaster) return;
-  const value: LayerAdjustment = { kind: 'Levels', levels: settings };
+  const value: LayerAdjustment = { kind: 'Levels', schemaVersion: 1, parameters: settings };
   const job = adjustmentPixelJob(state.originalRaster, state.originalTransform, value, session.selection); pixelJobs.set(session, job);
   try { const made = await job.promise;
     if (request === state.request && levelsEdits.get(session) === state) { session.rasterOverrides.set(state.layerId, made.raster); session.notify('document'); }
@@ -83,7 +83,8 @@ export async function applyLevelsEdit(session: EditorSession): Promise<boolean> 
   const state = levelsEdits.get(session); if (!state || state.committing) return false; state.committing = true; state.request++;
   pixelJobs.get(session)?.cancel(); histogramJobs.get(session)?.cancel(); histogramJobs.delete(session); const layer = session.layer(state.layerId);
   if (!layer || layer.raster !== state.originalRaster || layer.transform !== state.originalTransform) { cancelLevelsEdit(session); return false; }
-  const job = adjustmentPixelJob(state.originalRaster, state.originalTransform, { kind: 'Levels', levels: state.settings }, session.selection);
+  const job = adjustmentPixelJob(state.originalRaster, state.originalTransform,
+    { kind: 'Levels', schemaVersion: 1, parameters: state.settings }, session.selection);
   pixelJobs.set(session, job); let made;
   try { made = (await job.promise).raster; } catch { cancelLevelsEdit(session); return false; }
   session.rasterOverrides.delete(state.layerId); levelsEdits.delete(session); session.replaceLayerPixels(state.layerId, made, 'Levels'); return true;
@@ -104,7 +105,9 @@ export async function updateHueSaturationEdit(session: EditorSession, settings: 
   const layer = session.layer(state.layerId);
   if (request !== state.request || !layer || layer.raster !== state.originalRaster) return;
   const job = adjustmentPixelJob(state.originalRaster, state.originalTransform,
-    { kind: 'Hue/Saturation', hsvSettings: settings }, session.selection); pixelJobs.set(session, job);
+    { kind: 'Hue/Saturation', schemaVersion: 1, parameters: { hue: settings.adjustments.Master?.hue ?? 0,
+      saturation: settings.adjustments.Master?.saturation ?? 0, lightness: settings.adjustments.Master?.lightness ?? 0,
+      colorize: settings.colorize, settings } }, session.selection); pixelJobs.set(session, job);
   try { const made = await job.promise;
     if (request === state.request && hueEdits.get(session) === state) { session.rasterOverrides.set(state.layerId, made.raster); session.notify('document'); }
   } catch { /* superseded */ } finally { if (pixelJobs.get(session) === job) pixelJobs.delete(session); }
@@ -118,7 +121,9 @@ export async function applyHueSaturationEdit(session: EditorSession): Promise<bo
   pixelJobs.get(session)?.cancel(); const layer = session.layer(state.layerId);
   if (!layer || layer.raster !== state.originalRaster || layer.transform !== state.originalTransform) { cancelHueSaturationEdit(session); return false; }
   const job = adjustmentPixelJob(state.originalRaster, state.originalTransform,
-    { kind: 'Hue/Saturation', hsvSettings: state.settings }, session.selection); pixelJobs.set(session, job); let made;
+    { kind: 'Hue/Saturation', schemaVersion: 1, parameters: { hue: state.settings.adjustments.Master?.hue ?? 0,
+      saturation: state.settings.adjustments.Master?.saturation ?? 0, lightness: state.settings.adjustments.Master?.lightness ?? 0,
+      colorize: state.settings.colorize, settings: state.settings } }, session.selection); pixelJobs.set(session, job); let made;
   try { made = (await job.promise).raster; } catch { cancelHueSaturationEdit(session); return false; }
   session.rasterOverrides.delete(state.layerId); hueEdits.delete(session); session.replaceLayerPixels(state.layerId, made, 'Hue/Saturation'); return true;
 }

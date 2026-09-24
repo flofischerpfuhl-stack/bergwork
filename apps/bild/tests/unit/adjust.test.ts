@@ -25,7 +25,7 @@ describe('adjustment pixel engines', () => {
   });
 
   it('ImageAdjustmentTests.gradientMapColorsByBrightnessAndReverses', () => {
-    const adjustment = { kind: 'Gradient Map', gradientMapSettings: {
+    const adjustment = { kind: 'Gradient Map', schemaVersion: 1, parameters: {
       shadows: { red: 1, green: 0, blue: 0 }, highlights: { red: 0, green: 0, blue: 1 }, reversed: false,
     } } as const;
     expect(bytes(applyAdjustment(adjustment, pixel([0, 0, 0, 255]), 1, 1, 0, 0))).toEqual([255, 0, 0, 255]);
@@ -35,7 +35,7 @@ describe('adjustment pixel engines', () => {
   });
 
   it('ImageAdjustmentTests.grainIsFixedInDocumentSpaceAndLeavesTransparencyAlone', () => {
-    const adjustment = { kind: 'Grain', grainSettings: { amount: 60, size: 2, roughness: 40, seed: 7 } } as const;
+    const adjustment = { kind: 'Grain', schemaVersion: 1, parameters: { amount: 60, size: 2, roughness: 40, seed: 7 } } as const;
     const whole = applyAdjustment(adjustment, new Float32Array(40 * 40 * 4).map((_, i) => i % 4 === 3 ? 1 : 128 / 255), 40, 40, 0, 0);
     const part = applyAdjustment(adjustment, new Float32Array(20 * 20 * 4).map((_, i) => i % 4 === 3 ? 1 : 128 / 255), 20, 20, 10, 10);
     for (let y = 0; y < 20; y++) for (let x = 0; x < 20; x++) {
@@ -47,7 +47,8 @@ describe('adjustment pixel engines', () => {
 
   it('HueSaturationTests.hueRotatesSaturationAndLightnessFollowPhotoshopRanges', () => {
     const settings = defaultHueSaturation(120);
-    const result = bytes(applyAdjustment({ kind: 'Hue/Saturation', hsvSettings: settings }, pixel([255, 0, 0, 127]), 1, 1, 0, 0));
+    const result = bytes(applyAdjustment({ kind: 'Hue/Saturation', schemaVersion: 1,
+      parameters: { hue: 120, saturation: 0, lightness: 0, colorize: false, settings } }, pixel([255, 0, 0, 127]), 1, 1, 0, 0));
     expect(result[0]).toBeLessThanOrEqual(2); expect(result[1]).toBeGreaterThanOrEqual(253); expect(result[2]).toBeLessThanOrEqual(2);
     expect(result[3]).toBe(127);
   });
@@ -117,17 +118,19 @@ describe('levels, curves, selection and edit state', () => {
 
   it('new adjustment defaults use palette colors and unique grain seeds', () => {
     const g = defaultAdjustment('Gradient Map', { red: 1, green: 0, blue: 0 }, { red: 0, green: 0, blue: 1 });
-    expect((g.gradientMapSettings as { shadows: unknown }).shadows).toEqual({ red: 1, green: 0, blue: 0 });
+    expect(g.kind === 'Gradient Map' ? g.parameters.shadows : null).toEqual({ red: 1, green: 0, blue: 0 });
     expect(defaultRangeAdjustment()).toEqual({ hue: 0, saturation: 0, lightness: 0 });
     expect(isValidAdjustment(g)).toBe(true);
-    expect(isValidAdjustment({ kind: 'Exposure', exposureSettings: { exposure: 0, offset: 0, gamma: 0 } })).toBe(false);
+    expect(isValidAdjustment({ kind: 'Exposure', schemaVersion: 1,
+      parameters: { exposure: 0, offset: 0, gamma: 0 } })).toBe(false);
   });
 
   it('AdjustmentEditing cancel restores original and apply is one undo step', () => {
     const session = new EditorSession(); session.createDocument(2, 1); session.addAdjustment('Exposure');
     const id = session.activeLayerId!, original = session.activeLayer!.adjustment!, count = session.history.undoCount;
     beginAdjustmentLayerEdit(session, id);
-    const changed = { ...original, exposureSettings: { exposure: 2, offset: 0, gamma: 1 } };
+    if (original.kind !== 'Exposure') throw new Error('Expected exposure adjustment');
+    const changed = { ...original, parameters: { exposure: 2, offset: 0, gamma: 1 } };
     expect(updateAdjustmentLayerEdit(session, changed)).toBe(true); expect(session.activeLayer?.adjustment).toEqual(changed);
     finishAdjustmentLayerEdit(session, false); expect(session.activeLayer?.adjustment).toEqual(original); expect(session.history.undoCount).toBe(count);
     beginAdjustmentLayerEdit(session, id); updateAdjustmentLayerEdit(session, changed); finishAdjustmentLayerEdit(session, true);

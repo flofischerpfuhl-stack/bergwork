@@ -77,7 +77,7 @@ function publish(session: EditorSession, context: Context, values: Partial<Subje
 function canBegin(session: EditorSession): boolean {
   const layer = session.activeLayer;
   return session.canEditLayers && session.selectedLayerIds.size === 1 && !session.isMaskSelected
-    && !!layer?.raster && !layer.isGroup && !layer.adjustment;
+    && !!layer?.raster && !layer.adjustment;
 }
 
 /**

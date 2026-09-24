@@ -70,10 +70,10 @@ export function lensCorrection(raster: Raster, distortion: number): Raster {
 }
 
 function adjustment(kind: FilterKind, settings: FilterSettings, seed: number): LayerAdjustment | null {
-  if (kind === 'Curves') return { kind, curves: settings.curves };
-  if (kind === 'Exposure') return { kind, exposureSettings: settings.exposure };
-  if (kind === 'Gradient Map') return { kind, gradientMapSettings: settings.gradientMap };
-  if (kind === 'Grain') return { kind, grainSettings: { ...settings.grain, seed } };
+  if (kind === 'Curves') return { kind, schemaVersion: 1, parameters: settings.curves };
+  if (kind === 'Exposure') return { kind, schemaVersion: 1, parameters: settings.exposure };
+  if (kind === 'Gradient Map') return { kind, schemaVersion: 1, parameters: settings.gradientMap };
+  if (kind === 'Grain') return { kind, schemaVersion: 1, parameters: { ...settings.grain, seed } };
   return null;
 }
 

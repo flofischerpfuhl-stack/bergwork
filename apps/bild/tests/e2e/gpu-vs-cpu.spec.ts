@@ -45,7 +45,7 @@ test('GPU export matches the CPU reference compositor', async ({ page }) => {
       mask: { raster: gray(30, 30, (x: number) => x * 8), enabled: true, placement: null, linked: true },
       transform: makeTransform({ x: 60, y: 30 }, { width: 30, height: 30 }) }));
     // Folder with a mask containing a clipping stack.
-    layers.push(newLayer({ id: 'F', name: 'folder', isGroup: true, transform: makeTransform({ x: 0, y: 0 }, { width: W, height: H }),
+    layers.push(newLayer({ id: 'F', name: 'folder', kind: 'group', transform: makeTransform({ x: 0, y: 0 }, { width: W, height: H }),
       mask: { raster: gray(W, H, (x: number, y: number) => (x + y) % 2 ? 255 : 200), enabled: true, placement: null, linked: true } }));
     layers.push(newLayer({ id: 'base', name: 'base', parentId: 'F', raster: pattern(20, 20, (x: number, y: number) => ((x - 10) ** 2 + (y - 10) ** 2 < 64 ? 255 : 0)),
       transform: makeTransform({ x: 8, y: 44 }, { width: 20, height: 20 }) }));

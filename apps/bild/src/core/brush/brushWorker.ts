@@ -1,4 +1,4 @@
-import { rasterFromTransfer } from '../transfer';
+import { layerFromTransfer as transferredLayer } from '../transfer';
 import type { Layer } from '../document';
 import type { Raster } from '../raster';
 import { beginSettledStroke, warmBrushDensity, type SettledStroke, type StrokeResult } from './stroke';
@@ -21,11 +21,7 @@ function post(message: BrushWorkerResponse, transfers: Transferable[] = []): voi
 }
 
 function layerFromTransfer(value: Extract<BrushWorkerRequest, { type: 'init' }>['options']['layer']): Layer {
-  return {
-    ...value,
-    raster: value.raster ? rasterFromTransfer(value.raster) : null,
-    mask: value.mask ? { ...value.mask, raster: rasterFromTransfer(value.mask.raster) } : null,
-  };
+  return transferredLayer(value);
 }
 
 function changedTiles(next: Raster, reset: boolean): { tiles: BrushTileTransfer[]; transfers: Transferable[] } {

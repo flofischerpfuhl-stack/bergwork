@@ -31,7 +31,7 @@ export interface ExposureSettings { readonly exposure: number; readonly offset: 
 export interface GradientMapSettings { readonly shadows: RGB; readonly highlights: RGB; readonly reversed: boolean }
 export interface GrainSettings { readonly amount: number; readonly size: number; readonly roughness: number; readonly seed: number }
 
-/** Fully resolved in-memory view of the optional Codable fields in `LayerAdjustment`. */
+/** Stable view used by the adjustment kernels and controls. */
 export interface ResolvedAdjustment {
   readonly kind: AdjustmentKind;
   readonly hue: number; readonly saturation: number; readonly lightness: number; readonly colorize: boolean;
@@ -79,35 +79,33 @@ export function defaultGradientMap(shadows: RGB = { red: 0, green: 0, blue: 0 },
 }
 export function defaultGrain(seed = 0): GrainSettings { return { amount: 25, size: 1.5, roughness: 50, seed: seed >>> 0 }; }
 
-/** Optional new fields are deliberately omitted, matching old project JSON exactly. */
+export function defaultAdjustment<K extends AdjustmentKind>(kind: K, foreground: RGB, background: RGB): Extract<LayerAdjustment, { kind: K }>;
 export function defaultAdjustment(kind: AdjustmentKind, foreground: RGB, background: RGB): LayerAdjustment {
-  const base: Record<string, unknown> = {
-    kind, hue: 0, saturation: 0, lightness: 0, colorize: false,
-    levels: defaultLevels(), curves: defaultCurves(),
-  };
-  if (kind === 'Gradient Map') base.gradientMapSettings = defaultGradientMap(foreground, background);
-  if (kind === 'Grain') base.grainSettings = defaultGrain(Math.floor(Math.random() * 0x1_0000_0000));
-  return base as LayerAdjustment;
-}
-
-function record(value: LayerAdjustment): Record<string, unknown> { return value as Record<string, unknown>; }
-function setting<T>(r: Record<string, unknown>, key: string, fallback: T): T {
-  return r[key] && typeof r[key] === 'object' ? r[key] as T : fallback;
+  switch (kind) {
+    case 'Hue/Saturation': return { kind, schemaVersion: 1,
+      parameters: { hue: 0, saturation: 0, lightness: 0, colorize: false, settings: defaultHueSaturation() } };
+    case 'Levels': return { kind, schemaVersion: 1, parameters: defaultLevels() };
+    case 'Curves': return { kind, schemaVersion: 1, parameters: defaultCurves() };
+    case 'Exposure': return { kind, schemaVersion: 1, parameters: defaultExposure() };
+    case 'Gradient Map': return { kind, schemaVersion: 1, parameters: defaultGradientMap(foreground, background) };
+    case 'Grain': return { kind, schemaVersion: 1,
+      parameters: defaultGrain(Math.floor(Math.random() * 0x1_0000_0000)) };
+  }
 }
 
 export function resolveAdjustment(value: LayerAdjustment): ResolvedAdjustment {
-  const r = record(value);
-  const hue = typeof r.hue === 'number' ? r.hue : 0;
-  const saturation = typeof r.saturation === 'number' ? r.saturation : 0;
-  const lightness = typeof r.lightness === 'number' ? r.lightness : 0;
-  const colorize = typeof r.colorize === 'boolean' ? r.colorize : false;
+  const hue = value.kind === 'Hue/Saturation' ? value.parameters.hue : 0;
+  const saturation = value.kind === 'Hue/Saturation' ? value.parameters.saturation : 0;
+  const lightness = value.kind === 'Hue/Saturation' ? value.parameters.lightness : 0;
+  const colorize = value.kind === 'Hue/Saturation' ? value.parameters.colorize : false;
   return {
     kind: value.kind, hue, saturation, lightness, colorize,
-    hsvSettings: setting(r, 'hsvSettings', defaultHueSaturation(hue, saturation, lightness, colorize)),
-    levels: setting(r, 'levels', defaultLevels()), curves: setting(r, 'curves', defaultCurves()),
-    exposureSettings: setting(r, 'exposureSettings', defaultExposure()),
-    gradientMapSettings: setting(r, 'gradientMapSettings', defaultGradientMap()),
-    grainSettings: setting(r, 'grainSettings', defaultGrain()),
+    hsvSettings: value.kind === 'Hue/Saturation' ? value.parameters.settings : defaultHueSaturation(),
+    levels: value.kind === 'Levels' ? value.parameters : defaultLevels(),
+    curves: value.kind === 'Curves' ? value.parameters : defaultCurves(),
+    exposureSettings: value.kind === 'Exposure' ? value.parameters : defaultExposure(),
+    gradientMapSettings: value.kind === 'Gradient Map' ? value.parameters : defaultGradientMap(),
+    grainSettings: value.kind === 'Grain' ? value.parameters : defaultGrain(),
   };
 }
 
@@ -129,20 +127,24 @@ export function isValidCurves(value: CurvesSettings): boolean {
 
 /** `LayerAdjustment.isValid`; malformed imported project values are rejected, not silently clamped. */
 export function isValidAdjustment(value: LayerAdjustment): boolean {
-  if (!['Hue/Saturation', 'Levels', 'Curves', 'Exposure', 'Gradient Map', 'Grain'].includes(value.kind)) return false;
-  const a = resolveAdjustment(value), h = a.hsvSettings;
-  const hsv = COLOR_RANGES.includes(h.range) && typeof h.colorize === 'boolean' && typeof h.invertRange === 'boolean'
-    && Object.values(h.adjustments).every((x) => !!x && finiteRange(x.hue, -360, 360)
-      && finiteRange(x.saturation, -100, 100) && finiteRange(x.lightness, -100, 100))
-    && Object.values(h.bands).every((b) => !!b && [b.falloffStart, b.rangeStart, b.rangeEnd, b.falloffEnd].every(Number.isFinite));
-  const levels = a.levels.ranges.length === 4 && LEVELS_CHANNELS.includes(a.levels.channel)
-    && a.levels.ranges.every((x) => { const n = normalizeLevelRange(x); return x.black === n.black && x.gamma === n.gamma
-      && x.white === n.white && x.outputBlack === n.outputBlack && x.outputWhite === n.outputWhite; });
-  const e = a.exposureSettings, g = a.gradientMapSettings, grain = a.grainSettings;
-  return finiteRange(a.hue, -360, 360) && finiteRange(a.saturation, -100, 100) && finiteRange(a.lightness, -100, 100)
-    && hsv && levels && isValidCurves(a.curves)
-    && finiteRange(e.exposure, -20, 20) && finiteRange(e.offset, -0.5, 0.5) && finiteRange(e.gamma, 0.01, 9.99)
-    && [g.shadows, g.highlights].every((c) => finiteRange(c.red, 0, 1) && finiteRange(c.green, 0, 1) && finiteRange(c.blue, 0, 1))
-    && finiteRange(grain.amount, 0, 100) && finiteRange(grain.size, 0.5, 20) && finiteRange(grain.roughness, 0, 100)
-    && Number.isInteger(grain.seed) && grain.seed >= 0 && grain.seed <= 0xffff_ffff;
+  if (!value || typeof value !== 'object' || value.schemaVersion !== 1
+    || !['Hue/Saturation', 'Levels', 'Curves', 'Exposure', 'Gradient Map', 'Grain'].includes(value.kind)
+    || !value.parameters || typeof value.parameters !== 'object') return false;
+  try {
+    const a = resolveAdjustment(value), h = a.hsvSettings;
+    const hsv = COLOR_RANGES.includes(h.range) && typeof h.colorize === 'boolean' && typeof h.invertRange === 'boolean'
+      && Object.values(h.adjustments).every((x) => !!x && finiteRange(x.hue, -360, 360)
+        && finiteRange(x.saturation, -100, 100) && finiteRange(x.lightness, -100, 100))
+      && Object.values(h.bands).every((b) => !!b && [b.falloffStart, b.rangeStart, b.rangeEnd, b.falloffEnd].every(Number.isFinite));
+    const levels = a.levels.ranges.length === 4 && LEVELS_CHANNELS.includes(a.levels.channel)
+      && a.levels.ranges.every((x) => { const n = normalizeLevelRange(x); return x.black === n.black && x.gamma === n.gamma
+        && x.white === n.white && x.outputBlack === n.outputBlack && x.outputWhite === n.outputWhite; });
+    const e = a.exposureSettings, g = a.gradientMapSettings, grain = a.grainSettings;
+    return finiteRange(a.hue, -360, 360) && finiteRange(a.saturation, -100, 100) && finiteRange(a.lightness, -100, 100)
+      && hsv && levels && isValidCurves(a.curves)
+      && finiteRange(e.exposure, -20, 20) && finiteRange(e.offset, -0.5, 0.5) && finiteRange(e.gamma, 0.01, 9.99)
+      && [g.shadows, g.highlights].every((c) => finiteRange(c.red, 0, 1) && finiteRange(c.green, 0, 1) && finiteRange(c.blue, 0, 1))
+      && finiteRange(grain.amount, 0, 100) && finiteRange(grain.size, 0.5, 20) && finiteRange(grain.roughness, 0, 100)
+      && Number.isInteger(grain.seed) && grain.seed >= 0 && grain.seed <= 0xffff_ffff;
+  } catch { return false; }
 }

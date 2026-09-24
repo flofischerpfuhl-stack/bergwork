@@ -16,8 +16,9 @@ import {
 } from '../core/document';
 import { isValidTransform, LAYER_SAMPLINGS, type LayerTransform } from '../core/geometry';
 import { Raster } from '../core/raster';
+import { vectorPathsForShape } from '../core/shape';
 import { decodePng, encodePng, PngError, type PngResult } from './png';
-import { ProjectError } from './project';
+import { legacyAdjustmentProjection, migrateLegacyAdjustment, ProjectError } from './project';
 import { sha256Hex } from './sha256';
 
 export const COMP_FORMAT = 'com.compositor.project';
@@ -45,7 +46,7 @@ export interface CompLayerRecord {
   maskFile?: string;
   maskEnabled?: boolean;
   maskSourceID?: string;
-  adjustment?: LayerAdjustment;
+  adjustment?: unknown;
   maskPlacement?: LayerTransform;
   maskLinked?: boolean;
   shape?: LayerShape;
@@ -80,6 +81,7 @@ interface ParsedLayer extends CompLayerRecord {
   blend: BlendMode;
   parentID?: string;
   maskSourceID?: string;
+  adjustment?: LayerAdjustment;
 }
 
 function invalid(_detail: string): never {
@@ -139,15 +141,11 @@ function parseShape(value: unknown): LayerShape {
     || !finite(value.red) || !finite(value.green) || !finite(value.blue) || !finite(value.cornerRadius)) {
     invalid('shape');
   }
-  return value as LayerShape;
+  return value as unknown as LayerShape;
 }
 
 function parseAdjustment(value: unknown): LayerAdjustment {
-  const adjustment = value as LayerAdjustment;
-  let valid = false;
-  try { valid = object(value) && isValidAdjustment(adjustment); } catch { /* malformed nested Codable record */ }
-  if (!valid) invalid('adjustment');
-  return adjustment;
+  try { return migrateLegacyAdjustment(value); } catch { invalid('adjustment'); }
 }
 
 function safeMember(path: string): boolean {
@@ -358,16 +356,19 @@ export async function readCompPackage(input: Map<string, Uint8Array>): Promise<L
       visible: record.isVisible,
       locked: false,
       parentId: record.parentID ?? null,
-      isGroup: record.isGroup === true,
+      kind: record.isGroup === true ? 'group' : record.adjustment ? 'adjustment' : record.shape && raster ? 'vector' : 'pixel',
       opacity: record.opacity ?? 1,
       blendMode: record.blend,
       transform: record.transform,
       raster,
       mask,
       maskSourceId: record.maskSourceID ?? null,
-      adjustment: record.adjustment ?? null,
+      ...(record.adjustment ? { adjustment: record.adjustment } : {}),
       // Upstream only restores a live shape when its ordinary raster also exists.
-      shape: record.shape && raster ? record.shape : null,
+      ...(record.shape && raster ? { sourceShape: record.shape,
+        paths: vectorPathsForShape(record.shape.kind, raster.width, raster.height, record.shape.cornerRadius),
+        style: { fill: { kind: 'solid' as const, schemaVersion: 1 as const,
+          color: { red: record.shape.red, green: record.shape.green, blue: record.shape.blue } }, stroke: null } } : {}),
     }));
   }
 
@@ -420,15 +421,15 @@ function assertWritableDocument(document: CanvasDocument, activeLayerId: string 
     ids.add(id);
     if (typeof layer.name !== 'string' || !layer.name.trim() || encoder.encode(layer.name).byteLength > 16_384) invalid('layer name');
     if (!isValidTransform(layer.transform)) invalid('layer transform');
-    if (!finite(layer.opacity) || layer.opacity < 0 || layer.opacity > 1 || (layer.isGroup && (layer.opacity !== 1 || layer.blendMode !== 'normal'))) {
+    if (!finite(layer.opacity) || layer.opacity < 0 || layer.opacity > 1 || (layer.kind === 'group' && (layer.opacity !== 1 || layer.blendMode !== 'normal'))) {
       invalid('layer appearance');
     }
     if (!blendToLabel.has(layer.blendMode)) invalid('blend mode');
-    if (layer.isGroup && layer.raster) invalid('group with image');
+    if (layer.kind === 'group' && layer.raster) invalid('group with image');
     if (layer.raster && layer.raster.channels !== 4) invalid('image is not RGBA');
-    if (layer.adjustment && (layer.isGroup || layer.raster)) invalid('adjustment layer');
-    if (layer.adjustment) parseAdjustment(layer.adjustment);
-    if (layer.shape) parseShape(layer.shape);
+    if (layer.kind === 'adjustment' && layer.raster) invalid('adjustment layer');
+    if (layer.kind === 'adjustment' && !isValidAdjustment(layer.adjustment)) invalid('adjustment layer');
+    if (layer.kind === 'vector' && layer.sourceShape) parseShape(layer.sourceShape);
     if (layer.raster) {
       if (layer.raster.width > MAX_SIDE || layer.raster.height > MAX_SIDE) tooLarge();
       imagePixels += layer.raster.width * layer.raster.height;
@@ -464,7 +465,7 @@ function layerRecord(layer: Layer): CompLayerRecord {
     transform: layer.transform,
     ...(layer.raster ? { imageFile: `${id}.png` } : {}),
     ...(layer.parentId ? { parentID: layer.parentId } : {}),
-    isGroup: layer.isGroup,
+    isGroup: layer.kind === 'group',
     opacity: layer.opacity,
     blendMode: blendToLabel.get(layer.blendMode)!,
     ...(layer.mask ? {
@@ -474,8 +475,8 @@ function layerRecord(layer: Layer): CompLayerRecord {
       maskLinked: layer.mask.linked,
     } : {}),
     ...(layer.maskSourceId ? { maskSourceID: layer.maskSourceId } : {}),
-    ...(layer.adjustment ? { adjustment: layer.adjustment } : {}),
-    ...(layer.shape && layer.raster ? { shape: layer.shape } : {}),
+    ...(layer.kind === 'adjustment' ? { adjustment: legacyAdjustmentProjection(layer.adjustment) } : {}),
+    ...(layer.kind === 'vector' && layer.sourceShape && layer.raster ? { shape: layer.sourceShape } : {}),
   };
   return record;
 }

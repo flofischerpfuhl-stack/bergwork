@@ -1,5 +1,6 @@
 import type { Point, Rect } from '../geometry';
 import type { EditorSession } from '../session';
+import { withLayerRaster } from '../document';
 import { BlurStroke, type BlurSettings } from './blur';
 import { editableTarget } from './common';
 import { WarpStroke, type RetouchStroke, type WarpMode, type WarpSettings } from './warp';
@@ -24,7 +25,7 @@ export function beginRetouch(session: EditorSession, point: Point, mode: Retouch
   cancelRetouch(session);
   const layer = session.activeLayer;
   if (!session.canEditLayers || session.selectedLayerIds.size !== 1 || !layer
-      || (!session.isMaskSelected && (layer.isGroup || layer.adjustment))
+      || (!session.isMaskSelected && (layer.kind === 'group' || layer.adjustment))
       || (mode !== 'blur' && session.isMaskSelected)) return [];
   const document = session.document;
   if (!document) return [];
@@ -65,7 +66,7 @@ export function commitRetouch(session: EditorSession): boolean {
     session.beginEdit(name);
     const document = session.document;
     if (document) session.replaceDocument({ ...document, layers: document.layers.map((item) => item.id === active.layerId
-      ? { ...item, raster, transform: active.transform, shape: null } : item) });
+      ? withLayerRaster(item, raster, active.transform) : item) });
     session.endEdit();
   }
   return true;

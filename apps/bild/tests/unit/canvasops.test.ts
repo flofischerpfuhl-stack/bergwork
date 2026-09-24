@@ -169,10 +169,10 @@ describe('ImageResizer.swift', () => {
     const base = document(4, 2);
     const mask = Raster.fromPixels(4, 2, 1, Uint8Array.from([255, 0, 0, 0, 0, 0, 0, 255]));
     const pixel = { ...base.layers[0]!, parentId: 'group', mask: { raster: mask, enabled: false, linked: true, placement: null } };
-    const group = newLayer({ id: 'group', name: 'Folder', isGroup: true, visible: false, opacity: .4,
+    const group = newLayer({ id: 'group', name: 'Folder', kind: 'group', visible: false, opacity: .4,
       transform: makeTransform({ x: 0, y: 0 }, { width: 4, height: 2 }) });
     const output = resizeImage({ ...base, layers: [group, pixel] }, 8, 4, 72, 'Nearest');
-    expect(output.layers[0]!.isGroup).toBe(true);
+    expect(output.layers[0]!.kind).toBe('group');
     expect(output.layers[0]!.visible).toBe(false);
     expect(output.layers[0]!.opacity).toBe(.4);
     expect(output.layers[1]!.mask!.raster.pixel(0, 0)).toEqual([255]);

@@ -12,7 +12,7 @@ describe('document model v2 (PRODUCT-PLAN A2)', () => {
       newLayer({ ...common('pixel', 'Pixel'), kind: 'pixel', raster: Raster.blank(8, 6, 4) }),
       newLayer({ ...common('group', 'Group'), kind: 'group' }),
       newLayer({ ...common('adjustment', 'Exposure'), kind: 'adjustment', adjustment: {
-        kind: 'Exposure', schemaVersion: 1, exposureSettings: { exposure: 1, offset: 0, gamma: 1 },
+        kind: 'Exposure', schemaVersion: 1, parameters: { exposure: 1, offset: 0, gamma: 1 },
       } }),
       newLayer({ ...common('fill', 'Fill'), kind: 'fill', fill: {
         kind: 'solid', schemaVersion: 1, color: { red: 1, green: 0.5, blue: 0 },
@@ -25,7 +25,11 @@ describe('document model v2 (PRODUCT-PLAN A2)', () => {
     ];
     expect(layers.map((layer) => layer.kind)).toEqual(['pixel', 'group', 'adjustment', 'fill', 'vector', 'text', 'embedded']);
     expect(layers.every((layer) => layer.fillOpacity === 1 && layer.effects.length === 0 && layer.filters.length === 0)).toBe(true);
-    expect(layers[1]!.isGroup).toBe(true);
+    expect(layers[1]!.kind).toBe('group');
+    expect('isGroup' in layers[1]!).toBe(false);
+    expect('raster' in layers[1]!).toBe(false);
+    expect('adjustment' in layers[0]!).toBe(false);
+    expect('sourceShape' in layers[0]!).toBe(false);
   });
 
   it('keeps artboards above the flat layer stack', () => {

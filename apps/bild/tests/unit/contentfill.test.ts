@@ -112,7 +112,9 @@ describe('Content-Aware Fill (SmartEditTests / Filters.swift)', () => {
     beginContentAwareFill(session, { kernels });
     const pending = previewContentAwareFill(session);
     const replacement = Raster.blank(64, 48, 4), layers = session.document!.layers.slice();
-    layers[layers.length - 1] = { ...layers.at(-1)!, raster: replacement };
+    const last = layers.at(-1);
+    if (last?.kind !== 'pixel') throw new Error('Expected pixel layer');
+    layers[layers.length - 1] = { ...last, raster: replacement };
     session.replaceDocument({ ...session.document!, layers });
     expect(await pending).toBeNull();
     expect(contentFillState(session)).toBeNull();

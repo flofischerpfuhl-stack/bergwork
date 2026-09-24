@@ -197,7 +197,7 @@ function targetGeometry(options: BeginStrokeOptions): TargetGeometry {
   const isMask = options.target === 'mask';
   const placedMask = isMask && options.layer.mask?.placement ? options.layer.mask : null;
   const base = placedMask ? maskTransform(options.layer) : options.layer.transform;
-  const layerRaster = options.layer.raster;
+  const layerRaster = options.layer.raster ?? null;
   const source = isMask ? options.layer.mask?.raster ?? null : layerRaster;
   const originalWidth = placedMask?.raster.width ?? layerRaster?.width
     ?? Math.max(1, Math.round(options.layer.transform.size.width));

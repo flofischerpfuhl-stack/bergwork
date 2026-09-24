@@ -16,8 +16,8 @@ export interface CompositeOptions {
   readonly transform?: (layer: Layer) => LayerTransform;
   readonly maskPlacement?: (layer: Layer) => LayerTransform | null;
   readonly blendMode?: (layer: Layer) => BlendMode;
-  readonly raster?: (layer: Layer) => Raster | null;
-  readonly maskRaster?: (layer: Layer) => Raster | null;
+  readonly raster?: (layer: Layer) => Raster | null | undefined;
+  readonly maskRaster?: (layer: Layer) => Raster | null | undefined;
   readonly sampler?: (raster: Raster, sampling: LayerSampling, drawnWidth: number) => RasterSampler;
   readonly adjust?: AdjustmentApplier;
 }
@@ -86,7 +86,7 @@ class BandRenderer {
     if (seed === undefined) { seed = seedForBlend(layer.id); this.blendSeeds.set(layer.id, seed); }
     return seed;
   }
-  private raster(layer: Layer): Raster | null { return this.options.raster?.(layer) ?? layer.raster; }
+  private raster(layer: Layer): Raster | null { return this.options.raster?.(layer) ?? layer.raster ?? null; }
   private maskRaster(layer: Layer): Raster | null { return this.options.maskRaster?.(layer) ?? layer.mask?.raster ?? null; }
   private sampler(raster: Raster, sampling: LayerSampling, drawnWidth: number): RasterSampler {
     return this.options.sampler?.(raster, sampling, drawnWidth) ?? prepareSampler(raster, sampling, drawnWidth);
@@ -246,7 +246,7 @@ class BandRenderer {
   liveCoverage(id: string, x: number, y: number, visiting: Set<string>, documentToOutput?: Affine): number {
     if (visiting.size >= 256 || visiting.has(id)) return 0;
     const layer = this.byId.get(id);
-    if (!layer || layer.isGroup || layer.adjustment) return 0;
+    if (!layer || layer.kind === 'group' || layer.adjustment) return 0;
     visiting.add(id);
     const edge = this.sourceAt(layer, x, y, this.liveSample, documentToOutput);
     let coverage = this.liveSample[3]! * edge * clamp01(layer.opacity)

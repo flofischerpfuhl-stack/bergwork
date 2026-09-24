@@ -127,7 +127,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         'separator',
         { label: t('Transform Layer'), shortcut: 'mod+t', enabled: session.canTransform, run: () => { features.transformCommand ? features.transformCommand.run() : session.beginTransform(); } },
         { label: session.selection ? t('Layer via Copy') : t('Duplicate Layer'), shortcut: 'mod+j',
-          enabled: session.selection ? !!features.layerViaCopy?.enabled() : session.canEditLayers && !!layer && !layer.isGroup,
+          enabled: session.selection ? !!features.layerViaCopy?.enabled() : session.canEditLayers && !!layer && layer.kind !== 'group',
           run: () => { if (session.selection && features.layerViaCopy) features.layerViaCopy.run(); else session.duplicateActiveLayer(); } },
         'separator',
         { label: layer?.maskSourceId ? t('Release Clipping Mask') : t('Create Clipping Mask'), shortcut: 'mod+alt+g',
