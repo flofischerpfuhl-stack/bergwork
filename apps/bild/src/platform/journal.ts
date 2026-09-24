@@ -5,6 +5,7 @@ const MAGIC = 0x314a5746; // "FWJ1", little endian
 const HEADER = 24;
 const ASSET = 1;
 const COMMIT = 2;
+const STRUCTURE = 3;
 
 interface JournalRecord { type: number; key: string; time: number; bytes: Uint8Array }
 
@@ -15,6 +16,7 @@ export interface JournalCommit {
   readonly asset: string;
   readonly size: number;
   readonly command?: string;
+  readonly format?: 'archive' | 'state';
 }
 
 function record(type: number, key: string, time: number, bytes: Uint8Array): Uint8Array {
@@ -88,6 +90,17 @@ export class CrashJournal {
     return commit;
   }
 
+  /** Appends document structure/history only; raster bytes already live in content-addressed tile files. */
+  async appendState(bytes: Uint8Array, metadata: Omit<JournalCommit, 'asset' | 'size' | 'format'>): Promise<JournalCommit> {
+    const asset = sha256Hex(bytes);
+    await this.host.write(this.key, record(STRUCTURE, asset, metadata.time, bytes), { append: true });
+    const commit: JournalCommit = { ...metadata, asset, size: bytes.byteLength, format: 'state' };
+    await this.host.write(this.key, record(COMMIT, asset, metadata.time,
+      new TextEncoder().encode(JSON.stringify(commit))), { append: true });
+    await this.host.flush();
+    return commit;
+  }
+
   async commits(): Promise<readonly JournalCommit[]> {
     const result: JournalCommit[] = [];
     for (const item of await this.records()) {
@@ -103,7 +116,7 @@ export class CrashJournal {
 
   async latest(excludingInstance?: string): Promise<{ commit: JournalCommit; bytes: Uint8Array } | null> {
     const records = await this.records();
-    const assets = new Map(records.filter((item) => item.type === ASSET).map((item) => [item.key, item.bytes]));
+    const assets = new Map(records.filter((item) => item.type === ASSET || item.type === STRUCTURE).map((item) => [item.key, item.bytes]));
     for (let index = records.length - 1; index >= 0; index--) {
       const item = records[index]!;
       if (item.type !== COMMIT) continue;

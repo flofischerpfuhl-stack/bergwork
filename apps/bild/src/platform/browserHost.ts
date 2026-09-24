@@ -73,7 +73,8 @@ export function createBrowserHost(): FileTargetHost {
   } : {};
   return {
     ...targets,
-    ...(OpfsScratchHost.available() ? { scratchHost: new BrowserScratchHost(), editorProfile: 'lite' as const } : {}),
+    ...(OpfsScratchHost.available() || typeof indexedDB !== 'undefined'
+      ? { scratchHost: new BrowserScratchHost(), editorProfile: 'lite' as const } : {}),
     async chooseImages() {
       return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,image/webp,image/avif,image/gif,.heic,.heif,.tif,.tiff,.webp,.avif,.gif', true);
     },

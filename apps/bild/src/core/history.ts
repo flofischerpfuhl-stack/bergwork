@@ -160,7 +160,10 @@ export class DocumentHistory {
       }
       if (document.selection) rasters.push(document.selection.mask);
       for (const raster of rasters) {
-        for (const tile of raster.tiles) {
+        for (let index = 0; index < raster.cols * raster.rows; index++) {
+          // Swapped history tiles occupy no RAM and must not be faulted in just to enforce the RAM cap.
+          if (raster.tileResidency(index) === 'swapped') continue;
+          const tile = raster.tiles[index];
           if (tile && !seen.has(tile)) { seen.add(tile); if (count) bytes += tile.byteLength; }
         }
       }

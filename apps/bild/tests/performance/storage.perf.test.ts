@@ -27,6 +27,8 @@ describe('swapped tile working set', () => {
     }
     samples.sort((a, b) => a - b);
     const p95 = samples[Math.ceil(samples.length * 0.95) - 1]!;
+    console.info('storage working set', { p95Ms: p95, residentBytes: cache.residentBytes,
+      scratchBytes: cache.persistedBytes, logicalPixels: 4_000_000_000 });
     expect(p95).toBeLessThanOrEqual(33);
   });
 });

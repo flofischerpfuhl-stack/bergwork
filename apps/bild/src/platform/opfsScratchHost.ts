@@ -96,10 +96,64 @@ export class OpfsScratchHost implements ScratchHost {
   }
 }
 
+/** Persistent fallback for engines without OPFS (notably older Firefox/WebKit builds). */
+class IndexedDbScratchHost implements ScratchHost {
+  readonly kind = 'indexeddb' as const;
+  private constructor(private readonly db: IDBDatabase) {}
+
+  static create(): Promise<IndexedDbScratchHost> {
+    if (typeof indexedDB === 'undefined') return Promise.reject(new Error('Persistent browser scratch storage is unavailable.'));
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('fernwork-scratch', 1);
+      request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains('files')) request.result.createObjectStore('files'); };
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(new IndexedDbScratchHost(request.result));
+    });
+  }
+
+  private request<T>(mode: IDBTransactionMode, action: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      const transaction = this.db.transaction('files', mode);
+      const request = action(transaction.objectStore('files'));
+      let result: T;
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => { result = request.result; };
+      transaction.oncomplete = () => resolve(result);
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error ?? new Error('Scratch transaction was aborted'));
+    });
+  }
+
+  async read(key: string): Promise<Uint8Array | null> {
+    requireScratchKey(key);
+    const value = await this.request<ArrayBuffer | Uint8Array | undefined>('readonly', (store) => store.get(key));
+    if (!value) return null;
+    return value instanceof Uint8Array ? value.slice() : new Uint8Array(value.slice(0));
+  }
+  async write(key: string, bytes: Uint8Array, options: { append?: boolean } = {}): Promise<void> {
+    requireScratchKey(key);
+    let value = bytes.slice();
+    if (options.append) {
+      const previous = await this.read(key);
+      if (previous) { value = new Uint8Array(previous.byteLength + bytes.byteLength); value.set(previous); value.set(bytes, previous.byteLength); }
+    }
+    await this.request('readwrite', (store) => store.put(value, key));
+  }
+  async remove(key: string): Promise<void> { requireScratchKey(key); await this.request('readwrite', (store) => store.delete(key)); }
+  async list(prefix = ''): Promise<readonly string[]> {
+    const keys = await this.request<IDBValidKey[]>('readonly', (store) => store.getAllKeys());
+    return keys.filter((key): key is string => typeof key === 'string' && key.startsWith(prefix)).sort();
+  }
+  async flush(): Promise<void> { /* IndexedDB resolves writes after commit scheduling. */ }
+  async close(): Promise<void> { this.db.close(); }
+}
+
 /** Lazily opens OPFS so the synchronous HostAdapter factory needs no startup I/O. */
 export class BrowserScratchHost implements ScratchHost {
   readonly kind = 'opfs' as const;
-  private readonly host = OpfsScratchHost.create();
+  private readonly host: Promise<ScratchHost> = (OpfsScratchHost.available()
+    ? OpfsScratchHost.create().catch(() => IndexedDbScratchHost.create())
+    : IndexedDbScratchHost.create());
   async read(key: string): Promise<Uint8Array | null> { return (await this.host).read(key); }
   async write(key: string, bytes: Uint8Array, options?: { append?: boolean }): Promise<void> {
     return (await this.host).write(key, bytes, options);

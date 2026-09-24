@@ -40,14 +40,17 @@ export class SoftwareDownsampleCache {
 
   level(factor: number): number { return downsampleLevel(factor); }
 
-  sampler(raster: Raster, sampling: LayerSampling, drawnWidth: number): RasterSampler {
-    const level = sampling === 'Nearest' ? 0 : this.level(drawnWidth / Math.max(1, raster.width));
+  sampler(raster: Raster, sampling: LayerSampling, drawnWidth: number,
+    requestHydration?: (raster: Raster) => void): RasterSampler {
+    const source = raster.hasSwappedTiles ? raster.reducedCopy ?? raster : raster;
+    if (source !== raster && drawnWidth > source.width) requestHydration?.(raster);
+    const level = sampling === 'Nearest' ? 0 : this.level(drawnWidth / Math.max(1, source.width));
     const key = `${sampling}:${level}`;
     let variants = this.entries.get(raster);
     if (!variants) { variants = new Map(); this.entries.set(raster, variants); }
     let selected = variants.get(key);
     if (!selected) {
-      selected = prepareSampler(raster, sampling, drawnWidth);
+      selected = prepareSampler(source, sampling, drawnWidth);
       // A raster needs no more than the three level-zero sampling modes plus six mip levels.
       if (variants.size >= 9) variants.delete(variants.keys().next().value as string);
       variants.set(key, selected);
@@ -65,6 +68,7 @@ export class SoftwareCompositor {
   readonly downsampleCache = new SoftwareDownsampleCache();
   adjustmentPrograms: AdjustmentApplier = applyAdjustment;
   skippedAdjustments = 0;
+  private requestHydration: ((raster: Raster) => void) | null = null;
   private readonly rasterSurfaces = new WeakMap<Raster, Map<string, OffscreenCanvas>>();
   private constructor(private readonly canvas: SoftwareCanvas, private readonly context: SoftwareContext) {}
 
@@ -82,11 +86,15 @@ export class SoftwareCompositor {
     if (this.canvas.height !== height) this.canvas.height = height;
   }
 
+  configureResidency(options: { requestHydration?: (raster: Raster) => void }): void {
+    this.requestHydration = options.requestHydration ?? null;
+  }
+
   private options(hooks: CompositeHooks): CompositeOptions {
     return {
       transform: hooks.transform, maskPlacement: hooks.maskPlacement, blendMode: hooks.blendMode,
       raster: hooks.raster, maskRaster: hooks.maskRaster, adjust: this.adjustmentPrograms,
-      sampler: (raster, sampling, drawnWidth) => this.downsampleCache.sampler(raster, sampling, drawnWidth),
+      sampler: (raster, sampling, drawnWidth) => this.downsampleCache.sampler(raster, sampling, drawnWidth, this.requestHydration ?? undefined),
     };
   }
 
@@ -125,13 +133,15 @@ export class SoftwareCompositor {
   }
 
   private rasterSurface(raster: Raster, sampling: LayerSampling, drawnWidth: number): OffscreenCanvas {
-    const sampler = this.downsampleCache.sampler(raster, sampling, drawnWidth), key = `${sampling}:${sampler.level}`;
+    const sampler = this.downsampleCache.sampler(raster, sampling, drawnWidth, this.requestHydration ?? undefined);
+    const sourceRaster = raster.hasSwappedTiles ? raster.reducedCopy ?? raster : raster;
+    const key = `${sampling}:${sampler.level}:${sourceRaster === raster ? 'full' : 'lod'}`;
     let variants = this.rasterSurfaces.get(raster);
     if (!variants) { variants = new Map(); this.rasterSurfaces.set(raster, variants); }
     const existing = variants.get(key); if (existing) return existing;
     const canvas = new OffscreenCanvas(sampler.width, sampler.height), context = canvas.getContext('2d');
     if (!context) throw new Error('Canvas 2D is unavailable for a software mip level.');
-    const native = sampler.reduced?.bytes ?? raster.toPixelsNative();
+    const native = sampler.reduced?.bytes ?? sourceRaster.toPixelsNative();
     const source = native instanceof Uint16Array ? rgba16To8(native) : native;
     const straight = new Uint8ClampedArray(source.length);
     if (!sampler.reduced) straight.set(source);

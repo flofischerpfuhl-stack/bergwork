@@ -5,14 +5,14 @@
 
 import type { HostAdapter, LayerId, ProjectManifestV1 } from '../../contracts';
 import type { EditorHandleV2, ProjectManifestV2 } from '../../contracts-v2';
-import { MAX_SIDE, type CanvasDocument } from '../core/document';
+import { documentLimits, type CanvasDocument, type DocumentLimits } from '../core/document';
 import { Raster, alphaBounds, cropRaster } from '../core/raster';
-import type { EditorSession, SessionServices, Tool } from '../core/session';
+import type { EditorSession, RasterCommandKind, SessionServices, Tool } from '../core/session';
 import type { ReactNode } from 'react';
 import { setShortcutLocale, type FeatureRegistry } from './menus';
 import type { IconName } from './icons';
 import type { CanvasView } from './canvas/CanvasView';
-import type { Modifiers, ToolHandler } from './canvas/tools';
+import type { Modifiers, ToolContext, ToolHandler } from './canvas/tools';
 import type { Point } from '../core/geometry';
 import { pixelClipboard, type ClipboardHooks, type PixelClipboardEntry } from '../core/clipboard';
 import { failureMessage, ImportQueue } from '../core/importQueue';
@@ -29,7 +29,8 @@ import { sha256Hex } from '../io/sha256';
 import type { GpuCompositor } from '../render/gpuCompositor';
 import type { FileTargetHost, SaveTarget } from '../platform/browserHost';
 import type { ImageDecoderHost } from '../platform/imageDecoder';
-import type { ScratchHostCapability } from '../platform/scratchHost';
+import { LITE_TILE_BUDGET, PRO_TILE_BUDGET, type ScratchHostCapability } from '../platform/scratchHost';
+import { RasterResidency, TileCache } from '../core/storage';
 import { translator, type Locale } from './i18n';
 import { createUiStore, type Dialog, type UiStore } from './store';
 import { describeError, isCancellation } from './errors';
@@ -83,7 +84,7 @@ export class EditorController {
   canvasView: CanvasView | null = null;
   private canvasWaiters: (() => void)[] = [];
   /** Commands provided by feature modules (selection, brushes, adjustments…), keyed by menu command. */
-  features: FeatureRegistry = {};
+  features: FeatureRegistry;
   /** Tools with a working canvas handler; the rest are shown disabled. */
   availableTools = new Set<Tool>(['move', 'hand', 'zoom', 'idle']);
   contextBars: Partial<Record<Tool, (session: EditorSession) => ReactNode>> = {};
@@ -156,6 +157,11 @@ export class EditorController {
     else this.session.addLayerMask(revealing);
   }
   jpegOptions: JpegOptions = { ...DEFAULT_JPEG, quality: storedQuality() };
+  readonly residency: RasterResidency | null;
+  readonly tileBudgetBytes: number;
+  readonly gpuTextureBudgetBytes: number;
+  readonly limits: DocumentLimits;
+  private readonly hydrationPending = new WeakSet<Raster>();
 
   constructor(host: HostAdapter, locale: Locale, theme: 'dark' | 'light') {
     this.host = host;
@@ -163,6 +169,14 @@ export class EditorController {
     this.theme = theme;
     this.t = translator(locale);
     setShortcutLocale(locale);
+    const scratch = host as HostAdapter & Partial<ScratchHostCapability>;
+    const profile = scratch.editorProfile ?? 'lite';
+    this.limits = documentLimits(profile);
+    this.tileBudgetBytes = scratch.tileBudgetBytes ?? (profile === 'pro' ? PRO_TILE_BUDGET : LITE_TILE_BUDGET);
+    this.gpuTextureBudgetBytes = scratch.gpuTextureBudgetBytes ?? Math.min(1024 * 1024 * 1024, Math.floor(this.tileBudgetBytes / 4));
+    this.residency = scratch.scratchHost ? new RasterResidency(new TileCache(scratch.scratchHost, this.tileBudgetBytes)) : null;
+    this.features = this.hydratingFeatureRegistry();
+    this.canvasSetups.push((view) => this.installHydratingTools(view));
     this.imports = new ImportQueue((bytes, remainingPixels) => this.decodeImage(bytes, remainingPixels));
     const services: SessionServices = {
       flatten: async (document) => this.flatten(document),
@@ -173,20 +187,118 @@ export class EditorController {
         this.t('Bake keeps the current masked appearance in the dependent layers’ pixels. Remove Links reveals their pixels. You can undo either choice.'),
         [{ label: this.t('Bake and Delete'), value: 'bake', role: 'default' }, { label: this.t('Cancel'), value: 'cancel', role: 'cancel' },
           { label: this.t('Remove Links and Delete'), value: 'unlink' }])) as 'bake' | 'unlink' | 'cancel',
+      ...(this.residency ? { residency: this.residency } : {}),
+      limits: this.limits,
     };
     this.workspace = new ProjectWorkspace(services);
   }
 
   /** Uses optional capabilities carried by the mount host without widening contracts.ts. */
   decodeImage(bytes: Uint8Array, remainingPixels: number) {
-    return decodeImageFile(bytes, remainingPixels, { host: this.host as HostAdapter & ImageDecoderHost });
+    return decodeImageFile(bytes, remainingPixels, { host: this.host as HostAdapter & ImageDecoderHost, maxSide: this.limits.maxSide });
   }
 
   get session(): EditorSession { return this.workspace.current.session; }
 
   attachCanvas(canvas: CanvasHost | null): void {
     this.canvas = canvas;
-    if (canvas) { for (const waiter of this.canvasWaiters.splice(0)) waiter(); }
+    if (canvas) {
+      canvas.gpu?.configureResidency({ textureByteBudget: this.gpuTextureBudgetBytes,
+        requestHydration: (raster) => this.requestRasterHydration(raster) });
+      for (const waiter of this.canvasWaiters.splice(0)) waiter();
+    }
+  }
+
+  private commandKind(command: string): RasterCommandKind {
+    if (command === 'copyMerged') return 'clipboardMerged';
+    if (command === 'copy' || command === 'cut' || command === 'paste' || command === 'layerViaCopy') return 'clipboard';
+    if (command.startsWith('fill') || command === 'clearSelection') return 'fill';
+    if (['gaussianBlur', 'motionBlur', 'noise', 'lensCorrection', 'removeBackground', 'contentAwareFill'].includes(command)) return 'filter';
+    if (['levels', 'curves', 'hueSaturation', 'exposure', 'gradientMap', 'grain', 'invert', 'editAdjustment'].includes(command)) return 'adjustment';
+    if (command === 'transformCommand') return 'transform';
+    return 'fill';
+  }
+
+  /** All menu feature modules pass through this one async hydration boundary. */
+  private hydratingFeatureRegistry(): FeatureRegistry {
+    const target: FeatureRegistry = {};
+    return new Proxy(target, {
+      set: (registry, property, value: FeatureRegistry[string]) => {
+        if (typeof property !== 'string' || !value) return Reflect.set(registry, property, value);
+        const original = value;
+        return Reflect.set(registry, property, { ...original, run: () => {
+          void this.session.runHydrated(this.commandKind(property), () => original.run()).catch((error) => this.reportError('hydrate-failed', error));
+        } });
+      },
+    });
+  }
+
+  private installHydratingTools(view: CanvasView): void {
+    const target = view.tools;
+    const wrappers = new WeakMap<ToolHandler, ToolHandler>();
+    view.tools = new Proxy(target, {
+      get: (registry, property, receiver) => {
+        const handler = Reflect.get(registry, property, receiver) as ToolHandler | undefined;
+        if (!handler || property === 'hand' || property === 'zoom' || property === 'idle') return handler;
+        let wrapped = wrappers.get(handler);
+        if (!wrapped) { wrapped = this.hydratingTool(handler, property === 'move' ? 'transform' : 'brush'); wrappers.set(handler, wrapped); }
+        return wrapped;
+      },
+    });
+  }
+
+  /** Pointer samples are queued from down through up while the target rasters hydrate. */
+  private hydratingTool(handler: ToolHandler, kind: RasterCommandKind): ToolHandler {
+    let queue: (() => void)[] = [];
+    let ready = false;
+    let finish: (() => void) | null = null;
+    let failed = false;
+    const enqueue = (action: () => void) => { if (ready) action(); else if (!failed) queue.push(action); };
+    return {
+      down: (context: ToolContext) => {
+        queue = [() => handler.down(context)]; ready = false; failed = false;
+        let busy = false;
+        const timer = setTimeout(() => { busy = true; context.session.isProjectBusy = true; context.session.notify('ui'); }, 150);
+        void context.session.runHydrated(kind, () => new Promise<void>((resolve) => {
+          clearTimeout(timer);
+          if (busy) { context.session.isProjectBusy = false; context.session.notify('ui'); }
+          ready = true;
+          for (const action of queue.splice(0)) action();
+          finish = resolve;
+        })).catch((error) => {
+          clearTimeout(timer); failed = true; queue = [];
+          if (busy) { context.session.isProjectBusy = false; context.session.notify('ui'); }
+          this.reportError('hydrate-failed', error);
+        });
+      },
+      move: (context) => enqueue(() => handler.move(context)),
+      up: (context) => enqueue(() => {
+        handler.up(context);
+        const resolve = finish; finish = null; ready = false;
+        if (!resolve) return;
+        if (!context.session.history.isInTransaction) { resolve(); return; }
+        let off: (() => void) | null = null;
+        off = context.session.subscribe(() => {
+          if (context.session.history.isInTransaction) return;
+          off?.(); resolve();
+        });
+      }),
+      cancel: (session) => enqueue(() => { handler.cancel(session); finish?.(); finish = null; ready = false; }),
+      ...(handler.hover ? { hover: (context: ToolContext) => handler.hover!(context) } : {}),
+      ...(handler.overlayOnly ? { overlayOnly: (session: EditorSession) => handler.overlayOnly!(session) } : {}),
+      ...(handler.autoscrolls ? { autoscrolls: (session: EditorSession) => handler.autoscrolls!(session) } : {}),
+    };
+  }
+
+  private requestRasterHydration(raster: Raster): void {
+    if (!this.residency || this.hydrationPending.has(raster)) return;
+    this.hydrationPending.add(raster);
+    void this.residency.ensureResident([raster]).then((lease) => {
+      this.canvas?.redraw();
+      const release = () => { lease.release(); this.hydrationPending.delete(raster); };
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => requestAnimationFrame(release));
+      else setTimeout(release, 32);
+    }, (error) => { this.hydrationPending.delete(raster); this.host.reportError({ code: 'hydrate-failed', message: (error as Error).message }); });
   }
   private async readyCanvas(): Promise<CanvasHost> {
     if (this.canvas) return this.canvas;
@@ -326,7 +438,7 @@ export class EditorController {
       this.installLoaded(loaded.document, loaded.activeLayerId, name?.replace(/\.comp$/i, '') ?? loaded.name);
       return;
     }
-    const loaded = await readArchive(blob, (data, mime) => browserDecode(data, mime));
+    const loaded = await readArchive(blob, (data, mime) => browserDecode(data, mime), this.limits);
     const tab = this.workspace.createTab(name ?? loaded.name);
     tab.session.installProject(loaded.document, loaded.activeLayerId, name ?? loaded.name, loaded.history);
     this.workspace.adopt(tab);
@@ -421,9 +533,11 @@ export class EditorController {
     session.commitTransform();
     const final = session.document ?? document;
     const name = session.projectName ?? this.workspace.current.title;
-    // The worker populates the encoded-raster cache; the cheap second pass adds the command/tile history.
-    await encodeArchive(final, name, session.activeLayerId);
-    return writeArchive(final, name, session.activeLayerId, this.saveHistoryWithProject ? session.history.exportState() : undefined).blob;
+    return session.runHydrated('save', async () => {
+      // The worker populates the encoded-raster cache; the cheap second pass adds the command/tile history.
+      await encodeArchive(final, name, session.activeLayerId);
+      return writeArchive(final, name, session.activeLayerId, this.saveHistoryWithProject ? session.history.exportState() : undefined).blob;
+    });
   }
 
   // MARK: Crash journal recovery (ScratchHost / OPFS)
@@ -447,7 +561,21 @@ export class EditorController {
             { label: this.t('Later'), value: 'later', role: 'cancel' }]);
         if (answer === 'recover') {
           for (const record of previous) {
-            try { await this.openArchive(record.archive, record.name); await this.recovery.remove(record.id); } catch (error) { this.reportError('recovery-failed', error); }
+            try {
+              if (record.kind === 'state' && this.residency) {
+                const loaded = await this.recovery.recover(record, this.residency);
+                const rasters = documentRasters(loaded.document);
+                const bytes = rasters.reduce((sum, raster) => sum + this.residency!.describe(raster).tiles.reduce((n, tile) => n + (tile?.byteLength ?? 0), 0), 0);
+                // Current thumbnails are synchronous. Keep a modest recovered document pinned for
+                // its first render; large documents stay on compositor LODs and hydrate on demand.
+                const firstFrame = bytes <= 64 * 1024 * 1024 ? await this.residency.ensureResident(rasters) : null;
+                const tab = this.workspace.createTab(loaded.name);
+                tab.session.installProject(loaded.document, loaded.activeLayerId, loaded.name, loaded.history);
+                this.workspace.adopt(tab);
+                if (firstFrame) setTimeout(() => firstFrame.release(), 250);
+              } else await this.openArchive(record.archive, record.name);
+              await this.recovery.remove(record.id);
+            } catch (error) { this.reportError('recovery-failed', error); }
           }
           for (const tab of this.workspace.tabs) tab.session.history.markUnsaved();
         } else if (answer === 'discard') {
@@ -471,27 +599,54 @@ export class EditorController {
     }
     for (const tab of this.workspace.tabs) {
       if (this.recoveryWatchers.has(tab.id)) continue;
-      this.recoveryWatchers.set(tab.id, tab.session.subscribe((kind) => { if (kind === 'document') this.scheduleRecoveryCopy(tab); }));
+      this.recoveryWatchers.set(tab.id, tab.session.subscribe((kind) => {
+        if (kind === 'document') { this.trackDocumentResidency(tab); this.scheduleRecoveryCopy(tab); }
+      }));
+      this.trackDocumentResidency(tab);
     }
   }
 
+  private trackDocumentResidency(tab: ProjectTab): void {
+    if (!this.residency) return;
+    const session = tab.session;
+    const historyDocuments = session.history.exportState().past.flatMap((entry) => [entry.before.document, entry.after.document]);
+    const current = session.document;
+    void (async () => {
+      for (const document of historyDocuments) for (const raster of documentRasters(document)) {
+        await this.residency!.manage(raster, 'history');
+      }
+      if (current) for (const layer of current.layers) {
+        for (const raster of [layer.raster, layer.mask?.raster ?? null]) if (raster) {
+          await this.residency!.manage(raster, layer.visible ? 'offscreen' : 'hidden');
+        }
+      }
+      if (current?.selection) await this.residency!.manage(current.selection.mask, 'visible');
+    })().catch((error) => this.host.reportError({ code: 'scratch-write-failed', message: (error as Error).message }));
+  }
+
   private scheduleRecoveryCopy(tab: ProjectTab): void {
-    clearTimeout(this.recoveryTimers.get(tab.id));
     // PRODUCT-PLAN section 8: journal commits are batched for at most one second.
+    if (this.recoveryTimers.has(tab.id)) return;
     this.recoveryTimers.set(tab.id, setTimeout(() => void this.writeRecoveryCopy(tab), 750));
   }
 
   private async writeRecoveryCopy(tab: ProjectTab): Promise<void> {
+    this.recoveryTimers.delete(tab.id);
     const store = this.recovery, session = tab.session;
     if (!store || this.recoveryPaused.has(tab.id)) return;
     if (session.isProjectBusy || session.transformEdit || session.history.isInTransaction) { this.scheduleRecoveryCopy(tab); return; }
     if (!session.document || !session.isModified) { await store.remove(tab.id).catch(() => undefined); return; }
     try {
       const name = session.projectName ?? tab.title;
-      await encodeArchive(session.document, name, session.activeLayerId);
-      const archive = writeArchive(session.document, name, session.activeLayerId, session.history.exportState()).blob;
-      await store.put({ id: tab.id, name: session.projectName ?? tab.title, savedAt: Date.now(), size: archive.size, archive,
-        command: session.history.undoName || undefined });
+      if (this.residency) await store.putState({ id: tab.id, name, savedAt: Date.now(), document: session.document,
+        activeLayerId: session.activeLayerId, history: session.history.exportState(),
+        ...(session.history.undoName ? { command: session.history.undoName } : {}) }, this.residency);
+      else {
+        await encodeArchive(session.document, name, session.activeLayerId);
+        const archive = writeArchive(session.document, name, session.activeLayerId, session.history.exportState()).blob;
+        await store.put({ id: tab.id, name, savedAt: Date.now(), size: archive.size, archive,
+          ...(session.history.undoName ? { command: session.history.undoName } : {}) });
+      }
     } catch (error) {
       if (isQuotaError(error)) {
         this.recoveryPaused.add(tab.id);
@@ -535,14 +690,16 @@ export class EditorController {
   async exportBlob(format: 'png' | 'jpeg', options: Partial<JpegOptions> = {}, session: EditorSession = this.session): Promise<Blob> {
     const document = session.document;
     if (!document) throw new ProjectError('no-document', 'There is no canvas to export.');
-    if (document.width * document.height > 100_000_000 || document.width > MAX_SIDE || document.height > MAX_SIDE) {
-      throw new ProjectError('too-large', 'Image export supports canvases up to 100 megapixels and 30,000 pixels per side.');
+    if (document.width * document.height > this.limits.maxPixels || document.width > this.limits.maxSide || document.height > this.limits.maxSide) {
+      throw new ProjectError('too-large', 'Image export exceeds this editor profile’s document limit.');
     }
-    session.commitTransform();
-    const canvas = await this.readyCanvas();
-    const pixels = canvas.readRegion(document, 0, 0, document.width, document.height);
-    if (format === 'png') return pngBlob(pixels, document.width, document.height, document.resolution);
-    return jpegBlob(pixels, document.width, document.height, document.resolution, { ...this.jpegOptions, ...options });
+    return session.runHydrated('export', async () => {
+      session.commitTransform();
+      const canvas = await this.readyCanvas();
+      const pixels = canvas.readRegion(document, 0, 0, document.width, document.height);
+      if (format === 'png') return pngBlob(pixels, document.width, document.height, document.resolution);
+      return jpegBlob(pixels, document.width, document.height, document.resolution, { ...this.jpegOptions, ...options });
+    });
   }
 
   /** Export: choose the file first (see save), then read the pixels back and encode. */
@@ -590,8 +747,9 @@ export class EditorController {
   handle(destroy: () => void): EditorHandleV2 {
     return {
       newProject: async ({ name, width, height }) => {
-        if (!(Number.isInteger(width) && Number.isInteger(height) && width >= 1 && height >= 1 && width <= MAX_SIDE && height <= MAX_SIDE)) {
-          throw new ProjectError('invalid-size', 'Enter whole numbers from 1 to 30,000 pixels.');
+        if (!(Number.isInteger(width) && Number.isInteger(height) && width >= 1 && height >= 1
+          && width <= this.limits.maxSide && height <= this.limits.maxSide && width * height <= this.limits.maxPixels)) {
+          throw new ProjectError('invalid-size', `Enter dimensions within ${this.limits.maxSide.toLocaleString()} pixels per side and ${Math.floor(this.limits.maxPixels / 1_000_000)} megapixels.`);
         }
         const tab = this.workspace.current.session.document ? this.workspace.newCanvas() ?? this.workspace.current : this.workspace.current;
         const session = tab.session;
@@ -635,7 +793,11 @@ export class EditorController {
     for (const timer of this.recoveryTimers.values()) clearTimeout(timer);
     for (const off of this.recoveryWatchers.values()) off();
     this.workspaceRecoveryOff?.();
-    this.recovery?.close();
+    const recovery = this.recovery;
+    if (recovery) {
+      const ids = [...this.recoveryWatchers.keys()];
+      void Promise.allSettled(ids.map((id) => recovery.remove(id))).then(() => recovery.close());
+    }
     this.workspace.destroy();
   }
 }
@@ -646,6 +808,17 @@ export function trimToAlpha(raster: Raster): { raster: Raster; x: number; y: num
   if (!bounds) return null;
   if (bounds.x === 0 && bounds.y === 0 && bounds.width === raster.width && bounds.height === raster.height) return { raster, x: 0, y: 0 };
   return { raster: cropRaster(raster, bounds.x, bounds.y, bounds.width, bounds.height), x: bounds.x, y: bounds.y };
+}
+
+function documentRasters(document: CanvasDocument | null): Raster[] {
+  if (!document) return [];
+  const rasters: Raster[] = [];
+  for (const layer of document.layers) {
+    if (layer.raster) rasters.push(layer.raster);
+    if (layer.mask) rasters.push(layer.mask.raster);
+  }
+  if (document.selection) rasters.push(document.selection.mask);
+  return rasters;
 }
 
 function storedQuality(): number {

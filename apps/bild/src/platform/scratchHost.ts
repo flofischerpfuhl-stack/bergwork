@@ -1,6 +1,6 @@
 /** Durable byte storage used for decoded tile spill and crash journals. */
 export interface ScratchHost {
-  readonly kind: 'memory' | 'opfs' | 'tauri';
+  readonly kind: 'memory' | 'opfs' | 'indexeddb' | 'tauri';
   read(key: string): Promise<Uint8Array | null>;
   write(key: string, bytes: Uint8Array, options?: { append?: boolean }): Promise<void>;
   remove(key: string): Promise<void>;
@@ -14,6 +14,10 @@ export interface ScratchHost {
 export interface ScratchHostCapability {
   readonly scratchHost: ScratchHost;
   readonly editorProfile?: 'lite' | 'pro';
+  /** Optional deployment override; defaults remain 1.5 GiB Lite / 4 GiB Pro. */
+  readonly tileBudgetBytes?: number;
+  /** Separate WebGL texture cap. Defaults to one quarter of the tile budget, at most 1 GiB. */
+  readonly gpuTextureBudgetBytes?: number;
 }
 
 export const LITE_TILE_BUDGET = 1536 * 1024 * 1024;
