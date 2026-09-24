@@ -4,6 +4,7 @@ import type { EditorController } from './controller';
 import { useSession, useUi, useWorkspace } from './hooks';
 import { Icon } from './icons';
 import { buildMenus, shortcutLabel, type Menu, type MenuEntry, type MenuItem } from './menus';
+import { isProjectFile } from './projectFiles';
 
 export function MenuPopup({ items, anchor, onClose, controller, flipRight }: {
   items: MenuEntry[]; anchor: { x: number; y: number }; onClose: () => void; controller: EditorController;
@@ -110,7 +111,7 @@ export function TopBar({ controller, compact }: { controller: EditorController; 
           // Dock/new-tab drops open one project per image (ProjectWorkspace.receive).
           event.preventDefault();
           for (const file of [...event.dataTransfer.files]) {
-            if (/\.zip$/i.test(file.name)) { void controller.openArchive(file).catch((error) => controller.reportError('open-failed', error)); continue; }
+            if (isProjectFile(file.name)) { void controller.openArchive(file).catch((error) => controller.reportError('open-failed', error)); continue; }
             const tab = workspace.addTab();
             void controller.importFiles([file], tab);
           }
@@ -124,7 +125,11 @@ export function TopBar({ controller, compact }: { controller: EditorController; 
               onDrop={(event) => {
                 event.preventDefault();
                 workspace.select(tab.id);
-                void controller.importFiles([...event.dataTransfer.files].filter((f) => !/\.zip$/i.test(f.name)), tab);
+                const files = [...event.dataTransfer.files];
+                // Projects open in their own tab (as on the canvas); images are imported into this one.
+                for (const archive of files.filter((f) => isProjectFile(f.name))) void controller.openArchive(archive).catch((error) => controller.reportError('open-failed', error));
+                const images = files.filter((f) => !isProjectFile(f.name));
+                if (images.length) void controller.importFiles(images, tab);
               }}>
               <button type="button" role="tab" aria-selected={active} className={styles.tabLabel} title={tab.title}
                 disabled={!workspace.canSwitch && !active} onClick={() => workspace.select(tab.id)}>

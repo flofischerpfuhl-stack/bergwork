@@ -65,7 +65,16 @@ interface Slot {
   raster: Raster;
   chunks: Map<string, TextureChunk>;
   lastUsed: number;
+  /** RGBA chunks are premultiplied half floats rather than 8-bit (16-bit rasters, or `preciseTextures`). */
+  wide: boolean;
 }
+
+/**
+ * Modes that divide by the blend or backdrop colour (Colour Burn/Dodge, Vivid Light, Divide). They amplify the
+ * error of an 8-bit premultiplied texture un-premultiplied at low alpha, so documents using them upload RGBA8
+ * layers as premultiplied half floats, which keeps the GPU within rounding of the straight-alpha CPU compositor.
+ */
+const PRECISION_SENSITIVE_MODES: ReadonlySet<string> = new Set(['colorBurn', 'colorDodge', 'vividLight', 'divide']);
 
 interface TextureChunk {
   readonly col: number;
@@ -157,6 +166,8 @@ export class GpuCompositor {
   /** The LUT samples last uploaded per layer, so an unchanged adjustment is not re-uploaded every frame. */
   private lutUploaded = new Map<string, Uint8Array | Float32Array>();
   private activeDocument: CanvasDocument | undefined;
+  /** Set per composite: RGBA8 layers get half-float textures (see PRECISION_SENSITIVE_MODES). */
+  private preciseTextures = false;
   adjustmentPrograms: AdjustmentProgramProvider = adjustmentProgram;
   /** Adjustment layers drawn without a GPU implementation in the last composite. */
   skippedAdjustments = 0;
@@ -428,8 +439,14 @@ export class GpuCompositor {
   }
 
   private uploadRasterData(x: number, y: number, width: number, height: number, format: number,
-    data: PixelArray): void {
+    data: PixelArray, wide = false): void {
     const gl = this.gl;
+    if (wide && data instanceof Uint8Array) {
+      // RGBA8 into a half-float chunk: widen to 16 bit, then premultiply at that precision like a 16-bit raster.
+      const wider = new Uint16Array(data.length);
+      for (let i = 0; i < data.length; i++) wider[i] = data[i]! * 257;
+      data = wider;
+    }
     if (data instanceof Uint16Array) {
       // `data` is always a fresh region buffer. Reusing it for binary16 avoids a second, twice-as-large
       // float allocation for a 4096px texture chunk. WebGL only defines UNPACK_PREMULTIPLY_ALPHA for 8-bit
@@ -459,17 +476,20 @@ export class GpuCompositor {
   private texture(slotKey: string, raster: Raster): Slot {
     const gl = this.gl;
     const existing = this.slots.get(slotKey);
-    if (existing && existing.raster === raster) { existing.lastUsed = this.frame; return existing; }
+    // Once widened a slot stays wide until it is recreated, so previewing modes does not re-upload back and forth.
+    const wantsWide = raster.format === 'rgba16' || (raster.channels === 4 && this.preciseTextures);
+    if (existing && existing.raster === raster && (existing.wide || !wantsWide)) { existing.lastUsed = this.frame; return existing; }
     const compatible = existing && existing.raster.width === raster.width && existing.raster.height === raster.height
-      && existing.raster.channels === raster.channels && existing.raster.format === raster.format;
+      && existing.raster.channels === raster.channels && existing.raster.format === raster.format && (existing.wide || !wantsWide);
     let slot: Slot;
     if (compatible) {
       slot = existing!;
     } else {
       if (existing) for (const chunk of existing.chunks.values()) chunk.source.destroy();
-      slot = { raster, chunks: new Map(), lastUsed: this.frame };
+      slot = { raster, chunks: new Map(), lastUsed: this.frame, wide: wantsWide };
       this.slots.set(slotKey, slot);
     }
+    const wide = slot.wide;
     const previous = compatible ? existing!.raster : null;
     const desired = new Set<string>();
     for (let row = 0; row < raster.rows; row++) for (let col = 0; col < raster.cols; col++) {
@@ -494,15 +514,15 @@ export class GpuCompositor {
       const mips = Math.floor(Math.log2(Math.max(textureWidth, textureHeight))) + 1;
       const source = new TextureSource({
         width: textureWidth, height: textureHeight,
-        format: raster.format === 'rgba16' ? 'rgba16float' : raster.channels === 4 ? 'rgba8unorm' : 'r8unorm', mipLevelCount: mips,
+        format: wide ? 'rgba16float' : raster.channels === 4 ? 'rgba8unorm' : 'r8unorm', mipLevelCount: mips,
         autoGenerateMipmaps: false, scaleMode: 'linear', mipmapFilter: 'linear', addressMode: 'clamp-to-edge', maxAnisotropy: 1,
       });
       const chunk: TextureChunk = { col, row, x, y, width, height, source,
-        bytes: mipBytes(textureWidth, textureHeight, raster.channels, raster.format === 'rgba16' ? 2 : 1) };
+        bytes: mipBytes(textureWidth, textureHeight, raster.channels, wide ? 2 : 1) };
       slot.chunks.set(key, chunk);
       this.renderer.texture.bindSource(source, 0);
       this.uploadRasterData(0, 0, textureWidth, textureHeight, raster.channels === 4 ? gl.RGBA : gl.RED,
-        readClamped(raster, x - CHUNK_APRON, y - CHUNK_APRON, textureWidth, textureHeight));
+        readClamped(raster, x - CHUNK_APRON, y - CHUNK_APRON, textureWidth, textureHeight), wide);
       gl.generateMipmap(gl.TEXTURE_2D);
       created.add(key);
     }
@@ -529,7 +549,7 @@ export class GpuCompositor {
       if (bulk) {
         const tw = chunk.width + CHUNK_APRON * 2, th = chunk.height + CHUNK_APRON * 2;
         this.uploadRasterData(0, 0, tw, th, format,
-          readClamped(raster, chunk.x - CHUNK_APRON, chunk.y - CHUNK_APRON, tw, th));
+          readClamped(raster, chunk.x - CHUNK_APRON, chunk.y - CHUNK_APRON, tw, th), wide);
       } else {
         for (const index of changed) {
           const tileCol = index % raster.cols, tileRow = Math.floor(index / raster.cols);
@@ -539,9 +559,9 @@ export class GpuCompositor {
           const y1 = Math.min(ty + raster.tileHeight(tileRow), chunk.y + chunk.height);
           if (x1 <= x0 || y1 <= y0) continue;
           this.uploadRasterData(x0 - chunk.x + CHUNK_APRON, y0 - chunk.y + CHUNK_APRON, x1 - x0, y1 - y0,
-            format, raster.readRegionNative(x0, y0, x1 - x0, y1 - y0));
+            format, raster.readRegionNative(x0, y0, x1 - x0, y1 - y0), wide);
         }
-        this.uploadAprons(chunk, raster, format);
+        this.uploadAprons(chunk, raster, format, wide);
       }
       gl.generateMipmap(gl.TEXTURE_2D);
     }
@@ -551,16 +571,16 @@ export class GpuCompositor {
     return slot;
   }
 
-  private uploadAprons(chunk: TextureChunk, raster: Raster, format: number): void {
+  private uploadAprons(chunk: TextureChunk, raster: Raster, format: number, wide: boolean): void {
     const gl = this.gl, tw = chunk.width + CHUNK_APRON * 2, th = chunk.height + CHUNK_APRON * 2;
     this.uploadRasterData(0, 0, tw, CHUNK_APRON, format,
-      readClamped(raster, chunk.x - CHUNK_APRON, chunk.y - CHUNK_APRON, tw, CHUNK_APRON));
+      readClamped(raster, chunk.x - CHUNK_APRON, chunk.y - CHUNK_APRON, tw, CHUNK_APRON), wide);
     this.uploadRasterData(0, th - CHUNK_APRON, tw, CHUNK_APRON, format,
-      readClamped(raster, chunk.x - CHUNK_APRON, chunk.y + chunk.height, tw, CHUNK_APRON));
+      readClamped(raster, chunk.x - CHUNK_APRON, chunk.y + chunk.height, tw, CHUNK_APRON), wide);
     this.uploadRasterData(0, CHUNK_APRON, CHUNK_APRON, chunk.height, format,
-      readClamped(raster, chunk.x - CHUNK_APRON, chunk.y, CHUNK_APRON, chunk.height));
+      readClamped(raster, chunk.x - CHUNK_APRON, chunk.y, CHUNK_APRON, chunk.height), wide);
     this.uploadRasterData(tw - CHUNK_APRON, CHUNK_APRON, CHUNK_APRON, chunk.height, format,
-      readClamped(raster, chunk.x + chunk.width, chunk.y, CHUNK_APRON, chunk.height));
+      readClamped(raster, chunk.x + chunk.width, chunk.y, CHUNK_APRON, chunk.height), wide);
   }
 
   /** Drops textures of layers not drawn for a while. */
@@ -828,6 +848,8 @@ export class GpuCompositor {
     document = documentWithLayerEffects(document, hooks);
     this.frame++;
     this.skippedAdjustments = 0;
+    // Float targets only: an 8-bit accumulation target would lose the precision again.
+    this.preciseTextures = this.floatTargets && document.layers.some((layer) => PRECISION_SENSITIVE_MODES.has(hooks.blendMode(layer)));
     const { width, height } = view;
     const activeBrush = hooks.brush ?? null;
     let brushState: BrushGpuState | null = null;

@@ -14,29 +14,33 @@ export type AdjustmentCommandName = 'levels' | 'curves' | 'hueSaturation' | 'exp
 export interface AdjustmentCommand { enabled(): boolean; run(): void }
 export type AdjustmentCommandRegistry = Record<AdjustmentCommandName, AdjustmentCommand>;
 
+/** Pixel locks do not disable these commands: running one on a locked layer refuses with the lock notice (Photoshop). */
 function canAdjust(session: EditorSession): boolean {
   const layer = session.activeLayer;
   return session.canEditLayers && session.selectedLayerIds.size === 1 && !!layer?.raster && !layer.adjustment
-    && !session.isMaskSelected && !session.editBlocker(layer.id, 'pixels')
+    && !session.isMaskSelected
     && !levelsEditState(session) && !hueSaturationEditState(session) && !filterEditState(session);
 }
+function refused(session: EditorSession): boolean {
+  const id = session.activeLayerId;
+  return !!id && session.refuseLayerEdit(id, 'pixels');
+}
 function filter(session: EditorSession, kind: Parameters<typeof beginFilterEdit>[1]): AdjustmentCommand {
-  return { enabled: () => canAdjust(session), run: () => { beginFilterEdit(session, kind); } };
+  return { enabled: () => canAdjust(session), run: () => { if (!refused(session)) beginFilterEdit(session, kind); } };
 }
 
 export function adjustmentCommands(session: EditorSession): AdjustmentCommandRegistry {
   return {
-    levels: { enabled: () => canAdjust(session), run: () => { beginLevelsEdit(session); } },
+    levels: { enabled: () => canAdjust(session), run: () => { if (!refused(session)) beginLevelsEdit(session); } },
     curves: filter(session, 'Curves'),
-    hueSaturation: { enabled: () => canAdjust(session), run: () => { beginHueSaturationEdit(session); } },
+    hueSaturation: { enabled: () => canAdjust(session), run: () => { if (!refused(session)) beginHueSaturationEdit(session); } },
     exposure: filter(session, 'Exposure'), gradientMap: filter(session, 'Gradient Map'), grain: filter(session, 'Grain'),
     invert: { enabled: () => {
       const layer = session.activeLayer;
       return session.canEditLayers && session.selectedLayerIds.size === 1 && !!layer
-        && !session.editBlocker(layer.id, 'pixels')
         && (session.isMaskSelected ? !!layer.mask : !!layer.raster && !layer.adjustment);
     }, run: () => {
-      const layer = session.activeLayer; if (!layer) return;
+      const layer = session.activeLayer; if (!layer || refused(session)) return;
       if (session.isMaskSelected && layer.mask) session.replaceMaskPixels(layer.id,
         invertRaster(layer.mask.raster, layer.mask.placement ?? layer.transform, session.selection), 'Invert');
       else if (layer.raster) session.replaceLayerPixels(layer.id, invertRaster(layer.raster, layer.transform, session.selection), 'Invert');

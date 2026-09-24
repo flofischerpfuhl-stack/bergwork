@@ -78,7 +78,7 @@ class GuideTool implements ToolHandler {
   }
   cancel(session: EditorSession): void {
     pending.delete(session);
-    if (this.moving) { session.endGuideDrag(); session.undo(); }
+    if (this.moving) session.cancelGuideDrag();
     this.moving = null;
     this.target = null;
   }

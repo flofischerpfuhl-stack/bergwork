@@ -6,9 +6,7 @@ import { CanvasView } from './canvas/CanvasView';
 import { NewCanvasSheet } from './Dialogs';
 import { Icon } from './icons';
 import type { LayerLockBlocker } from '../core/locks';
-
-/** Project archives: `.fwimg`, and `.zip` as written by earlier builds. */
-const PROJECT_FILE = /\.(fwimg|zip)$/i;
+import { isProjectFile } from './projectFiles';
 
 /** Hosts the canvas view; shows the New Canvas welcome when the tab has no document; accepts file drops. */
 export function CanvasPane({ controller }: { controller: EditorController }) {
@@ -45,8 +43,8 @@ export function CanvasPane({ controller }: { controller: EditorController }) {
         event.preventDefault();
         setDropping(false);
         const files = [...event.dataTransfer.files];
-        const archives = files.filter((f) => PROJECT_FILE.test(f.name));
-        const images = files.filter((f) => !PROJECT_FILE.test(f.name));
+        const archives = files.filter((f) => isProjectFile(f.name));
+        const images = files.filter((f) => !isProjectFile(f.name));
         for (const archive of archives) void controller.openArchive(archive).catch((error) => controller.reportError('open-failed', error));
         if (images.length) {
           const rect = host.current!.getBoundingClientRect();

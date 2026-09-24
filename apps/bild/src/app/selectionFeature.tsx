@@ -21,7 +21,7 @@ import {
 } from '../core/selectionOps';
 import {
   addMaskFromSelection, applySelection, beginSelectionMove, beginSelectionTransform, canEditPixels, canEditSelection,
-  canInvertPixels, canModifySelection, canMoveSelection, canTransformSelection, clearSelectedPixels, contractSelection,
+  canInvertPixels, canModifySelection, refusePixelCommand, canMoveSelection, canTransformSelection, clearSelectedPixels, contractSelection,
   deleteKeyPressed, deselect, displayedSelection, endSelectionMove, expandSelection, fillSelection, invertPixels,
   beginPixelMove, cancelPixelMove, finishPixelMove, movePixels, nudgePixels, pixelMoveState,
   invertSelection, loadLayerSelection, loadMaskSelection, nudgeSelection, previewSelectionMove, selectAll,
@@ -400,11 +400,11 @@ export function installSelection(controller: EditorController): void {
   f.loadMaskSelection = { enabled: () => !!s().activeLayer?.mask && canEditSelection(s()), run: () => { const id = s().activeLayerId; if (id) loadMaskSelection(s(), id); } };
   f.expandSelection = { enabled: () => canModifySelection(s()), run: () => expandSelection(s(), selectionState(s()).expandAmount) };
   f.contractSelection = { enabled: () => canModifySelection(s()), run: () => contractSelection(s(), selectionState(s()).contractAmount) };
-  f.fillForeground = { enabled: () => canEditPixels(s()), run: () => fillSelection(s(), 'foreground') };
-  f.fillBackground = { enabled: () => canEditPixels(s()), run: () => fillSelection(s(), 'background') };
+  f.fillForeground = { enabled: () => canEditPixels(s(), true), run: () => { if (!refusePixelCommand(s())) fillSelection(s(), 'foreground'); } };
+  f.fillBackground = { enabled: () => canEditPixels(s(), true), run: () => { if (!refusePixelCommand(s())) fillSelection(s(), 'background'); } };
   f.clearSelection = { enabled: () => !!s().selection && canEditPixels(s()), run: () => clearSelectedPixels(s()) };
   f.deleteKey = { enabled: () => true, run: () => { if (!deleteKeyPressed(s())) void s().deleteLayerOrMask(); } };
-  f.invert = { enabled: () => canInvertPixels(s()), run: () => invertPixels(s()) };
+  f.invert = { enabled: () => canInvertPixels(s(), true), run: () => { if (!refusePixelCommand(s())) invertPixels(s()); } };
   f.copy = { enabled: () => canCopyPixels(s()), run: () => copySelection(s(), undefined, controller.clipboardHooks) };
   f.cut = { enabled: () => canCutPixels(s()), run: () => cutSelection(s(), undefined, controller.clipboardHooks) };
   f.copyMerged = { enabled: () => canCopyMerged(s()), run: () => void copyMergedSelection(s(), undefined, controller.clipboardHooks) };

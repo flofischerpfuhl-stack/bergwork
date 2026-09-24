@@ -508,6 +508,28 @@ const de: Record<string, string> = {
     'Dieses Dokument verwendet Schriften, die hier nicht verfügbar sind. Ihr Text wird mit einem Ersatz gezeichnet, bis du sie ersetzt; importierter Text behält seine gespeicherte Vorschau, bis du ihn bearbeitest.',
   'Look in Installed Fonts': 'In installierten Schriften suchen', 'Text layer': 'Textebene',
   'Double-click to edit the text': 'Doppelklick bearbeitet den Text',
+  // Blend modes as Photoshop's German UI names them.
+  'Dissolve': 'Sprenkeln', 'Linear Burn': 'Linear nachbelichten', 'Darker Color': 'Dunklere Farbe',
+  'Linear Dodge (Add)': 'Linear abwedeln (Hinzufügen)', 'Lighter Color': 'Hellere Farbe', 'Soft Light': 'Weiches Licht',
+  'Hard Light': 'Hartes Licht', 'Vivid Light': 'Strahlendes Licht', 'Linear Light': 'Lineares Licht', 'Pin Light': 'Lichtpunkt',
+  'Hard Mix': 'Hart mischen', 'Exclusion': 'Ausschluss', 'Divide': 'Dividieren',
+  // Image Size and Canvas Size.
+  'Units': 'Einheiten', 'Current:': 'Aktuell:', 'New:': 'Neu:', 'Result:': 'Ergebnis:', 'pixels': 'Pixel',
+  'uncompressed': 'unkomprimiert', 'uncompressed RGBA canvas': 'unkomprimierte RGBA-Arbeitsfläche',
+  'Relative to current dimensions': 'Relativ', 'Lock original aspect ratio': 'Ursprüngliches Seitenverhältnis beibehalten',
+  'Final dimensions must be 1–30,000 pixels per side.': 'Die neuen Maße müssen 1–30.000 Pixel pro Seite betragen.',
+  'Anchor': 'Anker',
+  'Keeps this point fixed. Artwork is not scaled; cropped content remains outside the canvas.':
+    'Dieser Punkt bleibt fest. Das Bild wird nicht skaliert; beschnittener Inhalt bleibt außerhalb der Arbeitsfläche erhalten.',
+  'Canvas extension': 'Farbe für erweiterte Arbeitsfläche', 'Extension color': 'Farbe der Erweiterung',
+  'pixels/inch': 'Pixel/Zoll', 'Resample': 'Neu berechnen', 'Resize': 'Größe ändern',
+  'Resizes layer pixels and applies existing transforms. Undo restores the originals.':
+    'Berechnet die Ebenenpixel neu und wendet bestehende Transformationen an. Rückgängig stellt die Originale wieder her.',
+  'Only print dimensions and resolution change. Pixels stay unchanged.': 'Nur Druckmaße und Auflösung ändern sich. Die Pixel bleiben unverändert.',
+  'Use 1–30,000 pixels per side, up to 100 megapixels, and 1–9,600 pixels/inch.':
+    '1–30.000 Pixel pro Seite, höchstens 100 Megapixel und 1–9.600 Pixel/Zoll verwenden.',
+  'Choose a JPEG, PNG, HEIC, TIFF, WebP, AVIF, or GIF image.': 'Wähle ein JPEG-, PNG-, HEIC-, TIFF-, WebP-, AVIF- oder GIF-Bild.',
+  'Content-Aware Fill': 'Inhaltsbasierte Füllung',
 };
 
 const isApple = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);

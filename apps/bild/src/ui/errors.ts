@@ -13,6 +13,7 @@ type Translate = (text: string) => string;
 const KNOWN_MESSAGES = [
   'The image could not be read. It may be damaged or unavailable.',
   'Choose a JPEG, PNG, HEIC, or TIFF image.',
+  'Choose a JPEG, PNG, HEIC, TIFF, WebP, AVIF, or GIF image.',
   'This import exceeds the current 100-megapixel document budget or 30,000-pixel side limit.',
   'This browser cannot decode HEIC. Convert the image to JPEG or PNG and try again.',
   'Image export supports canvases up to 100 megapixels and 30,000 pixels per side.',

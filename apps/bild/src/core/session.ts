@@ -1374,10 +1374,15 @@ export class EditorSession {
     this.beginTransform(false);
   }
 
-  nudgeLayer(dx: number, dy: number): void {
+  /** Shows the lock notice when a transform of the current target is refused by a position lock. */
+  refuseTransform(): boolean {
     const ids = this.transformsAsGroup ? this.groupTransformMembers.map((layer) => layer.id)
       : this.activeLayerId ? [this.activeLayerId] : [];
-    if (ids.some((id) => this.refuseLayerEdit(id, 'position'))) return;
+    return ids.some((id) => this.refuseLayerEdit(id, 'position'));
+  }
+
+  nudgeLayer(dx: number, dy: number): void {
+    if (this.refuseTransform()) return;
     const alreadyEditing = this.transformEdit !== null;
     if (!alreadyEditing) this.beginTransform(false);
     const edit = this.transformEdit;
@@ -1415,11 +1420,12 @@ export class EditorSession {
   /** Distort Apply: resamples the layer's pixels into the dragged quadrilateral. */
   private commitDistort(edit: TransformEdit, quad: readonly Point[]): void {
     const ids = edit.group ? [...edit.group.originals.keys()] : [edit.layerId];
-    // Distort.commitDistort: one transaction for the whole group; a bad member does not stop the rest.
+    // A locked member refuses the whole distort (Photoshop): check every target before anything changes.
+    if (ids.some((id) => this.refuseLayerEdit(id, 'position') || this.refuseLayerEdit(id, 'pixels'))) return;
+    // Distort.commitDistort: one transaction for the whole group; a member that fails to warp does not stop the rest.
     this.beginEdit(edit.group ? 'Distort Layers' : 'Distort');
     try {
       for (const id of ids) {
-        if (this.refuseLayerEdit(id, 'position') || this.refuseLayerEdit(id, 'pixels')) return;
         const layer = this.layer(id);
         if (!layer?.raster) continue;
         try {
@@ -1634,8 +1640,25 @@ export class EditorSession {
     this.notify('document');
   }
 
-  beginGuideDrag(): void { if (this.document && !this.guidesLocked) this.beginEdit('Move Guide'); }
-  endGuideDrag(): void { if (this.history.isInTransaction) this.endEdit(); }
+  /** Guides as they were when the open guide drag began; null when no drag step is open. */
+  private guideDragBefore: readonly Guide[] | null = null;
+  beginGuideDrag(): void {
+    if (!this.document || this.guidesLocked || this.guideDragBefore) return;
+    this.guideDragBefore = this.document.guides ?? [];
+    this.beginEdit('Move Guide');
+  }
+  endGuideDrag(): void {
+    if (!this.guideDragBefore) return;
+    this.guideDragBefore = null;
+    this.endEdit();
+  }
+  /** Escape during a guide drag: puts the guides back and closes the drag step without recording it. */
+  cancelGuideDrag(): void {
+    const before = this.guideDragBefore;
+    if (!before) return;
+    if (this.document) this.document = { ...this.document, guides: [...before] };
+    this.endGuideDrag();
+  }
   /** Deletes a guide inside the open drag step (dropped back on its ruler). */
   dropGuideInDrag(id: string): void {
     if (!this.document) return;

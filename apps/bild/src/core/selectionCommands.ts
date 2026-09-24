@@ -85,21 +85,28 @@ export function nudgeSelection(session: EditorSession, dx: number, dy: number): 
   previewSelectionMove(session, dx, dy); endSelectionMove(session); return true;
 }
 
-export function canEditPixels(session: EditorSession): boolean {
+/** `ignoringLocks`: true for menu commands, which stay enabled on a locked layer and refuse with the lock notice when run. */
+export function canEditPixels(session: EditorSession, ignoringLocks = false): boolean {
   const document = session.document, layer = session.activeLayer;
   if (!document || !layer || !session.canEditLayers || session.selectedLayerIds.size !== 1) return false;
   if (!effectiveVisibleIds(document.layers).has(layer.id)) return false;
-  if (session.editBlocker(layer.id, 'pixels')) return false;
+  if (!ignoringLocks && session.editBlocker(layer.id, 'pixels')) return false;
   return session.isMaskSelected ? !!layer.mask?.enabled : layer.kind !== 'group';
 }
 
-export function canInvertPixels(session: EditorSession): boolean {
+export function canInvertPixels(session: EditorSession, ignoringLocks = false): boolean {
   const document = session.document, layer = session.activeLayer;
   if (!document || !layer || session.isProjectBusy || session.isImporting || session.renamingLayerId !== null
     || session.selectedLayerIds.size !== 1 || !effectiveVisibleIds(document.layers).has(layer.id)
     || session.selection && selectionIsEmpty(session.selection)) return false;
-  if (session.editBlocker(layer.id, 'pixels')) return false;
+  if (!ignoringLocks && session.editBlocker(layer.id, 'pixels')) return false;
   return session.isMaskSelected ? !!layer.mask?.enabled : layer.kind !== 'group' && !!layer.raster;
+}
+
+/** A pixel command run on a pixel-locked active layer: shows the lock notice and reports the refusal. */
+export function refusePixelCommand(session: EditorSession): boolean {
+  const id = session.activeLayerId;
+  return !!id && session.refuseLayerEdit(id, 'pixels');
 }
 
 function rasterByte(raster: Raster, x: number, y: number, channel = 0): number {
