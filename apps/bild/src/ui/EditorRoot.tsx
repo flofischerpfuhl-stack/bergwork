@@ -21,7 +21,7 @@ function layoutFor(width: number, height: number): Layout {
 }
 
 const TOOL_KEYS: Record<string, Tool> = {
-  a: 'idle', v: 'move', m: 'marquee', l: 'lasso', w: 'wand', c: 'crop', b: 'brush', e: 'brush', j: 'spotHealing',
+  a: 'directSelect', p: 'pen', v: 'move', m: 'marquee', l: 'lasso', w: 'wand', c: 'crop', b: 'brush', e: 'brush', j: 'spotHealing',
   s: 'cloneStamp', r: 'blur', g: 'gradient', u: 'shape', i: 'eyedropper', h: 'hand', z: 'zoom',
 };
 

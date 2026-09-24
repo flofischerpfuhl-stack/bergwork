@@ -306,6 +306,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
           </div>
         </>
       ) : null}
+      {controller.layerThumbs.map((thumb, i) => <Fragment key={i}>{thumb(session, layer)}</Fragment>)}
       <div className={styles.layerText}>
         {renaming ? (
           <input className={styles.renameInput} defaultValue={layer.name} autoFocus aria-label={t('Layer name')}

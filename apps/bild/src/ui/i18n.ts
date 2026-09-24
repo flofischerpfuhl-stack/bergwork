@@ -530,6 +530,36 @@ const de: Record<string, string> = {
     '1–30.000 Pixel pro Seite, höchstens 100 Megapixel und 1–9.600 Pixel/Zoll verwenden.',
   'Choose a JPEG, PNG, HEIC, TIFF, WebP, AVIF, or GIF image.': 'Wähle ein JPEG-, PNG-, HEIC-, TIFF-, WebP-, AVIF- oder GIF-Bild.',
   'Content-Aware Fill': 'Inhaltsbasierte Füllung',
+  // Vector tools (Shape, Pen, Direct/Path Selection; Photoshop German).
+  'Shape (U) · Shift-U switches Rectangle/Ellipse/Polygon/Star/Line': 'Form (U) · Umschalt-U wechselt Rechteck/Ellipse/Polygon/Stern/Linie',
+  'Pen (P)': 'Zeichenstift-Werkzeug (P)', 'Direct Selection (A) · Shift-A switches Path Selection': 'Direktauswahl-Werkzeug (A) · Umschalt-A wechselt zur Pfadauswahl',
+  'No tool': 'Kein Werkzeug', 'Pen': 'Zeichenstift', 'Direct Selection': 'Direktauswahl', 'Path Selection': 'Pfadauswahl', 'Selection': 'Auswahl',
+  'Polygon': 'Polygon', 'Star': 'Stern', 'Line': 'Linie', 'Fill:': 'Fläche:', 'Stroke:': 'Kontur:', 'Stroke Width': 'Konturstärke',
+  'Stroke Options': 'Konturoptionen', 'Caps': 'Enden', 'Butt': 'Abgeflacht', 'Round': 'Abgerundet', 'Projecting': 'Überstehend', 'Corners': 'Ecken',
+  'Miter': 'Gehrung', 'Bevel': 'Abgeschrägt', 'Dashed Line': 'Strichlinie', 'Solid': 'Durchgezogen', 'Dashed': 'Gestrichelt', 'Dotted': 'Gepunktet',
+  'Dash': 'Strich', 'Gap': 'Lücke', 'Arrowheads': 'Pfeilspitzen', 'Start': 'Anfang', 'End': 'Ende', 'Arrow': 'Pfeil', 'Open Arrow': 'Offener Pfeil',
+  'Circle': 'Kreis', 'Square': 'Quadrat', 'Top Left': 'oben links', 'Top Right': 'oben rechts', 'Bottom Right': 'unten rechts', 'Bottom Left': 'unten links',
+  'Link corner radii': 'Eckenradien verbinden', 'Sides': 'Seiten', 'Corner Radius': 'Eckenradius', 'Points': 'Zacken', 'Star Ratio': 'Sternverhältnis',
+  'Path Operations': 'Pfadvorgänge', 'New Layer': 'Neue Ebene', 'Combine Shapes': 'Formen kombinieren', 'Subtract Front Shape': 'Vordere Form subtrahieren',
+  'Intersect Shape Areas': 'Schnittmenge von Formbereichen', 'Exclude Overlapping Shapes': 'Überlappende Formbereiche ausschließen',
+  'Unite Shapes': 'Formen vereinigen', 'Merge Shapes': 'Formen zusammenführen', 'Merged Shapes': 'Zusammengeführte Formen',
+  'Fill Path': 'Pfadfläche füllen', 'Stroke Path': 'Pfadkontur füllen', 'Load Selection from Path': 'Auswahl aus Pfad laden',
+  'Vector Mask': 'Vektormaske', 'Reveal All': 'Alles einblenden', 'Hide All': 'Alles ausblenden', 'Current Path': 'Aktueller Pfad',
+  'Enable Vector Mask': 'Vektormaske aktivieren', 'Disable Vector Mask': 'Vektormaske deaktivieren', 'Delete Vector Mask': 'Vektormaske löschen',
+  'Add Vector Mask': 'Vektormaske hinzufügen', 'Select vector mask': 'Vektormaske auswählen',
+  'Select the vector mask to edit its path; Shift-click to enable or disable it': 'Vektormaske auswählen, um ihren Pfad zu bearbeiten; Umschalt-Klick aktiviert oder deaktiviert sie',
+  'Drag to draw a shape': 'Ziehen zeichnet eine Form', 'Shift constrains proportions': 'Umschalt erhält die Proportionen',
+  'Shift snaps to 45°': 'Umschalt rastet auf 45° ein',
+  'Click for corners · Drag for curves · Click the first point to close · Option-drag breaks a handle · ⌘ Direct Selection · Enter finishes':
+    'Klicken setzt Ecken · Ziehen formt Kurven · Klick auf den ersten Punkt schließt · Option-Ziehen trennt einen Griff · ⌘ Direktauswahl · Eingabe beendet',
+  'Click a path to select it · Drag to move it · Delete removes it · Shift-A Direct Selection':
+    'Klick wählt einen Pfad · Ziehen verschiebt ihn · Entf löscht ihn · Umschalt-A Direktauswahl',
+  'Drag anchors or handles · Drag a frame to select anchors · Option-click converts a point · Delete removes anchors · Shift-A Path Selection':
+    'Ankerpunkte oder Griffe ziehen · Rahmen ziehen wählt Ankerpunkte · Option-Klick wandelt einen Punkt um · Entf löscht Ankerpunkte · Umschalt-A Pfadauswahl',
+  'Set Fill': 'Fläche festlegen', 'Set Stroke': 'Kontur festlegen', 'Change Shape': 'Form ändern', 'Move Anchor': 'Ankerpunkt verschieben',
+  'Drag Handle': 'Griff ziehen', 'Convert Point': 'Punkt umwandeln', 'Delete Anchor': 'Ankerpunkt löschen', 'Nudge Anchors': 'Ankerpunkte verschieben',
+  'Create Line': 'Linie erstellen', 'Pen Path': 'Zeichenstiftpfad', 'Create Rectangle': 'Rechteck erstellen', 'Create Ellipse': 'Ellipse erstellen',
+  'Create Polygon': 'Polygon erstellen', 'Create Star': 'Stern erstellen', 'Boolean Path Operation': 'Pfadvorgang',
 };
 
 const isApple = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);

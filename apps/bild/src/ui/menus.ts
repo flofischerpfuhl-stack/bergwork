@@ -74,6 +74,9 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         feature('fillBackground', t('Fill with Background Color'), 'mod+backspace'),
         feature('clearSelection', t('Clear Selection Pixels')),
         feature('contentAwareFill', t('Content-Aware Fill…'), 'shift+backspace'),
+        'separator',
+        feature('fillPath', t('Fill Path')),
+        feature('strokePath', t('Stroke Path')),
       ],
     },
     {
@@ -84,6 +87,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         feature('inverse', t('Inverse'), 'mod+shift+i'),
         feature('loadLayerSelection', t("Layer's Pixels")),
         feature('loadMaskSelection', t("Mask's Black Areas")),
+        feature('selectionFromPath', t('Load Selection from Path')),
         'separator',
         feature('expandSelection', `${t('Expand')}…`),
         feature('contractSelection', `${t('Contract')}…`),
@@ -137,6 +141,16 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
           ? { label: t('Layer Style'), enabled: !!layer && controller.layerStyles.styleable(layer.id), testId: 'menu-layer-style',
             submenu: layer ? controller.layerStyles.menu(layer.id) : [] }
           : { label: t('Layer Style'), enabled: false, note: pending },
+        { label: t('Vector Mask'), enabled: !!features.vectorMaskRevealAll && !!layer, testId: 'menu-vector-mask', submenu: [
+          feature('vectorMaskRevealAll', t('Reveal All')), feature('vectorMaskHideAll', t('Hide All')), feature('vectorMaskCurrentPath', t('Current Path')),
+          'separator', feature('vectorMaskToggle', layer?.vectorMask?.enabled === false ? t('Enable Vector Mask') : t('Disable Vector Mask')),
+          feature('vectorMaskDelete', t('Delete Vector Mask')),
+        ] },
+        { label: t('Combine Shapes'), enabled: !!features.mergeShapes, testId: 'menu-combine-shapes', submenu: [
+          feature('combineUnite', t('Unite Shapes')), feature('combineSubtract', t('Subtract Front Shape')),
+          feature('combineIntersect', t('Intersect Shape Areas')), feature('combineExclude', t('Exclude Overlapping Shapes')),
+          'separator', feature('mergeShapes', t('Merge Shapes')),
+        ] },
         'separator',
         { label: t('Group Selected Layers'), shortcut: 'mod+g', enabled: session.canEditLayers && !!document, run: () => session.groupSelectedLayers() },
         { label: t('Move Out of Folder'), enabled: session.canEditLayers && !!layer?.parentId, run: () => session.moveActiveLayerOutOfGroup() },

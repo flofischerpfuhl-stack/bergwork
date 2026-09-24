@@ -44,18 +44,19 @@ import { isValidLayerEffect } from './effects/validate';
 export type Tool =
   | 'move' | 'artboard' | 'marquee' | 'lasso' | 'wand' | 'crop' | 'brush' | 'spotHealing' | 'cloneStamp' | 'blur'
   | 'gradient' | 'shape' | 'eyedropper' | 'hand' | 'zoom' | 'idle'
-  | 'text';
+  | 'text' | 'pen' | 'directSelect';
 
 export const TOOLS: readonly Tool[] = ['move', 'artboard', 'marquee', 'lasso', 'wand', 'crop', 'brush', 'spotHealing', 'cloneStamp',
-  'blur', 'gradient', 'text', 'shape', 'eyedropper', 'hand', 'zoom'];
+  'blur', 'gradient', 'text', 'pen', 'directSelect', 'shape', 'eyedropper', 'hand', 'zoom'];
 
 export const TOOL_LABELS: Record<Tool, string> = {
   move: 'Move / Transform (V)', artboard: 'Artboard Tool (Shift-V)', marquee: 'Marquee (M)', lasso: 'Lasso (L)', wand: 'Magic Wand (W)', crop: 'Crop (C)',
   brush: 'Brush (B) · Eraser (E)', spotHealing: 'Spot Healing Brush (J)',
   cloneStamp: 'Clone Stamp (S) · Option-click sets the source', blur: 'Smear (R)', gradient: 'Gradient (G)',
-  shape: 'Shape (U) · Shift-U switches Rectangle/Ellipse', eyedropper: 'Eyedropper (I)', hand: 'Hand (H)', zoom: 'Zoom (Z)',
-  idle: 'No tool (A)',
+  shape: 'Shape (U) · Shift-U switches Rectangle/Ellipse/Polygon/Star/Line', eyedropper: 'Eyedropper (I)', hand: 'Hand (H)', zoom: 'Zoom (Z)',
+  idle: 'No tool',
   text: 'Horizontal Type (T)',
+  pen: 'Pen (P)', directSelect: 'Direct Selection (A) · Shift-A switches Path Selection',
 };
 
 export function isBrushTool(tool: Tool): boolean { return tool === 'brush' || tool === 'spotHealing' || tool === 'cloneStamp' || tool === 'blur'; }
@@ -116,6 +117,10 @@ export const pendingUndoHandlers: ((session: EditorSession) => boolean)[] = [];
 /** Pixels derived from editable layer content (text shaped by the lazily loaded engine, PRODUCT-PLAN A5). */
 export interface DerivedLayerPixels { readonly raster: Raster; readonly transform: LayerTransform }
 export const derivedLayerSources: ((session: EditorSession, layer: Layer) => DerivedLayerPixels | null)[] = [];
+/** Where a vector layer's derived pixels sit for a placement of the layer: strokes and markers reach past its box. */
+export const derivedPlacements: ((session: EditorSession, layer: Layer, transform: LayerTransform) => LayerTransform | null)[] = [];
+/** Masks derived from editable content (vector masks); they cover the layer's displayed grid (placement null). */
+export const derivedMaskSources: ((session: EditorSession, layer: Layer) => Raster | null)[] = [];
 
 export class EditorSession {
   document: CanvasDocument | null = null;
@@ -1237,21 +1242,29 @@ export class EditorSession {
   }
   displayedTransform(layer: Layer): LayerTransform {
     const pending = this.pendingTransform(layer);
-    if (pending) return pending;
+    if (pending) return this.derivedPlacement(layer, pending);
     const preview = this.livePreview(layer.id);
     if (preview && !preview.mask) return preview.transform;
     const override = this.transformOverrides.get(layer.id);
-    if (override) return override;
+    if (override) return this.derivedPlacement(layer, override);
     // Text: shaped pixels where the engine has them, else an imported preview at its saved placement.
     if (layer.kind === 'text') return this.derivedPixels(layer)?.transform ?? (layer.raster && layer.renderedTransform) ?? layer.transform;
-    return layer.transform;
+    return this.derivedPlacement(layer, layer.transform);
+  }
+  private derivedPlacement(layer: Layer, transform: LayerTransform): LayerTransform {
+    if (layer.kind !== 'vector') return transform;
+    for (const place of derivedPlacements) {
+      const placed = place(this, layer, transform);
+      if (placed) return placed;
+    }
+    return transform;
   }
   displayedRaster(layer: Layer): Raster | null {
     const preview = this.livePreview(layer.id);
     if (preview && !preview.mask) return preview.raster;
     const override = this.rasterOverrides.get(layer.id);
     if (override) return override;
-    if (layer.kind === 'text') return this.derivedPixels(layer)?.raster ?? layer.raster ?? null;
+    if (layer.kind === 'text' || layer.kind === 'vector') return this.derivedPixels(layer)?.raster ?? layer.raster ?? null;
     return layer.raster ?? null;
   }
   private derivedPixels(layer: Layer): DerivedLayerPixels | null {
@@ -1264,7 +1277,15 @@ export class EditorSession {
   displayedMaskRaster(layer: Layer): Raster | null {
     const preview = this.livePreview(layer.id);
     if (preview?.mask) return preview.raster;
-    return this.maskOverrides.get(layer.id) ?? layer.mask?.raster ?? null;
+    return this.maskOverrides.get(layer.id) ?? this.derivedMask(layer) ?? layer.mask?.raster ?? null;
+  }
+  private derivedMask(layer: Layer): Raster | null {
+    if (!layer.vectorMask?.enabled && !(layer.kind === 'vector' && layer.mask?.enabled)) return null;
+    for (const source of derivedMaskSources) {
+      const raster = source(this, layer);
+      if (raster) return raster;
+    }
+    return null;
   }
 
   /** Where the transform handles sit for `layer`. */
@@ -1280,7 +1301,7 @@ export class EditorSession {
   /** Where a mask shows right now: null while it covers the layer's displayed grid (displayedMaskPlacement). */
   displayedMaskPlacement(layer: Layer): LayerTransform | null {
     const mask = layer.mask;
-    if (!mask) return null;
+    if (!mask || (!this.maskOverrides.has(layer.id) && this.derivedMask(layer))) return null;
     // A preview that grows or moves the layer's pixel grid must not drag the mask along.
     const preview = this.livePreview(layer.id);
     if (preview && !preview.mask && !transformsEqual(preview.transform, layer.transform)) return mask.placement ?? layer.transform;
