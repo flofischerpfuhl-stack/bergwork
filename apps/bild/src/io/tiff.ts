@@ -1,8 +1,8 @@
 import { inflateSync, unzlibSync } from 'fflate';
 import { IccError, loadLittleCms, type IccColorModel } from '../wasm/lcms';
 
-const MAX_SIDE = 30_000;
-const MAX_PIXELS = 100_000_000;
+const DEFAULT_LIMITS: TiffLimits = { maxSide: 30_000, maxPixels: 100_000_000 };
+const MAX_PIXELS = 300_000_000;
 const MAX_IFD_ENTRIES = 4096;
 const MAX_SAMPLES = 8;
 const MAX_SEGMENTS = 1_000_000;
@@ -40,6 +40,8 @@ export interface TiffProbe {
   dpi: TiffDpi | null;
   hasIcc: boolean;
 }
+
+export interface TiffLimits { readonly maxSide: number; readonly maxPixels: number }
 
 interface Entry { type: number; count: number; value: number; inline: number }
 
@@ -87,14 +89,14 @@ interface SegmentGeometry {
  * Reads first-IFD dimensions and metadata without touching compressed pixels. This mirrors
  * ImageImporter.decode's pre-decode size gate (Compositor/IO/ImageImporter.swift).
  */
-export function tiffDimensions(bytes: Uint8Array): TiffProbe {
-  const parsed = parse(bytes);
+export function tiffDimensions(bytes: Uint8Array, limits: TiffLimits = DEFAULT_LIMITS): TiffProbe {
+  const parsed = parse(bytes, limits);
   return { width: parsed.width, height: parsed.height, dpi: parsed.dpi, hasIcc: parsed.hasIcc };
 }
 
 /** Decodes the first TIFF IFD to straight-alpha sRGB RGBA8, applying an embedded ICC profile when present. */
-export async function decodeTiff(bytes: Uint8Array): Promise<TiffResult> {
-  const parsed = parse(bytes);
+export async function decodeTiff(bytes: Uint8Array, limits: TiffLimits = DEFAULT_LIMITS): Promise<TiffResult> {
+  const parsed = parse(bytes, limits);
   const layout = readLayout(parsed);
   if (layout.compression === 7) return decodeJpegTiff(parsed, layout);
 
@@ -119,15 +121,15 @@ export async function decodeTiff(bytes: Uint8Array): Promise<TiffResult> {
 }
 
 /** Decodes 16-bit integer TIFF samples without quantizing untagged RGB/gray data. */
-export async function decodeTiffNative(bytes: Uint8Array): Promise<TiffNativeResult> {
-  const parsed = parse(bytes), layout = readLayout(parsed);
+export async function decodeTiffNative(bytes: Uint8Array, limits: TiffLimits = DEFAULT_LIMITS): Promise<TiffNativeResult> {
+  const parsed = parse(bytes, limits), layout = readLayout(parsed);
   if (layout.bits !== 16 || layout.compression === 7) {
-    return { ...await decodeTiff(bytes), bitDepth: 8 };
+    return { ...await decodeTiff(bytes, limits), bitDepth: 8 };
   }
   if (parsed.iccProfile && [0, 1, 2, 3, 5].includes(layout.photometric)) {
     // M6 requires deterministic profile handling. The committed lcms bridge currently emits RGB8;
     // expand that result rather than bypassing the profile (the precision deviation is reported).
-    const managed = await decodeTiff(bytes), expanded = new Uint16Array(managed.data.length);
+    const managed = await decodeTiff(bytes, limits), expanded = new Uint16Array(managed.data.length);
     for (let i = 0; i < managed.data.length; i++) expanded[i] = managed.data[i]! * 257;
     return { ...managed, data: expanded, bitDepth: 16 };
   }
@@ -139,7 +141,7 @@ export async function decodeTiffNative(bytes: Uint8Array): Promise<TiffNativeRes
     hasIcc: parsed.hasIcc, bitDepth: 16 };
 }
 
-function parse(bytes: Uint8Array): Parsed {
+function parse(bytes: Uint8Array, limits: TiffLimits): Parsed {
   if (bytes.length < 8) throw new TiffError('signature', 'TIFF header is truncated');
   const little = bytes[0] === 0x49 && bytes[1] === 0x49;
   const big = bytes[0] === 0x4d && bytes[1] === 0x4d;
@@ -168,7 +170,7 @@ function parse(bytes: Uint8Array): Parsed {
   }
   const sourceWidth = requiredScalar({ bytes, view, little, entries }, 256);
   const sourceHeight = requiredScalar({ bytes, view, little, entries }, 257);
-  validateDimensions(sourceWidth, sourceHeight);
+  validateDimensions(sourceWidth, sourceHeight, limits);
   const orientation = scalar({ bytes, view, little, entries }, 274, 1);
   if (!Number.isInteger(orientation) || orientation < 1 || orientation > 8) {
     throw new TiffError('format', `Invalid TIFF orientation ${orientation}`);
@@ -822,9 +824,11 @@ function checkedMultiply(a: number, b: number, label: string): number {
   return value;
 }
 
-function validateDimensions(width: number, height: number): void {
+function validateDimensions(width: number, height: number, limits: TiffLimits = DEFAULT_LIMITS): void {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new TiffError('dimensions', 'Invalid TIFF dimensions');
-  if (width > MAX_SIDE || height > MAX_SIDE || width * height > MAX_PIXELS) throw new TiffError('dimensions', 'TIFF dimensions exceed the 30,000-pixel side or 100-megapixel limit');
+  if (width > limits.maxSide || height > limits.maxSide || width * height > limits.maxPixels) {
+    throw new TiffError('dimensions', `TIFF dimensions exceed the ${limits.maxSide.toLocaleString('en-US')}-pixel side or ${limits.maxPixels / 1_000_000}-megapixel limit`);
+  }
 }
 
 function toByte(value: number, max: number): number { return Math.floor((value * 255 + Math.floor(max / 2)) / max); }

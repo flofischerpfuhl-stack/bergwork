@@ -149,6 +149,8 @@ export class GpuCompositor {
   /** The LUT samples last uploaded per layer, so an unchanged adjustment is not re-uploaded every frame. */
   private lutUploaded = new Map<string, Uint8Array | Float32Array>();
   private highPrecisionLuts = false;
+  private textureByteBudget = 384 * 1024 * 1024;
+  private requestHydration: ((raster: Raster) => void) | null = null;
   adjustmentPrograms: AdjustmentProgramProvider = adjustmentProgram;
   /** Adjustment layers drawn without a GPU implementation in the last composite. */
   skippedAdjustments = 0;
@@ -222,6 +224,16 @@ export class GpuCompositor {
     let bytes = 0;
     for (const slot of this.slots.values()) for (const chunk of slot.chunks.values()) bytes += chunk.bytes;
     return bytes;
+  }
+
+  /** Tile RAM and GPU textures have independent caps; hosts may lower this for constrained devices. */
+  configureResidency(options: { textureByteBudget?: number; requestHydration?: (raster: Raster) => void }): void {
+    if (options.textureByteBudget !== undefined) {
+      if (!Number.isSafeInteger(options.textureByteBudget) || options.textureByteBudget < 0) throw new RangeError('Invalid GPU texture budget');
+      this.textureByteBudget = options.textureByteBudget;
+    }
+    this.requestHydration = options.requestHydration ?? null;
+    this.collectTextures(true);
   }
 
   resize(width: number, height: number): void {
@@ -547,12 +559,19 @@ export class GpuCompositor {
   }
 
   /** Drops textures of layers not drawn for a while. */
-  private collectTextures(): void {
+  private collectTextures(enforceBudget = false): void {
     for (const [key, slot] of this.slots) {
       if (this.frame - slot.lastUsed > 120) {
         for (const chunk of slot.chunks.values()) chunk.source.destroy();
         this.slots.delete(key);
       }
+    }
+    if (!enforceBudget && this.textureBytes <= this.textureByteBudget) return;
+    const cold = [...this.slots.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+    for (const [key, slot] of cold) {
+      if (this.textureBytes <= this.textureByteBudget) break;
+      for (const chunk of slot.chunks.values()) chunk.source.destroy();
+      this.slots.delete(key);
     }
   }
 
@@ -864,7 +883,7 @@ export class GpuCompositor {
       acc = next;
     }
     for (const t of temporaries) this.release(t);
-    if (this.frame % 60 === 0) this.collectTextures();
+    if (this.frame % 60 === 0 || this.textureBytes > this.textureByteBudget) this.collectTextures(true);
     return acc;
   }
 
@@ -884,6 +903,13 @@ export class GpuCompositor {
       uSampling: nearest ? 0 : (mipLevel > 0 ? 2 : 1),
       uMipLevel: mipLevel,
     };
+  }
+
+  private residentLod(raster: Raster, transform: LayerTransform, view: ViewSpec): Raster {
+    if (!raster.hasSwappedTiles) return raster;
+    const pixelsPerSourcePixel = transform.size.width / Math.max(1, raster.width) * view.scale;
+    if (pixelsPerSourcePixel > 1 / 8) this.requestHydration?.(raster);
+    return raster.reducedCopy ?? raster;
   }
 
   /** Target-pixel bounds of a grid rectangle, expanded for edge antialiasing. */
@@ -915,8 +941,9 @@ export class GpuCompositor {
     if (layer.mask && maskRaster) {
       const placement = hooks.maskPlacement(layer);
       const maskPlace = placement ?? hooks.transform(layer);
-      maskTarget = this.renderMask(null, maskRaster, `mask:${layer.id}`, maskPlace, view,
-        placement ? maskBackground(maskRaster) : 0);
+      const drawnMask = this.residentLod(maskRaster, maskPlace, view);
+      maskTarget = this.renderMask(null, drawnMask, `mask:${layer.id}:${drawnMask === maskRaster ? 'full' : 'lod'}`, maskPlace, view,
+        placement ? maskBackground(drawnMask) : 0);
     }
     if (brush?.target === 'mask' && brushState && maskTarget) {
       const paintedMask = this.overlayBrushMask(maskTarget, brush, brushState, view);
@@ -927,11 +954,12 @@ export class GpuCompositor {
     if (!raster) this.copy(backdrop, out, view);
     else {
       const transform = hooks.transform(layer);
-      const slot = this.texture(`px:${layer.id}`, raster);
-      const u = this.layerUniforms(raster, transform, view);
+      const drawnRaster = this.residentLod(raster, transform, view);
+      const slot = this.texture(`px:${layer.id}:${drawnRaster === raster ? 'full' : 'lod'}`, drawnRaster);
+      const u = this.layerUniforms(drawnRaster, transform, view);
       const restricted = slot.chunks.size > 1;
       if (!slot.chunks.size || restricted) this.copy(backdrop, out, view);
-      const gridToDoc = pixelToDocument(transform, raster.width, raster.height);
+      const gridToDoc = pixelToDocument(transform, drawnRaster.width, drawnRaster.height);
       for (const chunk of slot.chunks.values()) {
         const rect = restricted
           ? this.gridRect(chunk.x, chunk.y, chunk.width, chunk.height, gridToDoc, view)
@@ -1042,6 +1070,9 @@ export class GpuCompositor {
   /** Builds a mask in view space, replacing disjoint chunk interiors over a zero-inside base. */
   private renderMask(previous: RenderTexture | null, raster: Raster, slotKey: string, placement: LayerTransform, view: ViewSpec,
     background: number): RenderTexture {
+    const original = raster;
+    raster = this.residentLod(raster, placement, view);
+    if (raster !== original) slotKey += ':lod';
     const slot = this.texture(slotKey, raster);
     const docToGrid = invert(pixelToDocument(placement, raster.width, raster.height));
     const gx = placement.size.width / raster.width * (view.snap ? 1 : view.scale);

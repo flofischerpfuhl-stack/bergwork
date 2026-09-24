@@ -20,11 +20,30 @@ export const TILE = 256;
 
 export type Channels = 1 | 4;
 
+export class TileNotResidentError extends Error {
+  override readonly name = 'TileNotResidentError';
+  constructor(readonly tileIndex: number) {
+    super(`Raster tile ${tileIndex} is swapped out; call ensureResident() before synchronous pixel access.`);
+  }
+}
+
 /** The encoded bytes a raster was decoded from, kept while its pixels are unchanged. */
 export interface EncodedSource {
   readonly bytes: Uint8Array;
   readonly mime: string;
   readonly sha256: string;
+}
+
+/** Storage indirection kept synchronous for existing kernels; swapped stores hydrate before use. */
+export interface RasterTileStorage {
+  readonly tiles: ReadonlyArray<PixelArray | null>;
+  /** Lets lazy stores validate metadata without faulting every tile in during construction. */
+  validateFormat?(format: RasterFormat): void;
+  residency?(index: number): 'zero' | 'resident' | 'swapped';
+}
+
+export class ResidentTileStorage implements RasterTileStorage {
+  constructor(readonly tiles: ReadonlyArray<PixelArray | null>) {}
 }
 
 let nextSerial = 1;
@@ -40,12 +59,14 @@ export class Raster {
   readonly maximum: 255 | 65535;
   readonly cols: number;
   readonly rows: number;
+  private tileStorage: RasterTileStorage;
+  private reducedValue: Raster | null = null;
   /** Row-major sample arrays; null means every sample of the tile is zero. Never mutated after construction. */
-  readonly tiles: ReadonlyArray<PixelArray | null>;
+  get tiles(): ReadonlyArray<PixelArray | null> { return this.tileStorage.tiles; }
   /** Original encoded bytes, when these pixels are exactly the decoded file. */
   readonly source: EncodedSource | null;
 
-  constructor(width: number, height: number, channels: Channels, tiles: ReadonlyArray<PixelArray | null>,
+  constructor(width: number, height: number, channels: Channels, tiles: ReadonlyArray<PixelArray | null> | RasterTileStorage,
     options: { id?: string; source?: EncodedSource | null; format?: RasterFormat } = {}) {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) {
       throw new RangeError(`Invalid raster size ${width}×${height}`);
@@ -57,14 +78,17 @@ export class Raster {
     this.maximum = maximumFor(this.format);
     this.cols = Math.ceil(width / TILE);
     this.rows = Math.ceil(height / TILE);
-    if (tiles.length !== this.cols * this.rows) throw new RangeError('Tile count does not match raster size');
-    const sixteen = this.format === 'rgba16';
-    for (const tile of tiles) {
-      if (tile && sixteen !== (tile instanceof Uint16Array)) {
-        throw new RangeError(`Pixel format ${this.format} uses the wrong tile array type`);
+    this.tileStorage = Array.isArray(tiles) ? new ResidentTileStorage(tiles) : tiles as RasterTileStorage;
+    if (this.tiles.length !== this.cols * this.rows) throw new RangeError('Tile count does not match raster size');
+    if (this.tileStorage.validateFormat) this.tileStorage.validateFormat(this.format);
+    else {
+      const sixteen = this.format === 'rgba16';
+      for (const tile of this.tiles) {
+        if (tile && sixteen !== (tile instanceof Uint16Array)) {
+          throw new RangeError(`Pixel format ${this.format} uses the wrong tile array type`);
+        }
       }
     }
-    this.tiles = tiles;
     this.serial = nextSerial++;
     this.id = options.id ?? uuid();
     this.source = options.source ?? null;
@@ -72,6 +96,57 @@ export class Raster {
 
   tileWidth(col: number): number { return Math.min(TILE, this.width - col * TILE); }
   tileHeight(row: number): number { return Math.min(TILE, this.height - row * TILE); }
+
+  /** Storage-layer hook. Pixel content and raster identity do not change. */
+  adoptTileStorage(storage: RasterTileStorage): void {
+    if (storage.tiles.length !== this.cols * this.rows) throw new RangeError('Tile count does not match raster size');
+    storage.validateFormat?.(this.format);
+    this.tileStorage = storage;
+  }
+
+  tileResidency(index: number): 'zero' | 'resident' | 'swapped' {
+    if (index < 0 || index >= this.cols * this.rows) throw new RangeError('Tile index is outside the raster');
+    return this.tileStorage.residency?.(index) ?? (this.tiles[index] ? 'resident' : 'zero');
+  }
+
+  get hasSwappedTiles(): boolean {
+    if (!this.tileStorage.residency) return false;
+    for (let index = 0; index < this.cols * this.rows; index++) {
+      if (this.tileStorage.residency(index) === 'swapped') return true;
+    }
+    return false;
+  }
+
+  /** Always-resident navigation copy. It is populated by the storage layer before first eviction. */
+  get reducedCopy(): Raster | null { return this.reducedValue; }
+  installReducedCopy(reduced: Raster): void {
+    if (reduced.channels !== this.channels) throw new RangeError('Reduced raster channels do not match');
+    this.reducedValue = reduced;
+  }
+
+  /** Builds the fixed 1/8 navigation LOD tile-wise without materialising the full raster. */
+  makeReducedCopy(factor = 8): Raster {
+    if (!Number.isInteger(factor) || factor < 2) throw new RangeError('Invalid reduced-raster factor');
+    if (this.reducedValue) return this.reducedValue;
+    const width = Math.max(1, Math.ceil(this.width / factor));
+    const height = Math.max(1, Math.ceil(this.height / factor));
+    const data = makePixelArray(this.format, width * height * this.channels);
+    const ch = this.channels;
+    for (let y = 0; y < height; y++) {
+      const sy = Math.min(this.height - 1, y * factor);
+      for (let x = 0; x < width; x++) {
+        const sx = Math.min(this.width - 1, x * factor);
+        const col = Math.floor(sx / TILE), row = Math.floor(sy / TILE);
+        const tile = this.tiles[row * this.cols + col];
+        if (!tile) continue;
+        const source = ((sy - row * TILE) * this.tileWidth(col) + (sx - col * TILE)) * ch;
+        const target = (y * width + x) * ch;
+        for (let channel = 0; channel < ch; channel++) data[target + channel] = tile[source + channel]!;
+      }
+    }
+    this.reducedValue = Raster.fromPixels(width, height, ch, data, { format: this.format });
+    return this.reducedValue;
+  }
 
   static blank(width: number, height: number, channels: Channels,
     options: { format?: RasterFormat } = {}): Raster {

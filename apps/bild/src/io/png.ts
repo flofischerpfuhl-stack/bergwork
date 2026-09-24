@@ -2,8 +2,7 @@ import { unzlibSync, zlibSync } from 'fflate';
 import type { Chromaticities, IccColorModel } from '../wasm/lcms';
 
 const SIGNATURE = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-const MAX_SIDE = 30_000;
-const MAX_PIXELS = 100_000_000;
+const DEFAULT_LIMITS: PngLimits = { maxSide: 30_000, maxPixels: 100_000_000 };
 
 export class PngError extends Error {
   readonly code: string;
@@ -76,15 +75,19 @@ export interface PngEncodeOptions {
   level?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
   /** Emits PNG16 and requires a Uint16Array. Defaults to the legacy PNG8 path. */
   bitDepth?: 8 | 16;
+  /** The editor profile owns the limit; direct codec callers retain Lite defaults. */
+  limits?: PngLimits;
 }
+
+export interface PngLimits { readonly maxSide: number; readonly maxPixels: number }
 
 /**
  * Lossless PNG decoder used instead of canvas/ImageBitmap, which may premultiply
  * semi-transparent pixels. Mask PNGs stay scalar, matching LayerMask.isValid
  * (Compositor/Document/LayerMask.swift).
  */
-export function decodePng(bytes: Uint8Array): PngResult {
-  const parsed = parsePng(bytes, true);
+export function decodePng(bytes: Uint8Array, limits: PngLimits = DEFAULT_LIMITS): PngResult {
+  const parsed = parsePng(bytes, true, limits);
   const h = parsed.header;
   const samples = samplesPerPixel(h.colorType);
   const expected = inflatedSize(h.width, h.height, h.bitDepth, samples, h.interlace);
@@ -130,8 +133,8 @@ export function decodePng(bytes: Uint8Array): PngResult {
   };
 }
 
-export function decodePngRGBA(bytes: Uint8Array): Omit<PngResult, 'channels'> & { channels: 4 } {
-  const result = decodePng(bytes);
+export function decodePngRGBA(bytes: Uint8Array, limits: PngLimits = DEFAULT_LIMITS): Omit<PngResult, 'channels'> & { channels: 4 } {
+  const result = decodePng(bytes, limits);
   if (result.channels === 4) return result as Omit<PngResult, 'channels'> & { channels: 4 };
   const rgba = new Uint8Array(result.width * result.height * 4);
   for (let src = 0, dst = 0; src < result.data.length; src++, dst += 4) {
@@ -144,20 +147,20 @@ export function decodePngRGBA(bytes: Uint8Array): Omit<PngResult, 'channels'> & 
   return { ...result, channels: 4, data: rgba };
 }
 
-export function pngDimensions(bytes: Uint8Array): { width: number; height: number } {
+export function pngDimensions(bytes: Uint8Array, limits: PngLimits = DEFAULT_LIMITS): { width: number; height: number } {
   checkSignature(bytes);
   if (bytes.length < 33 || readU32(bytes, 8) !== 13 || chunkType(bytes, 12) !== 'IHDR') {
     throw new PngError('header', 'PNG does not begin with a valid IHDR chunk');
   }
   checkChunkCrc(bytes, 12, 13);
   const width = readU32(bytes, 16), height = readU32(bytes, 20);
-  validateDimensions(width, height);
+  validateDimensions(width, height, limits);
   return { width, height };
 }
 
 /** Extracts ICC/cHRM/gAMA metadata and unquantized color samples for ImageImporter.swift's sRGB conversion. */
-export function decodePngColorSamples(bytes: Uint8Array): PngColorSamples {
-  const parsed = parsePng(bytes, true), h = parsed.header;
+export function decodePngColorSamples(bytes: Uint8Array, limits: PngLimits = DEFAULT_LIMITS): PngColorSamples {
+  const parsed = parsePng(bytes, true, limits), h = parsed.header;
   const samples = samplesPerPixel(h.colorType), expected = inflatedSize(h.width, h.height, h.bitDepth, samples, h.interlace);
   let inflated: Uint8Array;
   try { inflated = unzlibSync(concat(parsed.idat)); }
@@ -189,8 +192,8 @@ export function decodePngColorSamples(bytes: Uint8Array): PngColorSamples {
 }
 
 /** Decodes color channels without the legacy RGBA8 quantization step. */
-export function decodePngNativeRGBA(bytes: Uint8Array): PngNativeRgba {
-  const samples = decodePngColorSamples(bytes), count = samples.width * samples.height;
+export function decodePngNativeRGBA(bytes: Uint8Array, limits: PngLimits = DEFAULT_LIMITS): PngNativeRgba {
+  const samples = decodePngColorSamples(bytes, limits), count = samples.width * samples.height;
   const data = samples.bits === 16 ? new Uint16Array(count * 4) : new Uint8Array(count * 4);
   const maximum = samples.bits === 16 ? 65535 : 255;
   for (let pixel = 0; pixel < count; pixel++) {
@@ -221,7 +224,7 @@ export function encodePng(
   channels: 1 | 4,
   options: PngEncodeOptions = {},
 ): Uint8Array {
-  validateDimensions(width, height);
+  validateDimensions(width, height, options.limits);
   if (channels !== 1 && channels !== 4) throw new PngError('pixels', 'PNG channels must be 1 or 4');
   const bitDepth = options.bitDepth ?? 8;
   const expected = width * height * channels;
@@ -276,7 +279,7 @@ export function encodePng(
   return concat(chunks);
 }
 
-function parsePng(bytes: Uint8Array, requireData: boolean): ParsedPng {
+function parsePng(bytes: Uint8Array, requireData: boolean, limits: PngLimits): ParsedPng {
   checkSignature(bytes);
   let offset = 8;
   let header: Header | null = null;
@@ -304,7 +307,7 @@ function parsePng(bytes: Uint8Array, requireData: boolean): ParsedPng {
       case 'IHDR': {
         if (header !== null || length !== 13) throw new PngError('header', 'Invalid PNG IHDR');
         const width = readU32(bytes, start), height = readU32(bytes, start + 4);
-        validateDimensions(width, height);
+        validateDimensions(width, height, limits);
         const bitDepth = bytes[start + 8]!, colorType = bytes[start + 9]!;
         if (!validDepth(colorType, bitDepth)) throw new PngError('format', `Unsupported PNG color type ${colorType} / depth ${bitDepth}`);
         if (bytes[start + 10] !== 0 || bytes[start + 11] !== 0 || (bytes[start + 12] !== 0 && bytes[start + 12] !== 1)) {
@@ -635,9 +638,9 @@ function validDepth(colorType: number, depth: number): boolean {
     || ((colorType === 4 || colorType === 6) && (depth === 8 || depth === 16));
 }
 
-function validateDimensions(width: number, height: number): void {
+function validateDimensions(width: number, height: number, limits: PngLimits = DEFAULT_LIMITS): void {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1
-    || width > MAX_SIDE || height > MAX_SIDE || width * height > MAX_PIXELS) {
+    || width > limits.maxSide || height > limits.maxSide || width * height > limits.maxPixels) {
     // Same canvas guard as ImageExporter.render (Compositor/IO/ImageExporter.swift).
     throw new PngError('dimensions', 'PNG dimensions must be 1…30000 per side and at most 100 megapixels');
   }

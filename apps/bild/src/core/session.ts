@@ -9,11 +9,11 @@
 
 import {
   ADJUSTMENT_KINDS, adoptClipping, descendantIds, documentsEqual, effectiveVisibleIds, hierarchyEntries,
-  isValidStructure, layerPixelHeight, layerPixelWidth, maskTransform, MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
+  isValidStructure, layerPixelHeight, layerPixelWidth, maskTransform, MAX_LAYERS, newLayer,
   releaseDetachedClipping, renderLayers as renderLayersOf, uniqueName, usedPixels, withLayerRaster,
   type AdjustmentKind, type BlendMode, type CanvasDocument, type HierarchyEntry, type Layer, type LayerAdjustment,
   type LayerMask, BLEND_MODES,
-type Guide, } from './document';
+type Guide, type DocumentLimits, LITE_DOCUMENT_LIMITS, } from './document';
 import {
   boundingBox, center, corners as transformCorners, following, isValidTransform, makeTransform, mirrored, samePlacement,
   snapOffset, transformsEqual, type LayerTransform, type Point, type Rect, type Size,
@@ -94,7 +94,15 @@ export interface SessionServices {
   confirmLiveMaskDeletion?(count: number): Promise<'bake' | 'unlink' | 'cancel'>;
   /** Translates generated names ('Layer', 'Folder', adjustment kinds, 'copy', 'Untitled') into the UI language. */
   label?(text: string): string;
+  /** Async storage boundary used before existing synchronous commands touch raster bytes. */
+  residency?: {
+    ensureResident(rasters: Iterable<Raster>, rect?: Rect): Promise<{ release(): void }>;
+  };
+  limits?: DocumentLimits;
 }
+
+export type RasterCommandKind = 'brush' | 'fill' | 'filter' | 'adjustment' | 'transform'
+  | 'clipboard' | 'clipboardMerged' | 'export' | 'save' | 'history';
 
 /** Open edits outside the session (adjustment and filter panels) that make the document read-only meanwhile. */
 export const editBlockers: ((session: EditorSession) => boolean)[] = [];
@@ -184,6 +192,7 @@ export class EditorSession {
   layer(id: string | null | undefined): Layer | null { return id ? this.document?.layers.find((l) => l.id === id) ?? null : null; }
   get isModified(): boolean { return this.history.isModified; }
   get selection() { return this.document?.selection ?? null; }
+  get limits(): DocumentLimits { return this.services?.limits ?? LITE_DOCUMENT_LIMITS; }
 
   get canEditLayers(): boolean {
     return this.document !== null && !editBlockers.some((blocks) => blocks(this)) && !this.isProjectBusy && !this.isImporting && this.renamingLayerId === null
@@ -217,6 +226,50 @@ export class EditorSession {
   edit(name: string, body: () => void): void {
     this.beginEdit(name);
     try { body(); } finally { this.endEdit(); }
+  }
+
+  /** The complete synchronous pixel input set for one command dispatch. */
+  rastersForCommand(kind: RasterCommandKind): Raster[] {
+    const document = this.document;
+    if (!document) return [];
+    const result = new Set<Raster>();
+    const addLayer = (layer: Layer | null | undefined) => {
+      if (!layer) return;
+      if (layer.raster) result.add(layer.raster);
+      if (layer.mask?.enabled) result.add(layer.mask.raster);
+      if (layer.maskSourceId) {
+        const base = document.layers.find((candidate) => candidate.id === layer.maskSourceId);
+        if (base?.raster) result.add(base.raster);
+        if (base?.mask?.enabled) result.add(base.mask.raster);
+      }
+    };
+    const addDocument = (value: CanvasDocument | null) => {
+      if (!value) return;
+      for (const layer of value.layers) addLayer(layer);
+      if (value.selection) result.add(value.selection.mask);
+    };
+    if (kind === 'save') {
+      addDocument(document);
+      const history = this.history.exportState();
+      for (const entry of [...history.past, ...history.future]) {
+        addDocument(entry.before.document);
+        addDocument(entry.after.document);
+      }
+    } else if (kind === 'export' || kind === 'clipboardMerged' || kind === 'adjustment') {
+      for (const layer of renderLayersOf(document.layers)) addLayer(layer);
+    } else {
+      const ids = this.selectedLayerIds.size ? this.selectedLayerIds : new Set(this.activeLayerId ? [this.activeLayerId] : []);
+      for (const id of ids) addLayer(document.layers.find((layer) => layer.id === id));
+    }
+    if (kind !== 'save' && document.selection) result.add(document.selection.mask);
+    return [...result];
+  }
+
+  /** Hydrates, pins, executes, then unpins at the one async→sync command boundary. */
+  async runHydrated<T>(kind: RasterCommandKind, body: () => T | Promise<T>, rect?: Rect): Promise<T> {
+    const lease = await this.services?.residency?.ensureResident(this.rastersForCommand(kind), rect);
+    try { return await body(); }
+    finally { lease?.release(); }
   }
 
   private setLayers(layers: readonly Layer[]): void {
@@ -271,7 +324,8 @@ export class EditorSession {
   // MARK: Documents
 
   createDocument(width: number, height: number, emptyLayer = false): void {
-    if (this.isProjectBusy || this.isImporting || !(width >= 1 && width <= MAX_SIDE && height >= 1 && height <= MAX_SIDE)) return;
+    if (this.isProjectBusy || this.isImporting || !(width >= 1 && width <= this.limits.maxSide && height >= 1 && height <= this.limits.maxSide)
+      || width * height > this.limits.maxPixels) return;
     this.commitTransform();
     this.beginEdit('New Canvas');
     const document: CanvasDocument = { id: uuid(), width, height, resolution: 72, layers: [], artboards: [], selection: null };
@@ -343,7 +397,7 @@ export class EditorSession {
     } finally { this.endEdit(); }
   }
 
-  remainingPixelBudget(): number { return MAX_PIXELS - usedPixels(this.document?.layers ?? []); }
+  remainingPixelBudget(): number { return this.limits.maxPixels - usedPixels(this.document?.layers ?? []); }
 
   addBlankLayer(): void {
     const document = this.document;

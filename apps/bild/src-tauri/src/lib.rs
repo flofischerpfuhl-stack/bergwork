@@ -7,6 +7,7 @@ use tauri::{
 
 #[cfg(feature = "a6-spike")]
 mod a6_spike;
+mod scratch;
 
 #[tauri::command]
 fn write_matrix_result(result: String) -> Result<(), String> {
@@ -64,6 +65,11 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             write_matrix_result,
+            scratch::scratch_write,
+            scratch::scratch_read,
+            scratch::scratch_remove,
+            scratch::scratch_list,
+            scratch::scratch_flush,
             #[cfg(feature = "a6-spike")]
             a6_spike::a6_write_result,
             #[cfg(feature = "a6-spike")]
@@ -76,6 +82,8 @@ pub fn run() {
         .setup(|app| {
             let measuring_a6 =
                 cfg!(feature = "a6-spike") && env::var_os("FERNWORK_A6_SPIKE").is_some();
+            let scratch_path = app.path().app_cache_dir()?.join("scratch");
+            app.manage(scratch::ScratchManager::open(scratch_path).map_err(std::io::Error::other)?);
             let measuring = env::var_os("FERNWORK_WEBVIEW_MATRIX").is_some();
             let url = if measuring_a6 {
                 WebviewUrl::App("index.html?a6-spike=1".into())

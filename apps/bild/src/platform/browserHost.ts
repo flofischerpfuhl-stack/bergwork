@@ -5,6 +5,8 @@
 
 import type { HostAdapter } from '../../contracts';
 import type { ImageDecoderHost } from './imageDecoder';
+import { BrowserScratchHost, OpfsScratchHost } from './opfsScratchHost';
+import type { ScratchHostCapability } from './scratchHost';
 
 export type { HostDecodedImage, ImageDecoderHost } from './imageDecoder';
 
@@ -19,7 +21,7 @@ export type SaveKind = 'project' | 'png' | 'jpeg';
  * Choosing comes first and on its own: a browser only shows its save dialog while it still counts the user's click
  * or key press, so the (possibly slow) encoding must happen afterwards.
  */
-export interface FileTargetHost extends HostAdapter, ImageDecoderHost {
+export interface FileTargetHost extends HostAdapter, ImageDecoderHost, Partial<ScratchHostCapability> {
   chooseSaveTarget?(suggestedName: string, kind: SaveKind): Promise<SaveTarget | null>;
   saveFileTo?(target: SaveTarget, blob: Blob): Promise<void>;
 }
@@ -71,6 +73,8 @@ export function createBrowserHost(): FileTargetHost {
   } : {};
   return {
     ...targets,
+    ...(OpfsScratchHost.available() || typeof indexedDB !== 'undefined'
+      ? { scratchHost: new BrowserScratchHost(), editorProfile: 'lite' as const } : {}),
     async chooseImages() {
       return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,image/webp,image/avif,image/gif,.heic,.heif,.tif,.tiff,.webp,.avif,.gif', true);
     },
