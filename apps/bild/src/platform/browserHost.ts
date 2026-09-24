@@ -71,7 +71,9 @@ export function createBrowserHost(): FileTargetHost {
   } : {};
   return {
     ...targets,
-    async chooseImages() { return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,.heic,.heif,.tif,.tiff', true); },
+    async chooseImages() {
+      return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,image/webp,image/avif,image/gif,.heic,.heif,.tif,.tiff,.webp,.avif,.gif', true);
+    },
     async chooseProject() { return (await pick('.fwimg,.zip,.comp,application/zip', false))[0] ?? null; },
     async saveFile(blob, suggestedName) {
       const url = URL.createObjectURL(blob);

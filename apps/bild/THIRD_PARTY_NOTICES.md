@@ -163,6 +163,23 @@ from an original 64×64 red/green image using Ubuntu libheif 1.17.6 and x265
 3.5 (`heif-enc --quality 95`). It contains no third-party artwork. Its SHA-256
 is `b496c28c0bb1b99dce93e4c40ac0c5aa506732c9e0c656af8e103b2a91474208`.
 
+## WebP codec
+
+WebP encoding and deterministic decoding of ICC-tagged WebP use libwebp
+1.6.0, copyright Google LLC, under the BSD 3-Clause License. The official
+release archive, SHA-256, generated WASM checksum, and complete license are
+recorded in `src/wasm/webp/README.md` and `src/wasm/webp/LICENSE`. The module is
+loaded only when its codec path is requested.
+
+## AVIF codec
+
+AVIF encoding and deterministic decoding of ICC-tagged AVIF use libavif 1.3.0
+(BSD 2-Clause), dav1d 1.5.1 (BSD 2-Clause), libaom 3.12.1 (BSD 2-Clause), and
+libavif's pinned libyuv conversion subset (BSD 3-Clause). Exact archive and
+WASM checksums and the complete applicable license terms are in
+`src/wasm/avif/README.md` and `src/wasm/avif/LICENSE`. The 3.8 MiB module is a
+separate lazy chunk and is not part of application startup.
+
 ## BiRefNet_lite model weights
 
 The optional best-quality subject model is BiRefNet_lite by Peng Zheng,
