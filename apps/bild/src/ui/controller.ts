@@ -164,7 +164,8 @@ export class EditorController {
     if (this.session.selection && this.maskFromSelection) this.maskFromSelection(revealing);
     else this.session.addLayerMask(revealing);
   }
-  jpegOptions: JpegOptions = { ...DEFAULT_JPEG, quality: storedQuality() };
+  /** JPEG defaults for `EditorHandle.exportImage`; the Export As dialog keeps its own settings per document. */
+  jpegOptions: JpegOptions = { ...DEFAULT_JPEG };
 
   constructor(host: HostAdapter, locale: Locale, theme: 'dark' | 'light', profile: EditorProfile = profileFor('lite')) {
     this.host = host;
@@ -577,7 +578,7 @@ export class EditorController {
     };
   }
 
-  /** Request defaults shared by every entry point: the project name and the stored JPEG settings. */
+  /** Request defaults shared by every entry point (the Export As dialog, `EditorHandle.exportImage`): the project name and the JPEG defaults. */
   exportRequest(format: ExportFormat, overrides: Partial<ExportRequest> = {}, session: EditorSession = this.session): ExportRequest {
     const jpeg = format === 'jpeg' ? { quality: this.jpegOptions.quality,
       matte: { red: this.jpegOptions.red, green: this.jpegOptions.green, blue: this.jpegOptions.blue } } : {};
@@ -640,13 +641,6 @@ export class EditorController {
       ? { quality: jpeg.quality, matte: { red: jpeg.red, green: jpeg.green, blue: jpeg.blue } } : {}, session);
     const [file] = await this.exportFiles(request, {}, session);
     return new Blob([file!.bytes as Uint8Array<ArrayBuffer>], { type: file!.mime });
-  }
-
-  /** File > Export PNG/JPEG: the whole canvas at 1×, through the same pipeline as the export dialog. */
-  async exportTo(format: 'png' | 'jpeg'): Promise<void> {
-    if (!this.session.document) return;
-    const exported = await this.exportWith(this.exportRequest(format));
-    if (exported && format === 'jpeg') storeQuality(this.jpegOptions.quality);
   }
 
   async closeTab(id: string): Promise<void> {
@@ -733,8 +727,3 @@ export function trimToAlpha(raster: Raster): { raster: Raster; x: number; y: num
   return { raster: cropRaster(raster, bounds.x, bounds.y, bounds.width, bounds.height), x: bounds.x, y: bounds.y };
 }
 
-function storedQuality(): number {
-  const value = Number(globalThis.localStorage?.getItem('compositor.jpegExportQuality'));
-  return Number.isFinite(value) && value >= 0 && value <= 1 && globalThis.localStorage?.getItem('compositor.jpegExportQuality') !== null ? value : DEFAULT_JPEG.quality;
-}
-function storeQuality(value: number): void { try { globalThis.localStorage?.setItem('compositor.jpegExportQuality', String(value)); } catch { /* private mode */ } }

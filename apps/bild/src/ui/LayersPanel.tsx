@@ -19,6 +19,9 @@ import { filterLayers, type LayerSearchQuery } from '../core/layerSearch';
 type LayerQuery = { -readonly [K in keyof LayerSearchQuery]: K extends 'kinds' ? Layer['kind'][] : K extends 'labels' ? ColorLabel[] : LayerSearchQuery[K] };
 import type { EditorSession } from '../core/session';
 import type { MenuEntry } from './menus';
+import type { Artboard } from '../core/document';
+import { duplicateArtboard, renameArtboard } from '../core/artboardCommands';
+import { confirmDeleteArtboard, groupRowsByArtboard, isArtboardCollapsed, requestArtboardRename, selectArtboard, takeArtboardRename, selectedArtboard, toggleArtboardCollapsed, type PanelRow } from './artboardState';
 
 const ADJUSTMENT_ICONS: Record<AdjustmentKind, IconName> = {
   'Hue/Saturation': 'adjustment', 'Levels': 'levels', 'Curves': 'curves', 'Exposure': 'exposure', 'Gradient Map': 'gradientMap', 'Grain': 'grain',
@@ -315,6 +318,61 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
   );
 }
 
+/** An artboard as a top-level entry grouping its member layers (Photoshop's artboard rows). */
+function ArtboardRow({ controller, session, artboard, count, onContext }: {
+  controller: EditorController; session: EditorSession; artboard: Artboard; count: number; onContext: (id: string, x: number, y: number) => void;
+}) {
+  const t = controller.t;
+  const [renaming, setRenaming] = useState(false);
+  // A rename asked for from the menu (checked after every render of the row).
+  useEffect(() => { if (takeArtboardRename(session, artboard.id)) setRenaming(true); });
+  const collapsed = isArtboardCollapsed(session, artboard.id);
+  const selected = selectedArtboard(session)?.id === artboard.id;
+  const size = `${artboard.rect.width.toLocaleString(controller.locale)} × ${artboard.rect.height.toLocaleString(controller.locale)} px`;
+  const rename = (value: string) => { setRenaming(false); if (value.trim() && value.trim() !== artboard.name) renameArtboard(session, artboard.id, value); };
+  return (
+    <div className={`${styles.layerRow} ${styles.artboardRow} ${selected ? styles.layerRowSelected : ''}`} role="treeitem" aria-level={1} aria-expanded={!collapsed}
+      aria-selected={selected} data-artboard-id={artboard.id} data-testid="artboard-row"
+      onPointerDown={(event) => { if (event.button === 0 && !(event.target as HTMLElement).closest('button, input')) selectArtboard(session, artboard.id); }}
+      onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest('button') && session.canEditLayers) setRenaming(true); }}
+      onContextMenu={(event) => { event.preventDefault(); selectArtboard(session, artboard.id); onContext(artboard.id, event.clientX, event.clientY); }}>
+      <span className={styles.artboardSpacer} />
+      <button type="button" className={styles.disclosure} aria-label={t('Expand or collapse artboard')} data-testid="artboard-disclosure"
+        onClick={() => toggleArtboardCollapsed(session, artboard.id)}>
+        <Icon name={collapsed ? 'chevronRight' : 'chevronDown'} size={12} />
+      </button>
+      <span className={styles.iconThumb}><Icon name="artboard" size={22} /></span>
+      <div className={styles.layerText}>
+        {renaming ? (
+          <input className={styles.renameInput} defaultValue={artboard.name} autoFocus aria-label={t('Artboard name')}
+            onFocus={(event) => event.currentTarget.select()}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === 'Enter') rename(event.currentTarget.value);
+              if (event.key === 'Escape') setRenaming(false);
+            }}
+            onBlur={(event) => rename(event.currentTarget.value)} />
+        ) : <span className={styles.layerName}>{artboard.name}</span>}
+        <span className={styles.layerMeta}>{`${t('Artboard')} · ${size}${count ? ` · ${count === 1 ? t('1 layer') : t('{n} layers').replace('{n}', String(count))}` : ''}`}</span>
+      </div>
+      <button type="button" className={styles.layerMore} aria-label={`${t('More')}: ${artboard.name}`}
+        onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); onContext(artboard.id, r.left, r.bottom); }}>
+        <Icon name="more" size={16} />
+      </button>
+    </div>
+  );
+}
+
+function artboardMenuItems(controller: EditorController, session: EditorSession, id: string): MenuEntry[] {
+  const t = controller.t;
+  return [
+    { label: t('Rename…'), enabled: session.canEditLayers, run: () => requestArtboardRename(session, id) },
+    { label: t('Duplicate Artboard'), enabled: session.canEditLayers, run: () => { const copy = duplicateArtboard(session, id); if (copy) selectArtboard(session, copy); } },
+    'separator',
+    { label: t('Delete Artboard…'), enabled: session.canEditLayers, run: () => void confirmDeleteArtboard(controller, id) },
+  ];
+}
+
 function document_elementFromPoint(x: number, y: number): Element | null { return globalThis.document.elementFromPoint(x, y); }
 
 export function LayersPanel({ controller, inSheet = false }: { controller: EditorController; inSheet?: boolean }) {
@@ -327,11 +385,15 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
   const filtering = !!document && isActive(query);
   const found = filtering ? filterLayers(document, query) : null;
   // While filtering, folders open so matches inside collapsed folders show; their folders stay as context rows.
-  const rows = found ? hierarchyEntries(document!.layers, true).filter((r) => found.matchingIds.has(r.layer.id) || found.ancestorIds.has(r.layer.id))
-    : session.layerRows;
+  // Without a filter, layers are grouped under their artboards (geometric membership; the stack order is unchanged).
+  const panelRows: PanelRow[] = found
+    ? hierarchyEntries(document!.layers, true).filter((r) => found.matchingIds.has(r.layer.id) || found.ancestorIds.has(r.layer.id)).map((entry) => ({ kind: 'layer', entry }))
+    : groupRowsByArtboard(session, session.layerRows);
+  const rows = panelRows.flatMap((row) => (row.kind === 'layer' ? [row.entry] : []));
   const listRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [artboardMenu, setArtboardMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [adjustMenu, setAdjustMenu] = useState<{ x: number; y: number } | null>(null);
   const width = controller.ui.getState().layersWidth;
   const [panelWidth, setPanelWidth] = useState(width);
@@ -510,12 +572,15 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
           </button>
         </div>
       ) : null}
-      {document && (rows.length || filtering) ? (
+      {document && (panelRows.length || filtering) ? (
         <div className={styles.layerList} ref={listRef} role="tree" aria-label={t('Layers')} aria-multiselectable data-testid="layers-list">
-          {rows.map((entry) => (
-            <LayerRow key={entry.layer.id} controller={controller} session={session} entry={entry} rows={rows} drag={drag}
+          {panelRows.map((row) => row.kind === 'artboard' ? (
+            <ArtboardRow key={`artboard-${row.artboard.id}`} controller={controller} session={session} artboard={row.artboard} count={row.count}
+              onContext={(id, x, y) => setArtboardMenu({ id, x, y })} />
+          ) : (
+            <LayerRow key={row.entry.layer.id} controller={controller} session={session} entry={row.entry} rows={rows} drag={drag}
               onDragStart={found ? null : startDrag} onContext={(id, x, y) => setMenu({ id, x, y })}
-              context={!!found && !found.matchingIds.has(entry.layer.id)} />
+              context={!!found && !found.matchingIds.has(row.entry.layer.id)} />
           ))}
           {found && !found.matchingIds.size ? <div className={styles.panelNote} data-testid="layer-search-empty">{t('No matching layers')}</div> : null}
           {drag?.moved && drag.target?.index === rows.length ? <div style={{ height: 2, background: 'var(--cmp-accent)' }} /> : null}
@@ -547,6 +612,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
       </>)}
       {filterMenu ? <MenuPopup controller={controller} anchor={filterMenu} items={filterItems(t, query, setQuery)} onClose={() => setFilterMenu(null)} /> : null}
       {menu ? <MenuPopup controller={controller} anchor={menu} items={menuItems(menu.id)} onClose={() => setMenu(null)} /> : null}
+      {artboardMenu ? <MenuPopup controller={controller} anchor={artboardMenu} items={artboardMenuItems(controller, session, artboardMenu.id)} onClose={() => setArtboardMenu(null)} /> : null}
       {adjustMenu ? (
         <MenuPopup controller={controller} anchor={adjustMenu} onClose={() => setAdjustMenu(null)}
           items={ADJUSTMENT_KINDS.map((kind) => ({ label: t(kind), enabled: true, run: () => session.addAdjustment(kind) }))} />

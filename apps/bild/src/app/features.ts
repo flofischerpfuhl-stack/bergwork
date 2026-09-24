@@ -11,6 +11,7 @@ import { installRetouch } from './retouchFeature';
 import { installAdjustments } from './adjustmentsFeature';
 import { installSubject } from './subjectFeature';
 import { installGuides } from './guidesFeature';
+import { installArtboards } from './artboardFeature';
 import type { EditorProfile } from './profiles';
 
 export function installFeatures(controller: EditorController, profile: EditorProfile = controller.profile): void {
@@ -22,6 +23,7 @@ export function installFeatures(controller: EditorController, profile: EditorPro
   if (enabled.has('adjustments')) installAdjustments(controller);
   if (enabled.has('subject')) installSubject(controller);
   if (enabled.has('guides')) installGuides(controller);
+  if (enabled.has('artboards')) installArtboards(controller);
   const tools = new Set(profile.tools);
   for (const tool of controller.availableTools) if (!tools.has(tool)) controller.availableTools.delete(tool);
 }

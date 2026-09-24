@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test';
  * user's activation is still valid, so the editor must ask for the destination before the slow encoding. The picker is
  * replaced by a recorder that notes whether activation was still active when it was called and captures the bytes.
  */
-test('saving and exporting a 40-megapixel document asks for the file while the key press still counts', async ({ page }) => {
+test('saving and exporting a 40-megapixel document asks for the file while the key press or click still counts', async ({ page }) => {
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.addInitScript(() => {
@@ -54,7 +54,9 @@ test('saving and exporting a 40-megapixel document asks for the file while the k
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
   await editor.press(`${mod}+s`);
   await expect.poll(() => page.evaluate(() => (window as any).__picks[0]?.bytes ?? 0), { timeout: 180_000 }).toBeGreaterThan(10_000);
+  // The export shortcut opens File > Export As…; its Export button asks for the file while the click still counts.
   await editor.press(`${mod}+Shift+e`);
+  await page.getByTestId('export-confirm').click();
   await expect.poll(() => page.evaluate(() => (window as any).__picks[1]?.bytes ?? 0), { timeout: 180_000 }).toBeGreaterThan(10_000);
   const picks = await page.evaluate(() => (window as any).__picks);
   expect(picks.map((p: { name: string; active: boolean }) => [p.name, p.active])).toEqual([['Poster.fwimg', true], ['Poster.png', true]]);

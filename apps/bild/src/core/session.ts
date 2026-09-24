@@ -36,14 +36,14 @@ import {
 } from './locks';
 
 export type Tool =
-  | 'move' | 'marquee' | 'lasso' | 'wand' | 'crop' | 'brush' | 'spotHealing' | 'cloneStamp' | 'blur'
+  | 'move' | 'artboard' | 'marquee' | 'lasso' | 'wand' | 'crop' | 'brush' | 'spotHealing' | 'cloneStamp' | 'blur'
   | 'gradient' | 'shape' | 'eyedropper' | 'hand' | 'zoom' | 'idle';
 
-export const TOOLS: readonly Tool[] = ['move', 'marquee', 'lasso', 'wand', 'crop', 'brush', 'spotHealing', 'cloneStamp',
+export const TOOLS: readonly Tool[] = ['move', 'artboard', 'marquee', 'lasso', 'wand', 'crop', 'brush', 'spotHealing', 'cloneStamp',
   'blur', 'gradient', 'shape', 'eyedropper', 'hand', 'zoom'];
 
 export const TOOL_LABELS: Record<Tool, string> = {
-  move: 'Move / Transform (V)', marquee: 'Marquee (M)', lasso: 'Lasso (L)', wand: 'Magic Wand (W)', crop: 'Crop (C)',
+  move: 'Move / Transform (V)', artboard: 'Artboard Tool (Shift-V)', marquee: 'Marquee (M)', lasso: 'Lasso (L)', wand: 'Magic Wand (W)', crop: 'Crop (C)',
   brush: 'Brush (B) · Eraser (E)', spotHealing: 'Spot Healing Brush (J)',
   cloneStamp: 'Clone Stamp (S) · Option-click sets the source', blur: 'Smear (R)', gradient: 'Gradient (G)',
   shape: 'Shape (U) · Shift-U switches Rectangle/Ellipse', eyedropper: 'Eyedropper (I)', hand: 'Hand (H)', zoom: 'Zoom (Z)',
