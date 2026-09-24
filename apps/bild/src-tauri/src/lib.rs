@@ -72,7 +72,9 @@ pub fn run() {
                 // These replace Tauri's defaults, which are kept in the first --disable-features list. No effect
                 // outside Windows.
                 .additional_browser_args(WEBVIEW2_ARGS);
-            if !measuring {
+            // One menu, one way (PRODUCT-PLAN P4): the editor draws its own menu bar inside the window. Only macOS gets
+            // the native menu, because there it is the global menu bar at the top of the screen.
+            if !measuring && cfg!(target_os = "macos") {
                 window = window.menu(editor_menu(app.handle())?);
             }
             window.build()?;
