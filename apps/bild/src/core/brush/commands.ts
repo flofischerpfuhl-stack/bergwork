@@ -150,6 +150,7 @@ export function beginBrushStroke(session: EditorSession, point: Point, options: 
   const recorded = session.tool === 'brush' && !document!.selection && !clone ? new RecordedBrushStroke(strokeOptions) : null;
   const stroke = recorded ?? beginStroke(strokeOptions);
   const name = mask ? 'Paint Mask' : settings.mode === 'erase' ? 'Erase'
+    : settings.mode === 'dodge' ? 'Dodge' : settings.mode === 'burn' ? 'Burn' : settings.mode === 'sponge' ? 'Sponge'
     : session.tool === 'cloneStamp' ? 'Clone Stamp' : 'Brush Stroke';
   value.active = { stroke, gpu: recorded?.gpuPreview ?? null, layerId: layer!.id, sourceRaster: layer!.raster ?? null,
     sourceMaskRaster: layer!.mask?.raster ?? null, sourceTransform: layer!.transform, mask, name, changed: false };

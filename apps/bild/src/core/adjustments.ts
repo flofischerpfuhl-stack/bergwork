@@ -3,7 +3,11 @@
  * ImageAdjustments.swift, Levels.swift, Curves.swift and HueSaturation.swift.
  */
 
-import type { AdjustmentKind, LayerAdjustment } from './document';
+import type { LayerAdjustment, LayerAdjustmentKind } from './document';
+import type {
+  BasicSettings, BrightnessContrastSettings, ChannelMixerChannel, ChannelMixerSettings, ColourSettings,
+  PhotoFilterSettings,
+} from './model/types';
 
 export interface RGB { readonly red: number; readonly green: number; readonly blue: number }
 export type LevelsChannel = 'RGB' | 'Red' | 'Green' | 'Blue';
@@ -33,7 +37,7 @@ export interface GrainSettings { readonly amount: number; readonly size: number;
 
 /** Stable view used by the adjustment kernels and controls. */
 export interface ResolvedAdjustment {
-  readonly kind: AdjustmentKind;
+  readonly kind: LayerAdjustmentKind;
   readonly hue: number; readonly saturation: number; readonly lightness: number; readonly colorize: boolean;
   readonly hsvSettings: HueSaturationSettings;
   readonly levels: LevelsSettings;
@@ -78,9 +82,33 @@ export function defaultGradientMap(shadows: RGB = { red: 0, green: 0, blue: 0 },
   return { shadows: { ...shadows }, highlights: { ...highlights }, reversed: false };
 }
 export function defaultGrain(seed = 0): GrainSettings { return { amount: 25, size: 1.5, roughness: 50, seed: seed >>> 0 }; }
+export function defaultBasic(): BasicSettings {
+  return { exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0,
+    texture: 0, clarity: 0, dehaze: 0, vibrance: 0, saturation: 0, temperature: 0, tint: 0 };
+}
+const ZERO_BALANCE = { cyanRed: 0, magentaGreen: 0, yellowBlue: 0 } as const;
+export function defaultColour(): ColourSettings {
+  return {
+    blackAndWhite: { enabled: false, reds: 40, yellows: 60, greens: 40, cyans: 60, blues: 20, magentas: 80,
+      tint: false, tintColor: { red: 0.84, green: 0.75, blue: 0.62 } },
+    colourBalance: { enabled: false, shadows: ZERO_BALANCE, midtones: ZERO_BALANCE, highlights: ZERO_BALANCE, preserveLuminosity: true },
+    selectiveColour: { mode: 'relative', ranges: {} },
+  };
+}
+export function defaultBrightnessContrast(): BrightnessContrastSettings { return { brightness: 0, contrast: 0, legacy: false }; }
+export function defaultPhotoFilter(): PhotoFilterSettings {
+  return { color: { red: 1, green: 0.55, blue: 0.16 }, density: 25, preserveLuminosity: true };
+}
+export function defaultMixerChannel(red: number, green: number, blue: number): ChannelMixerChannel {
+  return { red, green, blue, constant: 0 };
+}
+export function defaultChannelMixer(): ChannelMixerSettings {
+  return { monochrome: false, red: defaultMixerChannel(100, 0, 0), green: defaultMixerChannel(0, 100, 0),
+    blue: defaultMixerChannel(0, 0, 100), gray: defaultMixerChannel(40, 40, 20) };
+}
 
-export function defaultAdjustment<K extends AdjustmentKind>(kind: K, foreground: RGB, background: RGB): Extract<LayerAdjustment, { kind: K }>;
-export function defaultAdjustment(kind: AdjustmentKind, foreground: RGB, background: RGB): LayerAdjustment {
+export function defaultAdjustment<K extends LayerAdjustmentKind>(kind: K, foreground: RGB, background: RGB): Extract<LayerAdjustment, { kind: K }>;
+export function defaultAdjustment(kind: LayerAdjustmentKind, foreground: RGB, background: RGB): LayerAdjustment {
   switch (kind) {
     case 'Hue/Saturation': return { kind, schemaVersion: 1,
       parameters: { hue: 0, saturation: 0, lightness: 0, colorize: false, settings: defaultHueSaturation() } };
@@ -90,6 +118,15 @@ export function defaultAdjustment(kind: AdjustmentKind, foreground: RGB, backgro
     case 'Gradient Map': return { kind, schemaVersion: 1, parameters: defaultGradientMap(foreground, background) };
     case 'Grain': return { kind, schemaVersion: 1,
       parameters: defaultGrain(Math.floor(Math.random() * 0x1_0000_0000)) };
+    case 'Basic': return { kind, schemaVersion: 1, parameters: defaultBasic() };
+    case 'Colour Lookup': return { kind, schemaVersion: 1, parameters: { resourceId: '', interpolation: 'tetrahedral' } };
+    case 'Colour': return { kind, schemaVersion: 1, parameters: defaultColour() };
+    case 'Invert': return { kind, schemaVersion: 1, parameters: {} };
+    case 'Threshold': return { kind, schemaVersion: 1, parameters: { level: 128 } };
+    case 'Posterize': return { kind, schemaVersion: 1, parameters: { levels: 4 } };
+    case 'Brightness/Contrast': return { kind, schemaVersion: 1, parameters: defaultBrightnessContrast() };
+    case 'Photo Filter': return { kind, schemaVersion: 1, parameters: defaultPhotoFilter() };
+    case 'Channel Mixer': return { kind, schemaVersion: 1, parameters: defaultChannelMixer() };
   }
 }
 
@@ -128,9 +165,30 @@ export function isValidCurves(value: CurvesSettings): boolean {
 /** `LayerAdjustment.isValid`; malformed imported project values are rejected, not silently clamped. */
 export function isValidAdjustment(value: LayerAdjustment): boolean {
   if (!value || typeof value !== 'object' || value.schemaVersion !== 1
-    || !['Hue/Saturation', 'Levels', 'Curves', 'Exposure', 'Gradient Map', 'Grain'].includes(value.kind)
+    || !['Hue/Saturation', 'Levels', 'Curves', 'Exposure', 'Gradient Map', 'Grain', 'Basic', 'Colour Lookup',
+      'Colour', 'Invert', 'Threshold', 'Posterize', 'Brightness/Contrast', 'Photo Filter', 'Channel Mixer'].includes(value.kind)
     || !value.parameters || typeof value.parameters !== 'object') return false;
   try {
+    if (value.kind === 'Basic') {
+      const p = value.parameters;
+      return finiteRange(p.exposure, -5, 5) && [p.contrast, p.highlights, p.shadows, p.whites, p.blacks,
+        p.texture, p.clarity, p.dehaze, p.vibrance, p.saturation, p.temperature, p.tint].every((n) => finiteRange(n, -100, 100));
+    }
+    if (value.kind === 'Colour Lookup') return typeof value.parameters.resourceId === 'string'
+      && ['trilinear', 'tetrahedral'].includes(value.parameters.interpolation);
+    if (value.kind === 'Invert') return Object.keys(value.parameters).length === 0;
+    if (value.kind === 'Threshold') return Number.isInteger(value.parameters.level) && finiteRange(value.parameters.level, 0, 255);
+    if (value.kind === 'Posterize') return Number.isInteger(value.parameters.levels) && finiteRange(value.parameters.levels, 2, 256);
+    if (value.kind === 'Brightness/Contrast') return finiteRange(value.parameters.brightness, -150, 150)
+      && finiteRange(value.parameters.contrast, -100, 100) && typeof value.parameters.legacy === 'boolean';
+    if (value.kind === 'Photo Filter') return validRgb(value.parameters.color) && finiteRange(value.parameters.density, 0, 100)
+      && typeof value.parameters.preserveLuminosity === 'boolean';
+    if (value.kind === 'Channel Mixer') {
+      const p = value.parameters;
+      return typeof p.monochrome === 'boolean' && [p.red, p.green, p.blue, p.gray].every((c) =>
+        [c.red, c.green, c.blue, c.constant].every((n) => finiteRange(n, -200, 200)));
+    }
+    if (value.kind === 'Colour') return validColour(value.parameters);
     const a = resolveAdjustment(value), h = a.hsvSettings;
     const hsv = COLOR_RANGES.includes(h.range) && typeof h.colorize === 'boolean' && typeof h.invertRange === 'boolean'
       && Object.values(h.adjustments).every((x) => !!x && finiteRange(x.hue, -360, 360)
@@ -147,4 +205,19 @@ export function isValidAdjustment(value: LayerAdjustment): boolean {
       && finiteRange(grain.amount, 0, 100) && finiteRange(grain.size, 0.5, 20) && finiteRange(grain.roughness, 0, 100)
       && Number.isInteger(grain.seed) && grain.seed >= 0 && grain.seed <= 0xffff_ffff;
   } catch { return false; }
+}
+
+function validRgb(value: RGB): boolean {
+  return finiteRange(value.red, 0, 1) && finiteRange(value.green, 0, 1) && finiteRange(value.blue, 0, 1);
+}
+
+function validColour(value: ColourSettings): boolean {
+  const bw = value.blackAndWhite, balance = value.colourBalance, selective = value.selectiveColour;
+  return typeof bw.enabled === 'boolean' && [bw.reds, bw.yellows, bw.greens, bw.cyans, bw.blues, bw.magentas].every((n) => finiteRange(n, -200, 300))
+    && typeof bw.tint === 'boolean' && validRgb(bw.tintColor) && typeof balance.enabled === 'boolean'
+    && [balance.shadows, balance.midtones, balance.highlights].every((tone) =>
+      [tone.cyanRed, tone.magentaGreen, tone.yellowBlue].every((n) => finiteRange(n, -100, 100)))
+    && typeof balance.preserveLuminosity === 'boolean' && ['relative', 'absolute'].includes(selective.mode)
+    && Object.values(selective.ranges).every((range) => !!range
+      && [range.cyan, range.magenta, range.yellow, range.black].every((n) => finiteRange(n, -100, 100)));
 }

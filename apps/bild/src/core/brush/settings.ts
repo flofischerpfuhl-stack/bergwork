@@ -1,4 +1,6 @@
-export type BrushMode = 'paint' | 'erase';
+export type BrushMode = 'paint' | 'erase' | 'dodge' | 'burn' | 'sponge';
+export type BrushRange = 'shadows' | 'midtones' | 'highlights';
+export type SpongeMode = 'saturate' | 'desaturate';
 
 /** `BrushSettings` from Document/BrushStroke.swift. Colours and opacity are 0...1. */
 export interface BrushSettings {
@@ -9,6 +11,11 @@ export interface BrushSettings {
   readonly blue: number;
   readonly opacity: number;
   readonly mode: BrushMode;
+  readonly range?: BrushRange;
+  readonly exposure?: number;
+  readonly spongeMode?: SpongeMode;
+  readonly flow?: number;
+  readonly vibrance?: boolean;
 }
 
 export const DEFAULT_BRUSH_SETTINGS: BrushSettings = {
@@ -19,6 +26,7 @@ export const DEFAULT_BRUSH_SETTINGS: BrushSettings = {
   blue: 0,
   opacity: 1,
   mode: 'paint',
+  range: 'midtones', exposure: 0.5, spongeMode: 'saturate', flow: 0.5, vibrance: false,
 };
 
 /** Clone Stamp owns a soft parked tip (`EditorSession.selectTool`). */
@@ -38,6 +46,12 @@ export function validateBrushSettings(settings: BrushSettings): void {
   if (!Number.isFinite(settings.diameter) || settings.diameter < 1 || settings.diameter > 2000
     || !Number.isFinite(settings.hardness) || settings.hardness < 0 || settings.hardness > 1
     || !Number.isFinite(settings.opacity) || settings.opacity < 0.01 || settings.opacity > 1
+    || !['paint', 'erase', 'dodge', 'burn', 'sponge'].includes(settings.mode)
+    || !['shadows', 'midtones', 'highlights'].includes(settings.range ?? 'midtones')
+    || !Number.isFinite(settings.exposure ?? 0.5) || (settings.exposure ?? 0.5) < 0.01 || (settings.exposure ?? 0.5) > 1
+    || !['saturate', 'desaturate'].includes(settings.spongeMode ?? 'saturate')
+    || !Number.isFinite(settings.flow ?? 0.5) || (settings.flow ?? 0.5) < 0.01 || (settings.flow ?? 0.5) > 1
+    || (settings.vibrance !== undefined && typeof settings.vibrance !== 'boolean')
     || colour.some((value) => !Number.isFinite(value) || value < 0 || value > 1)) {
     throw new RangeError('Invalid brush settings');
   }

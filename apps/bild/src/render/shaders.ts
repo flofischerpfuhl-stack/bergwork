@@ -390,6 +390,12 @@ uniform int uHasBase;
 uniform int uMask;
 uniform int uHard;
 uniform int uErase;
+uniform int uBrushMode;
+uniform int uRange;
+uniform float uExposure;
+uniform int uSpongeDirection;
+uniform float uFlow;
+uniform int uVibrance;
 uniform vec3 uColor;
 uniform float uOpacity;
 
@@ -417,6 +423,17 @@ void main() {
   } else if (uErase == 1) {
     float alpha = floor(base.a * (1.0 - coverage) * 255.0 + 0.5) / 255.0;
     finalColor = vec4(straightBase * alpha, alpha);
+  } else if (uBrushMode != 0 && base.a > 0.0) {
+    float luma=dot(straightBase,vec3(0.2126,0.7152,0.0722));
+    float rangeWeight=uRange==0 ? (1.0-luma)*(1.0-luma) : (uRange==2 ? luma*luma : max(0.0,1.0-abs(luma*2.0-1.0)));
+    vec3 adjusted;
+    if (uBrushMode==1) { float s=clamp(coverage*uExposure*rangeWeight,0.0,1.0); adjusted=1.0-(1.0-straightBase)*(1.0-s); }
+    else if (uBrushMode==2) { float s=clamp(coverage*uExposure*rangeWeight,0.0,1.0); adjusted=straightBase*(1.0-s); }
+    else { float chroma=max(max(straightBase.r,straightBase.g),straightBase.b)-min(min(straightBase.r,straightBase.g),straightBase.b);
+      float s=clamp(coverage*uFlow,0.0,1.0); if(uVibrance==1 && uSpongeDirection==1)s*=1.0-chroma;
+      adjusted=clamp(vec3(luma)+(straightBase-vec3(luma))*(1.0+float(uSpongeDirection)*s),0.0,1.0); }
+    adjusted=floor(adjusted*255.0+0.5)/255.0;
+    finalColor=vec4(adjusted*base.a,base.a);
   } else {
     float alpha = coverage + base.a * (1.0 - coverage);
     vec3 premultiplied = paint * coverage + base.rgb * (1.0 - coverage);

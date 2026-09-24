@@ -3,11 +3,16 @@ import {
   type Color as AgColor, type EffectSolidGradient, type LayerEffectsInfo, type LayerTextData, type PixelData, type Psd, type UnitsValue,
 } from 'ag-psd';
 import {
-  type BlendMode, type CanvasDocument, type ColorLabel, type Layer, type LayerEffect, type LayerLocks,
+  type BlendMode, type CanvasDocument, type ColorLabel, type Layer, type LayerAdjustment, type LayerEffect, type LayerLocks,
   DEFAULT_TEXT_STYLE, defaultTextParagraphStyle, MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
 } from '../../core/document';
 import { makeTransform, samePlacement, type LayerTransform } from '../../core/geometry';
 import { Raster } from '../../core/raster';
+import {
+  defaultChannelMixer, defaultColour, defaultCurves, defaultHueSaturation, defaultLevels,
+  type RGB,
+} from '../../core/adjustments';
+import { parseCubeLut } from '../../core/adjust/cube';
 
 export type PsdUnsupportedImpact = 'not-rendered' | 'approximated' | 'editability-only';
 
@@ -102,6 +107,7 @@ interface ImportState {
   readonly documentWidth: number;
   readonly documentHeight: number;
   readonly unsupported: PsdUnsupportedFeature[];
+  readonly resources: NonNullable<CanvasDocument['resources']>[number][];
 }
 
 function issue(state: ImportState, code: string, message: string, impact: PsdUnsupportedImpact, layerPath?: string): void {
@@ -240,8 +246,6 @@ function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportS
 }
 
 function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportState, layerPath: string): void {
-  if (source.adjustment) issue(state, `adjustment:${source.adjustment.type}`,
-    `Adjustment layer “${source.adjustment.type}” is preserved only as an empty layer.`, 'not-rendered', layerPath);
   if (source.vectorMask) issue(state, 'vector-mask', source.imageData
     ? 'Vector mask uses the layer pixel cache and is not editable.' : 'Vector mask is parsed but not rendered.',
     source.imageData ? 'editability-only' : 'not-rendered', layerPath);
@@ -273,6 +277,112 @@ function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportSta
     `Group blend mode “${source.blendMode}” is rendered as pass-through.`, 'not-rendered', layerPath);
   if (isGroup && (source.opacity ?? 1) !== 1) issue(state, 'group-opacity',
     'Group opacity is not represented by the current document model.', 'not-rendered', layerPath);
+}
+
+function rgbColor(value: unknown, fallback: RGB = { red: 1, green: 1, blue: 1 }): RGB {
+  if (!value || typeof value !== 'object') return fallback;
+  const v = value as Record<string, number>;
+  if ([v.fr, v.fg, v.fb].every(Number.isFinite)) return { red: v.fr!, green: v.fg!, blue: v.fb! };
+  if ([v.r, v.g, v.b].every(Number.isFinite)) {
+    const scale = Math.max(v.r!, v.g!, v.b!) > 1 ? 255 : 1;
+    return { red: v.r! / scale, green: v.g! / scale, blue: v.b! / scale };
+  }
+  if ([v.c, v.m, v.y, v.k].every(Number.isFinite)) {
+    const c = v.c! / 100, m = v.m! / 100, y = v.y! / 100, k = v.k! / 100;
+    return { red: (1 - c) * (1 - k), green: (1 - m) * (1 - k), blue: (1 - y) * (1 - k) };
+  }
+  if (Number.isFinite(v.k)) { const gray = 1 - v.k! / 100; return { red: gray, green: gray, blue: gray }; }
+  return fallback;
+}
+
+function importedAdjustment(source: AgLayer, state: ImportState, layerPath: string): LayerAdjustment | null {
+  const adjustment = source.adjustment;
+  if (!adjustment) return null;
+  switch (adjustment.type) {
+    case 'levels': {
+      const channels = [adjustment.rgb, adjustment.red, adjustment.green, adjustment.blue];
+      const defaults = defaultLevels();
+      return { kind: 'Levels', schemaVersion: 1, parameters: { ...defaults, ranges: channels.map((channel, i) => channel ? {
+        black: channel.shadowInput, gamma: channel.midtoneInput, white: channel.highlightInput,
+        outputBlack: channel.shadowOutput, outputWhite: channel.highlightOutput,
+      } : defaults.ranges[i]!) } };
+    }
+    case 'curves': {
+      const defaults = defaultCurves(), channels = [adjustment.rgb, adjustment.red, adjustment.green, adjustment.blue];
+      return { kind: 'Curves', schemaVersion: 1, parameters: { ...defaults, channels: channels.map((channel, i) =>
+        channel?.length ? channel.map((point) => ({ x: point.input, y: point.output })) : defaults.channels[i]!) } };
+    }
+    case 'exposure': return { kind: 'Exposure', schemaVersion: 1,
+      parameters: { exposure: adjustment.exposure ?? 0, offset: adjustment.offset ?? 0, gamma: adjustment.gamma ?? 1 } };
+    case 'hue/saturation': {
+      const sourceRanges = [adjustment.master, adjustment.reds, adjustment.yellows, adjustment.greens,
+        adjustment.cyans, adjustment.blues, adjustment.magentas];
+      const names = ['Master', 'Reds', 'Yellows', 'Greens', 'Cyans', 'Blues', 'Magentas'] as const;
+      const master = adjustment.master, settings = defaultHueSaturation(master?.hue ?? 0, master?.saturation ?? 0, master?.lightness ?? 0);
+      const adjustments = { ...settings.adjustments }, bands = { ...settings.bands };
+      sourceRanges.forEach((range, index) => { if (!range) return; const name = names[index]!;
+        adjustments[name] = { hue: range.hue, saturation: range.saturation, lightness: range.lightness };
+        if (name !== 'Master') bands[name] = { falloffStart: range.a, rangeStart: range.b, rangeEnd: range.c, falloffEnd: range.d }; });
+      return { kind: 'Hue/Saturation', schemaVersion: 1, parameters: { hue: master?.hue ?? 0,
+        saturation: master?.saturation ?? 0, lightness: master?.lightness ?? 0, colorize: false,
+        settings: { ...settings, adjustments, bands } } };
+    }
+    case 'vibrance': return { kind: 'Basic', schemaVersion: 1, parameters: {
+      exposure: 0, contrast: 0, highlights: 0, shadows: 0, whites: 0, blacks: 0, texture: 0, clarity: 0, dehaze: 0,
+      vibrance: adjustment.vibrance ?? 0, saturation: adjustment.saturation ?? 0, temperature: 0, tint: 0 } };
+    case 'black & white': {
+      const value = defaultColour();
+      return { kind: 'Colour', schemaVersion: 1, parameters: { ...value, blackAndWhite: { ...value.blackAndWhite,
+        enabled: true, reds: adjustment.reds ?? 40, yellows: adjustment.yellows ?? 60, greens: adjustment.greens ?? 40,
+        cyans: adjustment.cyans ?? 60, blues: adjustment.blues ?? 20, magentas: adjustment.magentas ?? 80,
+        tint: adjustment.useTint ?? false, tintColor: rgbColor(adjustment.tintColor, value.blackAndWhite.tintColor) } } };
+    }
+    case 'color balance': {
+      const value = defaultColour(), tone = (input: typeof adjustment.shadows) => ({ cyanRed: input?.cyanRed ?? 0,
+        magentaGreen: input?.magentaGreen ?? 0, yellowBlue: input?.yellowBlue ?? 0 });
+      return { kind: 'Colour', schemaVersion: 1, parameters: { ...value, colourBalance: { enabled: true,
+        shadows: tone(adjustment.shadows), midtones: tone(adjustment.midtones), highlights: tone(adjustment.highlights),
+        preserveLuminosity: adjustment.preserveLuminosity ?? true } } };
+    }
+    case 'selective color': {
+      const value = defaultColour(), ranges: Record<string, { cyan: number; magenta: number; yellow: number; black: number }> = {};
+      const names = [['Reds', adjustment.reds], ['Yellows', adjustment.yellows], ['Greens', adjustment.greens],
+        ['Cyans', adjustment.cyans], ['Blues', adjustment.blues], ['Magentas', adjustment.magentas],
+        ['Whites', adjustment.whites], ['Neutrals', adjustment.neutrals], ['Blacks', adjustment.blacks]] as const;
+      for (const [name, c] of names) if (c) ranges[name] = { cyan: c.c, magenta: c.m, yellow: c.y, black: c.k };
+      return { kind: 'Colour', schemaVersion: 1, parameters: { ...value,
+        selectiveColour: { mode: adjustment.mode ?? 'relative', ranges } } };
+    }
+    case 'invert': return { kind: 'Invert', schemaVersion: 1, parameters: {} };
+    case 'threshold': return { kind: 'Threshold', schemaVersion: 1, parameters: { level: adjustment.level ?? 128 } };
+    case 'posterize': return { kind: 'Posterize', schemaVersion: 1, parameters: { levels: adjustment.levels ?? 4 } };
+    case 'brightness/contrast': return { kind: 'Brightness/Contrast', schemaVersion: 1, parameters: {
+      brightness: adjustment.brightness ?? 0, contrast: adjustment.contrast ?? 0, legacy: adjustment.useLegacy ?? false } };
+    case 'photo filter': return { kind: 'Photo Filter', schemaVersion: 1, parameters: { color: rgbColor(adjustment.color),
+      density: adjustment.density ?? 25, preserveLuminosity: adjustment.preserveLuminosity ?? true } };
+    case 'channel mixer': {
+      const value = defaultChannelMixer(), channel = (input: typeof adjustment.red, fallback: typeof value.red) => input ? {
+        red: input.red, green: input.green, blue: input.blue, constant: input.constant } : fallback;
+      return { kind: 'Channel Mixer', schemaVersion: 1, parameters: { monochrome: adjustment.monochrome ?? false,
+        red: channel(adjustment.red, value.red), green: channel(adjustment.green, value.green),
+        blue: channel(adjustment.blue, value.blue), gray: channel(adjustment.gray, value.gray) } };
+    }
+    case 'color lookup': {
+      const bytes = adjustment.lutFormat === 'cube' ? adjustment.lut3DFileData : undefined;
+      if (!bytes) break;
+      try { parseCubeLut(bytes); } catch { break; }
+      const id = `psd-lut-${state.resources.length + 1}`;
+      state.resources.push({ id, role: 'lut', mime: 'application/x-cube', bytes: bytes.slice() });
+      return { kind: 'Colour Lookup', schemaVersion: 1, parameters: { resourceId: id, interpolation: 'tetrahedral' } };
+    }
+    case 'gradient map': {
+      const stops = adjustment.colorStops?.slice().sort((a, b) => a.location - b.location);
+      return { kind: 'Gradient Map', schemaVersion: 1, parameters: { shadows: rgbColor(stops?.[0]?.color, { red: 0, green: 0, blue: 0 }),
+        highlights: rgbColor(stops?.at(-1)?.color), reversed: adjustment.reverse ?? false } };
+    }
+  }
+  issue(state, `adjustment:${adjustment.type}`, `Adjustment layer “${adjustment.type}” could not be mapped losslessly.`, 'not-rendered', layerPath);
+  return null;
 }
 
 const COLOR_LABELS: ReadonlySet<string> = new Set(['none', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray']);
@@ -377,6 +487,7 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const isGroup = source.children !== undefined;
     const left = source.left ?? 0, top = source.top ?? 0;
     const width = Math.max(0, (source.right ?? left) - left), height = Math.max(0, (source.bottom ?? top) - top);
+    const adjustment = importedAdjustment(source, state, layerPath);
     const image = source.adjustment ? undefined : source.imageData;
     const layerTransform = image ? transform(left, top, image.width, image.height)
       : transform(isGroup ? 0 : left, isGroup ? 0 : top,
@@ -397,7 +508,7 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const textBox = textData ? psdTextBox(textData, width, height) : null;
     const editableTransform = textData ? psdTextTransform(textData, layerTransform, textBox) : layerTransform;
     const imported = newLayer({
-      id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : textData ? 'text' : 'pixel',
+      id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : textData ? 'text' : adjustment ? 'adjustment' : 'pixel',
       visible: source.hidden !== true, opacity, fillOpacity, blendMode: mappedMode,
       locks: importedLocks(source), colorLabel: importedColorLabel(source, state, layerPath), transform: editableTransform,
       raster: image ? Raster.fromPixels(image.width, image.height, 4, pixelDataToRgba8(image)) : null,
@@ -407,6 +518,7 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
       mask: maskFor(source, editableTransform, state, layerPath),
       maskSourceId: source.clipping && !isGroup ? clippingBaseId : null,
       effects: importEffects(source, state, layerPath),
+      ...(adjustment ? { adjustment } : {}),
     });
     result.push(imported);
     if (isGroup) {
@@ -445,12 +557,12 @@ export function readPsdDocument(bytes: Uint8Array): PsdReadResult {
   if (colorMode !== 3) unsupported.push({ code: `color-mode:${colorMode}`,
     message: `PSD color mode ${colorMode} uses ag-psd's conversion to sRGB-like RGBA.`, impact: 'approximated' });
   if (psd.artboards) unsupported.push({ code: 'artboards', message: 'Artboard metadata is not represented.', impact: 'not-rendered' });
-  const state: ImportState = { nextId: 1, documentWidth: psd.width, documentHeight: psd.height, unsupported };
+  const state: ImportState = { nextId: 1, documentWidth: psd.width, documentHeight: psd.height, unsupported, resources: [] };
   const layers = importSiblings(psd.children ?? [], null, '', state);
   if (layers.length > MAX_LAYERS) throw new RangeError(`PSD has ${layers.length} layers; the document limit is ${MAX_LAYERS}`);
   const document: CanvasDocument = {
     id: 'psd-document', width: psd.width, height: psd.height, resolution: resolution(psd),
-    globalLightAngle: psd.imageResources?.globalAngle ?? 120, layers, selection: null,
+    globalLightAngle: psd.imageResources?.globalAngle ?? 120, layers, resources: state.resources, selection: null,
   };
   const oracle = psd.imageData
     ? Raster.fromPixels(psd.imageData.width, psd.imageData.height, 4, pixelDataToRgba8(psd.imageData)) : null;

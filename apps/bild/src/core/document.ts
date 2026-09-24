@@ -10,16 +10,19 @@
 import type { LayerTransform, Point } from './geometry';
 import { transformsEqual } from './geometry';
 import type {
-  AdjustmentKind, BlendMode, CanvasDocument, ColorLabel, CropParameters, EmbeddedLayer, FillParameters, Layer,
+  LayerAdjustmentKind, BlendMode, CanvasDocument, ColorLabel, CropParameters, EmbeddedLayer, FillParameters, Layer,
   LayerAdjustment, LayerEffect, LayerLocks, LayerMask, LayerShape, LegacyTextRun, LiveFilter, TextParagraph,
   TextRun, TextRunStyle, VectorMask, VectorPath, VectorStyle, WarpQuad,
 } from './model';
 export type {
-  AdjustmentKind, Artboard, Guide, BlendMode, CanvasDocument, ColorLabel, CropParameters, DocumentFont, DocumentResource, EmbeddedLayer,
+  LayerAdjustmentKind, Artboard, Guide, BlendMode, CanvasDocument, ColorLabel, CropParameters, DocumentFont, DocumentResource, EmbeddedLayer,
   FillLayer, FillParameters, GroupLayer, Layer, LayerAdjustment, LayerEffect, LayerLocks, LayerMask, ModelLayer,
   LayerShape, LegacyTextRun, LiveFilter, PixelLayer, TextLayer, TextParagraph, TextParagraphStyle, TextRun, TextRunStyle,
   TextKerning, TextOpenTypeFeature, VectorLayer, VectorMask, WarpQuad,
 } from './model';
+
+/** Compatibility type for the legacy UI icon registry; engine records use `LayerAdjustmentKind`. */
+export type AdjustmentKind = string;
 
 /** Photoshop menu groups; the first 13 modes came from upstream LayerBlendMode.allCases. */
 export const BLEND_MODES: readonly { mode: BlendMode; label: string }[] = [
@@ -42,7 +45,11 @@ export const BLEND_MODES: readonly { mode: BlendMode; label: string }[] = [
 export const BLEND_MODE_SET: ReadonlySet<string> = new Set(BLEND_MODES.map((b) => b.mode));
 export function blendLabel(mode: BlendMode): string { return BLEND_MODES.find((b) => b.mode === mode)?.label ?? mode; }
 
-export const ADJUSTMENT_KINDS: readonly AdjustmentKind[] = ['Hue/Saturation', 'Levels', 'Curves', 'Exposure', 'Gradient Map', 'Grain'];
+export const ADJUSTMENT_KINDS = ['Hue/Saturation', 'Levels', 'Curves', 'Exposure', 'Gradient Map', 'Grain'] as const;
+export const ALL_ADJUSTMENT_KINDS: readonly LayerAdjustmentKind[] = [
+  ...ADJUSTMENT_KINDS, 'Basic', 'Colour Lookup',
+  'Colour', 'Invert', 'Threshold', 'Posterize', 'Brightness/Contrast', 'Photo Filter', 'Channel Mixer',
+];
 
 export const MAX_SIDE = 30_000;
 export const MAX_PIXELS = 100_000_000;

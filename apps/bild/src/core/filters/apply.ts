@@ -2,10 +2,12 @@
 import type { LayerAdjustment } from '../document';
 import { apply, invert, pixelToDocument, type LayerTransform } from '../geometry';
 import { alphaBounds, cropRaster, Raster } from '../raster';
+import { makePixelArray } from '../pixel/format';
 import type { DocumentSelection } from '../selection';
 import { adjustRaster } from '../adjust/raster';
 import { blurMargin, normalizeFilterSettings, type FilterKind, type FilterSettings } from './settings';
 import { gaussianBlur, motionBlur } from './blur';
+import { denoise, highPass, smartSharpen, unsharpMask } from './sharpen';
 
 export { gaussianBlur, motionBlur } from './blur';
 
@@ -32,30 +34,30 @@ function expanded(raster: Raster, transform: LayerTransform, margin: number): Fi
   const m = Math.ceil(margin); if (m <= 0) return { raster, transform };
   const width = raster.width + m * 2, height = raster.height + m * 2;
   if (width > 30_000 || height > 30_000 || width * height > 100_000_000) throw new RangeError('Filtered layer is too large');
-  const pixels = new Uint8Array(width * height * 4), source = raster.toPixels();
+  const pixels = makePixelArray(raster.format, width * height * 4), source = raster.toPixelsNative();
   for (let y = 0; y < raster.height; y++) pixels.set(source.subarray(y * raster.width * 4, (y + 1) * raster.width * 4), ((y + m) * width + m) * 4);
   const map = pixelToDocument(transform, raster.width, raster.height), middle = apply(map, { x: raster.width / 2, y: raster.height / 2 });
   const size = { width: width * transform.size.width / raster.width, height: height * transform.size.height / raster.height };
-  return { raster: Raster.fromPixels(width, height, 4, pixels),
+  return { raster: Raster.fromPixels(width, height, 4, pixels, { format: raster.format }),
     transform: { ...transform, size, origin: { x: middle.x - size.width / 2, y: middle.y - size.height / 2 } } };
 }
 
 function hash32(value: number): number { let x = value >>> 0; x ^= x >>> 16; x = Math.imul(x, 0x7feb352d) >>> 0; x ^= x >>> 15; x = Math.imul(x, 0x846ca68b) >>> 0; x ^= x >>> 16; return x >>> 0; }
 function unit(key: number): number { return (hash32(key) >>> 8) / 16777216; }
 export function addNoise(raster: Raster, settings: FilterSettings, seed: number): Raster {
-  const source = raster.toPixels(), out = source.slice(), spread = settings.amount / 100 * 127.5;
+  const source = raster.toPixelsNative(), out = source.slice(), maximum = raster.maximum, spread = settings.amount / 100 * maximum / 2;
   for (let i = 0; i < raster.width * raster.height; i++) { const p = i * 4, alpha = source[p + 3]!; if (!alpha) continue;
     const base = hash32((seed ^ hash32(i)) >>> 0);
     for (let c = 0; c < 3; c++) { const key = settings.monochromatic ? base : (base + Math.imul(c, 0x9e3779b9)) >>> 0;
       const n = settings.gaussian ? Math.sqrt(-2 * Math.log(1 - unit(key))) * Math.cos(2 * Math.PI * unit((key ^ 0x68e31da4) >>> 0)) * spread * 2 / 3 : (unit(key) * 2 - 1) * spread;
-      const straight = source[p + c]! + n; out[p + c] = Math.round(Math.min(255, Math.max(0, straight)));
+      const straight = source[p + c]! + n; out[p + c] = Math.round(Math.min(maximum, Math.max(0, straight)));
     }
   }
-  return Raster.fromPixels(raster.width, raster.height, 4, out);
+  return Raster.fromPixels(raster.width, raster.height, 4, out, { format: raster.format });
 }
 
 export function lensCorrection(raster: Raster, distortion: number): Raster {
-  const source = raster.toPixels(), out = new Uint8Array(source.length), w = raster.width, h = raster.height, cx = w / 2, cy = h / 2;
+  const source = raster.toPixelsNative(), out = makePixelArray(raster.format, source.length), w = raster.width, h = raster.height, cx = w / 2, cy = h / 2;
   const diagonal = cx * cx + cy * cy, k = distortion / 100 * 0.35;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const dx = x + 0.5 - cx, dy = y + 0.5 - cy, scale = 1 - k * (dx * dx + dy * dy) / diagonal;
     const sx = cx + dx * scale - 0.5, sy = cy + dy * scale - 0.5, x0 = Math.floor(sx), y0 = Math.floor(sy), fx = sx - x0, fy = sy - y0, dst = (y * w + x) * 4;
@@ -66,7 +68,7 @@ export function lensCorrection(raster: Raster, distortion: number): Raster {
     }
     for (let c = 0; c < 4; c++) out[dst + c] = Math.round(sums[c]!);
   }
-  return Raster.fromPixels(w, h, 4, out);
+  return Raster.fromPixels(w, h, 4, out, { format: raster.format });
 }
 
 function adjustment(kind: FilterKind, settings: FilterSettings, seed: number): LayerAdjustment | null {
@@ -79,12 +81,12 @@ function adjustment(kind: FilterKind, settings: FilterSettings, seed: number): L
 
 function blendSelection(original: Raster, filtered: Raster, transform: LayerTransform, selection: DocumentSelection | null): Raster {
   if (!selection) return filtered;
-  const a = original.toPixels(), b = filtered.toPixels(), map = pixelToDocument(transform, original.width, original.height);
+  const a = original.toPixelsNative(), b = filtered.toPixelsNative(), map = pixelToDocument(transform, original.width, original.height);
   for (let y = 0; y < original.height; y++) for (let x = 0; x < original.width; x++) { const point = apply(map, { x: x + 0.5, y: y + 0.5 });
     const coverage = (selection.mask.pixel(Math.floor(point.x) - selection.x, Math.floor(point.y) - selection.y)[0] ?? 0) / 255, i = (y * original.width + x) * 4;
     for (let c = 0; c < 4; c++) b[i + c] = Math.round(a[i + c]! + (b[i + c]! - a[i + c]!) * coverage);
   }
-  return Raster.fromPixels(original.width, original.height, 4, b);
+  return Raster.fromPixels(original.width, original.height, 4, b, { format: original.format });
 }
 
 /** Runs one filter, expanding and tightly trimming blur bounds like `FilterEdit`/`PixelFilter.trimmed`. */
@@ -98,7 +100,11 @@ export function applyFilter(kind: FilterKind, source: Raster, transform: LayerTr
   else if (kind === 'Gaussian Blur') result = gaussianBlur(room.raster, settings.radius);
   else if (kind === 'Motion Blur') result = motionBlur(room.raster, settings.distance, settings.angle);
   else if (kind === 'Add Noise') result = addNoise(room.raster, settings, seed);
-  else result = lensCorrection(room.raster, settings.distortion);
+  else if (kind === 'Lens Correction') result = lensCorrection(room.raster, settings.distortion);
+  else if (kind === 'Unsharp Mask') result = unsharpMask(room.raster, settings.amount, settings.radius, settings.threshold);
+  else if (kind === 'Smart Sharpen') result = smartSharpen(room.raster, settings.amount, settings.radius, settings.threshold, settings.reduceNoise);
+  else if (kind === 'High Pass') result = highPass(room.raster, settings.radius);
+  else result = denoise(room.raster, settings.luminance, settings.colour);
   if (!colorAdjustment) result = blendSelection(room.raster, result, room.transform, options.selection ?? null);
   if ((kind === 'Gaussian Blur' || kind === 'Motion Blur') && options.expand !== false) {
     const bounds = alphaBounds(result);

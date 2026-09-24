@@ -13,7 +13,8 @@ import {
 } from './resample';
 
 export type AdjustmentApplier = (adjustment: LayerAdjustment, rgba: Float32Array,
-  width: number, height: number, originX: number, originY: number) => Float32Array;
+  width: number, height: number, originX: number, originY: number,
+  resources?: CanvasDocument['resources']) => Float32Array;
 
 export interface CompositeOptions {
   readonly transform?: (layer: Layer) => LayerTransform;
@@ -313,7 +314,7 @@ class BandRenderer {
         ? { x: this.outputToDocument.a * originX + this.outputToDocument.c * originY + this.outputToDocument.tx,
           y: this.outputToDocument.b * originX + this.outputToDocument.d * originY + this.outputToDocument.ty }
         : { x: originX, y: originY };
-      straight = this.options.adjust(layer.adjustment, input, width, height, point.x, point.y);
+      straight = this.options.adjust(layer.adjustment, input, width, height, point.x, point.y, this.document.resources);
       if (straight.length !== input.length) throw new RangeError('AdjustmentApplier returned a buffer of the wrong size');
     } else {
       straight = input;

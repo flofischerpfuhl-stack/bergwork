@@ -21,7 +21,7 @@ export interface AssetRecordV2 {
   height?: number;
   channels?: 1 | 4;
   sha256: string;
-  role: 'image' | 'mask' | 'pattern' | 'embedded' | 'font' | 'history-tile';
+  role: 'image' | 'mask' | 'pattern' | 'embedded' | 'font' | 'lut' | 'history-tile';
 }
 
 export interface TextRunStyleRecordV2 {
@@ -111,7 +111,11 @@ export type FilterRecordV2 =
   | { kind: 'gaussianBlur'; schemaVersion: 1; enabled: boolean; radius: number }
   | { kind: 'motionBlur'; schemaVersion: 1; enabled: boolean; angle: number; distance: number }
   | { kind: 'noise'; schemaVersion: 1; enabled: boolean; amount: number; gaussian: boolean; monochromatic: boolean }
-  | { kind: 'lensCorrection'; schemaVersion: 1; enabled: boolean; distortion: number };
+  | { kind: 'lensCorrection'; schemaVersion: 1; enabled: boolean; distortion: number }
+  | { kind: 'unsharpMask'; schemaVersion: 1; enabled: boolean; amount: number; radius: number; threshold: number }
+  | { kind: 'smartSharpen'; schemaVersion: 1; enabled: boolean; amount: number; radius: number; threshold: number; reduceNoise: number }
+  | { kind: 'highPass'; schemaVersion: 1; enabled: boolean; radius: number }
+  | { kind: 'denoise'; schemaVersion: 1; enabled: boolean; luminance: number; colour: number };
 
 export interface HueSaturationParametersV1 {
   hue: number; saturation: number; lightness: number; colorize: boolean;
@@ -130,13 +134,39 @@ export interface CurvesParametersV1 { channel: 'RGB' | 'Red' | 'Green' | 'Blue';
 export interface ExposureParametersV1 { exposure: number; offset: number; gamma: number }
 export interface GradientMapParametersV1 { shadows: RGBV2; highlights: RGBV2; reversed: boolean }
 export interface GrainParametersV1 { amount: number; size: number; roughness: number; seed: number }
+export interface BasicParametersV1 {
+  exposure: number; contrast: number; highlights: number; shadows: number; whites: number; blacks: number;
+  texture: number; clarity: number; dehaze: number; vibrance: number; saturation: number; temperature: number; tint: number;
+}
+export interface ColourLookupParametersV1 { resourceId: AssetIdV2; interpolation: 'trilinear' | 'tetrahedral' }
+export interface ColourParametersV1 {
+  blackAndWhite: { enabled: boolean; reds: number; yellows: number; greens: number; cyans: number; blues: number; magentas: number;
+    tint: boolean; tintColor: RGBV2 };
+  colourBalance: { enabled: boolean; shadows: { cyanRed: number; magentaGreen: number; yellowBlue: number };
+    midtones: { cyanRed: number; magentaGreen: number; yellowBlue: number };
+    highlights: { cyanRed: number; magentaGreen: number; yellowBlue: number }; preserveLuminosity: boolean };
+  selectiveColour: { mode: 'relative' | 'absolute'; ranges: Partial<Record<
+    'Reds' | 'Yellows' | 'Greens' | 'Cyans' | 'Blues' | 'Magentas' | 'Whites' | 'Neutrals' | 'Blacks',
+    { cyan: number; magenta: number; yellow: number; black: number }>> };
+}
 export type AdjustmentRecordV2 =
   | { kind: 'Hue/Saturation'; schemaVersion: 1; parameters: HueSaturationParametersV1 }
   | { kind: 'Levels'; schemaVersion: 1; parameters: LevelsParametersV1 }
   | { kind: 'Curves'; schemaVersion: 1; parameters: CurvesParametersV1 }
   | { kind: 'Exposure'; schemaVersion: 1; parameters: ExposureParametersV1 }
   | { kind: 'Gradient Map'; schemaVersion: 1; parameters: GradientMapParametersV1 }
-  | { kind: 'Grain'; schemaVersion: 1; parameters: GrainParametersV1 };
+  | { kind: 'Grain'; schemaVersion: 1; parameters: GrainParametersV1 }
+  | { kind: 'Basic'; schemaVersion: 1; parameters: BasicParametersV1 }
+  | { kind: 'Colour Lookup'; schemaVersion: 1; parameters: ColourLookupParametersV1 }
+  | { kind: 'Colour'; schemaVersion: 1; parameters: ColourParametersV1 }
+  | { kind: 'Invert'; schemaVersion: 1; parameters: Record<string, never> }
+  | { kind: 'Threshold'; schemaVersion: 1; parameters: { level: number } }
+  | { kind: 'Posterize'; schemaVersion: 1; parameters: { levels: number } }
+  | { kind: 'Brightness/Contrast'; schemaVersion: 1; parameters: { brightness: number; contrast: number; legacy: boolean } }
+  | { kind: 'Photo Filter'; schemaVersion: 1; parameters: { color: RGBV2; density: number; preserveLuminosity: boolean } }
+  | { kind: 'Channel Mixer'; schemaVersion: 1; parameters: { monochrome: boolean;
+      red: { red: number; green: number; blue: number; constant: number }; green: { red: number; green: number; blue: number; constant: number };
+      blue: { red: number; green: number; blue: number; constant: number }; gray: { red: number; green: number; blue: number; constant: number } } };
 
 export type FillRecordV2 =
   | { kind: 'solid'; schemaVersion: 1; color: RGBV2 }

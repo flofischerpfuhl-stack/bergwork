@@ -11,7 +11,11 @@ export type BlendMode =
   | 'difference' | 'exclusion' | 'subtract' | 'divide'
   | 'hue' | 'saturation' | 'color' | 'luminosity';
 
+/** Legacy UI registry; the complete engine union is `LayerAdjustmentKind`. */
 export type AdjustmentKind = 'Hue/Saturation' | 'Levels' | 'Curves' | 'Exposure' | 'Gradient Map' | 'Grain';
+export type LayerAdjustmentKind = AdjustmentKind
+  | 'Basic' | 'Colour Lookup' | 'Colour' | 'Invert' | 'Threshold' | 'Posterize'
+  | 'Brightness/Contrast' | 'Photo Filter' | 'Channel Mixer';
 export type ColorLabel = 'none' | 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'violet' | 'gray';
 
 export interface RGB { readonly red: number; readonly green: number; readonly blue: number }
@@ -45,6 +49,40 @@ export interface ExposureSettings { readonly exposure: number; readonly offset: 
 export interface GradientMapSettings { readonly shadows: RGB; readonly highlights: RGB; readonly reversed: boolean }
 export interface GrainSettings { readonly amount: number; readonly size: number; readonly roughness: number; readonly seed: number }
 
+/** P5's single photographic correction. Slider units are -100…100 except exposure (stops). */
+export interface BasicSettings {
+  readonly exposure: number; readonly contrast: number; readonly highlights: number; readonly shadows: number;
+  readonly whites: number; readonly blacks: number; readonly texture: number; readonly clarity: number;
+  readonly dehaze: number; readonly vibrance: number; readonly saturation: number;
+  readonly temperature: number; readonly tint: number;
+}
+export type LutInterpolation = 'trilinear' | 'tetrahedral';
+export interface ColourLookupSettings { readonly resourceId: string; readonly interpolation: LutInterpolation }
+export interface BlackAndWhiteSettings {
+  readonly enabled: boolean;
+  readonly reds: number; readonly yellows: number; readonly greens: number;
+  readonly cyans: number; readonly blues: number; readonly magentas: number;
+  readonly tint: boolean; readonly tintColor: RGB;
+}
+export interface ColourBalanceTone { readonly cyanRed: number; readonly magentaGreen: number; readonly yellowBlue: number }
+export type SelectiveColourRange = 'Reds' | 'Yellows' | 'Greens' | 'Cyans' | 'Blues' | 'Magentas'
+  | 'Whites' | 'Neutrals' | 'Blacks';
+export interface SelectiveColourValues { readonly cyan: number; readonly magenta: number; readonly yellow: number; readonly black: number }
+export interface ColourSettings {
+  readonly blackAndWhite: BlackAndWhiteSettings;
+  readonly colourBalance: { readonly enabled: boolean; readonly shadows: ColourBalanceTone; readonly midtones: ColourBalanceTone;
+    readonly highlights: ColourBalanceTone; readonly preserveLuminosity: boolean };
+  readonly selectiveColour: { readonly mode: 'relative' | 'absolute';
+    readonly ranges: Partial<Record<SelectiveColourRange, SelectiveColourValues>> };
+}
+export interface BrightnessContrastSettings { readonly brightness: number; readonly contrast: number; readonly legacy: boolean }
+export interface PhotoFilterSettings { readonly color: RGB; readonly density: number; readonly preserveLuminosity: boolean }
+export interface ChannelMixerChannel { readonly red: number; readonly green: number; readonly blue: number; readonly constant: number }
+export interface ChannelMixerSettings {
+  readonly monochrome: boolean; readonly red: ChannelMixerChannel; readonly green: ChannelMixerChannel;
+  readonly blue: ChannelMixerChannel; readonly gray: ChannelMixerChannel;
+}
+
 export interface HueSaturationParameters {
   readonly hue: number;
   readonly saturation: number;
@@ -60,7 +98,16 @@ export type LayerAdjustment =
   | { readonly kind: 'Curves'; readonly schemaVersion: 1; readonly parameters: CurvesSettings }
   | { readonly kind: 'Exposure'; readonly schemaVersion: 1; readonly parameters: ExposureSettings }
   | { readonly kind: 'Gradient Map'; readonly schemaVersion: 1; readonly parameters: GradientMapSettings }
-  | { readonly kind: 'Grain'; readonly schemaVersion: 1; readonly parameters: GrainSettings };
+  | { readonly kind: 'Grain'; readonly schemaVersion: 1; readonly parameters: GrainSettings }
+  | { readonly kind: 'Basic'; readonly schemaVersion: 1; readonly parameters: BasicSettings }
+  | { readonly kind: 'Colour Lookup'; readonly schemaVersion: 1; readonly parameters: ColourLookupSettings }
+  | { readonly kind: 'Colour'; readonly schemaVersion: 1; readonly parameters: ColourSettings }
+  | { readonly kind: 'Invert'; readonly schemaVersion: 1; readonly parameters: Readonly<Record<string, never>> }
+  | { readonly kind: 'Threshold'; readonly schemaVersion: 1; readonly parameters: { readonly level: number } }
+  | { readonly kind: 'Posterize'; readonly schemaVersion: 1; readonly parameters: { readonly levels: number } }
+  | { readonly kind: 'Brightness/Contrast'; readonly schemaVersion: 1; readonly parameters: BrightnessContrastSettings }
+  | { readonly kind: 'Photo Filter'; readonly schemaVersion: 1; readonly parameters: PhotoFilterSettings }
+  | { readonly kind: 'Channel Mixer'; readonly schemaVersion: 1; readonly parameters: ChannelMixerSettings };
 
 export interface LayerShape {
   readonly kind: 'Rectangle' | 'Ellipse';
@@ -117,7 +164,14 @@ export type LiveFilter =
   | { readonly kind: 'motionBlur'; readonly schemaVersion: 1; readonly enabled: boolean; readonly angle: number; readonly distance: number }
   | { readonly kind: 'noise'; readonly schemaVersion: 1; readonly enabled: boolean; readonly amount: number;
       readonly gaussian: boolean; readonly monochromatic: boolean }
-  | { readonly kind: 'lensCorrection'; readonly schemaVersion: 1; readonly enabled: boolean; readonly distortion: number };
+  | { readonly kind: 'lensCorrection'; readonly schemaVersion: 1; readonly enabled: boolean; readonly distortion: number }
+  | { readonly kind: 'unsharpMask'; readonly schemaVersion: 1; readonly enabled: boolean;
+      readonly amount: number; readonly radius: number; readonly threshold: number }
+  | { readonly kind: 'smartSharpen'; readonly schemaVersion: 1; readonly enabled: boolean;
+      readonly amount: number; readonly radius: number; readonly threshold: number; readonly reduceNoise: number }
+  | { readonly kind: 'highPass'; readonly schemaVersion: 1; readonly enabled: boolean; readonly radius: number }
+  | { readonly kind: 'denoise'; readonly schemaVersion: 1; readonly enabled: boolean;
+      readonly luminance: number; readonly colour: number };
 
 export interface LayerCommon {
   readonly id: string;
@@ -251,7 +305,7 @@ export interface Artboard {
 
 export interface DocumentResource {
   readonly id: string;
-  readonly role: 'pattern' | 'embedded' | 'font';
+  readonly role: 'pattern' | 'embedded' | 'font' | 'lut';
   readonly mime: string;
   readonly bytes: Uint8Array;
 }

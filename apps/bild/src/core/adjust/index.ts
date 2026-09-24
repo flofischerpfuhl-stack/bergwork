@@ -5,3 +5,7 @@ export * from './editing';
 export * from './hue';
 export * from './levels';
 export * from './raster';
+export * from './basic';
+export * from './colour';
+export * from './cube';
+export * from './resources';

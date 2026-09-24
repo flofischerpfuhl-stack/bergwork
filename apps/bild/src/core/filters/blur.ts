@@ -136,21 +136,21 @@ function gaussianPlane(width: number, height: number, sigma: number, horizontal:
 }
 
 function fromBlurredPlanes(raster: Raster, blur: PlaneBlur): Raster {
-  const bytes = raster.toPixels(), count = raster.width * raster.height;
+  const bytes = raster.toPixelsNative(), maximum = raster.maximum, count = raster.width * raster.height;
   const alpha = new Float32Array(count), plane = new Float32Array(count), scratch = new Float32Array(count);
-  for (let i = 0; i < count; i++) alpha[i] = bytes[i * 4 + 3]! / 255;
+  for (let i = 0; i < count; i++) alpha[i] = bytes[i * 4 + 3]! / maximum;
   blur(alpha, scratch);
-  const out = new Uint8Array(bytes.length);
-  for (let i = 0; i < count; i++) out[i * 4 + 3] = Math.round(Math.min(1, Math.max(0, alpha[i]!)) * 255);
+  const out = raster.format === 'rgba16' ? new Uint16Array(bytes.length) : new Uint8Array(bytes.length);
+  for (let i = 0; i < count; i++) out[i * 4 + 3] = Math.round(Math.min(1, Math.max(0, alpha[i]!)) * maximum);
   for (let channel = 0; channel < 3; channel++) {
-    for (let i = 0; i < count; i++) plane[i] = bytes[i * 4 + channel]! / 255 * (bytes[i * 4 + 3]! / 255);
+    for (let i = 0; i < count; i++) plane[i] = bytes[i * 4 + channel]! / maximum * (bytes[i * 4 + 3]! / maximum);
     blur(plane, scratch);
     for (let i = 0; i < count; i++) {
       const a = alpha[i]!;
-      if (a > 0) out[i * 4 + channel] = Math.round(Math.min(1, Math.max(0, plane[i]! / a)) * 255);
+      if (a > 0) out[i * 4 + channel] = Math.round(Math.min(1, Math.max(0, plane[i]! / a)) * maximum);
     }
   }
-  return Raster.fromPixels(raster.width, raster.height, 4, out);
+  return Raster.fromPixels(raster.width, raster.height, 4, out, { format: raster.format });
 }
 
 /** `Filters.swift` `PixelFilter.run(.gaussianBlur)`: transparent-edge, premultiplied-sRGB Gaussian. */
@@ -160,26 +160,27 @@ export function gaussianBlur(raster: Raster, sigma: number): Raster {
 }
 
 function premultiplied(raster: Raster): Float32Array {
-  const bytes = raster.toPixels(), out = new Float32Array(bytes.length);
+  const bytes = raster.toPixelsNative(), out = new Float32Array(bytes.length), maximum = raster.maximum;
   for (let i = 0; i < bytes.length; i += 4) {
-    const alpha = bytes[i + 3]! / 255;
-    out[i] = bytes[i]! / 255 * alpha; out[i + 1] = bytes[i + 1]! / 255 * alpha;
-    out[i + 2] = bytes[i + 2]! / 255 * alpha; out[i + 3] = alpha;
+    const alpha = bytes[i + 3]! / maximum;
+    out[i] = bytes[i]! / maximum * alpha; out[i + 1] = bytes[i + 1]! / maximum * alpha;
+    out[i + 2] = bytes[i + 2]! / maximum * alpha; out[i + 3] = alpha;
   }
   return out;
 }
 
-function fromPremultiplied(data: Float32Array, width: number, height: number): Raster {
-  const out = new Uint8Array(data.length);
+function fromPremultiplied(data: Float32Array, width: number, height: number, format: Raster['format']): Raster {
+  const maximum = format === 'rgba16' ? 65535 : 255;
+  const out = format === 'rgba16' ? new Uint16Array(data.length) : new Uint8Array(data.length);
   for (let i = 0; i < data.length; i += 4) {
-    const alpha = Math.min(1, Math.max(0, data[i + 3]!)); out[i + 3] = Math.round(alpha * 255);
+    const alpha = Math.min(1, Math.max(0, data[i + 3]!)); out[i + 3] = Math.round(alpha * maximum);
     if (alpha > 0) {
-      out[i] = Math.round(Math.min(1, Math.max(0, data[i]! / alpha)) * 255);
-      out[i + 1] = Math.round(Math.min(1, Math.max(0, data[i + 1]! / alpha)) * 255);
-      out[i + 2] = Math.round(Math.min(1, Math.max(0, data[i + 2]! / alpha)) * 255);
+      out[i] = Math.round(Math.min(1, Math.max(0, data[i]! / alpha)) * maximum);
+      out[i + 1] = Math.round(Math.min(1, Math.max(0, data[i + 1]! / alpha)) * maximum);
+      out[i + 2] = Math.round(Math.min(1, Math.max(0, data[i + 2]! / alpha)) * maximum);
     }
   }
-  return Raster.fromPixels(width, height, 4, out);
+  return Raster.fromPixels(width, height, 4, out, { format });
 }
 
 /** `Filters.swift` `PixelFilter.run(.motionBlur)`: CIMotionBlur's radius is distance / sqrt(12). */
@@ -216,5 +217,5 @@ export function motionBlur(raster: Raster, distance: number, angle: number): Ras
     const destination = (y * width + x) * 4;
     out[destination] = red; out[destination + 1] = green; out[destination + 2] = blue; out[destination + 3] = alpha;
   }
-  return fromPremultiplied(out, width, height);
+  return fromPremultiplied(out, width, height, raster.format);
 }

@@ -11,7 +11,8 @@
  */
 
 import {
-  defaultCurves, defaultExposure, defaultGradientMap, defaultGrain, defaultHueSaturation, defaultLevels,
+  defaultBasic, defaultBrightnessContrast, defaultChannelMixer, defaultColour, defaultCurves, defaultExposure,
+  defaultGradientMap, defaultGrain, defaultHueSaturation, defaultLevels, defaultPhotoFilter,
   isValidAdjustment,
 } from '../core/adjustments';
 import { unzipSync, zipSync, type Zippable } from 'fflate';
@@ -33,6 +34,7 @@ import { vectorPathsForShape } from '../core/shape';
 import { decodePng, decodePngNativeRGBA, encodePng } from './png';
 import { sha256Hex } from './sha256';
 import { normalizeArtboards } from '../core/artboards';
+import { parseCubeLut } from '../core/adjust/cube';
 
 export const EXTENSION_KEY = 'org.compositor.port';
 const MANIFEST_LIMIT = 4 * 1024 * 1024;
@@ -86,6 +88,17 @@ export function migrateLegacyAdjustment(value: unknown): LayerAdjustment {
     case 'Gradient Map': adjustment = { kind, schemaVersion: 1,
       parameters: legacySetting(record, 'gradientMapSettings', defaultGradientMap()) }; break;
     case 'Grain': adjustment = { kind, schemaVersion: 1, parameters: legacySetting(record, 'grainSettings', defaultGrain()) }; break;
+    case 'Basic': adjustment = { kind, schemaVersion: 1, parameters: legacySetting(record, 'parameters', defaultBasic()) }; break;
+    case 'Colour Lookup': adjustment = { kind, schemaVersion: 1,
+      parameters: legacySetting(record, 'parameters', { resourceId: '', interpolation: 'tetrahedral' as const }) }; break;
+    case 'Colour': adjustment = { kind, schemaVersion: 1, parameters: legacySetting(record, 'parameters', defaultColour()) }; break;
+    case 'Invert': adjustment = { kind, schemaVersion: 1, parameters: {} }; break;
+    case 'Threshold': adjustment = { kind, schemaVersion: 1, parameters: legacySetting(record, 'parameters', { level: 128 }) }; break;
+    case 'Posterize': adjustment = { kind, schemaVersion: 1, parameters: legacySetting(record, 'parameters', { levels: 4 }) }; break;
+    case 'Brightness/Contrast': adjustment = { kind, schemaVersion: 1,
+      parameters: legacySetting(record, 'parameters', defaultBrightnessContrast()) }; break;
+    case 'Photo Filter': adjustment = { kind, schemaVersion: 1, parameters: legacySetting(record, 'parameters', defaultPhotoFilter()) }; break;
+    case 'Channel Mixer': adjustment = { kind, schemaVersion: 1, parameters: legacySetting(record, 'parameters', defaultChannelMixer()) }; break;
     default: invalid('adjustment parameters');
   }
   if (!isValidAdjustment(adjustment)) invalid('adjustment parameters');
@@ -101,6 +114,9 @@ export function legacyAdjustmentProjection(value: LayerAdjustment): Record<strin
     case 'Exposure': return { kind: value.kind, exposureSettings: value.parameters };
     case 'Gradient Map': return { kind: value.kind, gradientMapSettings: value.parameters };
     case 'Grain': return { kind: value.kind, grainSettings: value.parameters };
+    case 'Basic': case 'Colour Lookup': case 'Colour': case 'Invert': case 'Threshold': case 'Posterize':
+    case 'Brightness/Contrast': case 'Photo Filter': case 'Channel Mixer':
+      return { kind: value.kind, parameters: value.parameters };
   }
 }
 
@@ -193,6 +209,15 @@ function v2Adjustment(value: LayerAdjustment): AdjustmentRecordV2 {
     case 'Exposure': return value;
     case 'Gradient Map': return value;
     case 'Grain': return value;
+    case 'Basic': return value;
+    case 'Colour Lookup': return value;
+    case 'Colour': return value;
+    case 'Invert': return value;
+    case 'Threshold': return value;
+    case 'Posterize': return value;
+    case 'Brightness/Contrast': return value;
+    case 'Photo Filter': return value;
+    case 'Channel Mixer': return value;
   }
 }
 
@@ -204,6 +229,15 @@ function liveAdjustment(value: AdjustmentRecordV2): LayerAdjustment {
     case 'Exposure': return value;
     case 'Gradient Map': return value;
     case 'Grain': return value;
+    case 'Basic': return value;
+    case 'Colour Lookup': return value;
+    case 'Colour': return value;
+    case 'Invert': return value;
+    case 'Threshold': return value;
+    case 'Posterize': return value;
+    case 'Brightness/Contrast': return value;
+    case 'Photo Filter': return value;
+    case 'Channel Mixer': return value;
   }
 }
 
@@ -610,7 +644,7 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
   for (const asset of manifest.assets) {
     if (!asset || typeof asset.id !== 'string' || !asset.id || records.has(asset.id) || !isSafeRelativePath(asset.path)
       || typeof asset.mime !== 'string' || typeof asset.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(asset.sha256)
-      || !['image', 'mask', 'pattern', 'embedded', 'font', 'history-tile'].includes(asset.role)) invalid('v2 asset');
+      || !['image', 'mask', 'pattern', 'embedded', 'font', 'lut', 'history-tile'].includes(asset.role)) invalid('v2 asset');
     if (asset.width !== undefined && (!Number.isInteger(asset.width) || asset.width < 1 || asset.width > MAX_SIDE)) invalid('v2 asset width');
     if (asset.height !== undefined && (!Number.isInteger(asset.height) || asset.height < 1 || asset.height > MAX_SIDE)) invalid('v2 asset height');
     if (asset.width && asset.height) {
@@ -624,9 +658,10 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
   const rasters = new Map<string, Raster>();
   const resources: Array<NonNullable<CanvasDocument['resources']>[number]> = [];
   for (const record of records.values()) {
-    if (record.role !== 'pattern' && record.role !== 'embedded' && record.role !== 'font') continue;
+    if (record.role !== 'pattern' && record.role !== 'embedded' && record.role !== 'font' && record.role !== 'lut') continue;
     const bytes = entries[record.path];
     if (!bytes || sha256Hex(bytes) !== record.sha256) throw new ProjectError('missing-image', 'An embedded project asset is missing or damaged.');
+    if (record.role === 'lut') try { parseCubeLut(bytes); } catch { invalid('colour lookup resource'); }
     resources.push({ id: record.id, role: record.role, mime: record.mime, bytes });
   }
   const decode = async (id: string, mask: boolean): Promise<Raster> => {
@@ -699,6 +734,9 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
           if (!record.adjustment || record.adjustment.schemaVersion !== 1) invalid('adjustment schema');
           const adjustment = liveAdjustment(record.adjustment);
           if (!isValidAdjustment(adjustment)) invalid('adjustment parameters');
+          if (adjustment.kind === 'Colour Lookup' && records.get(adjustment.parameters.resourceId)?.role !== 'lut') {
+            invalid('colour lookup resource');
+          }
           layers.push(newLayer({ ...common, kind: 'adjustment', adjustment }));
           break;
         }
@@ -863,7 +901,11 @@ function validLiveFilter(value: import('../../contracts-v2').FilterRecordV2): bo
   if (value.kind === 'gaussianBlur') return num(value.radius);
   if (value.kind === 'motionBlur') return num(value.angle) && num(value.distance);
   if (value.kind === 'noise') return num(value.amount) && typeof value.gaussian === 'boolean' && typeof value.monochromatic === 'boolean';
-  return value.kind === 'lensCorrection' && num(value.distortion);
+  if (value.kind === 'lensCorrection') return num(value.distortion);
+  if (value.kind === 'unsharpMask') return num(value.amount) && num(value.radius) && num(value.threshold);
+  if (value.kind === 'smartSharpen') return num(value.amount) && num(value.radius) && num(value.threshold) && num(value.reduceNoise);
+  if (value.kind === 'highPass') return num(value.radius);
+  return value.kind === 'denoise' && num(value.luminance) && num(value.colour);
 }
 
 async function readHistory(history: ProjectHistoryV2, entries: Record<string, Uint8Array>, records: ReadonlyMap<string, AssetRecordV2>,
