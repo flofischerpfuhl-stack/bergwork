@@ -13,6 +13,7 @@ function keyFromFile(name: string): string | null {
 export class OpfsScratchHost implements ScratchHost {
   readonly kind = 'opfs' as const;
   private readonly syncHandles = new Map<string, FileSystemSyncAccessHandle>();
+  private readonly mutations = new Map<string, Promise<void>>();
 
   private constructor(private readonly directory: FileSystemDirectoryHandle) {}
 
@@ -43,39 +44,55 @@ export class OpfsScratchHost implements ScratchHost {
     return opened;
   }
 
-  async read(key: string): Promise<Uint8Array | null> {
-    const handle = await this.handle(key, false);
-    if (!handle) return null;
-    const sync = await this.sync(key, handle);
-    if (sync) {
-      const bytes = new Uint8Array(sync.getSize());
-      sync.read(bytes, { at: 0 });
-      return bytes;
-    }
-    return new Uint8Array(await (await handle.getFile()).arrayBuffer());
+  /** OPFS rejects removeEntry while createWritable still owns the same file. Keep same-key changes ordered. */
+  private sequence<T>(key: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.mutations.get(key) ?? Promise.resolve();
+    const result = previous.catch(() => {}).then(action);
+    const current = result.then(() => {}, () => {});
+    this.mutations.set(key, current);
+    void current.then(() => { if (this.mutations.get(key) === current) this.mutations.delete(key); });
+    return result;
   }
 
-  async write(key: string, bytes: Uint8Array, options: { append?: boolean } = {}): Promise<void> {
-    const handle = (await this.handle(key, true))!;
-    const sync = await this.sync(key, handle);
-    if (sync) {
-      const at = options.append ? sync.getSize() : 0;
-      if (!options.append) sync.truncate(bytes.byteLength);
-      sync.write(bytes, { at });
-      return;
-    }
-    const stream = await handle.createWritable({ keepExistingData: !!options.append });
-    if (options.append) await stream.seek((await handle.getFile()).size);
-    await stream.write(bytes as FileSystemWriteChunkType);
-    await stream.close();
+  read(key: string): Promise<Uint8Array | null> {
+    return this.sequence(key, async () => {
+      const handle = await this.handle(key, false);
+      if (!handle) return null;
+      const sync = await this.sync(key, handle);
+      if (sync) {
+        const bytes = new Uint8Array(sync.getSize());
+        sync.read(bytes, { at: 0 });
+        return bytes;
+      }
+      return new Uint8Array(await (await handle.getFile()).arrayBuffer());
+    });
   }
 
-  async remove(key: string): Promise<void> {
+  write(key: string, bytes: Uint8Array, options: { append?: boolean } = {}): Promise<void> {
+    return this.sequence(key, async () => {
+      const handle = (await this.handle(key, true))!;
+      const sync = await this.sync(key, handle);
+      if (sync) {
+        const at = options.append ? sync.getSize() : 0;
+        if (!options.append) sync.truncate(bytes.byteLength);
+        sync.write(bytes, { at });
+        return;
+      }
+      const stream = await handle.createWritable({ keepExistingData: !!options.append });
+      if (options.append) await stream.seek((await handle.getFile()).size);
+      await stream.write(bytes as FileSystemWriteChunkType);
+      await stream.close();
+    });
+  }
+
+  remove(key: string): Promise<void> {
     requireScratchKey(key);
-    this.syncHandles.get(key)?.close();
-    this.syncHandles.delete(key);
-    try { await this.directory.removeEntry(fileName(key)); }
-    catch (error) { if ((error as DOMException).name !== 'NotFoundError') throw error; }
+    return this.sequence(key, async () => {
+      this.syncHandles.get(key)?.close();
+      this.syncHandles.delete(key);
+      try { await this.directory.removeEntry(fileName(key)); }
+      catch (error) { if ((error as DOMException).name !== 'NotFoundError') throw error; }
+    });
   }
 
   async list(prefix = ''): Promise<readonly string[]> {
@@ -91,6 +108,7 @@ export class OpfsScratchHost implements ScratchHost {
 
   async flush(): Promise<void> { for (const handle of this.syncHandles.values()) handle.flush(); }
   async close(): Promise<void> {
+    await Promise.allSettled(this.mutations.values());
     for (const handle of this.syncHandles.values()) handle.close();
     this.syncHandles.clear();
   }

@@ -3,6 +3,7 @@ import { Raster, TileNotResidentError } from '../../src/core/raster';
 import { RasterResidency, loadRasterTiles, storeRasterTiles, TileCache } from '../../src/core/storage';
 import { CrashJournal } from '../../src/platform/journal';
 import { MemoryScratchHost } from '../../src/platform/memoryScratchHost';
+import { OpfsScratchHost } from '../../src/platform/opfsScratchHost';
 import { RecoveryStore } from '../../src/platform/recovery';
 import { derivedLayerSources, EditorSession, type RasterCommandKind } from '../../src/core/session';
 import { makeTransform } from '../../src/core/geometry';
@@ -18,6 +19,57 @@ import { prepareStreamingSha256 } from '../../src/io/sha256';
 import { readZipEntries, Zip64StreamWriter } from '../../src/io/zipStream';
 
 describe('scratch tile storage', () => {
+  it('serializes an OPFS journal deletion behind its active writer', async () => {
+    const files = new Map<string, Uint8Array>(), locked = new Set<string>();
+    const handles = new Map<string, FileSystemFileHandle>();
+    const directory = {
+      async getFileHandle(name: string, options?: { create?: boolean }) {
+        if (!files.has(name) && !options?.create) throw new DOMException('Missing', 'NotFoundError');
+        if (!files.has(name)) files.set(name, new Uint8Array());
+        let handle = handles.get(name);
+        if (!handle) {
+          handle = {
+            kind: 'file', name,
+            async getFile() { return new File([files.get(name)! as BlobPart], name); },
+            async createWritable(options?: { keepExistingData?: boolean }) {
+              locked.add(name);
+              let value = options?.keepExistingData ? files.get(name)!.slice() : new Uint8Array(), position = 0;
+              return {
+                async seek(at: number) { position = at; },
+                async write(chunk: FileSystemWriteChunkType) {
+                  if (!(chunk instanceof Uint8Array)) throw new Error('Unexpected test chunk');
+                  const end = position + chunk.byteLength;
+                  if (end > value.byteLength) { const grown = new Uint8Array(end); grown.set(value); value = grown; }
+                  value.set(chunk, position); position = end;
+                },
+                async close() { files.set(name, value); locked.delete(name); },
+              } as FileSystemWritableFileStream;
+            },
+          } as unknown as FileSystemFileHandle;
+          handles.set(name, handle);
+        }
+        return handle;
+      },
+      async removeEntry(name: string) {
+        if (locked.has(name)) throw new DOMException('Active writer', 'NotAllowedError');
+        if (!files.delete(name)) throw new DOMException('Missing', 'NotFoundError');
+        handles.delete(name);
+      },
+    } as unknown as FileSystemDirectoryHandle;
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', { configurable: true,
+      value: { storage: { getDirectory: async () => directory } } });
+    try {
+      const host = await OpfsScratchHost.create(), key = 'recovery/large.fwj';
+      await Promise.all([host.write(key, new Uint8Array([1, 2, 3])), host.remove(key)]);
+      expect(await host.read(key)).toBeNull();
+      await host.close();
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, 'navigator', descriptor);
+      else Reflect.deleteProperty(globalThis, 'navigator');
+    }
+  });
+
   it('evicts the least-recently-used immutable tile and reloads its exact bytes', async () => {
     const host = new MemoryScratchHost();
     const cache = new TileCache(host, 4);

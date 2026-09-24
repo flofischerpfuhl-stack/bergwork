@@ -753,15 +753,16 @@ export class EditorController {
   }
 
   private async archiveResult(session: EditorSession,
-    emitChunk?: (chunk: Uint8Array) => void | Promise<void>): Promise<{ blob: Blob; manifest: ProjectManifestV2 }> {
+    emitChunk?: (chunk: Uint8Array) => void | Promise<void>): Promise<{ blob: Blob; manifest: ProjectManifestV2; document: CanvasDocument }> {
     const document = session.document;
     if (!document) throw new ProjectError('no-document', 'There is no canvas to save.');
     await this.whenFullyResolved();
     session.commitTransform();
     const final = session.document ?? document;
     const name = session.projectName ?? this.workspace.current.title;
-    return writeArchiveStreaming(final, name, session.activeLayerId, this.residency ?? undefined,
+    const archived = await writeArchiveStreaming(final, name, session.activeLayerId, this.residency ?? undefined,
       this.saveHistoryWithProject ? session.history.exportState() : undefined, emitChunk);
+    return { ...archived, document: final };
   }
 
   // MARK: Crash journal recovery (ScratchHost / OPFS)
@@ -770,6 +771,7 @@ export class EditorController {
   private recoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private recoveryPaused = new Set<string>();
   private recoveryWatchers = new Map<string, () => void>();
+  private recoveryOperations = new Map<string, Promise<void>>();
 
   /** Offers archives left by an earlier page load, then keeps copies of modified tabs. */
   async startRecovery(): Promise<void> {
@@ -862,7 +864,19 @@ export class EditorController {
     // PRODUCT-PLAN section 8: journal commits are batched for at most one second.
     void this.recovery?.markPending(tab.id).catch(() => undefined);
     if (this.recoveryTimers.has(tab.id)) return;
-    this.recoveryTimers.set(tab.id, setTimeout(() => void this.writeRecoveryCopy(tab), 750));
+    this.recoveryTimers.set(tab.id, setTimeout(() => {
+      const operation = this.enqueueRecoveryOperation(tab.id, () => this.writeRecoveryCopy(tab));
+      void operation.catch(() => {});
+    }, 750));
+  }
+
+  /** Journal commits, deletion, and garbage collection share OPFS files and must not overlap for one tab. */
+  private enqueueRecoveryOperation(id: string, operation: () => Promise<void>): Promise<void> {
+    const previous = this.recoveryOperations.get(id) ?? Promise.resolve();
+    const current = previous.catch(() => {}).then(operation);
+    this.recoveryOperations.set(id, current);
+    void current.finally(() => { if (this.recoveryOperations.get(id) === current) this.recoveryOperations.delete(id); }).catch(() => {});
+    return current;
   }
 
   private async writeRecoveryCopy(tab: ProjectTab): Promise<void> {
@@ -878,12 +892,14 @@ export class EditorController {
         const written = await store.putState({ id: tab.id, name, savedAt: Date.now(), document,
           activeLayerId: session.activeLayerId, history: session.history.exportState(),
           ...(session.history.undoName ? { command: session.history.undoName } : {}) }, this.residency,
-        () => session.document === document);
-        if (!written) this.scheduleRecoveryCopy(tab);
+        () => session.document === document && session.isModified);
+        if (!written && session.isModified) this.scheduleRecoveryCopy(tab);
       }
       else {
-        const archive = (await writeArchiveStreaming(session.document, name, session.activeLayerId, undefined,
+        const document = session.document;
+        const archive = (await writeArchiveStreaming(document, name, session.activeLayerId, undefined,
           session.history.exportState())).blob;
+        if (session.document !== document || !session.isModified) return;
         await store.put({ id: tab.id, name, savedAt: Date.now(), size: archive.size, archive,
           ...(session.history.undoName ? { command: session.history.undoName } : {}) });
       }
@@ -901,11 +917,11 @@ export class EditorController {
    * press that asked for it still counts, and encoding a large document takes longer than that.
    */
   async save(saveAs = false): Promise<void> {
-    const session = this.session;
+    const tab = this.workspace.current, session = tab.session;
     if (!session.document || !this.workspace.canSwitch) return;
     try {
       for (const intercept of this.saveInterceptors) if (await intercept(session, saveAs)) return;
-      const name = `${session.projectName ?? this.workspace.current.title}.fwimg`;
+      const name = `${session.projectName ?? tab.title}.fwimg`;
       const files = this.capabilities.files;
       const targetHost = this.host as FileTargetHost;
       let target = saveAs ? undefined : saveTargets.get(session);
@@ -916,27 +932,39 @@ export class EditorController {
         target = chosen;
       }
       const sink = target && targetHost.openFileSink ? await targetHost.openFileSink(target) : null;
+      let savedDocument: CanvasDocument;
       if (target && sink) {
-        try { await this.archiveResult(session, (chunk) => sink.write(chunk)); await sink.close(); }
+        try { const archived = await this.archiveResult(session, (chunk) => sink.write(chunk)); savedDocument = archived.document; await sink.close(); }
         catch (error) { await sink.abort().catch(() => {}); throw error; }
         saveTargets.set(session, target);
         session.projectName = target.name.replace(/(\.fwimg|\.compositor\.zip|\.zip)$/i, '');
       } else {
-        const blob = await this.archive(session);
+        const archived = await this.archiveResult(session), blob = archived.blob;
+        savedDocument = archived.document;
         if (target && files) {
           await files.writeFile(target, blob);
           saveTargets.set(session, target);
           session.projectName = target.name.replace(/(\.fwimg|\.compositor\.zip|\.zip)$/i, '');
         } else await this.host.saveFile(blob, name);
       }
-      session.projectName ??= this.workspace.current.title;
-      session.history.markSaved();
-      this.recoveryPaused.delete(this.workspace.current.id);
-      if (this.recovery) {
-        await this.recovery.remove(this.workspace.current.id);
-        await this.recovery.collectGarbage(this.liveScratchKeys());
-      }
+      session.projectName ??= tab.title;
+      if (session.document === savedDocument) session.history.markSaved();
+      this.recoveryPaused.delete(tab.id);
       session.notify('ui');
+      const recovery = this.recovery;
+      if (recovery && !session.isModified) {
+        const timer = this.recoveryTimers.get(tab.id);
+        if (timer) { clearTimeout(timer); this.recoveryTimers.delete(tab.id); }
+        // The file is already durable and the saved revision must become visible immediately. Cleanup follows any
+        // journal writer that was already in flight; a later edit keeps/supersedes that recovery state.
+        const cleanup = this.enqueueRecoveryOperation(tab.id, async () => {
+          if (session.isModified) return;
+          await recovery.remove(tab.id);
+          if (!session.isModified) await recovery.collectGarbage(this.liveScratchKeys());
+        });
+        void cleanup.catch((error) => this.host.reportError({ code: 'recovery-write-failed',
+          message: technicalErrorMessage(error, 'Recovery cleanup failed.') }));
+      }
     } catch (error) { this.reportError('save-failed', error); }
   }
 
@@ -1112,7 +1140,7 @@ export class EditorController {
     const recovery = this.recovery;
     if (recovery) {
       const ids = [...this.recoveryWatchers.keys()];
-      void Promise.allSettled(ids.map((id) => recovery.remove(id)))
+      void Promise.allSettled(ids.map((id) => this.enqueueRecoveryOperation(id, () => recovery.remove(id))))
         .then(() => recovery.collectGarbage()).finally(() => recovery.close());
     }
     this.workspace.destroy();
