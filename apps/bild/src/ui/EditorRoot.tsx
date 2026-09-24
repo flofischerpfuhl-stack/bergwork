@@ -7,7 +7,7 @@ import { ToolRail } from './ToolRail';
 import { ContextBar, StatusBar } from './ContextBar';
 import { CanvasPane } from './CanvasPane';
 import { LayersPanel } from './LayersPanel';
-import { DialogHost } from './Dialogs';
+import { DialogHost, dismissDialog } from './Dialogs';
 import { buildMenus, shortcutMap, shortcutOf } from './menus';
 import { Icon } from './icons';
 import { modifiersOf } from './canvas/CanvasView';
@@ -107,7 +107,11 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
   useEffect(() => {
     const element = root.current!;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (controller.ui.getState().dialog) return;
+      if (controller.ui.getState().dialog) {
+        // Focus may have fallen back to the editor (a focused control inside the dialog went away): Escape still closes it.
+        if (event.key === 'Escape' && !(event.target as Element | null)?.closest?.('[role=dialog], [role=alertdialog]')) { dismissDialog(controller); event.preventDefault(); }
+        return;
+      }
       const session = controller.session;
       const view = controller.canvasView;
       if (isTextTarget(event.target)) return;

@@ -1,6 +1,6 @@
 /**
- * Sheets and alerts: New Canvas (UI/NewCanvasSheet.swift), JPEG export with an encoded preview
- * (UI/JPEGExportSheet.swift), confirmations (NSAlert) and error alerts.
+ * Sheets and alerts: New Canvas (UI/NewCanvasSheet.swift), the Export As dialog (./ExportDialog),
+ * confirmations (NSAlert) and error alerts.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -8,6 +8,7 @@ import styles from './editor.module.css';
 import type { EditorController } from './controller';
 import { useUi } from './hooks';
 import { validDimension } from '../core/document';
+import { ExportDialog } from './ExportDialog';
 
 export function NewCanvasSheet({ controller, welcome = false, onDone }: { controller: EditorController; welcome?: boolean; onDone?: () => void }) {
   const t = controller.t;
@@ -63,56 +64,12 @@ export function NewCanvasSheet({ controller, welcome = false, onDone }: { contro
   return welcome ? <div className={styles.welcome}>{card}</div> : card;
 }
 
-function JpegDialog({ controller }: { controller: EditorController }) {
-  const t = controller.t;
-  const [quality, setQuality] = useState(controller.jpegOptions.quality);
-  const [matte, setMatte] = useState('#ffffff');
-  const [preview, setPreview] = useState<{ url: string; size: number; key: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const key = `${quality}|${matte}`;
-  const document = controller.session.document;
-  useEffect(() => {
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      const rgb = [1, 3, 5].map((i) => parseInt(matte.slice(i, i + 2), 16) / 255);
-      void controller.exportBlob('jpeg', { quality, red: rgb[0]!, green: rgb[1]!, blue: rgb[2]! }).then((blob) => {
-        if (cancelled) return;
-        setPreview((old) => { if (old) URL.revokeObjectURL(old.url); return { url: URL.createObjectURL(blob), size: blob.size, key }; });
-        blobRef.current = blob;
-      }, (e: Error) => { if (!cancelled) setError(e.message); });
-    }, 200);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [key, controller, quality, matte]);
-  const blobRef = useRef<Blob | null>(null);
-  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview.url); }, [preview]);
-  const ready = preview?.key === key && !error;
-  return (
-    <div className={`${styles.dialog} ${styles.dialogWide}`} role="dialog" aria-modal aria-label={t('Export JPEG…')}>
-      <h2 className={styles.dialogTitle}>{t('Export JPEG…').replace('…', '')}</h2>
-      <div className={styles.preview}>{preview ? <img src={preview.url} alt="JPEG preview" /> : null}</div>
-      <label className={styles.appearanceRow}>
-        <span>{t('Quality')}</span>
-        <input className={styles.slider} type="range" min={0} max={1} step={0.01} value={quality} onChange={(e) => setQuality(Number(e.target.value))} />
-        <span style={{ width: 45, textAlign: 'right' }}>{Math.round(quality * 100)}%</span>
-      </label>
-      <label className={styles.appearanceRow}>
-        <span>{t('Background for transparency')}</span>
-        <input type="color" value={matte} onChange={(e) => setMatte(e.target.value)} />
-      </label>
-      <span className={styles.secondary}>{document ? `${document.width} × ${document.height} px · sRGB` : ''}</span>
-      <div className={styles.dialogButtons}>
-        <span className={styles.secondary} style={{ marginRight: 'auto' }}>{error ?? (ready && preview ? `${(preview.size / 1024).toFixed(0)} KB · encoded preview` : '…')}</span>
-        <button type="button" className={styles.pill} onClick={() => controller.showDialog(null)}>{t('Cancel')}</button>
-        <button type="button" className={`${styles.pill} ${styles.pillPrimary}`} disabled={!ready}
-          onClick={() => {
-            const rgb = [1, 3, 5].map((i) => parseInt(matte.slice(i, i + 2), 16) / 255);
-            controller.jpegOptions = { quality, red: rgb[0]!, green: rgb[1]!, blue: rgb[2]! };
-            controller.showDialog(null);
-            void controller.exportTo('jpeg');
-          }}>{t('Export')}…</button>
-      </div>
-    </div>
-  );
+/** Escape: cancels a confirmation, closes any other dialog. */
+export function dismissDialog(controller: EditorController): void {
+  const dialog = controller.ui.getState().dialog;
+  if (!dialog) return;
+  if (dialog.kind === 'confirm') dialog.resolve(dialog.buttons.find((b) => b.role === 'cancel')?.value ?? 'cancel');
+  else controller.showDialog(null);
 }
 
 export function DialogHost({ controller }: { controller: EditorController }) {
@@ -121,7 +78,7 @@ export function DialogHost({ controller }: { controller: EditorController }) {
   let content = null;
   const close = () => controller.showDialog(null);
   if (dialog.kind === 'newCanvas') content = <NewCanvasSheet controller={controller} onDone={close} />;
-  else if (dialog.kind === 'jpeg') content = <JpegDialog controller={controller} />;
+  else if (dialog.kind === 'export') content = <ExportDialog controller={controller} close={close} />;
   else if (dialog.kind === 'alert') {
     content = (
       <div className={styles.dialog} role="alertdialog" aria-modal aria-labelledby="cmp-alert-title">
@@ -156,10 +113,7 @@ export function DialogHost({ controller }: { controller: EditorController }) {
   return (
     <div className={styles.dialogBackdrop} onKeyDown={(event) => {
       event.stopPropagation();
-      if (event.key === 'Escape') {
-        if (dialog.kind === 'confirm') dialog.resolve(dialog.buttons.find((b) => b.role === 'cancel')?.value ?? 'cancel');
-        else close();
-      }
+      if (event.key === 'Escape') dismissDialog(controller);
     }}>
       {content}
     </div>

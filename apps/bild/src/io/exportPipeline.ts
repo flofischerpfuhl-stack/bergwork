@@ -1,6 +1,6 @@
 /**
  * The single export pipeline (PRODUCT-PLAN 6.1 "ein Export-Dialog", P4 "pro Aufgabe genau ein Weg").
- * Every image export — File > Export PNG/JPEG, the export dialog, per-artboard and per-layer exports,
+ * Every image export — File > Export As… (the one export dialog) for documents, artboards and layers,
  * `EditorHandle.exportImage` — is an `ExportRequest` that goes through `planExport` (`./exportPlan`:
  * names, regions, pixel sizes; synchronous so the host can ask for a destination first) and
  * `runExport` (render, back, matte, encode off the main thread). Loaded on first export.

@@ -11,7 +11,7 @@ type IconName =
   | 'eye' | 'eyeSlash' | 'folder' | 'chevronRight' | 'chevronDown' | 'plusSquare' | 'folderPlus' | 'mask'
   | 'adjustment' | 'trash' | 'link' | 'plus' | 'close' | 'zoomIn' | 'zoomOut' | 'swap' | 'reset' | 'menu'
   | 'layers' | 'sliders' | 'levels' | 'curves' | 'exposure' | 'grain' | 'gradientMap' | 'more'
-  | 'lock' | 'lockTransparency' | 'search' | 'filter';
+  | 'lock' | 'lockTransparency' | 'search' | 'filter' | 'artboard' | 'minus';
 
 const paths: Record<IconName, ReactElement> = {
   move: <path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3" />,
@@ -62,6 +62,8 @@ const paths: Record<IconName, ReactElement> = {
   lockTransparency: <><rect x="4" y="4" width="16" height="16" rx="1.5" /><path d="M4 12h16M12 4v16" /><path d="M4 4h8v8H4zM12 12h8v8h-8z" fill="currentColor" stroke="none" opacity=".55" /></>,
   search: <><circle cx="10.5" cy="10.5" r="6" /><path d="m15 15 5.5 5.5" /></>,
   filter: <path d="M4 5h16l-6 7.5V19l-4-2v-4.5z" />,
+  artboard: <><rect x="7" y="7" width="10" height="10" rx="0.5" /><path d="M7 2.5V7H2.5M17 2.5V7h4.5M7 21.5V17H2.5M17 21.5V17h4.5" /></>,
+  minus: <path d="M5 12h14" />,
 };
 
 export function Icon({ name, size = 18, title }: { name: IconName; size?: number; title?: string }) {
