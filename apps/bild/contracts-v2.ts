@@ -1,4 +1,4 @@
-import type { EditorHandle, Matrix2D } from './contracts';
+import type { EditorHandle, HostAdapter, Matrix2D } from './contracts';
 
 export type AssetIdV2 = string;
 export type LayerIdV2 = string;
@@ -150,6 +150,15 @@ export interface ProjectManifestV2 {
 export interface EditorHandleV2 extends EditorHandle {
   getManifestV2(): ProjectManifestV2;
 }
+
+export type EditorProfileId = 'pro' | 'lite';
+export interface MountEditorOptionsV2 {
+  host: HostAdapter;
+  locale?: 'de' | 'en';
+  theme?: 'dark' | 'light';
+  profile?: EditorProfileId;
+}
+export type MountEditorV2 = (root: HTMLElement, options: MountEditorOptionsV2) => Promise<EditorHandleV2>;
 
 /** Migration readers may use v1 affine matrices while reconstructing semantic transforms. */
 export type LegacyMatrixV1 = Matrix2D;

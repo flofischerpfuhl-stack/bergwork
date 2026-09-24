@@ -8,9 +8,18 @@ Fernwork Bildeditor uses one engine and two host entries: the ordinary browser e
 the only paths passed to the filesystem plugin. No updater, telemetry, background service, or
 runtime network call is included.
 
+The adapter also publishes the A0 versioned capability registry: native file
+targets and OS-open events, system-font enumeration/loading, SHA-256 compute,
+verified model caching, and display ICC lookup. Recent files are stored in the
+Tauri application config directory; AI models are stored in the application
+cache directory. A remote model is fetched only for an explicit user action
+and only from its configured URL, then verified before it is cached.
+
 The editor draws its own menu bar on Linux and Windows. Only macOS gets a native File menu (it is the global
 menu bar there); it forwards ⌘N and ⌘W to the existing editor command dispatcher, and Quit exits the application. `.fwimg`, `.psd`, and common raster extensions are declared
-as associations; OS-delivered open events are intentionally not wired in A1.
+as associations. Command-line association paths, including paths delivered to
+a second instance, are emitted to the running editor and recorded in Recents
+after a successful open.
 
 ## Commands
 
@@ -146,11 +155,32 @@ limit (when exposed) and successful retained allocation. It has a 1024 MiB safet
 killing the desktop session; therefore a non-failing result is a lower bound, not a measured hard
 limit. This is the one deliberate deviation from “allocate to failure”.
 
+## Host diagnostics
+
+On Linux, `display_icc_profile` reads the X root `_ICC_PROFILE` property with
+`xprop`. On a Wayland-only session or when no profile is published it returns
+an explicit sRGB assumption. On Windows the `cfg(windows)` implementation uses
+`GetICMProfileW`; it must be checked by the Windows integration lane because
+the MSVC target is not installed here. Font enumeration scans the standard OS
+font directories and returns font-file bytes to the CanvasKit text engine.
+
+The release binary has an explicit console smoke mode which runs discovery
+before the WebView starts:
+
+```bash
+source scripts/tauri-env.sh
+FERNWORK_HOST_SMOKE=1 src-tauri/target/release/fernwork-bildeditor
+```
+
+It logs the system-font count and display-profile result. Absence of an ICC
+payload is valid only when the returned `assumed` flag is true.
+
 ## Current scope
 
 The host reads and writes whole files through plugin byte arrays; A6 binary channels, scratch mmap,
-native codecs/compute, recent-file state, OS association-open events, and updater support are not
-implemented. The A1 measurement entry writes a JSON result only when explicitly launched with
+native codec acceleration and A6 high-volume binary IPC are not implemented;
+the named checksum job is the real A0 ComputeHost reference job. Updater support
+is not implemented. The A1 measurement entry writes a JSON result only when explicitly launched with
 `FERNWORK_WEBVIEW_MATRIX=1` and `FERNWORK_MATRIX_RESULT`; ordinary runtime has no such write or
 network activity. Linux bundles are currently `.deb` and `.rpm`; Tauri's downloaded `linuxdeploy`
 helper exited nonzero while attempting an AppImage on this host, so AppImage is not a configured

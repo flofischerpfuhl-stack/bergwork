@@ -1,9 +1,12 @@
+use std::sync::Mutex;
 use std::{env, path::PathBuf};
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     webview::WebviewWindowBuilder,
     AppHandle, Emitter, Manager, WebviewUrl,
 };
+
+mod host;
 
 #[cfg(feature = "a6-spike")]
 mod a6_spike;
@@ -59,11 +62,35 @@ pub fn run() {
         return;
     }
 
+    // Release-build smoke mode logs native discovery before WebKit starts, so it also diagnoses a failed webview.
+    if env::var_os("FERNWORK_HOST_SMOKE").is_some() {
+        let _ = host::list_system_fonts();
+        let _ = host::display_icc_profile();
+    }
+
     tauri::Builder::default()
+        .manage(host::StartupFiles(Mutex::new(host::file_references(
+            env::args().skip(1),
+        ))))
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            let files = host::file_references(argv.into_iter().skip(1));
+            if !files.is_empty() {
+                let _ = app.emit("fernwork-open-files", files);
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             write_matrix_result,
+            host::list_system_fonts,
+            host::load_system_font,
+            host::recent_files,
+            host::record_recent_file,
+            host::startup_files,
+            host::run_compute_job,
+            host::read_cached_model,
+            host::write_cached_model,
+            host::display_icc_profile,
             #[cfg(feature = "a6-spike")]
             a6_spike::a6_write_result,
             #[cfg(feature = "a6-spike")]
