@@ -15,7 +15,7 @@ import {
   type RGB,
 } from '../../core/adjustments';
 import { parseCubeLut } from '../../core/adjust/cube';
-import { readRawPsdComposite } from './composite';
+import { psdHasMergedTransparency, readRawPsdComposite } from './composite';
 import { decodePsdLayerChannels } from './layerChannels';
 import type { LittleCms } from '../../wasm/lcms';
 import { sha256Hex } from '../sha256';
@@ -120,6 +120,8 @@ interface ImportState {
   nextId: number;
   readonly documentWidth: number;
   readonly documentHeight: number;
+  readonly bitsPerChannel: number;
+  readonly artboards: boolean;
   readonly resolution: number;
   readonly unsupported: PsdUnsupportedFeature[];
   readonly resources: NonNullable<CanvasDocument['resources']>[number][];
@@ -487,6 +489,163 @@ function psdVectorPaths(paths: readonly BezierPath[], origin: { x: number; y: nu
   }));
 }
 
+function rectanglePath(left: number, top: number, right: number, bottom: number): VectorPath {
+  const point = (x: number, y: number) => ({ in: { x, y }, anchor: { x, y }, out: { x, y }, kind: 'corner' as const });
+  return { schemaVersion: 1, closed: true, fillRule: 'nonzero',
+    points: [point(left, top), point(right, top), point(right, bottom), point(left, bottom)] };
+}
+
+function pathBounds(paths: readonly VectorPath[]): { x: number; y: number; width: number; height: number } | null {
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const path of paths) for (const point of path.points) for (const value of [point.in, point.anchor, point.out]) {
+    left = Math.min(left, value.x); top = Math.min(top, value.y);
+    right = Math.max(right, value.x); bottom = Math.max(bottom, value.y);
+  }
+  if (![left, top, right, bottom].every(Number.isFinite)) return null;
+  const x = Math.floor(left), y = Math.floor(top);
+  return { x, y, width: Math.max(1, Math.ceil(right) - x), height: Math.max(1, Math.ceil(bottom) - y) };
+}
+
+function localPaths(paths: readonly VectorPath[], x: number, y: number): readonly VectorPath[] {
+  return paths.map((path) => ({ ...path, points: path.points.map((point) => ({ ...point,
+    in: { x: point.in.x - x, y: point.in.y - y }, anchor: { x: point.anchor.x - x, y: point.anchor.y - y },
+    out: { x: point.out.x - x, y: point.out.y - y },
+  })) }));
+}
+
+interface FlatPath { readonly points: Float64Array; readonly evenOdd: boolean }
+
+function flattenedPaths(paths: readonly VectorPath[]): FlatPath[] {
+  const result: FlatPath[] = [];
+  for (const path of paths) {
+    if (path.points.length < 2) continue;
+    const values: number[] = [];
+    const segments = path.closed ? path.points.length : path.points.length - 1;
+    for (let index = 0; index < segments; index++) {
+      const from = path.points[index]!, to = path.points[(index + 1) % path.points.length]!;
+      if (index === 0) values.push(from.anchor.x, from.anchor.y);
+      for (let step = 1; step <= 12; step++) {
+        const t = step / 12, u = 1 - t;
+        values.push(u ** 3 * from.anchor.x + 3 * u * u * t * from.out.x + 3 * u * t * t * to.in.x + t ** 3 * to.anchor.x,
+          u ** 3 * from.anchor.y + 3 * u * u * t * from.out.y + 3 * u * t * t * to.in.y + t ** 3 * to.anchor.y);
+      }
+    }
+    result.push({ points: new Float64Array(values), evenOdd: path.fillRule === 'evenodd' });
+  }
+  return result;
+}
+
+function pathContains(paths: readonly FlatPath[], x: number, y: number): boolean {
+  let winding = 0, parity = false;
+  for (const path of paths) {
+    let local = 0;
+    const values = path.points, count = values.length / 2;
+    for (let index = 0, previous = count - 1; index < count; previous = index++) {
+      const x0 = values[previous * 2]!, y0 = values[previous * 2 + 1]!;
+      const x1 = values[index * 2]!, y1 = values[index * 2 + 1]!;
+      if ((y0 > y) !== (y1 > y) && x < (x1 - x0) * (y - y0) / (y1 - y0) + x0) {
+        parity = !parity; local += y1 > y0 ? 1 : -1;
+      }
+    }
+    if (!path.evenOdd) winding += local;
+  }
+  return parity || winding !== 0;
+}
+
+function pathDistanceSquared(paths: readonly FlatPath[], x: number, y: number): number {
+  let best = Infinity;
+  for (const path of paths) {
+    const values = path.points, count = values.length / 2;
+    for (let index = 0, previous = count - 1; index < count; previous = index++) {
+      const x0 = values[previous * 2]!, y0 = values[previous * 2 + 1]!;
+      const dx = values[index * 2]! - x0, dy = values[index * 2 + 1]! - y0;
+      const length = dx * dx + dy * dy;
+      const t = length ? Math.min(1, Math.max(0, ((x - x0) * dx + (y - y0) * dy) / length)) : 0;
+      const px = x0 + dx * t - x, py = y0 + dy * t - y;
+      best = Math.min(best, px * px + py * py);
+    }
+  }
+  return best;
+}
+
+/** Layer-owned fallback for PSD generated fills whose high-depth records contain no pixel cache. */
+function generatedVectorRaster(source: AgLayer, paths: readonly VectorPath[], width: number, height: number): Raster | null {
+  const content = source.vectorFill;
+  if (!content || (content.type !== 'color' && content.type !== 'solid') || width * height > MAX_PIXELS) return null;
+  const flat = flattenedPaths(paths);
+  if (!flat.length) return null;
+  const pixels = new Uint8Array(width * height * 4), samples = width * height <= 4_000_000 ? 4 : 1;
+  const offsets = samples === 4 ? [0.25, 0.75] as const : [0.5] as const;
+  const stops = content.type === 'solid' ? content.colorStops.slice().sort((a, b) => a.location - b.location) : [];
+  const opacity = content.type === 'solid' ? content.opacityStops.slice().sort((a, b) => a.location - b.location) : [];
+  const angle = ((content.type === 'solid' ? content.angle ?? 0 : 0) * Math.PI) / 180;
+  // PSD gradient angles use the document's upward-positive axis; raster rows grow downward.
+  const cos = Math.cos(angle), sin = -Math.sin(angle), scale = content.type === 'solid' ? Math.max(0.01, content.scale ?? 1) : 1;
+  const cx = width * (0.5 + (content.type === 'solid' ? content.offset?.x ?? 0 : 0) / 100);
+  const cy = height * (0.5 + (content.type === 'solid' ? content.offset?.y ?? 0 : 0) / 100);
+  const extent = Math.max(1e-9, (Math.abs(cos) * width + Math.abs(sin) * height) * 0.5 * scale);
+  const stroke = source.vectorStroke?.strokeEnabled === true ? source.vectorStroke : null;
+  const strokeWidth = stroke ? Math.max(0.01, units(stroke.lineWidth)) : 0;
+  const strokeColor = stroke?.content?.type === 'color' ? rgb(stroke.content.color) : null;
+  const stopValue = (location: number): readonly [number, number, number, number] => {
+    if (content.type === 'color') { const color = rgb(content.color); return [color.red, color.green, color.blue, 1]; }
+    let left = stops[0]!, right = stops.at(-1)!;
+    for (let index = 1; index < stops.length; index++) if (location <= stops[index]!.location) {
+      left = stops[index - 1]!; right = stops[index]!; break;
+    }
+    const mix = right.location === left.location ? 0 : Math.min(1, Math.max(0,
+      (location - left.location) / (right.location - left.location)));
+    const a = rgb(left.color), b = rgb(right.color);
+    let alpha = 1;
+    if (opacity.length) {
+      let lo = opacity[0]!, hi = opacity.at(-1)!;
+      for (let index = 1; index < opacity.length; index++) if (location <= opacity[index]!.location) {
+        lo = opacity[index - 1]!; hi = opacity[index]!; break;
+      }
+      const amount = hi.location === lo.location ? 0 : Math.min(1, Math.max(0,
+        (location - lo.location) / (hi.location - lo.location)));
+      alpha = lo.opacity + (hi.opacity - lo.opacity) * amount;
+    }
+    return [a.red + (b.red - a.red) * mix, a.green + (b.green - a.green) * mix,
+      a.blue + (b.blue - a.blue) * mix, alpha];
+  };
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    let covered = 0, stroked = 0;
+    for (const oy of offsets) for (const ox of offsets) {
+      const inside = pathContains(flat, x + ox, y + oy);
+      if (inside) covered++;
+      if (strokeColor) {
+        const reach = stroke!.lineAlignment === 'inside' ? strokeWidth
+          : stroke!.lineAlignment === 'outside' ? (inside ? 0 : strokeWidth) : strokeWidth / 2;
+        if (reach > 0 && pathDistanceSquared(flat, x + ox, y + oy) <= reach * reach) stroked++;
+      }
+    }
+    if (!covered) continue;
+    let location = ((x + 0.5 - cx) * cos + (y + 0.5 - cy) * sin) / (extent * 2) + 0.5;
+    if (content.type === 'solid') {
+      if (content.style === 'reflected') location = Math.abs(location * 2 - 1);
+      else if (content.style === 'radial') location = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) / extent;
+      else if (content.style === 'diamond') location = (Math.abs(x + 0.5 - cx) + Math.abs(y + 0.5 - cy)) / extent;
+      else if (content.style === 'angle') location = (Math.atan2(y + 0.5 - cy, x + 0.5 - cx) / (Math.PI * 2) + 1) % 1;
+      if (content.reverse) location = 1 - location;
+      // Photoshop's classic gradient interpolation eases around the midpoint even when the
+      // stop midpoint is 50%; its high-depth generated-fill cache pins this ≈1.3 response.
+      if (!content.interpolationMethod || content.interpolationMethod === 'classic') {
+        location = location < 0.5 ? 0.5 * (location * 2) ** 1.3
+          : 1 - 0.5 * ((1 - location) * 2) ** 1.3;
+      }
+    }
+    const color = stopValue(Math.min(1, Math.max(0, location))), coverage = covered / samples;
+    const strokeMix = strokeColor ? Math.min(1, stroked / covered) : 0;
+    const at = (y * width + x) * 4, alpha = color[3] * coverage;
+    pixels[at] = Math.round((color[0] * (1 - strokeMix) + (strokeColor?.red ?? 0) * strokeMix) * 255);
+    pixels[at + 1] = Math.round((color[1] * (1 - strokeMix) + (strokeColor?.green ?? 0) * strokeMix) * 255);
+    pixels[at + 2] = Math.round((color[2] * (1 - strokeMix) + (strokeColor?.blue ?? 0) * strokeMix) * 255);
+    pixels[at + 3] = Math.round(alpha * 255);
+  }
+  return Raster.fromPixels(width, height, 4, pixels);
+}
+
 function psdFill(content: VectorContent | undefined, state: ImportState, layerPath: string): FillParameters | null {
   if (!content) return null;
   if (content.type === 'color') return { kind: 'solid', schemaVersion: 1, color: psdTextColor(content.color) };
@@ -637,8 +796,6 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const mappedMode = BLEND_MODES.get(sourceMode) ?? 'normal';
     if (!isGroup && !BLEND_MODES.has(sourceMode)) issue(state, `blend-mode:${sourceMode}`,
       `Blend mode “${sourceMode}” is rendered as normal.`, 'not-rendered', layerPath);
-    if (isGroup && source.clipping) issue(state, 'group-clipping',
-      'A clipped group cannot be represented by the current live-mask graph.', 'not-rendered', layerPath);
     if (source.clipping && !clippingBaseId) issue(state, 'orphan-clipping',
       'Clipping layer has no visible base in its group.', 'not-rendered', layerPath);
     reportLayerFeatures(source, isGroup, state, layerPath);
@@ -648,27 +805,49 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const editableText = textData?.text.replace(/\r/g, '\n') ?? '';
     const textBox = textData ? psdTextBox(textData, width, height) : null;
     const editableTransform = textData ? psdTextTransform(textData, layerTransform, textBox) : layerTransform;
-    const vectorContent = !isGroup && !textData && !!(source.vectorFill || source.vectorStroke) && !!source.vectorMask?.paths.length;
-    const vectorPaths = vectorContent ? psdVectorPaths(source.vectorMask!.paths, editableTransform.origin) : [];
+    const vectorContent = !isGroup && !textData && !!(source.vectorFill || source.vectorStroke)
+      && (state.bitsPerChannel !== 8 || (!!source.vectorMask?.paths.length && !state.artboards));
+    const fillBounds = source.mask && (source.mask.right ?? 0) > (source.mask.left ?? 0)
+      && (source.mask.bottom ?? 0) > (source.mask.top ?? 0)
+      ? { left: source.mask.left!, top: source.mask.top!, right: source.mask.right!, bottom: source.mask.bottom! }
+      : { left: 0, top: 0, right: state.documentWidth, bottom: state.documentHeight };
+    const globalVectorPaths = vectorContent
+      ? source.vectorMask?.paths.length ? psdVectorPaths(source.vectorMask.paths, { x: 0, y: 0 })
+        : [rectanglePath(fillBounds.left, fillBounds.top, fillBounds.right, fillBounds.bottom)] : [];
+    const vectorBounds = vectorContent && !image ? pathBounds(globalVectorPaths) : null;
+    const vectorTransform = vectorBounds
+      ? transform(vectorBounds.x, vectorBounds.y, vectorBounds.width, vectorBounds.height) : editableTransform;
+    const vectorPaths = vectorContent ? localPaths(globalVectorPaths, vectorTransform.origin.x, vectorTransform.origin.y) : [];
+    const vectorRaster = vectorContent && !image
+      ? generatedVectorRaster(source, vectorPaths, Math.round(vectorTransform.size.width), Math.round(vectorTransform.size.height)) : null;
+    const vectorStyle = vectorContent ? psdVectorStyle(source, state.resolution, state, layerPath) : null;
+    if (vectorRaster) issue(state, 'generated-fill-cache',
+      'A cache-less PSD generated fill is rendered from its editable descriptor and path; its paint is retained as PSD metadata.',
+      'editability-only', layerPath);
     const placed = !isGroup ? placedContent(source, state) : null;
     const placedPixels = placed ? placedRaster(source, state) : null;
     // When ag-psd exposes only Photoshop's already-transformed cache, keep its pixel placement until the source
     // runtime resolves. Decodable embedded PNGs use their true original grid and the PlLd/SoLd transform directly.
-    const placement = placed && placedPixels ? placedTransform(source, layerTransform) : { transform: editableTransform, warp: null };
+    const placement = placed && placedPixels ? placedTransform(source, layerTransform) : { transform: vectorTransform, warp: null };
+    const vectorMask = vectorContent ? null : psdVectorMask(source, editableTransform.origin);
+    const importedMask = maskFor(source, placement.transform, state, layerPath);
     let imported: Layer = newLayer({
       id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : placed ? 'embedded' : textData ? 'text' : vectorContent ? 'vector' : adjustment ? 'adjustment' : 'pixel',
       visible: source.hidden !== true, opacity, fillOpacity, blendMode: mappedMode,
       locks: importedLocks(source), colorLabel: importedColorLabel(source, state, layerPath), transform: placement.transform,
       warp: placement.warp,
-      raster: placedPixels ?? (image ? rasterFromPixelData(image) : null),
+      raster: placedPixels ?? (image ? rasterFromPixelData(image) : vectorRaster),
       ...(placed ? { content: placed } : {}),
       ...(textData ? { text: editableText, runs: psdTextRuns(textData, editableText),
         paragraphs: psdParagraphs(textData, editableText), box: textBox,
         alignment: psdAlignment(textData.paragraphStyle?.justification), renderedTransform: layerTransform } : {}),
-      ...(vectorContent ? { paths: vectorPaths, style: psdVectorStyle(source, state.resolution, state, layerPath), sourceShape: null } : {}),
-      mask: maskFor(source, placement.transform, state, layerPath),
-      vectorMask: vectorContent ? null : psdVectorMask(source, editableTransform.origin),
-      maskSourceId: source.clipping && !isGroup ? clippingBaseId : null,
+      ...(vectorContent ? { paths: vectorPaths,
+        // Force every renderer to use the same descriptor-derived cache. CanvasKit's generic gradient
+        // lacks Photoshop classic interpolation and non-linear gradient styles.
+        style: vectorRaster ? { ...vectorStyle!, fill: null, stroke: null } : vectorStyle!, sourceShape: null } : {}),
+      mask: importedMask,
+      vectorMask,
+      maskSourceId: source.clipping ? clippingBaseId : null,
       effects: importEffects(source, state, layerPath),
       ...(adjustment ? { adjustment } : {}),
     });
@@ -677,9 +856,13 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
         & { readonly psdIsolated: boolean; readonly psdKnockout: boolean };
     if (source.mask) imported = { ...imported, psdMaskDefault: source.mask.defaultColor ?? 0 } as Layer
       & { readonly psdMaskDefault: number };
+    if (vectorRaster) imported = { ...imported, psdGeneratedStyle: vectorStyle } as Layer
+      & { readonly psdGeneratedStyle: VectorStyle };
     result.push(imported);
     if (isGroup) {
-      clippingBaseId = null;
+      // Photoshop permits a whole group to be a clipping member. Keep the preceding base alive
+      // across that group; an unclipped group starts a new sibling stack but is not yet a live-mask base.
+      if (!source.clipping) clippingBaseId = null;
       result.push(...importSiblings(source.children ?? [], id, layerPath, state));
     } else if (!source.clipping) {
       clippingBaseId = id;
@@ -695,9 +878,9 @@ function resolution(psd: Psd): number {
 }
 
 function parserWarningImpact(message: string): PsdUnsupportedImpact {
-  // psd-tools writes these generator/content-authentication records on otherwise pixel-identical files.
+  // psd-tools writes generator/content-authentication/OCIO bookkeeping on otherwise pixel-identical files.
   // ag-psd also reports descriptor padding as unread bytes; neither participates in compositing.
-  if (/^Unhandled additional info: (?:CAI  |GenI)$/.test(message)
+  if (/^Unhandled additional info: (?:CAI  |GenI|OCIO)$/.test(message)
     || /^Unread (?:2|4) bytes left for additional info: (?:vstk|PtFl|artb|brst)$/.test(message)) {
     return 'editability-only';
   }
@@ -748,8 +931,11 @@ function colorManagedComposite(raw: ReturnType<typeof readRawPsdComposite>, lcms
     const model = raw.colorMode === 4 ? 'cmyk' as const : 'gray' as const;
     const profile = raw.iccProfile ?? (model === 'cmyk' ? lcms.createCmykProfile()
       : lcms.createGrayProfile([0.3127, 0.329], 2.2));
-    return Raster.fromPixels(raw.width, raw.height, 4,
-      lcms.transform(profile, raw.managedSamples, model, raw.bitsPerChannel, raw.managedAlpha));
+    const converted = raw.bitsPerChannel === 16
+      ? lcms.transform16(profile, raw.managedSamples as Uint16Array, model, raw.managedAlpha as Uint16Array | null)
+      : lcms.transform(profile, raw.managedSamples, model, raw.bitsPerChannel, raw.managedAlpha);
+    return Raster.fromPixels(raw.width, raw.height, 4, converted,
+      raw.bitsPerChannel === 16 ? { format: 'rgba16' } : {});
   }
   return Raster.fromPixels(raw.width, raw.height, 4, raw.rgba);
 }
@@ -802,7 +988,7 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
   }));
   const bitsPerChannel = psd.bitsPerChannel ?? 8, colorMode = psd.colorMode ?? 3;
   if (bitsPerChannel !== 8) unsupported.push({ code: `bit-depth:${bitsPerChannel}`,
-    message: bitsPerChannel === 16 ? '16-bit RGB layer channels are retained as RGBA16; colour-managed modes currently have 8-bit CMS output.'
+    message: bitsPerChannel === 16 ? '16-bit layer channels and colour-managed CMS output are retained as RGBA16.'
       : '32-bit floating channels use a bounded display conversion.', impact: 'approximated' });
   if (colorMode !== 3) unsupported.push({ code: `color-mode:${colorMode}`,
     message: `PSD color mode ${colorMode} layer channels were converted independently to sRGB.`,
@@ -811,9 +997,13 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
     message: 'The synchronous CMYK path uses a deterministic fallback; product open applies Little CMS.', impact: 'approximated' });
   if (psd.artboards) unsupported.push({ code: 'artboards', message: 'Artboard metadata is not represented.', impact: 'not-rendered' });
   const documentResolution = resolution(psd);
-  const state: ImportState = { nextId: 1, documentWidth: psd.width, documentHeight: psd.height, resolution: documentResolution,
+  const state: ImportState = { nextId: 1, documentWidth: psd.width, documentHeight: psd.height,
+    bitsPerChannel, artboards: !!psd.artboards, resolution: documentResolution,
     unsupported, resources: [], linkedFiles: new Map((psd.linkedFiles ?? []).map((file) => [file.id, file])) };
   const layers = importSiblings(psd.children ?? [], null, '', state);
+  // PSD's negative layer-count flag is the native declaration that the merged result carries
+  // transparency. Otherwise Photoshop composites the editable stack over an opaque white canvas.
+  const opaqueCanvas = layers.length > 0 && !psdHasMergedTransparency(bytes);
   if (layers.length > MAX_LAYERS) throw new RangeError(`PSD has ${layers.length} layers; the document limit is ${MAX_LAYERS}`);
   const oracle = oracleOverride ?? (psd.imageData ? rasterFromPixelData(psd.imageData) : null);
   if (!oracle) unsupported.push({ code: 'composite-image', message: 'PSD has no decodable embedded composite image.',
@@ -833,10 +1023,11 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
       impact: 'editability-only',
     });
   }
-  const document: CanvasDocument = {
+  const document = {
     id: 'psd-document', width: psd.width, height: psd.height, resolution: resolution(psd),
     globalLightAngle: psd.imageResources?.globalAngle ?? 120, layers: documentLayers, resources: state.resources, selection: null,
-  };
+    psdOpaqueCanvas: opaqueCanvas,
+  } as CanvasDocument & { readonly psdOpaqueCanvas: boolean };
   return { document, oracle, unsupported, parserWarnings,
     source: { width: psd.width, height: psd.height, bitsPerChannel, colorMode, isPsb: bytes[5] === 2 } };
 }

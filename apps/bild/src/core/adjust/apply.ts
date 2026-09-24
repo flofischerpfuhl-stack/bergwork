@@ -114,10 +114,16 @@ export const applyAdjustment: AdjustmentApplier = (adjustment, rgba, width, heig
     else if (adjustment.kind === 'Colour') [r, g, b] = colourPanelColor(r, g, b, adjustment.parameters);
     else if (adjustment.kind === 'Invert') { r = 1 - r; g = 1 - g; b = 1 - b; }
     else if (adjustment.kind === 'Threshold') {
-      const value = colourLuminance(r, g, b) * 255 >= adjustment.parameters.level ? 1 : 0; r = g = b = value;
+      // Photoshop's PSD threshold oracle uses the legacy Rec. 601 luma coefficients.
+      const value = (0.299 * r + 0.587 * g + 0.114 * b) * 255 >= adjustment.parameters.level ? 1 : 0;
+      r = g = b = value;
     } else if (adjustment.kind === 'Posterize') {
-      const steps = adjustment.parameters.levels - 1;
-      r = Math.round(clamp01(r) * steps) / steps; g = Math.round(clamp01(g) * steps) / steps; b = Math.round(clamp01(b) * steps) / steps;
+      const levels = Math.max(2, adjustment.parameters.levels), steps = levels - 1;
+      // Photoshop partitions the input into `levels` equal bins, then maps those bins onto
+      // the inclusive 0…1 output range (PSD posterize adjustment oracle).
+      r = Math.min(steps, Math.floor(clamp01(r) * levels)) / steps;
+      g = Math.min(steps, Math.floor(clamp01(g) * levels)) / steps;
+      b = Math.min(steps, Math.floor(clamp01(b) * levels)) / steps;
     } else if (adjustment.kind === 'Brightness/Contrast') {
       const p = adjustment.parameters;
       r = brightnessContrast(r, p.brightness, p.contrast, p.legacy);

@@ -66,7 +66,7 @@ class BandRenderer {
     this.byId = new Map(document.layers.map((layer) => [layer.id, layer]));
     const isolated = document.layers.filter((layer) => layer.kind === 'group'
       && ((layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === true
-        || layer.opacity !== 1 || layer.fillOpacity !== 1 || layer.blendMode !== 'normal'));
+        || layer.opacity !== 1 || layer.fillOpacity !== 1 || layer.blendMode !== 'normal' || !!layer.maskSourceId));
     const isolatedIds = new Set(isolated.map((layer) => layer.id));
     const insideIsolated = new Set<string>();
     for (const group of isolated) for (const id of descendantIds(document.layers, group.id)) insideIsolated.add(id);
@@ -468,7 +468,9 @@ class BandRenderer {
       const x = map ? map.a * ox + map.c * oy + map.tx : ox;
       const y = map ? map.b * ox + map.d * oy + map.ty : oy;
       const coverage = this.ownMask(groupLayer, x, y, false, this.documentToOutput)
-        * this.folderCoverage(groupLayer, x, y);
+        * this.folderCoverage(groupLayer, x, y)
+        * (groupLayer.maskSourceId
+          ? this.liveCoverage(groupLayer.maskSourceId, x, y, new Set([groupLayer.id]), this.documentToOutput) : 1);
       if (coverage <= 0) continue;
       if (knockout) {
         const cut = alpha * coverage;
@@ -485,6 +487,8 @@ class BandRenderer {
 
   render(width: number, height: number, originX: number, originY: number): Float32Array {
     const target = new Float32Array(width * height * 4);
+    if (this.rootKnockout
+      && (this.document as CanvasDocument & { readonly psdOpaqueCanvas?: boolean }).psdOpaqueCanvas === true) target.fill(1);
     let knockoutBase: Float32Array | null = null;
     for (const layer of this.order) {
       if (layer.kind === 'group') { this.drawIsolatedGroup(layer, target, width, height, originX, originY,

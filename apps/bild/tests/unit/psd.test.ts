@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { writePsdUint8Array, type Layer as AgLayer, type Psd } from 'ag-psd';
 import type { HostAdapter } from '../../contracts';
+import { applyAdjustment } from '../../src/core/adjust/apply';
+import { curvesTables } from '../../src/core/adjust/levels';
+import { defaultCurves } from '../../src/core/adjustments';
+import { newLayer } from '../../src/core/document';
+import { makeTransform } from '../../src/core/geometry';
 import { readRawPsdComposite } from '../../src/io/psd/composite';
 import { decodePsdLayerChannels } from '../../src/io/psd/layerChannels';
 import { readPsdDocument, readPsdDocumentManaged } from '../../src/io/psd';
 import { cpuCompositeRegion } from '../../src/render/cpuRender';
+import { adjustmentProgram } from '../../src/render/adjustPrograms';
 import { EditorController } from '../../src/ui/controller';
 import { loadLittleCms } from '../../src/wasm/lcms';
 
@@ -23,6 +29,37 @@ function image(values: readonly number[]): { width: number; height: number; data
 }
 
 describe('PSD colour modes and product wiring', () => {
+  it('A7: Photoshop Threshold, Posterize and Curves formulas match GPU programs', () => {
+    const source = new Float32Array([1, 0, 0, 1, 0.2, 0.2, 0.2, 1]);
+    const threshold = { kind: 'Threshold' as const, schemaVersion: 1 as const, parameters: { level: 70 } };
+    const posterize = { kind: 'Posterize' as const, schemaVersion: 1 as const, parameters: { levels: 4 } };
+    expect(Array.from(applyAdjustment(threshold, source, 2, 1, 0, 0)))
+      .toEqual([1, 1, 1, 1, 0, 0, 0, 1]);
+    expect(Array.from(applyAdjustment(posterize, source, 2, 1, 0, 0)))
+      .toEqual([1, 0, 0, 1, 0, 0, 0, 1]);
+
+    const transform = makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 });
+    const thresholdLayer = newLayer({ id: 'threshold', name: 'threshold', transform, adjustment: threshold });
+    const posterizeLayer = newLayer({ id: 'posterize', name: 'posterize', transform, adjustment: posterize });
+    const thresholdGpu = adjustmentProgram(thresholdLayer)!;
+    const posterizeGpu = adjustmentProgram(posterizeLayer)!;
+    expect(Array.from(thresholdGpu.params(thresholdLayer).slice(0, 1))).toEqual([70]);
+    expect(thresholdGpu.glsl).toContain('0.299,0.587,0.114');
+    expect(Array.from(posterizeGpu.params(posterizeLayer).slice(0, 1))).toEqual([4]);
+    expect(posterizeGpu.glsl).toContain('floor(clamp(c,0.0,1.0)*levels)');
+
+    const defaults = defaultCurves();
+    const curves = { ...defaults, channels: [[{ x: 0, y: 0 }, { x: 80, y: 220 }, { x: 160, y: 20 },
+      { x: 255, y: 255 }], ...defaults.channels.slice(1)] };
+    const adjustment = { kind: 'Curves' as const, schemaVersion: 1 as const, parameters: curves };
+    const tables = curvesTables(curves);
+    const curvesLayer = newLayer({ id: 'curves', name: 'curves', transform, adjustment });
+    const gpuTable = adjustmentProgram(curvesLayer)!.lut!(curvesLayer)!;
+    for (let index = 0; index < 256; index++) {
+      expect(gpuTable.data[index * 4]).toBeCloseTo(Math.min(1, Math.max(0, tables[index]!)), 7);
+    }
+  });
+
   it('decodes CMYK pixels from layer-owned channels without consulting the merged composite', () => {
     const layer = { name: 'CMYK layer', top: 0, left: 0, bottom: 1, right: 1,
       rawData: { channels: [255, 128, 64, 200].map((value, id) =>
@@ -50,6 +87,53 @@ describe('PSD colour modes and product wiring', () => {
     const expected = lcms.transform(lcms.createCmykProfile(), new Uint8Array([0, 127, 191, 55]), 'cmyk', 8);
     const imported = await readPsdDocumentManaged(bytes);
     expect(imported.document.layers[0]?.raster?.toPixels()).toEqual(expected);
+  });
+
+  it('A3/A7: preserves 16-bit Little CMS output for PSD layer channels', async () => {
+    const lcms = await loadLittleCms();
+    const layer = { name: '16-bit gray', top: 0, left: 0, bottom: 1, right: 2,
+      rawData: { channels: [{ id: 0, compression: 0,
+        data: new Uint8Array([0x12, 0x34, 0xab, 0xcd]) }] } } as AgLayer;
+    decodePsdLayerChannels(layer, { colorMode: 1, bitsPerChannel: 16, isPsb: false,
+      palette: null, iccProfile: null, lcms });
+    expect(layer.imageData?.data).toBeInstanceOf(Uint16Array);
+    const expected = lcms.transform16(lcms.createGrayProfile([0.3127, 0.329], 2.2),
+      new Uint16Array([0x1234, 0xabcd]), 'gray');
+    expect(layer.imageData?.data).toEqual(expected);
+    expect(new Set(Array.from(layer.imageData!.data as Uint16Array).map((value) => value & 0xff)).size)
+      .toBeGreaterThan(1);
+  });
+
+  it('A7: renders a cache-less generated vector layer from its own descriptor and path', () => {
+    const knot = (x: number, y: number) => ({ linked: false, points: [x, y, x, y, x, y] });
+    const shape: AgLayer = { name: 'Generated rectangle', vectorFill: { type: 'color', color: { r: 0, g: 0, b: 0 } },
+      vectorMask: { paths: [{ open: false, fillRule: 'non-zero', operation: 'combine',
+        knots: [knot(1, 1), knot(3, 1), knot(3, 3), knot(1, 3)] }] } };
+    const oracle = { width: 4, height: 4, data: new Uint8ClampedArray(4 * 4 * 4) };
+    for (let y = 1; y < 3; y++) for (let x = 1; x < 3; x++) oracle.data[(y * 4 + x) * 4 + 3] = 255;
+    const imported = readPsdDocument(writePsdUint8Array({ width: 4, height: 4, children: [shape], imageData: oracle },
+      { generateThumbnail: false }));
+    const layer = imported.document.layers[0]!;
+    expect(layer.kind).toBe('vector');
+    expect(layer.transform).toMatchObject({ origin: { x: 1, y: 1 }, size: { width: 2, height: 2 } });
+    expect(layer.raster?.toPixels()).toEqual(new Uint8Array([0, 0, 0, 255, 0, 0, 0, 255,
+      0, 0, 0, 255, 0, 0, 0, 255]));
+    expect(cpuCompositeRegion(imported.document, { x: 0, y: 0, width: 4, height: 4 }))
+      .toEqual(new Uint8Array(oracle.data));
+  });
+
+  it('A7: clips an isolated PSD group to the preceding sibling base', () => {
+    const background: AgLayer = { name: 'Background', imageData: image([255, 255, 255, 255, 255, 255, 255, 255]) };
+    const base: AgLayer = { name: 'Base', imageData: image([0, 0, 0, 255, 0, 0, 0, 0]) };
+    const red: AgLayer = { name: 'Red', imageData: image([255, 0, 0, 255, 255, 0, 0, 255]) };
+    const group: AgLayer = { name: 'Clipped group', clipping: true, blendMode: 'normal', children: [red] };
+    const expected = image([255, 0, 0, 255, 255, 255, 255, 255]);
+    const imported = readPsdDocument(writePsdUint8Array({ width: 2, height: 1,
+      children: [background, base, group], imageData: expected }, { generateThumbnail: false }));
+    const importedGroup = imported.document.layers.find((layer) => layer.kind === 'group')!;
+    expect(importedGroup.maskSourceId).toBe(imported.document.layers.find((layer) => layer.name === 'Base')!.id);
+    expect(cpuCompositeRegion(imported.document, { x: 0, y: 0, width: 2, height: 1 }))
+      .toEqual(new Uint8Array(expected.data));
   });
 
   it('places an adjustment mask from its PSD bounds instead of the empty adjustment-layer bounds', () => {
