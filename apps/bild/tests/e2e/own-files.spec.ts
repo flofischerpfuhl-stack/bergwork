@@ -15,6 +15,10 @@ const cases = [
   { file: 'cmyk.tif', ref: 'ref-srgb.png', raw: 'raw-cmyk.png', max: 12 },
   { file: 'cmyk.jpg', ref: 'ref-srgb.png', raw: 'raw-cmyk.png', max: 14 },
   { file: 'chicken.heic', ref: 'chicken-ref8.png', raw: null, max: 4 },
+  { file: 'adobe.webp', ref: 'ref-srgb.png', raw: 'raw-adobe.png', max: 3 },
+  { file: 'android.webp', ref: 'android-ref.png', raw: null, max: 2 },
+  { file: 'pal.gif', ref: 'pal-ref.png', raw: null, max: 1 },
+  { file: 'example.avif', ref: 'avif-ref.png', raw: null, max: 4 },
 ];
 
 function rgbOf(png: Uint8Array): { width: number; height: number; rgba: Uint8Array } {
@@ -24,15 +28,19 @@ function rgbOf(png: Uint8Array): { width: number; height: number; rgba: Uint8Arr
   const rgba = new Uint8Array(d.width * d.height * 4);
   for (let i = 0; i < d.width * d.height; i++) {
     for (let c = 0; c < 3; c++) rgba[i * 4 + c] = pixels[i * channels + (channels >= 3 ? c : 0)]!;
-    rgba[i * 4 + 3] = 255;
+    rgba[i * 4 + 3] = channels === 4 || channels === 2 ? pixels[i * channels + channels - 1]! : 255;
   }
   return { width: d.width, height: d.height, rgba };
 }
 
+/** Mean |Δ| over RGB where the reference is opaque (colour under transparency is undefined). */
 const meanDiff = (a: Uint8Array, b: Uint8Array) => {
   let sum = 0, n = 0;
-  for (let i = 0; i < a.length; i += 4) for (let c = 0; c < 3; c++) { sum += Math.abs(a[i + c]! - b[i + c]!); n++; }
-  return sum / n;
+  for (let i = 0; i < a.length; i += 4) {
+    if (b[i + 3]! < 255) continue;
+    for (let c = 0; c < 3; c++) { sum += Math.abs(a[i + c]! - b[i + c]!); n++; }
+  }
+  return sum / Math.max(1, n);
 };
 
 for (const item of cases) {
