@@ -12,7 +12,9 @@ import { useSession, useUi, useWorkspace } from './hooks';
 import { Icon, type IconName } from './icons';
 import { CanvasThumbnail, fittedSize } from './Thumbnail';
 import { MenuPopup } from './TopBar';
-import { ADJUSTMENT_KINDS, BLEND_MODES, blendLabel, descendantIds, maskTransform, type AdjustmentKind, type HierarchyEntry, type Layer } from '../core/document';
+import { ADJUSTMENT_KINDS, BLEND_MODES, blendLabel, descendantIds, hierarchyEntries, maskTransform, type AdjustmentKind, type HierarchyEntry, type Layer } from '../core/document';
+import type { ColorLabel, LayerLocks } from '../core/model/types';
+import { filterLayers, type LayerQuery } from '../core/layerSearch';
 import type { EditorSession } from '../core/session';
 import type { MenuEntry } from './menus';
 
@@ -22,15 +24,72 @@ const ADJUSTMENT_ICONS: Record<AdjustmentKind, IconName> = {
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
+const LOCKS: { key: keyof LayerLocks; icon: IconName; label: string }[] = [
+  { key: 'transparency', icon: 'lockTransparency', label: 'Lock transparent pixels' },
+  { key: 'pixels', icon: 'brush', label: 'Lock image pixels' },
+  { key: 'position', icon: 'move', label: 'Lock position' },
+  { key: 'all', icon: 'lock', label: 'Lock all' },
+];
+
+/** Colour labels in the order of Photoshop's layer context menu. */
+export const COLOR_LABELS: { label: ColorLabel; name: string; color: string }[] = [
+  { label: 'none', name: 'No Color', color: 'transparent' },
+  { label: 'red', name: 'Red', color: '#c8554f' },
+  { label: 'orange', name: 'Orange', color: '#d0853a' },
+  { label: 'yellow', name: 'Yellow', color: '#c9b440' },
+  { label: 'green', name: 'Green', color: '#5c9e55' },
+  { label: 'blue', name: 'Blue', color: '#4f7fc8' },
+  { label: 'violet', name: 'Violet', color: '#8d65c2' },
+  { label: 'gray', name: 'Gray', color: '#8a8a8a' },
+];
+const labelColor = (label: ColorLabel) => COLOR_LABELS.find((c) => c.label === label)?.color ?? 'transparent';
+
+/** Slider plus percent field; a slider drag is one undo step (LayerAppearanceControls). */
+function PercentControl({ controller, label, testId, value, enabled, begin, finish, set }: {
+  controller: EditorController; label: string; testId: string; value: number; enabled: boolean;
+  begin: () => void; finish: () => void; set: (value: number) => void;
+}) {
+  const t = controller.t;
+  const [percent, setPercent] = useState('100');
+  const [focused, setFocused] = useState(false);
+  useEffect(() => { if (!focused) setPercent(String(Math.round(value * 100))); }, [value, focused]);
+  return (
+    <div className={styles.appearanceRow}>
+      <span>{t(label)}</span>
+      <input className={styles.slider} type="range" min={0} max={100} step={1} value={Math.round(value * 100)} disabled={!enabled}
+        aria-label={t(label)} data-testid={`${testId}-slider`}
+        onPointerDown={begin} onPointerUp={finish}
+        onKeyDown={(event) => event.stopPropagation()}
+        onChange={(event) => set(Number(event.target.value) / 100)} />
+      <label className={styles.field}>
+        <input value={percent} disabled={!enabled} style={{ width: 44 }} aria-label={`${t(label)} %`} data-testid={`${testId}-field`}
+          onFocus={() => setFocused(true)}
+          onBlur={() => { setFocused(false); const v = Number(percent.replace(',', '.')); if (Number.isFinite(v)) set(Math.min(100, Math.max(0, v)) / 100); }}
+          onChange={(event) => setPercent(event.target.value)}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === 'Enter' || event.key === 'Escape') (event.target as HTMLInputElement).blur();
+            if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+              set(Math.min(100, Math.max(0, Math.round(value * 100) + (event.shiftKey ? 10 : 1) * (event.key === 'ArrowUp' ? 1 : -1))) / 100);
+              event.preventDefault();
+            }
+          }} />
+        <span>%</span>
+      </label>
+    </div>
+  );
+}
+
 function Appearance({ controller, session }: { controller: EditorController; session: EditorSession }) {
   const t = controller.t;
   const layer = session.activeLayer;
   const enabled = session.canEditAppearance;
   const [popup, setPopup] = useState<{ x: number; y: number } | null>(null);
-  const [percent, setPercent] = useState('100');
-  const [focused, setFocused] = useState(false);
   const opacity = layer?.opacity ?? 1;
-  useEffect(() => { if (!focused) setPercent(String(Math.round(opacity * 100))); }, [opacity, focused]);
+  const fill = layer?.fillOpacity ?? 1;
+  // Locks work on every selected layer, folders included (Photoshop).
+  const lockable = session.canEditLayers && session.selectedLayerIds.size > 0 && !!layer;
+  const locks = layer ? session.layerLocks(layer.id) : null;
   const mode = layer ? session.displayedBlendMode(layer) : 'normal';
   const items: MenuEntry[] = BLEND_MODES.map((b) => ({ label: t(b.label), enabled: true, checked: b.mode === layer?.blendMode, run: () => session.setLayerBlendMode(b.mode) }));
   return (
@@ -42,31 +101,25 @@ function Appearance({ controller, session }: { controller: EditorController; ses
           {t(blendLabel(mode))}
         </button>
       </div>
+      <PercentControl controller={controller} label="Opacity" testId="opacity" value={opacity} enabled={enabled}
+        begin={() => session.beginOpacityEdit()} finish={() => session.finishOpacityEdit()} set={(v) => session.setLayerOpacity(v)} />
       <div className={styles.appearanceRow}>
-        <span>{t('Opacity')}</span>
-        <input className={styles.slider} type="range" min={0} max={100} step={1} value={Math.round(opacity * 100)} disabled={!enabled}
-          aria-label={t('Opacity')} data-testid="opacity-slider"
-          onPointerDown={() => session.beginOpacityEdit()}
-          onPointerUp={() => session.finishOpacityEdit()}
-          onKeyDown={(event) => event.stopPropagation()}
-          onChange={(event) => session.setLayerOpacity(Number(event.target.value) / 100)} />
-        <label className={styles.field}>
-          <input value={percent} disabled={!enabled} style={{ width: 44 }} aria-label={t('Opacity percent')} data-testid="opacity-field"
-            onFocus={() => setFocused(true)}
-            onBlur={() => { setFocused(false); const v = Number(percent); if (Number.isFinite(v)) session.setLayerOpacity(Math.min(100, Math.max(0, v)) / 100); }}
-            onChange={(event) => setPercent(event.target.value)}
-            onKeyDown={(event) => {
-              event.stopPropagation();
-              if (event.key === 'Enter' || event.key === 'Escape') (event.target as HTMLInputElement).blur();
-              if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-                const next = Math.min(100, Math.max(0, Math.round(opacity * 100) + (event.shiftKey ? 10 : 1) * (event.key === 'ArrowUp' ? 1 : -1)));
-                session.setLayerOpacity(next / 100);
-                event.preventDefault();
-              }
-            }} />
-          <span>%</span>
-        </label>
+        <span>{t('Lock')}</span>
+        <span className={styles.lockButtons} role="group" aria-label={t('Lock')}>
+          {LOCKS.map((lock) => {
+            const on = !!locks?.[lock.key];
+            return (
+              <button key={lock.key} type="button" className={`${styles.lockButton} ${on ? styles.lockButtonOn : ''}`} aria-pressed={on}
+                disabled={!lockable} title={t(lock.label)} aria-label={t(lock.label)} data-testid={`lock-${lock.key}`}
+                onClick={() => session.setLayerLocks([...session.selectedLayerIds], { [lock.key]: !on })}>
+                <Icon name={lock.icon} size={14} />
+              </button>
+            );
+          })}
+        </span>
       </div>
+      <PercentControl controller={controller} label="Fill opacity" testId="fill" value={fill} enabled={enabled}
+        begin={() => session.beginFillOpacityEdit()} finish={() => session.finishFillOpacityEdit()} set={(v) => session.setLayerFillOpacity(v)} />
       {popup ? (
         <BlendPopup controller={controller} session={session} anchor={popup} items={items} onClose={() => { setPopup(null); session.previewBlendMode(null); }} />
       ) : null}
@@ -96,9 +149,11 @@ interface DragState {
   maskFrom?: string; maskTarget?: string | null;
 }
 
-function LayerRow({ controller, session, entry, rows, drag, onDragStart, onContext }: {
+function LayerRow({ controller, session, entry, rows, drag, onDragStart, onContext, context = false }: {
   controller: EditorController; session: EditorSession; entry: HierarchyEntry; rows: HierarchyEntry[]; drag: DragState | null;
-  onDragStart: (event: ReactPointerEvent, id: string) => void; onContext: (id: string, x: number, y: number) => void;
+  onDragStart: ((event: ReactPointerEvent, id: string) => void) | null; onContext: (id: string, x: number, y: number) => void;
+  /** Shown only as the folder of a search match, not as a match itself. */
+  context?: boolean;
 }) {
   const t = controller.t;
   const layer = entry.layer;
@@ -125,7 +180,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
     if (target.closest('button') && !target.closest('[data-thumb]')) return;
     // Option-drag from a mask thumbnail carries a copy of the mask to another row (NativeLayerList.dragMaskCopy).
     if (event.altKey && target.closest('[data-mask-thumb]')) {
-      if (enabled && event.pointerType === 'mouse') onDragStart(event, layer.id);
+      if (enabled && event.pointerType === 'mouse') onDragStart?.(event, layer.id);
       return;
     }
     // Option-click on the bottom quarter of a row makes or releases a clipping mask.
@@ -147,11 +202,13 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
       if (session.isMaskSelected && session.activeLayerId === layer.id && !target.closest('[data-thumb]')) session.selectLayerTarget(layer.id, false);
       else session.selectLayer(layer.id);
     }
-    if (enabled && event.pointerType === 'mouse') onDragStart(event, layer.id);
+    if (enabled && event.pointerType === 'mouse') onDragStart?.(event, layer.id);
   };
+  const locks = session.layerLocks(layer.id);
+  const lockedAll = locks.all, lockedSome = locks.transparency || locks.pixels || locks.position;
 
   return (
-    <div className={`${styles.layerRow} ${selected ? styles.layerRowSelected : ''} ${entry.visible ? '' : styles.layerRowDim} ${dropAbove ? styles.layerRowDropAbove : ''} ${dropInto ? styles.layerRowDropInto : ''}`}
+    <div className={`${styles.layerRow} ${selected ? styles.layerRowSelected : ''} ${entry.visible ? '' : styles.layerRowDim} ${dropAbove ? styles.layerRowDropAbove : ''} ${dropInto ? styles.layerRowDropInto : ''} ${context ? styles.layerRowContext : ''}`}
       role="treeitem" aria-selected={selected} aria-level={entry.depth + 1} aria-expanded={layer.kind === 'group' ? !session.collapsedGroupIds.has(layer.id) : undefined}
       data-layer-id={layer.id} data-testid="layer-row"
       onPointerDown={onRowPointerDown}
@@ -163,7 +220,8 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
         setRenaming(true);
       }}
       onContextMenu={(event) => { event.preventDefault(); onContext(layer.id, event.clientX, event.clientY); }}>
-      <button type="button" className={styles.eye} disabled={!enabled} aria-label={`${t(layer.visible ? 'Hide' : 'Show')} ${layer.name}`}
+      <button type="button" className={styles.eye} disabled={!enabled} data-label={layer.colorLabel}
+        style={layer.colorLabel !== 'none' ? { background: labelColor(layer.colorLabel) } : undefined} aria-label={`${t(layer.visible ? 'Hide' : 'Show')} ${layer.name}`}
         data-testid="layer-eye" data-eye={layer.id}
         onPointerDown={(event) => {
           event.stopPropagation();
@@ -240,6 +298,10 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
         )}
         <span className={styles.layerMeta} title={source ? `Clipping mask based on ${source.name}. Option-click the bottom of its row to release.` : undefined}>{meta}</span>
       </div>
+      {lockedAll || lockedSome ? (
+        <span className={`${styles.layerLock} ${lockedAll ? '' : styles.layerLockPartial}`} data-testid="layer-lock"
+          title={t(lockedAll ? 'Locked' : 'Partially locked')}><Icon name="lock" size={12} /></span>
+      ) : null}
       <button type="button" className={styles.layerMore} aria-label={`${t('More')}: ${layer.name}`}
         onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); onContext(layer.id, r.left, r.bottom); }}>
         <Icon name="more" size={16} />
@@ -255,7 +317,13 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
   const session = useSession(controller.session);
   const t = controller.t;
   const document = session.document;
-  const rows = session.layerRows;
+  const [query, setQuery] = useState<LayerQuery>({});
+  const [filterMenu, setFilterMenu] = useState<{ x: number; y: number } | null>(null);
+  const filtering = !!document && isActive(query);
+  const found = filtering ? filterLayers(document, query) : null;
+  // While filtering, folders open so matches inside collapsed folders show; their folders stay as context rows.
+  const rows = found ? hierarchyEntries(document!.layers, true).filter((r) => found.matches.has(r.layer.id) || found.ancestors.has(r.layer.id))
+    : session.layerRows;
   const listRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
@@ -363,6 +431,10 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
     return [
       { label: t('Rename…'), enabled: session.canEditLayers, run: () => { session.selectLayer(id); controller.renamingLayerId = id; session.notify('ui'); } },
       { label: t('Hide/Show Layer'), enabled: session.canEditLayers, run: () => session.toggleLayerVisibility(id) },
+      { label: t('Color Label'), enabled: session.canEditLayers, submenu: COLOR_LABELS.map((c) => ({
+        label: t(c.name), enabled: true, checked: layer.colorLabel === c.label,
+        run: () => session.setLayerColorLabel(session.selectedLayerIds.has(id) ? [...session.selectedLayerIds] : [id], c.label),
+      })) },
       'separator',
       { label: t('Add White Mask'), enabled: session.canEditLayers && !layer.mask, run: () => { select(); controller.addMask(true); } },
       { label: t('Add Black Mask'), enabled: session.canEditLayers && !layer.mask, run: () => { select(); controller.addMask(false); } },
@@ -417,12 +489,30 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
       </div>
       {side === 'history' ? <HistoryPanel controller={controller} /> : (<>
       <Appearance controller={controller} session={session} />
-      {document && rows.length ? (
+      {document ? (
+        <div className={styles.layerFilter}>
+          <Icon name="search" size={13} />
+          <input type="search" value={query.text ?? ''} placeholder={t('Search layers')} aria-label={t('Search layers')} data-testid="layer-search"
+            onChange={(event) => setQuery({ ...query, text: event.target.value })}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === 'Escape') { setQuery({ ...query, text: '' }); (event.target as HTMLInputElement).blur(); }
+            }} />
+          <button type="button" className={`${styles.footerButton} ${filtering && hasFilter(query) ? styles.lockButtonOn : ''}`}
+            aria-label={t('Filter layers')} title={t('Filter layers')} data-testid="layer-filter" aria-haspopup="menu"
+            onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setFilterMenu({ x: r.left, y: r.bottom + 4 }); }}>
+            <Icon name="filter" size={14} />
+          </button>
+        </div>
+      ) : null}
+      {document && (rows.length || filtering) ? (
         <div className={styles.layerList} ref={listRef} role="tree" aria-label={t('Layers')} aria-multiselectable data-testid="layers-list">
           {rows.map((entry) => (
             <LayerRow key={entry.layer.id} controller={controller} session={session} entry={entry} rows={rows} drag={drag}
-              onDragStart={startDrag} onContext={(id, x, y) => setMenu({ id, x, y })} />
+              onDragStart={found ? null : startDrag} onContext={(id, x, y) => setMenu({ id, x, y })}
+              context={!!found && !found.matches.has(entry.layer.id)} />
           ))}
+          {found && !found.matches.size ? <div className={styles.panelNote} data-testid="layer-search-empty">{t('No matching layers')}</div> : null}
           {drag?.moved && drag.target?.index === rows.length ? <div style={{ height: 2, background: 'var(--cmp-accent)' }} /> : null}
         </div>
       ) : (
@@ -450,6 +540,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
           disabled={!session.canEditLayers || !session.activeLayer} onClick={() => void session.deleteLayerOrMask()}><Icon name="trash" size={17} /></button>
       </div>
       </>)}
+      {filterMenu ? <MenuPopup controller={controller} anchor={filterMenu} items={filterItems(t, query, setQuery)} onClose={() => setFilterMenu(null)} /> : null}
       {menu ? <MenuPopup controller={controller} anchor={menu} items={menuItems(menu.id)} onClose={() => setMenu(null)} /> : null}
       {adjustMenu ? (
         <MenuPopup controller={controller} anchor={adjustMenu} onClose={() => setAdjustMenu(null)}
@@ -457,6 +548,36 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
       ) : null}
     </aside>
   );
+}
+
+const KIND_FILTERS: { kind: Layer['kind']; name: string }[] = [
+  { kind: 'pixel', name: 'Pixel Layers' }, { kind: 'adjustment', name: 'Adjustment Layers' }, { kind: 'vector', name: 'Shape Layers' },
+  { kind: 'text', name: 'Text Layers' }, { kind: 'group', name: 'Folders' }, { kind: 'embedded', name: 'Embedded Content' },
+];
+
+function hasFilter(query: LayerQuery): boolean {
+  return !!query.kinds?.length || !!query.labels?.length || query.visible !== undefined || query.locked !== undefined;
+}
+function isActive(query: LayerQuery): boolean { return !!query.text?.trim() || hasFilter(query); }
+
+function toggled<T>(list: readonly T[] | undefined, value: T): T[] | undefined {
+  const next = list?.includes(value) ? list.filter((x) => x !== value) : [...(list ?? []), value];
+  return next.length ? next : undefined;
+}
+
+/** Photoshop's layer filter as one menu: kinds and colours combine (any of), visibility and locks narrow further. */
+function filterItems(t: (text: string) => string, query: LayerQuery, set: (query: LayerQuery) => void): MenuEntry[] {
+  return [
+    ...KIND_FILTERS.map((k) => ({ label: t(k.name), enabled: true, checked: !!query.kinds?.includes(k.kind), run: () => set({ ...query, kinds: toggled(query.kinds, k.kind) }) })),
+    'separator' as const,
+    ...COLOR_LABELS.filter((c) => c.label !== 'none').map((c) => ({ label: t(c.name), enabled: true, checked: !!query.labels?.includes(c.label),
+      run: () => set({ ...query, labels: toggled(query.labels, c.label) }) })),
+    'separator' as const,
+    { label: t('Visible Layers'), enabled: true, checked: query.visible === true, run: () => set({ ...query, visible: query.visible ? undefined : true }) },
+    { label: t('Locked Layers'), enabled: true, checked: query.locked === true, run: () => set({ ...query, locked: query.locked ? undefined : true }) },
+    'separator' as const,
+    { label: t('Clear Filter'), enabled: isActive(query), run: () => set({}) },
+  ];
 }
 
 export type { Layer };

@@ -256,3 +256,24 @@ Raw JSON (unchanged, SHA-256 `6704CEF44325EDB187E375926330B4AF223F4E5BE5B55B74BB
   }
 }
 ```
+
+## Windows WebView2: real UI interactions (remote lane, 2026-09-24, commit aa767c1)
+
+The hardened release build was driven through WebView2's documented test-only remote debugging override (EXE-specific
+registry value, removed afterwards; the app's own browser flags stayed in place) with Playwright over CDP, German
+Windows (`navigator.language` = `de`).
+
+| Area | Result |
+|---|---|
+| Start screen, all 8 in-app menus (German) | pass |
+| Ctrl+N, Ctrl+Z, Ctrl+Shift+Z (pixel hashes: undo returns exactly to the pre-stroke state) | pass |
+| Ctrl+R (rulers, no reload), Ctrl+; (guides), Ctrl+0/+/−, Ctrl+wheel (app zoom, WebView page zoom unchanged) | pass |
+| Ctrl+S / File > Open (native German dialogs), Ctrl+W (closes the tab, not the window) | pass |
+| Ctrl+P, Ctrl+F, F12, Ctrl+Shift+I, F5, Ctrl+Shift+R, Alt+Left: no print, find bar, DevTools, reload or history navigation | pass |
+| Right-click on canvas/layer: no browser context menu; layer menu is the app's | pass |
+| No text selection on menu labels, no drag ghost on toolbar icons | pass |
+
+Findings fixed afterwards: `<html lang>` stayed `en` under a German UI (the Tauri entry now sets it); a fresh
+Windows checkout with `core.autocrlf=true` picked WSL's `bash.exe` for `npm run tauri:build` and failed on CRLF
+scripts (the npm scripts now go through `scripts/tauri.mjs`, bash only on Linux; `.gitattributes` keeps `*.sh` LF).
+Build: 7 min 16 s cargo, 23.6 MB executable.

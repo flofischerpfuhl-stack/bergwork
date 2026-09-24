@@ -10,7 +10,8 @@ type IconName =
   | 'spotHealing' | 'cloneStamp' | 'blur' | 'gradient' | 'shape' | 'eyedropper' | 'hand' | 'zoom' | 'idle'
   | 'eye' | 'eyeSlash' | 'folder' | 'chevronRight' | 'chevronDown' | 'plusSquare' | 'folderPlus' | 'mask'
   | 'adjustment' | 'trash' | 'link' | 'plus' | 'close' | 'zoomIn' | 'zoomOut' | 'swap' | 'reset' | 'menu'
-  | 'layers' | 'sliders' | 'levels' | 'curves' | 'exposure' | 'grain' | 'gradientMap' | 'more';
+  | 'layers' | 'sliders' | 'levels' | 'curves' | 'exposure' | 'grain' | 'gradientMap' | 'more'
+  | 'lock' | 'lockTransparency' | 'search' | 'filter';
 
 const paths: Record<IconName, ReactElement> = {
   move: <path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3" />,
@@ -57,6 +58,10 @@ const paths: Record<IconName, ReactElement> = {
   grain: <path d="M6 6h.01M12 6h.01M18 6h.01M6 12h.01M12 12h.01M18 12h.01M6 18h.01M12 18h.01M18 18h.01" strokeWidth="3" />,
   gradientMap: <><path d="M12 3a9 9 0 1 0 0 18c1.5 0 2-1 2-2s-1-1.5-1-2.5 1-1.5 2.5-1.5H18a3 3 0 0 0 3-3c0-5-4-9-9-9z" /><path d="M7.5 11h.01M10 7.5h.01M14.5 7.5h.01" strokeWidth="2.5" /></>,
   more: <path d="M6 12h.01M12 12h.01M18 12h.01" strokeWidth="3" />,
+  lock: <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></>,
+  lockTransparency: <><rect x="4" y="4" width="16" height="16" rx="1.5" /><path d="M4 12h16M12 4v16" /><path d="M4 4h8v8H4zM12 12h8v8h-8z" fill="currentColor" stroke="none" opacity=".55" /></>,
+  search: <><circle cx="10.5" cy="10.5" r="6" /><path d="m15 15 5.5 5.5" /></>,
+  filter: <path d="M4 5h16l-6 7.5V19l-4-2v-4.5z" />,
 };
 
 export function Icon({ name, size = 18, title }: { name: IconName; size?: number; title?: string }) {
