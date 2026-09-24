@@ -18,7 +18,7 @@ import {
   boundingBox, center, corners as transformCorners, following, isValidTransform, makeTransform, mirrored, samePlacement,
   snapOffset, transformsEqual, type LayerTransform, type Point, type Rect, type Size,
 } from './geometry';
-import { DocumentHistory, type HistorySnapshot } from './history';
+import { DocumentHistory, type HistorySnapshot, type PersistedHistoryState } from './history';
 import { uuid } from './ids';
 import { Raster } from './raster';
 import { CanvasViewport } from './viewport';
@@ -100,7 +100,7 @@ export const pendingUndoHandlers: ((session: EditorSession) => boolean)[] = [];
 
 export class EditorSession {
   document: CanvasDocument | null = null;
-  readonly history = new DocumentHistory();
+  readonly history: DocumentHistory;
   readonly viewport = new CanvasViewport();
   tool: Tool = 'move';
   activeLayerId: string | null = null;
@@ -154,7 +154,10 @@ export class EditorSession {
   private listeners = new Set<Listener>();
   private revisionValue = 0;
 
-  constructor(services?: SessionServices) { this.services = services ?? null; }
+  constructor(services?: SessionServices, historyOptions: { enabled?: boolean; retainedByteLimit?: number; entryLimit?: number } = {}) {
+    this.services = services ?? null;
+    this.history = new DocumentHistory(historyOptions.entryLimit, historyOptions.retainedByteLimit, historyOptions.enabled);
+  }
 
   // MARK: Observation
 
@@ -268,7 +271,7 @@ export class EditorSession {
     if (this.isProjectBusy || this.isImporting || !(width >= 1 && width <= MAX_SIDE && height >= 1 && height <= MAX_SIDE)) return;
     this.commitTransform();
     this.beginEdit('New Canvas');
-    const document: CanvasDocument = { id: uuid(), width, height, resolution: 72, layers: [], selection: null };
+    const document: CanvasDocument = { id: uuid(), width, height, resolution: 72, layers: [], artboards: [], selection: null };
     const layer = emptyLayer ? newLayer({ id: uuid(), name: `${this.label('Layer')} 1`, transform: makeTransform({ x: 0, y: 0 }, { width, height }) }) : null;
     this.document = layer ? { ...document, layers: [layer] } : document;
     this.setActiveLayer(layer?.id ?? null);
@@ -298,8 +301,8 @@ export class EditorSession {
     this.changed();
   }
 
-  /** Installs a validated, fully loaded project; history starts clean (EditorSession+Projects). */
-  installProject(document: CanvasDocument, activeLayerId: string | null, name: string | null): void {
+  /** Installs a validated project and its optional saved command history. */
+  installProject(document: CanvasDocument, activeLayerId: string | null, name: string | null, history?: PersistedHistoryState): void {
     this.collapsedGroupIds = new Set();
     this.isMaskSelected = false;
     this.transformEdit = null;
@@ -307,7 +310,7 @@ export class EditorSession {
     this.setActiveLayer(activeLayerId && document.layers.some((l) => l.id === activeLayerId) ? activeLayerId : null);
     this.projectName = name;
     this.renamingLayerId = null;
-    this.history.reset();
+    if (history) this.history.importState(history, document); else this.history.reset();
     this.viewport.fit(document);
     this.changed();
   }
@@ -319,7 +322,7 @@ export class EditorSession {
     this.beginEdit('Import Image');
     try {
       if (!this.document) {
-        this.document = { id: uuid(), width: raster.width, height: raster.height, resolution: 72, layers: [], selection: null };
+        this.document = { id: uuid(), width: raster.width, height: raster.height, resolution: 72, layers: [], artboards: [], selection: null };
         this.viewport.fit(this.document);
         point = null;
       }

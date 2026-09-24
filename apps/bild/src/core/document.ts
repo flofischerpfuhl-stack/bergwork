@@ -9,12 +9,14 @@
 
 import type { LayerTransform, Point } from './geometry';
 import { transformsEqual } from './geometry';
-import type { Raster } from './raster';
-import type { DocumentSelection } from './selection';
-
-export type BlendMode =
-  | 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten' | 'difference'
-  | 'colorDodge' | 'colorBurn' | 'hue' | 'saturation' | 'color' | 'luminosity';
+import type {
+  AdjustmentKind, BlendMode, CanvasDocument, Layer, LayerAdjustment, LayerMask, LayerShape,
+} from './model';
+export type {
+  AdjustmentKind, Artboard, BlendMode, CanvasDocument, ColorLabel, CropParameters, DocumentResource, EmbeddedLayer,
+  FillLayer, FillParameters, GroupLayer, Layer, LayerAdjustment, LayerEffect, LayerLocks, LayerMask, ModelLayer,
+  LayerShape, LiveFilter, PixelLayer, TextLayer, VectorLayer, VectorMask, WarpQuad,
+} from './model';
 
 /** Blend menu order (LayerBlendMode.allCases) with upstream raw values as labels. */
 export const BLEND_MODES: readonly { mode: BlendMode; label: string }[] = [
@@ -27,60 +29,7 @@ export const BLEND_MODES: readonly { mode: BlendMode; label: string }[] = [
 export const BLEND_MODE_SET: ReadonlySet<string> = new Set(BLEND_MODES.map((b) => b.mode));
 export function blendLabel(mode: BlendMode): string { return BLEND_MODES.find((b) => b.mode === mode)?.label ?? mode; }
 
-export type AdjustmentKind = 'Hue/Saturation' | 'Levels' | 'Curves' | 'Exposure' | 'Gradient Map' | 'Grain';
 export const ADJUSTMENT_KINDS: readonly AdjustmentKind[] = ['Hue/Saturation', 'Levels', 'Curves', 'Exposure', 'Gradient Map', 'Grain'];
-
-/** Upstream `LayerAdjustment` in its Codable JSON shape; `kind` selects which settings apply. */
-export interface LayerAdjustment {
-  readonly kind: AdjustmentKind;
-  readonly [key: string]: unknown;
-}
-
-/** Upstream `LayerShapeStyle` (ShapeTool.swift) in its Codable JSON shape. */
-export interface LayerShape {
-  readonly [key: string]: unknown;
-}
-
-/** Normalized layer-local coverage: 1-channel raster, white reveals. */
-export interface LayerMask {
-  readonly raster: Raster;
-  readonly enabled: boolean;
-  /** Where the mask sits once moved apart from its layer; null while it covers the layer's grid. */
-  readonly placement: LayerTransform | null;
-  readonly linked: boolean;
-}
-
-export interface Layer {
-  readonly id: string;
-  readonly name: string;
-  readonly visible: boolean;
-  /** Not an upstream concept; carried for the shared contract and always false from this editor. */
-  readonly locked: boolean;
-  readonly parentId: string | null;
-  readonly isGroup: boolean;
-  readonly opacity: number;
-  readonly blendMode: BlendMode;
-  readonly transform: LayerTransform;
-  /** Pixels; null for groups, adjustments and blank layers that have not been painted yet. */
-  readonly raster: Raster | null;
-  readonly mask: LayerMask | null;
-  /** Live alpha source (clipping mask base or another layer). */
-  readonly maskSourceId: string | null;
-  readonly adjustment: LayerAdjustment | null;
-  readonly shape: LayerShape | null;
-}
-
-export interface CanvasDocument {
-  readonly id: string;
-  readonly width: number;
-  readonly height: number;
-  /** Pixels per inch (Image Size); 72 by default. */
-  readonly resolution: number;
-  /** Bottom to top; groups are contiguous subtrees ordered by array position. */
-  readonly layers: readonly Layer[];
-  /** Part of the document so undo covers selection changes; never saved. */
-  readonly selection: DocumentSelection | null;
-}
 
 export const MAX_SIDE = 30_000;
 export const MAX_PIXELS = 100_000_000;
@@ -109,16 +58,33 @@ export function layersEqual(a: Layer, b: Layer): boolean {
   return a === b || (a.id === b.id && a.name === b.name && a.visible === b.visible && a.locked === b.locked
     && transformsEqual(a.transform, b.transform) && a.raster === b.raster && a.parentId === b.parentId
     && a.isGroup === b.isGroup && a.opacity === b.opacity && a.blendMode === b.blendMode && masksEqual(a.mask, b.mask)
-    && a.maskSourceId === b.maskSourceId && jsonEqual(a.adjustment, b.adjustment) && jsonEqual(a.shape, b.shape));
+    && a.kind === b.kind && (a.fillOpacity ?? 1) === (b.fillOpacity ?? 1) && jsonEqual(a.locks, b.locks)
+    && (a.colorLabel ?? 'none') === (b.colorLabel ?? 'none')
+    && jsonEqual(a.warp ?? null, b.warp ?? null) && jsonEqual(a.crop ?? null, b.crop ?? null)
+    && jsonEqual(a.vectorMask ?? null, b.vectorMask ?? null)
+    && jsonEqual(a.effects ?? [], b.effects ?? []) && jsonEqual(a.filters ?? [], b.filters ?? [])
+    && a.maskSourceId === b.maskSourceId && jsonEqual(a.adjustment, b.adjustment) && jsonEqual(a.shape, b.shape)
+    && jsonEqual(kindPayload(a), kindPayload(b)));
 }
 
 export function documentsEqual(a: CanvasDocument | null, b: CanvasDocument | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  if (a.id !== b.id || a.width !== b.width || a.height !== b.height || a.resolution !== b.resolution) return false;
+  if (a.id !== b.id || a.width !== b.width || a.height !== b.height || a.resolution !== b.resolution
+    || !jsonEqual(a.artboards ?? [], b.artboards ?? []) || !resourcesEqual(a.resources ?? [], b.resources ?? [])) return false;
   if (a.selection !== b.selection) return false;
   if (a.layers.length !== b.layers.length) return false;
   return a.layers.every((layer, i) => layersEqual(layer, b.layers[i]!));
+}
+
+function resourcesEqual(a: NonNullable<CanvasDocument['resources']>, b: NonNullable<CanvasDocument['resources']>): boolean {
+  return a.length === b.length && a.every((value, index) => {
+    const other = b[index];
+    if (!other || value.id !== other.id || value.role !== other.role || value.mime !== other.mime || value.bytes.length !== other.bytes.length) return false;
+    if (value.bytes === other.bytes) return true;
+    for (let i = 0; i < value.bytes.length; i++) if (value.bytes[i] !== other.bytes[i]) return false;
+    return true;
+  });
 }
 
 function jsonEqual(a: unknown, b: unknown): boolean {
@@ -127,11 +93,47 @@ function jsonEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-export function newLayer(fields: Partial<Layer> & Pick<Layer, 'id' | 'name' | 'transform'>): Layer {
-  return {
-    visible: true, locked: false, parentId: null, isGroup: false, opacity: 1, blendMode: 'normal',
-    raster: null, mask: null, maskSourceId: null, adjustment: null, shape: null, ...fields,
+export type NewLayerFields = Partial<Omit<Layer, 'kind'>> & Pick<Layer, 'id' | 'name' | 'transform'> & {
+  kind?: Exclude<Layer['kind'], undefined>;
+  fill?: import('./model').FillParameters;
+  paths?: readonly import('./model').VectorPath[];
+  style?: import('./model').VectorStyle;
+  text?: string;
+  runs?: readonly import('./model').TextRun[];
+  box?: { readonly width: number; readonly height: number } | null;
+  alignment?: 'left' | 'center' | 'right' | 'justify';
+  content?: import('./model').EmbeddedLayer['content'];
+};
+
+export function newLayer(fields: NewLayerFields): import('./model').ModelLayer {
+  const candidate = fields;
+  const kind = candidate.kind ?? (candidate.isGroup ? 'group' : candidate.adjustment ? 'adjustment' : candidate.shape ? 'vector' : 'pixel');
+  const base = {
+    visible: true, locked: false, parentId: null, isGroup: kind === 'group', opacity: 1, fillOpacity: 1,
+    blendMode: 'normal' as const, locks: { transparency: false, pixels: false, position: false, all: false },
+    colorLabel: 'none' as const, warp: null, crop: null, raster: null, mask: null, vectorMask: null,
+    maskSourceId: null, effects: [], filters: [], adjustment: null, shape: null, ...candidate, kind,
   };
+  if (kind === 'fill') return { ...base, isGroup: false, fill: candidate.fill ?? { kind: 'solid', schemaVersion: 1, color: { red: 0, green: 0, blue: 0 } } } as import('./model').ModelLayer;
+  if (kind === 'vector') return { ...base, isGroup: false, paths: candidate.kind === 'vector' ? candidate.paths : [],
+    style: candidate.kind === 'vector' ? candidate.style : { fill: null, stroke: null } } as import('./model').ModelLayer;
+  if (kind === 'text') return { ...base, isGroup: false, text: candidate.kind === 'text' ? candidate.text : '',
+    runs: candidate.kind === 'text' ? candidate.runs : [], box: candidate.kind === 'text' ? candidate.box : null,
+    alignment: candidate.kind === 'text' ? candidate.alignment : 'left' } as import('./model').ModelLayer;
+  if (kind === 'embedded') return { ...base, isGroup: false, content: candidate.kind === 'embedded' ? candidate.content
+    : { mode: 'embedded', mediaType: 'image', sourceName: '' } } as import('./model').ModelLayer;
+  return { ...base, isGroup: kind === 'group' } as import('./model').ModelLayer;
+}
+
+function kindPayload(layer: Layer): unknown {
+  const model = layer as import('./model').ModelLayer;
+  switch (layer.kind) {
+    case 'fill': return (model as import('./model').FillLayer).fill;
+    case 'vector': { const value = model as import('./model').VectorLayer; return { paths: value.paths, style: value.style }; }
+    case 'text': { const value = model as import('./model').TextLayer; return { text: value.text, runs: value.runs, box: value.box, alignment: value.alignment }; }
+    case 'embedded': return (model as import('./model').EmbeddedLayer).content;
+    default: return null;
+  }
 }
 
 // MARK: Hierarchy (LayerHierarchy)
@@ -193,7 +195,7 @@ export function ancestorIds(layers: readonly Layer[], id: string): string[] {
 }
 
 export class InvalidProjectError extends Error {
-  constructor(message = 'This is not a valid Compositor project, or its metadata is damaged.') { super(message); this.name = 'InvalidProjectError'; }
+  constructor(message = 'This is not a valid Fernwork Bildeditor project, or its metadata is damaged.') { super(message); this.name = 'InvalidProjectError'; }
 }
 
 /** Minimal record shape the validators need, shared by live documents and loaded manifests. */

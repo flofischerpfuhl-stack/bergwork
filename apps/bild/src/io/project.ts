@@ -1,12 +1,11 @@
 /**
- * Portable project archive: ZIP with `manifest.json` (the shared ProjectManifestV1 contract) and
- * binary assets. Replaces upstream's `.comp` document package (IO/ProjectStore.swift,
- * docs/project-format.md) while keeping its validation rules and limits: 30,000 px per side,
+ * Fernwork Image v2 archive and v1 migration reader: ZIP with `manifest.json` and binary assets.
+ * Validation limits continue to follow upstream IO/ProjectStore.swift (`validate`, `readPackage`): 30,000 px per side,
  * 100 Mpx of image pixels plus 100 Mpx of mask pixels, 10,000 layers, 4 MiB manifest, 512 MiB per
  * asset, safe relative paths only, hierarchy and live-mask graph validation, everything checked
  * before the live document is replaced.
  *
- * Exact upstream values the contract has no field for (the LayerTransform as origin/size/rotation/
+ * The v1 compatibility projection carries exact upstream values absent from that contract (origin/size/rotation/
  * flips/sampling, placed mask transforms, live-mask sources, resolution, active layer) travel in
  * `extensions["org.compositor.port"]`. Readers without it reconstruct them from the matrices.
  */
@@ -14,15 +13,20 @@
 import { isValidAdjustment } from '../core/adjustments';
 import { unzipSync, zipSync, type Zippable } from 'fflate';
 import type { AssetRecord, LayerRecord, Matrix2D, ProjectManifestV1 } from '../../contracts';
+import type {
+  AdjustmentRecordV2, AssetRecordV2, LayerCommonV2, LayerRecordV2, ProjectHistoryV2, ProjectManifestV2,
+} from '../../contracts-v2';
+import { resolveAdjustment } from '../core/adjustments';
+import type { HistorySnapshot, PersistedHistoryState } from '../core/history';
 import {
-  BLEND_MODE_SET, hierarchyRecord, InvalidProjectError, layerPixelHeight, layerPixelWidth, MAX_LAYERS, MAX_PIXELS, MAX_SIDE,
-  validateHierarchy, validateLiveMasks, type BlendMode, type CanvasDocument, type Layer, type LayerAdjustment, type LayerShape,
+  BLEND_MODE_SET, documentsEqual, hierarchyRecord, InvalidProjectError, layerPixelHeight, layerPixelWidth, MAX_LAYERS, MAX_PIXELS, MAX_SIDE,
+  newLayer, validateHierarchy, validateLiveMasks, type BlendMode, type CanvasDocument, type Layer, type LayerAdjustment, type LayerShape,
 } from '../core/document';
 import {
   concat, fromMatrix, isValidTransform, makeTransform, pixelToDocument, placing, scaling, toMatrix,
   LAYER_SAMPLINGS, type LayerTransform,
 } from '../core/geometry';
-import { Raster } from '../core/raster';
+import { Raster, TILE } from '../core/raster';
 import { decodePng, encodePng } from './png';
 import { sha256Hex } from './sha256';
 
@@ -120,23 +124,183 @@ export function buildManifest(document: CanvasDocument, name: string, activeLaye
   };
 }
 
+function v2Adjustment(value: LayerAdjustment): AdjustmentRecordV2 {
+  const resolved = resolveAdjustment(value);
+  switch (value.kind) {
+    case 'Hue/Saturation': return { kind: value.kind, schemaVersion: 1,
+      parameters: { hue: resolved.hue, saturation: resolved.saturation, lightness: resolved.lightness,
+        colorize: resolved.colorize, settings: resolved.hsvSettings } };
+    case 'Levels': return { kind: value.kind, schemaVersion: 1, parameters: resolved.levels };
+    case 'Curves': return { kind: value.kind, schemaVersion: 1, parameters: resolved.curves };
+    case 'Exposure': return { kind: value.kind, schemaVersion: 1, parameters: resolved.exposureSettings };
+    case 'Gradient Map': return { kind: value.kind, schemaVersion: 1, parameters: resolved.gradientMapSettings };
+    case 'Grain': return { kind: value.kind, schemaVersion: 1, parameters: resolved.grainSettings };
+  }
+}
+
+function liveAdjustment(value: AdjustmentRecordV2): LayerAdjustment {
+  switch (value.kind) {
+    case 'Hue/Saturation': return { kind: value.kind, schemaVersion: 1, hue: value.parameters.hue,
+      saturation: value.parameters.saturation, lightness: value.parameters.lightness, colorize: value.parameters.colorize,
+      hsvSettings: value.parameters.settings };
+    case 'Levels': return { kind: value.kind, schemaVersion: 1, levels: value.parameters };
+    case 'Curves': return { kind: value.kind, schemaVersion: 1, curves: value.parameters };
+    case 'Exposure': return { kind: value.kind, schemaVersion: 1, exposureSettings: value.parameters };
+    case 'Gradient Map': return { kind: value.kind, schemaVersion: 1, gradientMapSettings: value.parameters };
+    case 'Grain': return { kind: value.kind, schemaVersion: 1, grainSettings: value.parameters };
+  }
+}
+
+interface V2BuildContext { assets: Map<string, AssetRecordV2>; rasters: Map<string, Raster>; binaryAssets: Map<string, Uint8Array> }
+
+function addV2Asset(context: V2BuildContext, raster: Raster, role: AssetRecordV2['role']): string {
+  const occupied = context.assets.get(raster.id);
+  if (occupied && occupied.role !== role) throw new ProjectError('invalid', `Asset ID ${raster.id} is used for incompatible roles.`);
+  if (!context.assets.has(raster.id)) {
+    const encoded = encodedAsset(raster);
+    context.assets.set(raster.id, { id: raster.id, path: `assets/${raster.id}.${extensionFor(encoded.mime)}`,
+      mime: encoded.mime, width: raster.width, height: raster.height, channels: raster.channels,
+      sha256: encoded.sha256, role });
+    context.rasters.set(raster.id, raster);
+  }
+  return raster.id;
+}
+
+function v2Layer(layer: Layer, context: V2BuildContext): LayerRecordV2 {
+  const inferredKind = layer.kind ?? (layer.isGroup ? 'group' : layer.adjustment ? 'adjustment' : layer.shape ? 'vector' : 'pixel');
+  const common: LayerCommonV2 = {
+    id: layer.id, parentId: layer.parentId, name: layer.name, visible: layer.visible, opacity: layer.opacity,
+    fillOpacity: layer.fillOpacity ?? 1, blendMode: layer.blendMode,
+    locks: layer.locks ?? { transparency: false, pixels: layer.locked, position: false, all: layer.locked },
+    colorLabel: layer.colorLabel ?? 'none', transform: layer.transform, warp: layer.warp ?? null, crop: layer.crop ?? null,
+    mask: layer.mask ? { assetId: addV2Asset(context, layer.mask.raster, 'mask'), transform: layer.mask.placement,
+      linked: layer.mask.linked, enabled: layer.mask.enabled } : null,
+    vectorMask: layer.vectorMask ?? null, clippedTo: layer.maskSourceId,
+    effects: layer.effects ?? [], filters: layer.filters ?? [],
+  };
+  const preview = layer.raster ? addV2Asset(context, layer.raster, 'image') : null;
+  switch (inferredKind) {
+    case 'group': return { ...common, kind: 'group' };
+    case 'adjustment': {
+      if (!layer.adjustment) throw new ProjectError('invalid', 'An adjustment layer has no parameters.');
+      return { ...common, kind: 'adjustment', adjustment: v2Adjustment(layer.adjustment) };
+    }
+    case 'fill': return { ...common, kind: 'fill', fill: (layer as import('../core/model').FillLayer).fill };
+    case 'vector': {
+      const value = layer as Partial<import('../core/model').VectorLayer>;
+      const shape = layer.shape;
+      const sourceShape = shape && (shape.kind === 'Rectangle' || shape.kind === 'Ellipse')
+        && num(shape.red) && num(shape.green) && num(shape.blue) && num(shape.cornerRadius)
+        ? { kind: shape.kind, red: shape.red, green: shape.green, blue: shape.blue, cornerRadius: shape.cornerRadius } : null;
+      return { ...common, kind: 'vector', paths: value.paths ?? [], style: value.style ?? { fill: null, stroke: null },
+        previewAssetId: preview, sourceShape };
+    }
+    case 'text': {
+      const value = layer as import('../core/model').TextLayer;
+      return { ...common, kind: 'text', text: value.text, runs: value.runs, box: value.box,
+        alignment: value.alignment, previewAssetId: preview };
+    }
+    case 'embedded': {
+      const value = layer as import('../core/model').EmbeddedLayer;
+      return { ...common, kind: 'embedded', content: value.content, previewAssetId: preview };
+    }
+    default: return { ...common, kind: 'pixel', assetId: preview };
+  }
+}
+
+function manifestV2WithContext(document: CanvasDocument, name: string, activeLayerId: string | null,
+  context: V2BuildContext): ProjectManifestV2 {
+  for (const resource of document.resources ?? []) {
+    if (context.assets.has(resource.id)) continue;
+    const hash = sha256Hex(resource.bytes);
+    context.assets.set(resource.id, { id: resource.id, path: `assets/resource-${hash}.bin`, mime: resource.mime,
+      sha256: hash, role: resource.role });
+    context.binaryAssets.set(resource.id, resource.bytes);
+  }
+  const layers = document.layers.map((layer) => v2Layer(layer, context));
+  return { format: 'fernwork-image', version: 2, id: document.id, name, width: document.width, height: document.height,
+    resolution: document.resolution, colorSpace: 'srgb', activeLayerId, layers, artboards: document.artboards ?? [],
+    assets: [...context.assets.values()] };
+}
+
+/** Native v2 manifest. `buildManifest` remains the v1 compatibility projection for EditorHandle. */
+export function buildManifestV2(document: CanvasDocument, name: string, activeLayerId: string | null): ProjectManifestV2 {
+  return manifestV2WithContext(document, name, activeLayerId, { assets: new Map(), rasters: new Map(), binaryAssets: new Map() });
+}
+
 /** Writes the ZIP archive. Assets are stored uncompressed (already compressed images). */
-export function writeArchive(document: CanvasDocument, name: string, activeLayerId: string | null): { blob: Blob; manifest: ProjectManifestV1 } {
-  const manifest = buildManifest(document, name, activeLayerId);
+export function writeArchive(document: CanvasDocument, name: string, activeLayerId: string | null,
+  history?: PersistedHistoryState): { blob: Blob; manifest: ProjectManifestV2 } {
+  const context: V2BuildContext = { assets: new Map(), rasters: new Map(), binaryAssets: new Map() };
+  const manifest = manifestV2WithContext(document, name, activeLayerId, context);
+  const files: Zippable = {};
+  if (history) manifest.history = writeHistory(history, name, context, files);
+  manifest.assets = [...context.assets.values()];
   const json = new TextEncoder().encode(JSON.stringify(manifest, null, 2));
   if (json.byteLength > MANIFEST_LIMIT) throw new ProjectError('too-large', 'The project manifest exceeds 4 MiB.');
-  const files: Zippable = { 'manifest.json': [json, { level: 6 }] };
-  const rasters = new Map<string, Raster>();
-  for (const layer of document.layers) {
-    if (layer.raster) rasters.set(layer.raster.id, layer.raster);
-    if (layer.mask) rasters.set(layer.mask.raster.id, layer.mask.raster);
-  }
+  files['manifest.json'] = [json, { level: 6 }];
   for (const asset of manifest.assets) {
-    const raster = rasters.get(asset.id)!;
-    files[asset.path] = [encodedAsset(raster).bytes, { level: 0 }];
+    const raster = context.rasters.get(asset.id);
+    if (raster) files[asset.path] = [encodedAsset(raster).bytes, { level: 0 }];
+    else {
+      const bytes = context.binaryAssets.get(asset.id);
+      if (bytes) files[asset.path] = [bytes, { level: 0 }];
+    }
   }
   const zipped = zipSync(files, { mtime: new Date('2026-01-01T00:00:00Z') });
   return { blob: new Blob([zipped as BlobPart], { type: 'application/zip' }), manifest };
+}
+
+interface HistorySnapshotFile {
+  document: Omit<ProjectManifestV2, 'format' | 'version' | 'name' | 'assets' | 'history'> | null;
+  activeLayerId: string | null;
+  revision: number;
+  tileRasters?: readonly { id: string; width: number; height: number; channels: 1 | 4; tiles: readonly (string | null)[] }[];
+}
+
+function writeHistory(state: PersistedHistoryState, name: string, context: V2BuildContext, files: Zippable): ProjectHistoryV2 {
+  if (!state.enabled) return { schemaVersion: 1, enabled: false, retainedByteLimit: state.retainedByteLimit,
+    cursor: 0, commands: [], snapshots: [] };
+  const commands = [...state.past, ...state.future];
+  const liveRasterIds = new Set(context.rasters.keys());
+  const snapshots: ProjectHistoryV2['snapshots'][number][] = [];
+  const ids = new Map<HistorySnapshot, string>();
+  const snapshotId = (snapshot: HistorySnapshot): string => {
+    const known = ids.get(snapshot);
+    if (known) return known;
+    const id = `snapshot-${ids.size + 1}`;
+    ids.set(snapshot, id);
+    const path = `history/snapshots/${id}.json`;
+    const built = snapshot.document ? manifestV2WithContext(snapshot.document, name, snapshot.activeLayerId, context) : null;
+    const tileRasters: NonNullable<HistorySnapshotFile['tileRasters']>[number][] = [];
+    for (const layer of snapshot.document?.layers ?? []) {
+      for (const raster of [layer.raster, layer.mask?.raster ?? null]) {
+        if (!raster || liveRasterIds.has(raster.id) || tileRasters.some((item) => item.id === raster.id)) continue;
+        const tiles = raster.tiles.map((tile) => {
+          if (!tile) return null;
+          const hash = sha256Hex(tile);
+          const assetId = `history-tile-${hash}`;
+          const path = `history/tiles/${hash}.bin`;
+          if (!context.assets.has(assetId)) {
+            context.assets.set(assetId, { id: assetId, path, mime: 'application/octet-stream', sha256: hash, role: 'history-tile' });
+            files[path] = [tile, { level: 0 }];
+          }
+          return assetId;
+        });
+        tileRasters.push({ id: raster.id, width: raster.width, height: raster.height, channels: raster.channels, tiles });
+      }
+    }
+    const value: HistorySnapshotFile = { document: built ? {
+      id: built.id, width: built.width, height: built.height, resolution: built.resolution, colorSpace: built.colorSpace,
+      activeLayerId: built.activeLayerId, layers: built.layers, artboards: built.artboards, extensions: built.extensions,
+    } : null, activeLayerId: snapshot.activeLayerId, revision: snapshot.revision, tileRasters };
+    files[path] = [new TextEncoder().encode(JSON.stringify(value)), { level: 6 }];
+    snapshots.push({ id, path, activeLayerId: snapshot.activeLayerId, revision: snapshot.revision });
+    return id;
+  };
+  const records = commands.map((command) => ({ name: command.name, before: snapshotId(command.before), after: snapshotId(command.after) }));
+  return { schemaVersion: 1, enabled: true, retainedByteLimit: state.retainedByteLimit,
+    cursor: state.past.length, commands: records, snapshots };
 }
 
 // MARK: Reading
@@ -152,12 +316,13 @@ export function isSafeRelativePath(path: string): boolean {
 }
 
 function num(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value); }
-function invalid(detail: string): never { throw new ProjectError('invalid', `This is not a valid Compositor project, or its metadata is damaged (${detail}).`); }
+function invalid(detail: string): never { throw new ProjectError('invalid', `This is not a valid Fernwork Bildeditor project, or its metadata is damaged (${detail}).`); }
 
 export interface LoadedProject {
   document: CanvasDocument;
   name: string;
   activeLayerId: string | null;
+  history?: PersistedHistoryState;
 }
 
 /** Parses, validates and decodes an archive. Nothing is installed until everything succeeded. */
@@ -177,8 +342,14 @@ export async function readArchive(blob: Blob, decodeImage: ImageDecoder): Promis
   const manifestBytes = entries['manifest.json'];
   if (!manifestBytes) invalid('manifest.json is missing');
   if (manifestBytes.byteLength > MANIFEST_LIMIT) throw new ProjectError('too-large', 'The project manifest exceeds 4 MiB.');
-  let manifest: ProjectManifestV1;
-  try { manifest = JSON.parse(new TextDecoder().decode(manifestBytes)) as ProjectManifestV1; } catch { invalid('manifest is not JSON'); }
+  let parsed: unknown;
+  try { parsed = JSON.parse(new TextDecoder().decode(manifestBytes)) as unknown; } catch { invalid('manifest is not JSON'); }
+  const discriminator = parsed as { format?: unknown; version?: unknown };
+  if (discriminator.format === 'fernwork-image') {
+    if (discriminator.version !== 2) throw new ProjectError('version', `This project uses format version ${String(discriminator.version)}. This editor supports version 2.`);
+    return readV2Archive(parsed as ProjectManifestV2, entries, decodeImage);
+  }
+  const manifest = parsed as ProjectManifestV1;
   if (manifest.format !== 'fernwork-compositor') invalid('unknown format');
   if (manifest.version !== 1) throw new ProjectError('version', `This project uses format version ${String(manifest.version)}. This editor supports version 1.`);
   if (manifest.colorSpace !== 'srgb') invalid('colour space');
@@ -274,13 +445,13 @@ export async function readArchive(blob: Blob, decodeImage: ImageDecoder): Promis
       mask = { raster: maskRaster, enabled: record.mask.enabled !== false, linked: record.mask.linked !== false,
         placement: lext && 'maskPlacement' in lext ? lext.maskPlacement ?? null : same ? null : stated };
     }
-    layers.push({
+    layers.push(newLayer({
       id: record.id, name: record.name, visible: record.visible !== false, locked: record.locked === true,
       parentId: record.parentId ?? null, isGroup, opacity: record.opacity, blendMode: record.blendMode as BlendMode, transform, raster, mask,
       maskSourceId: null,
       adjustment: record.kind === 'adjustment' ? validAdjustment(record.parameters) : null,
       shape: record.kind === 'shape' ? (record.parameters as LayerShape) : null,
-    });
+    }));
   }
   // Live-mask sources: exact ids from the extension, else the clipping base below.
   for (let i = 0; i < layers.length; i++) {
@@ -302,7 +473,7 @@ export async function readArchive(blob: Blob, decodeImage: ImageDecoder): Promis
   }
   const activeLayerId = ext?.activeLayerId && ids.has(ext.activeLayerId) ? ext.activeLayerId : null;
   return {
-    document: { id: manifest.id, width: manifest.width, height: manifest.height, resolution, layers, selection: null },
+    document: { id: manifest.id, width: manifest.width, height: manifest.height, resolution, layers, artboards: [], selection: null },
     name: typeof manifest.name === 'string' && manifest.name ? manifest.name : 'Untitled',
     activeLayerId,
   };
@@ -340,4 +511,229 @@ function validAdjustment(parameters: unknown): LayerAdjustment {
   const value = parameters as LayerAdjustment;
   if (!value || typeof value !== 'object' || typeof value.kind !== 'string' || !isValidAdjustment(value)) invalid('adjustment parameters');
   return value;
+}
+
+async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string, Uint8Array>,
+  decodeImage: ImageDecoder): Promise<LoadedProject> {
+  if (manifest.format !== 'fernwork-image' || manifest.version !== 2 || manifest.colorSpace !== 'srgb') invalid('v2 header');
+  if (!Number.isInteger(manifest.width) || !Number.isInteger(manifest.height) || manifest.width < 1 || manifest.height < 1
+    || manifest.width > MAX_SIDE || manifest.height > MAX_SIDE) throw new ProjectError('too-large', 'This project exceeds the supported canvas size.');
+  if (!num(manifest.resolution) || manifest.resolution < 1 || manifest.resolution > 9600) invalid('resolution');
+  if (typeof manifest.id !== 'string' || !manifest.id || typeof manifest.name !== 'string') invalid('identity');
+  if (!Array.isArray(manifest.layers) || !Array.isArray(manifest.assets) || !Array.isArray(manifest.artboards)
+    || manifest.layers.length > MAX_LAYERS) invalid('v2 collections');
+
+  const records = new Map<string, AssetRecordV2>();
+  let imagePixels = 0, maskPixels = 0;
+  for (const asset of manifest.assets) {
+    if (!asset || typeof asset.id !== 'string' || !asset.id || records.has(asset.id) || !isSafeRelativePath(asset.path)
+      || typeof asset.mime !== 'string' || typeof asset.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(asset.sha256)
+      || !['image', 'mask', 'pattern', 'embedded', 'history-tile'].includes(asset.role)) invalid('v2 asset');
+    if (asset.width !== undefined && (!Number.isInteger(asset.width) || asset.width < 1 || asset.width > MAX_SIDE)) invalid('v2 asset width');
+    if (asset.height !== undefined && (!Number.isInteger(asset.height) || asset.height < 1 || asset.height > MAX_SIDE)) invalid('v2 asset height');
+    if (asset.width && asset.height) {
+      if (asset.role === 'mask') maskPixels += asset.width * asset.height;
+      else if (asset.role === 'image') imagePixels += asset.width * asset.height;
+    }
+    records.set(asset.id, asset);
+  }
+  if (imagePixels > MAX_PIXELS || maskPixels > MAX_PIXELS) throw new ProjectError('too-large', 'This project exceeds the 100-megapixel image limit.');
+
+  const rasters = new Map<string, Raster>();
+  const resources: Array<NonNullable<CanvasDocument['resources']>[number]> = [];
+  for (const record of records.values()) {
+    if (record.role !== 'pattern' && record.role !== 'embedded') continue;
+    const bytes = entries[record.path];
+    if (!bytes || sha256Hex(bytes) !== record.sha256) throw new ProjectError('missing-image', 'An embedded project asset is missing or damaged.');
+    resources.push({ id: record.id, role: record.role, mime: record.mime, bytes });
+  }
+  const decode = async (id: string, mask: boolean): Promise<Raster> => {
+    const existing = rasters.get(id);
+    if (existing) {
+      if ((existing.channels === 1) !== mask) invalid('asset used as both mask and image');
+      return existing;
+    }
+    const record = records.get(id);
+    if (!record || record.width === undefined || record.height === undefined) invalid(`missing raster record ${id}`);
+    if (mask ? record.role !== 'mask' : record.role !== 'image') invalid('raster asset role');
+    const bytes = entries[record.path];
+    if (!bytes || sha256Hex(bytes) !== record.sha256) throw new ProjectError('missing-image', 'An image inside the project is missing or damaged.');
+    const decoded = record.mime === 'image/png' ? decodePng(bytes) : await decodeImage(bytes, record.mime);
+    if (decoded.width !== record.width || decoded.height !== record.height) invalid('asset size does not match its record');
+    let data = decoded.data, channels = decoded.channels;
+    if (mask && channels === 4) {
+      const gray = new Uint8Array(decoded.width * decoded.height);
+      for (let i = 0; i < gray.length; i++) gray[i] = data[i * 4]!;
+      data = gray; channels = 1;
+    } else if (!mask && channels === 1) {
+      const rgba = new Uint8Array(decoded.width * decoded.height * 4);
+      for (let i = 0; i < data.length; i++) { const v = data[i]!; rgba[i * 4] = v; rgba[i * 4 + 1] = v; rgba[i * 4 + 2] = v; rgba[i * 4 + 3] = 255; }
+      data = rgba; channels = 4;
+    }
+    const raster = Raster.fromPixels(decoded.width, decoded.height, channels, data,
+      { id, source: { bytes, mime: record.mime, sha256: record.sha256 } });
+    rasters.set(id, raster);
+    return raster;
+  };
+
+  const parseDocument = async (source: Pick<ProjectManifestV2, 'id' | 'width' | 'height' | 'resolution' | 'layers' | 'artboards'>): Promise<CanvasDocument> => {
+    if (typeof source.id !== 'string' || !source.id || !Number.isInteger(source.width) || !Number.isInteger(source.height)
+      || source.width < 1 || source.height < 1 || source.width > MAX_SIDE || source.height > MAX_SIDE
+      || !num(source.resolution) || source.resolution < 1 || source.resolution > 9600
+      || !Array.isArray(source.layers) || !Array.isArray(source.artboards) || source.layers.length > MAX_LAYERS) invalid('snapshot document');
+    const ids = new Set<string>();
+    const layers: Layer[] = [];
+    for (const record of source.layers) {
+      if (!record || typeof record.id !== 'string' || !record.id || ids.has(record.id) || typeof record.name !== 'string'
+        || !record.name.trim() || !num(record.opacity) || record.opacity < 0 || record.opacity > 1
+        || !num(record.fillOpacity) || record.fillOpacity < 0 || record.fillOpacity > 1
+        || !BLEND_MODE_SET.has(record.blendMode) || !isLayerTransform(record.transform)
+        || !validLocks(record.locks) || !['none', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray'].includes(record.colorLabel)
+        || !Array.isArray(record.effects) || !record.effects.every(validEffect)
+        || !Array.isArray(record.filters) || !record.filters.every(validLiveFilter)) invalid('v2 layer');
+      ids.add(record.id);
+      if (!['pixel', 'group', 'adjustment', 'fill', 'vector', 'text', 'embedded'].includes(record.kind)) invalid('v2 layer kind');
+      const assetId = record.kind === 'pixel' ? record.assetId
+        : record.kind === 'vector' || record.kind === 'text' || record.kind === 'embedded' ? record.previewAssetId : null;
+      const raster = assetId ? await decode(assetId, false) : null;
+      const maskRaster = record.mask ? await decode(record.mask.assetId, true) : null;
+      const mask = record.mask && maskRaster ? { raster: maskRaster, enabled: record.mask.enabled,
+        linked: record.mask.linked, placement: record.mask.transform } : null;
+      const common = {
+        id: record.id, name: record.name, visible: record.visible !== false, locked: record.locks.all,
+        parentId: record.parentId, opacity: record.opacity, fillOpacity: record.fillOpacity,
+        blendMode: record.blendMode as BlendMode, locks: record.locks, colorLabel: record.colorLabel,
+        transform: record.transform, warp: record.warp, crop: record.crop, raster, mask,
+        vectorMask: record.vectorMask, maskSourceId: record.clippedTo, effects: record.effects, filters: record.filters,
+      };
+      switch (record.kind) {
+        case 'group': layers.push(newLayer({ ...common, kind: 'group' })); break;
+        case 'adjustment': {
+          if (!record.adjustment || record.adjustment.schemaVersion !== 1) invalid('adjustment schema');
+          const adjustment = liveAdjustment(record.adjustment);
+          if (!isValidAdjustment(adjustment)) invalid('adjustment parameters');
+          layers.push(newLayer({ ...common, kind: 'adjustment', adjustment }));
+          break;
+        }
+        case 'fill':
+          if (!validFill(record.fill, records)) invalid('fill parameters');
+          layers.push(newLayer({ ...common, kind: 'fill', fill: record.fill }));
+          break;
+        case 'vector':
+          if (!Array.isArray(record.paths) || !record.paths.every(validVectorPath) || !record.style
+            || (record.style.fill !== null && !validFill(record.style.fill, records))) invalid('vector parameters');
+          layers.push(newLayer({ ...common, kind: 'vector', paths: record.paths, style: record.style,
+          shape: record.sourceShape })); break;
+        case 'text':
+          if (typeof record.text !== 'string' || !Array.isArray(record.runs)
+            || !['left', 'center', 'right', 'justify'].includes(record.alignment)) invalid('text parameters');
+          layers.push(newLayer({ ...common, kind: 'text', text: record.text, runs: record.runs,
+            box: record.box, alignment: record.alignment })); break;
+        case 'embedded': {
+          const content = record.content;
+          if (!content || !['embedded', 'linked'].includes(content.mode) || !['image', 'svg', 'pdf', 'project'].includes(content.mediaType)
+            || typeof content.sourceName !== 'string' || (content.mode === 'embedded'
+              ? typeof content.assetId !== 'string' || records.get(content.assetId)?.role !== 'embedded'
+              : typeof content.uri !== 'string')) invalid('embedded parameters');
+          layers.push(newLayer({ ...common, kind: 'embedded', content })); break;
+        }
+        case 'pixel': layers.push(newLayer({ ...common, kind: 'pixel' })); break;
+      }
+    }
+    const structure = layers.map(hierarchyRecord);
+    try { validateHierarchy(structure); validateLiveMasks(structure); } catch { invalid('v2 layer hierarchy or clipping graph'); }
+    for (const artboard of source.artboards) {
+      if (!artboard || typeof artboard.id !== 'string' || !artboard.id || typeof artboard.name !== 'string'
+        || !num(artboard.rect?.x) || !num(artboard.rect?.y) || !num(artboard.rect?.width) || !num(artboard.rect?.height)
+        || artboard.rect.width < 1 || artboard.rect.height < 1) invalid('artboard');
+    }
+    return { id: source.id, width: source.width, height: source.height, resolution: source.resolution,
+      layers, artboards: source.artboards, resources, selection: null };
+  };
+
+  const document = await parseDocument(manifest);
+  const activeLayerId = manifest.activeLayerId && document.layers.some((layer) => layer.id === manifest.activeLayerId)
+    ? manifest.activeLayerId : null;
+  const history = manifest.history ? await readHistory(manifest.history, entries, records, parseDocument) : undefined;
+  if (history?.enabled) {
+    const expected = history.past.at(-1)?.after ?? history.future.at(-1)?.before;
+    if (expected && (!documentsEqual(expected.document, document) || expected.activeLayerId !== activeLayerId)) invalid('history cursor state');
+  }
+  return { document, name: manifest.name || 'Untitled', activeLayerId, ...(history ? { history } : {}) };
+}
+
+function validLocks(value: LayerCommonV2['locks']): boolean {
+  return !!value && [value.transparency, value.pixels, value.position, value.all].every((part) => typeof part === 'boolean');
+}
+
+function validRgb(value: { red: number; green: number; blue: number } | null | undefined): boolean {
+  return !!value && [value.red, value.green, value.blue].every((part) => num(part) && part >= 0 && part <= 1);
+}
+
+function validVectorPath(value: import('../../contracts-v2').VectorPathRecordV2): boolean {
+  return !!value && typeof value.closed === 'boolean' && Array.isArray(value.points)
+    && value.points.every((point) => [point?.anchor, point?.in, point?.out].every((part) => num(part?.x) && num(part?.y)));
+}
+
+function validFill(value: import('../../contracts-v2').FillRecordV2, assets: ReadonlyMap<string, AssetRecordV2>): boolean {
+  if (!value || value.schemaVersion !== 1) return false;
+  if (value.kind === 'solid') return validRgb(value.color);
+  if (value.kind === 'gradient') return num(value.angle) && Array.isArray(value.stops) && value.stops.length >= 2
+    && value.stops.every((stop) => num(stop.offset) && stop.offset >= 0 && stop.offset <= 1 && validRgb(stop.color)
+      && num(stop.opacity) && stop.opacity >= 0 && stop.opacity <= 1);
+  return value.kind === 'pattern' && typeof value.assetId === 'string' && assets.get(value.assetId)?.role === 'pattern'
+    && num(value.scale) && value.scale > 0 && num(value.angle);
+}
+
+function validEffect(value: import('../../contracts-v2').EffectRecordV2): boolean {
+  if (!value || value.schemaVersion !== 1 || typeof value.enabled !== 'boolean') return false;
+  if (value.kind === 'dropShadow') return validRgb(value.color)
+    && [value.opacity, value.angle, value.distance, value.blur].every(num);
+  if (value.kind === 'stroke') return validRgb(value.color) && num(value.width)
+    && ['inside', 'center', 'outside'].includes(value.position);
+  return value.kind === 'colorOverlay' && validRgb(value.color) && num(value.opacity);
+}
+
+function validLiveFilter(value: import('../../contracts-v2').FilterRecordV2): boolean {
+  if (!value || value.schemaVersion !== 1 || typeof value.enabled !== 'boolean') return false;
+  if (value.kind === 'gaussianBlur') return num(value.radius);
+  if (value.kind === 'motionBlur') return num(value.angle) && num(value.distance);
+  if (value.kind === 'noise') return num(value.amount) && typeof value.gaussian === 'boolean' && typeof value.monochromatic === 'boolean';
+  return value.kind === 'lensCorrection' && num(value.distortion);
+}
+
+async function readHistory(history: ProjectHistoryV2, entries: Record<string, Uint8Array>, records: ReadonlyMap<string, AssetRecordV2>,
+  parseDocument: (source: Pick<ProjectManifestV2, 'id' | 'width' | 'height' | 'resolution' | 'layers' | 'artboards'>) => Promise<CanvasDocument>): Promise<PersistedHistoryState | undefined> {
+  if (history.schemaVersion !== 1 || !Number.isInteger(history.cursor) || history.cursor < 0 || history.cursor > history.commands.length
+    || !num(history.retainedByteLimit) || history.retainedByteLimit < 0) invalid('history header');
+  if (!history.enabled) return { schemaVersion: 1, enabled: false, retainedByteLimit: history.retainedByteLimit, past: [], future: [] };
+  const snapshots = new Map<string, HistorySnapshot>();
+  for (const record of history.snapshots) {
+    if (!record || typeof record.id !== 'string' || snapshots.has(record.id) || !isSafeRelativePath(record.path)
+      || !record.path.startsWith('history/snapshots/')) invalid('history snapshot');
+    const bytes = entries[record.path];
+    if (!bytes || bytes.byteLength > MANIFEST_LIMIT) invalid('history snapshot file');
+    let raw: HistorySnapshotFile;
+    try { raw = JSON.parse(new TextDecoder().decode(bytes)) as HistorySnapshotFile; } catch { invalid('history snapshot JSON'); }
+    for (const raster of raw.tileRasters ?? []) {
+      if (!Number.isInteger(raster.width) || !Number.isInteger(raster.height) || raster.width < 1 || raster.height < 1
+        || ![1, 4].includes(raster.channels) || raster.tiles.length !== Math.ceil(raster.width / TILE) * Math.ceil(raster.height / TILE)) {
+        invalid('history tile raster');
+      }
+      for (const assetId of raster.tiles) {
+        if (assetId === null) continue;
+        const asset = records.get(assetId), tile = asset ? entries[asset.path] : undefined;
+        if (!asset || asset.role !== 'history-tile' || !tile || sha256Hex(tile) !== asset.sha256) invalid('history tile asset');
+      }
+    }
+    const document = raw.document ? await parseDocument(raw.document as Pick<ProjectManifestV2, 'id' | 'width' | 'height' | 'resolution' | 'layers' | 'artboards'>) : null;
+    snapshots.set(record.id, { document, activeLayerId: raw.activeLayerId, revision: raw.revision });
+  }
+  const commands = history.commands.map((record) => {
+    const before = snapshots.get(record.before), after = snapshots.get(record.after);
+    if (!before || !after || typeof record.name !== 'string') invalid('history command');
+    return { name: record.name, before, after };
+  });
+  return { schemaVersion: 1, enabled: true, retainedByteLimit: history.retainedByteLimit,
+    past: commands.slice(0, history.cursor), future: commands.slice(history.cursor) };
 }

@@ -12,29 +12,39 @@ export interface HistorySnapshot {
   readonly revision: number;
 }
 
-interface Entry { readonly name: string; readonly before: HistorySnapshot; readonly after: HistorySnapshot }
+export interface HistoryCommand { readonly name: string; readonly before: HistorySnapshot; readonly after: HistorySnapshot }
+export interface PersistedHistoryState {
+  readonly schemaVersion: 1;
+  readonly enabled: boolean;
+  readonly retainedByteLimit: number;
+  readonly past: readonly HistoryCommand[];
+  readonly future: readonly HistoryCommand[];
+}
 
 let revisionCounter = 1;
 
 export class DocumentHistory {
-  private past: Entry[] = [];
-  private future: Entry[] = [];
+  private past: HistoryCommand[] = [];
+  private future: HistoryCommand[] = [];
   private revision = revisionCounter++;
   private savedRevision: number | null;
   private pending: HistorySnapshot | null = null;
   private pendingName = 'Edit';
   private depth = 0;
   readonly entryLimit: number;
-  readonly retainedByteLimit: number;
+  retainedByteLimit: number;
+  private enabledValue: boolean;
 
-  constructor(entryLimit = 100, retainedByteLimit = 256 * 1024 * 1024) {
+  constructor(entryLimit = 100, retainedByteLimit = 256 * 1024 * 1024, enabled = true) {
     this.entryLimit = Math.max(0, entryLimit);
     this.retainedByteLimit = Math.max(0, retainedByteLimit);
+    this.enabledValue = enabled;
     this.savedRevision = this.revision;
   }
 
-  get canUndo(): boolean { return this.depth === 0 && this.past.length > 0; }
-  get canRedo(): boolean { return this.depth === 0 && this.future.length > 0; }
+  get enabled(): boolean { return this.enabledValue; }
+  get canUndo(): boolean { return this.enabledValue && this.depth === 0 && this.past.length > 0; }
+  get canRedo(): boolean { return this.enabledValue && this.depth === 0 && this.future.length > 0; }
   get undoName(): string { return this.past.at(-1)?.name ?? ''; }
   get redoName(): string { return this.future.at(-1)?.name ?? ''; }
   get isModified(): boolean { return this.revision !== this.savedRevision; }
@@ -43,6 +53,16 @@ export class DocumentHistory {
   markSaved(): void { this.savedRevision = this.revision; }
   /** Marks the current state as not matching any saved file. */
   markUnsaved(): void { this.savedRevision = null; }
+
+  /** Disabling history drops retained snapshots immediately; edits continue normally. */
+  setEnabled(enabled: boolean): void {
+    if (enabled === this.enabledValue) return;
+    this.enabledValue = enabled;
+    this.past = [];
+    this.future = [];
+    this.pending = null;
+    this.depth = 0;
+  }
 
   reset(): void {
     this.past = [];
@@ -70,9 +90,30 @@ export class DocumentHistory {
     // Selecting, navigating and no-op edits preserve redo history.
     if (documentsEqual(before.document, document)) return;
     this.revision = revisionCounter++;
+    if (!this.enabledValue) return;
     this.past.push({ name: this.pendingName, before, after: { document, activeLayerId: selection, revision: this.revision } });
     this.future = [];
     this.trim(document);
+  }
+
+  /** Serializable command log. Immutable document/raster references are intentionally shared. */
+  exportState(): PersistedHistoryState {
+    return { schemaVersion: 1, enabled: this.enabledValue, retainedByteLimit: this.retainedByteLimit,
+      past: this.past.slice(), future: this.future.slice() };
+  }
+
+  /** Installs a validated project history and preserves the saved current revision. */
+  importState(state: PersistedHistoryState, current: CanvasDocument | null): void {
+    this.retainedByteLimit = Math.max(0, state.retainedByteLimit);
+    this.past = state.enabled ? state.past.slice(0, this.entryLimit) : [];
+    this.future = state.enabled ? state.future.slice(0, Math.max(0, this.entryLimit - this.past.length)) : [];
+    this.enabledValue = state.enabled;
+    this.pending = null;
+    this.depth = 0;
+    const currentSnapshot = this.past.at(-1)?.after ?? this.future.at(-1)?.before;
+    this.revision = currentSnapshot?.revision ?? revisionCounter++;
+    this.savedRevision = this.revision;
+    this.trim(current);
   }
 
   /** Abandons an open transaction without recording it (the caller restores the document). */

@@ -3,7 +3,8 @@
  * Holds no document state of its own: documents live in the core sessions.
  */
 
-import type { EditorHandle, HostAdapter, LayerId, ProjectManifestV1 } from '../../contracts';
+import type { HostAdapter, LayerId, ProjectManifestV1 } from '../../contracts';
+import type { EditorHandleV2, ProjectManifestV2 } from '../../contracts-v2';
 import { MAX_SIDE, type CanvasDocument } from '../core/document';
 import { Raster, alphaBounds, cropRaster } from '../core/raster';
 import type { EditorSession, SessionServices, Tool } from '../core/session';
@@ -15,7 +16,7 @@ import type { Modifiers, ToolHandler } from './canvas/tools';
 import { pixelClipboard, type ClipboardHooks, type PixelClipboardEntry } from '../core/clipboard';
 import { failureMessage, ImportQueue } from '../core/importQueue';
 import { ProjectWorkspace, type ProjectTab } from '../core/workspace';
-import { buildManifest, readArchive, ProjectError } from '../io/project';
+import { buildManifest, buildManifestV2, readArchive, writeArchive, ProjectError } from '../io/project';
 import { readCompPackage, readCompZip, writeCompZip } from '../io/compPackage';
 import { unzipSync } from 'fflate';
 import { encodeArchive } from '../workers/archiveClient';
@@ -325,7 +326,7 @@ export class EditorController {
     }
     const loaded = await readArchive(blob, (data, mime) => browserDecode(data, mime));
     const tab = this.workspace.createTab(name ?? loaded.name);
-    tab.session.installProject(loaded.document, loaded.activeLayerId, name ?? loaded.name);
+    tab.session.installProject(loaded.document, loaded.activeLayerId, name ?? loaded.name, loaded.history);
     this.workspace.adopt(tab);
   }
 
@@ -365,10 +366,9 @@ export class EditorController {
     await this.openCompFolder(files);
   }
 
-  /** Saves a copy in the macOS app's format (a zipped `.comp` package, version 7); the project itself stays as it is. */
+  /** @deprecated Compatibility hook for the legacy E2E fixture; no production menu exposes Mac-project writing. */
   async saveCompCopy(): Promise<void> {
-    const session = this.session;
-    const document = session.document;
+    const session = this.session, document = session.document;
     if (!document) return;
     try {
       session.commitTransform();
@@ -382,7 +382,6 @@ export class EditorController {
       else await this.host.saveFile(blob, `${name}.comp.zip`);
     } catch (error) { this.reportError('save-failed', error); }
   }
-
 
   async chooseAndOpen(): Promise<void> {
     if (!this.workspace.canSwitch) return;
@@ -401,12 +400,22 @@ export class EditorController {
     return buildManifest(document, session.projectName ?? this.workspace.current.title, session.activeLayerId);
   }
 
+  manifestV2(session: EditorSession = this.session): ProjectManifestV2 {
+    const document = session.document;
+    if (!document) return { format: 'fernwork-image', version: 2, id: '', name: session.projectName ?? this.workspace.current.title,
+      width: 0, height: 0, resolution: 72, colorSpace: 'srgb', activeLayerId: null, layers: [], artboards: [], assets: [] };
+    return buildManifestV2(document, session.projectName ?? this.workspace.current.title, session.activeLayerId);
+  }
+
   async archive(session: EditorSession = this.session): Promise<Blob> {
     const document = session.document;
     if (!document) throw new ProjectError('no-document', 'There is no canvas to save.');
     session.commitTransform();
     const final = session.document ?? document;
-    return encodeArchive(final, session.projectName ?? this.workspace.current.title, session.activeLayerId);
+    const name = session.projectName ?? this.workspace.current.title;
+    // The worker populates the encoded-raster cache; the cheap second pass adds the command/tile history.
+    await encodeArchive(final, name, session.activeLayerId);
+    return writeArchive(final, name, session.activeLayerId, session.history.exportState()).blob;
   }
 
   // MARK: Recovery copies (IndexedDB)
@@ -468,7 +477,9 @@ export class EditorController {
     if (session.isProjectBusy || session.transformEdit || session.history.isInTransaction) { this.scheduleRecoveryCopy(tab); return; }
     if (!session.document || !session.isModified) { await store.remove(tab.id).catch(() => undefined); return; }
     try {
-      const archive = await encodeArchive(session.document, session.projectName ?? tab.title, session.activeLayerId);
+      const name = session.projectName ?? tab.title;
+      await encodeArchive(session.document, name, session.activeLayerId);
+      const archive = writeArchive(session.document, name, session.activeLayerId, session.history.exportState()).blob;
       await store.put({ id: tab.id, name: session.projectName ?? tab.title, savedAt: Date.now(), size: archive.size, archive });
     } catch (error) {
       if (isQuotaError(error)) {
@@ -565,7 +576,7 @@ export class EditorController {
 
   // MARK: Public handle (contracts.ts EditorHandle)
 
-  handle(destroy: () => void): EditorHandle {
+  handle(destroy: () => void): EditorHandleV2 {
     return {
       newProject: async ({ name, width, height }) => {
         if (!(Number.isInteger(width) && Number.isInteger(height) && width >= 1 && height >= 1 && width <= MAX_SIDE && height <= MAX_SIDE)) {
@@ -602,6 +613,7 @@ export class EditorController {
       saveProject: async () => this.archive(),
       exportImage: async ({ format, quality }) => this.exportBlob(format, quality === undefined ? {} : { quality }),
       getManifest: () => this.manifest(),
+      getManifestV2: () => this.manifestV2(),
       undo: async () => this.session.undo(),
       redo: async () => this.session.redo(),
       destroy,
