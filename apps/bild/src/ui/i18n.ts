@@ -2,9 +2,12 @@
  * UI strings. English text (upstream wording) is the key; German is the only translation.
  */
 
+import { ADJUST_P2_DE, ADJUST_P2_EN } from '../app/adjust/strings';
+
 export type Locale = 'de' | 'en';
 
 const de: Record<string, string> = {
+  ...ADJUST_P2_DE,
   'Layers': 'Ebenen', 'Blend': 'Modus', 'Opacity': 'Deckkraft', 'No layers yet': 'Noch keine Ebenen',
   'Create a canvas or import an image.': 'Erstelle eine Leinwand oder importiere ein Bild.',
   'Import an image or add a blank layer.': 'Importiere ein Bild oder füge eine leere Ebene hinzu.',
@@ -308,7 +311,7 @@ const de: Record<string, string> = {
   'Finding the subject…': 'Motiv wird gesucht …',
   'Refining edges…': 'Kanten werden verfeinert …',
   'Hide the background behind a layer mask, keeping the foreground subjects. The pixels stay, so the background can be painted back at any time.': 'Blendet den Hintergrund über eine Ebenenmaske aus und behält die Motive im Vordergrund. Die Pixel bleiben erhalten, der Hintergrund lässt sich jederzeit zurückmalen.',
-  'Basic': 'Einfach',
+  'Basic': 'Basis',
   'Advanced': 'Erweitert',
   'Refine': 'Verfeinern',
   'Shift Edge': 'Kante verschieben',
@@ -583,6 +586,6 @@ function dynamicGerman(text: string): string | null {
 }
 
 export function translator(locale: Locale): (text: string) => string {
-  if (locale === 'en') return (text) => platformKeys(text, locale);
+  if (locale === 'en') return (text) => platformKeys(ADJUST_P2_EN[text] ?? text, locale);
   return (text) => platformKeys(de[text] ?? dynamicGerman(text) ?? text, locale);
 }

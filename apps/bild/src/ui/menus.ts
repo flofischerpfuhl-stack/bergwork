@@ -116,8 +116,15 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
       items: [
         feature('gaussianBlur', `${t('Gaussian Blur')}…`),
         feature('motionBlur', `${t('Motion Blur')}…`),
-        feature('noise', `${t('Add Noise')}…`),
         feature('lensCorrection', `${t('Lens Correction')}…`),
+        'separator',
+        feature('noise', `${t('Add Noise')}…`),
+        feature('denoise', `${t('Reduce Noise')}…`),
+        'separator',
+        feature('unsharpMask', `${t('Unsharp Mask')}…`),
+        feature('smartSharpen', `${t('Smart Sharpen')}…`),
+        feature('highPass', `${t('High Pass')}…`),
+        'separator',
         feature('removeBackground', `${t('Remove Background')}…`),
       ],
     },
@@ -126,7 +133,8 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
       items: [
         {
           label: t('New Adjustment Layer'), enabled: session.canEditLayers && !!document,
-          submenu: ADJUSTMENT_KINDS.map((kind) => ({ label: `${t(kind)}…`, enabled: session.canEditLayers, run: () => session.addAdjustment(kind) })),
+          submenu: controller.adjustmentLayerItems?.(true)
+            ?? ADJUSTMENT_KINDS.map((kind) => ({ label: `${t(kind)}…`, enabled: session.canEditLayers, run: () => session.addAdjustment(kind) })),
         },
         feature('editAdjustment', t('Edit Adjustment…')),
         'separator',

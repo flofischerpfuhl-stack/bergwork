@@ -35,6 +35,9 @@ import {
 import { histogramPixelJob } from '../core/adjust/pixelWorkerClient';
 import { applyFilterEdit, cancelFilterEdit, filterEditState, updateFilterEdit } from '../core/filters/editing';
 import type { FilterKind, FilterSettings } from '../core/filters/settings';
+import { adjustmentName, P2AdjustmentControls, settlePendingLuts } from './adjust/controls';
+import { finishLiveFilterEdit, LIVE_FILTER_NAMES, liveFilterEditState, updateLiveFilterEdit } from './adjust/liveFilters';
+import { installAdjustP2 } from './adjust/install';
 
 // MARK: Edit state outside the engines (sampling modes, the adjustment-layer histogram)
 
@@ -57,7 +60,11 @@ type Edit =
   | { kind: 'levels'; settings: LevelsSettings; histogram: readonly Float64Array[] | null; preview: boolean; committing: boolean; layer: boolean }
   | { kind: 'hue'; settings: HueSaturationSettings; preview: boolean; committing: boolean; layer: boolean }
   | { kind: 'filter'; filter: FilterKind; settings: FilterSettings; preview: boolean; committing: boolean; preparing: boolean; error: string | null }
-  | { kind: 'curves' | 'exposure' | 'gradientMap' | 'grain'; value: LayerAdjustment; preview: boolean; layer: true };
+  | { kind: 'curves' | 'exposure' | 'gradientMap' | 'grain'; value: LayerAdjustment; preview: boolean; layer: true }
+  /** A Phase-2 adjustment layer (controls in adjust/controls.tsx). */
+  | { kind: 'p2'; value: LayerAdjustment; preview: boolean; layer: true }
+  /** A live filter on a layer: the destructive filter's panel, previewing through the layer's filter stack. */
+  | { kind: 'liveFilter'; filter: FilterKind; settings: FilterSettings; preview: boolean };
 
 /** The open edit, whichever engine owns it. */
 function currentEdit(session: EditorSession): Edit | null {
@@ -72,8 +79,11 @@ function currentEdit(session: EditorSession): Edit | null {
       case 'Exposure': return { kind: 'exposure', value: layerEdit.value, preview, layer: true };
       case 'Gradient Map': return { kind: 'gradientMap', value: layerEdit.value, preview, layer: true };
       case 'Grain': return { kind: 'grain', value: layerEdit.value, preview, layer: true };
+      default: return { kind: 'p2', value: layerEdit.value, preview, layer: true };
     }
   }
+  const live = liveFilterEditState(session);
+  if (live) return { kind: 'liveFilter', filter: LIVE_FILTER_NAMES[live.kind], settings: live.settings, preview: live.preview };
   const levels = levelsEditState(session);
   if (levels) return { kind: 'levels', settings: levels.settings, histogram: levels.histogramReady ? levels.histogram : null, preview: levels.preview, committing: levels.committing, layer: false };
   const hue = hueSaturationEditState(session);
@@ -155,12 +165,14 @@ function setPreview(session: EditorSession, edit: Edit, preview: boolean): void 
   if (edit.kind === 'levels') changeLevels(session, edit.settings, preview);
   else if (edit.kind === 'hue') changeHue(session, edit.settings, preview);
   else if (edit.kind === 'filter') changeFilter(session, edit.settings, preview);
+  else if (edit.kind === 'liveFilter') updateLiveFilterEdit(session, edit.settings, preview);
   else changeLayerValue(session, (v) => v, preview);
 }
 
 async function commit(controller: EditorController, session: EditorSession): Promise<void> {
   const layerEdit = adjustmentLayerEditState(session);
-  if (layerEdit) finishAdjustmentLayerEdit(session, true);
+  if (layerEdit) { settlePendingLuts(session, layerEdit.value.kind === 'Colour Lookup' ? layerEdit.value.parameters.resourceId : null); finishAdjustmentLayerEdit(session, true); }
+  else if (liveFilterEditState(session)) finishLiveFilterEdit(session, true);
   else if (levelsEditState(session)) await applyLevelsEdit(session);
   else if (hueSaturationEditState(session)) await applyHueSaturationEdit(session);
   else if (filterEditState(session)) {
@@ -174,7 +186,8 @@ async function commit(controller: EditorController, session: EditorSession): Pro
 }
 
 function cancel(session: EditorSession): void {
-  if (adjustmentLayerEditState(session)) finishAdjustmentLayerEdit(session, false);
+  if (adjustmentLayerEditState(session)) { settlePendingLuts(session, null); finishAdjustmentLayerEdit(session, false); }
+  else if (liveFilterEditState(session)) finishLiveFilterEdit(session, false);
   else if (levelsEditState(session)) cancelLevelsEdit(session);
   else if (hueSaturationEditState(session)) cancelHueSaturationEdit(session);
   else if (filterEditState(session)) cancelFilterEdit(session);
@@ -240,19 +253,25 @@ function samplingActive(session: EditorSession): boolean {
 const clamp = (value: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, value));
 
 /** A slider plus an exact field (FilterSheet.control). Logarithmic sliders give small values most of the travel. */
-export function SliderRow({ label, value, min, max, decimals = 0, logarithmic = false, suffix, onChange, testId }: {
+export function SliderRow({ label, value, min, max, decimals = 0, logarithmic = false, suffix, onChange, testId, onReset, title, labelWidth, trackClass }: {
   label: string; value: number; min: number; max: number; decimals?: number; logarithmic?: boolean; suffix?: string;
   onChange: (value: number) => void; testId?: string;
+  /** Double-clicking the label resets the value (Lightroom, Photoshop Camera Raw). */
+  onReset?: () => void; title?: string; labelWidth?: number; trackClass?: string;
 }) {
   const step = 10 ** decimals;
   const toSlider = (v: number) => (logarithmic ? Math.log(v) : v);
   const fromSlider = (v: number) => Math.round((logarithmic ? Math.exp(v) : v) * step) / step;
   return (
     <div className={styles.panelRow}>
-      <span className={styles.panelLabel}>{label}</span>
-      <input type="range" className={styles.slider} aria-label={label} data-testid={testId ? `${testId}-slider` : undefined}
-        min={toSlider(min)} max={toSlider(max)} step={logarithmic ? 'any' : 1 / step} value={toSlider(clamp(value, min, max))}
-        onChange={(event) => onChange(clamp(fromSlider(Number(event.target.value)), min, max))} />
+      <span className={styles.panelLabel} title={title} style={labelWidth ? { width: labelWidth } : undefined}
+        onDoubleClick={onReset ? (event) => { event.preventDefault(); onReset(); } : undefined} data-testid={testId && onReset ? `${testId}-label` : undefined}>{label}</span>
+      {/* A track class wraps the slider, e.g. to draw a colour ramp under it (white balance). */}
+      <span className={trackClass} style={trackClass ? undefined : { display: 'contents' }}>
+        <input type="range" className={styles.slider} aria-label={label} data-testid={testId ? `${testId}-slider` : undefined}
+          min={toSlider(min)} max={toSlider(max)} step={logarithmic ? 'any' : 1 / step} value={toSlider(clamp(value, min, max))}
+          onChange={(event) => onChange(clamp(fromSlider(Number(event.target.value)), min, max))} />
+      </span>
       <NumberField label="" value={value} suffix={suffix} width={56} testId={testId}
         onChange={(v) => onChange(clamp(Math.round(v * step) / step, min, max))} />
     </div>
@@ -305,7 +324,7 @@ const CHANNEL_COLORS = ['#9a9a9a', '#e05050', '#4cc060', '#4a86e8'];
 
 // MARK: Levels (LevelsSheet.swift)
 
-function Histogram({ bins, color, label, hint }: { bins: ArrayLike<number> | null; color: string; label: string; hint: string }) {
+export function Histogram({ bins, color, label, hint }: { bins: ArrayLike<number> | null; color: string; label: string; hint: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current;
@@ -636,11 +655,13 @@ function GrainControls({ controller, settings, onChange }: { controller: EditorC
   );
 }
 
-function FilterControls({ controller, session, edit }: { controller: EditorController; session: EditorSession; edit: Extract<Edit, { kind: 'filter' }> }) {
+/** The panel of a pixel filter; the same controls edit a destructive filter and a live filter on a layer. */
+function FilterControls({ controller, filter, settings: s, onChange }: {
+  controller: EditorController; filter: FilterKind; settings: FilterSettings; onChange: (settings: FilterSettings) => void;
+}) {
   const t = controller.t;
-  const s = edit.settings;
-  const set = (change: Partial<FilterSettings>) => changeFilter(session, { ...s, ...change });
-  switch (edit.filter) {
+  const set = (change: Partial<FilterSettings>) => onChange({ ...s, ...change });
+  switch (filter) {
     case 'Curves': return <CurvesControls controller={controller} settings={s.curves} onChange={(curves) => set({ curves })} />;
     case 'Exposure': return <ExposureControls controller={controller} settings={s.exposure} onChange={(exposure) => set({ exposure })} />;
     case 'Gradient Map': return <GradientMapControls controller={controller} settings={s.gradientMap} onChange={(gradientMap) => set({ gradientMap })} />;
@@ -666,6 +687,30 @@ function FilterControls({ controller, session, edit }: { controller: EditorContr
         <p className={styles.panelNote}>{t('Positive straightens lines that bow outward (barrel); negative, lines that bow inward (pincushion).')}</p>
       </>
     );
+    case 'Unsharp Mask': return (
+      <>
+        <SliderRow label={t('Amount')} value={s.amount} min={1} max={400} suffix="%" testId="sharpenAmount" onChange={(amount) => set({ amount })} />
+        <SliderRow label={t('Radius')} value={s.radius} min={0.1} max={250} decimals={1} logarithmic suffix="px" testId="sharpenRadius" onChange={(radius) => set({ radius })} />
+        <SliderRow label={t('Threshold')} value={s.threshold} min={0} max={255} testId="sharpenThreshold" onChange={(threshold) => set({ threshold })} />
+      </>
+    );
+    case 'Smart Sharpen': return (
+      <>
+        <SliderRow label={t('Amount')} value={s.amount} min={1} max={400} suffix="%" testId="sharpenAmount" onChange={(amount) => set({ amount })} />
+        <SliderRow label={t('Radius')} value={s.radius} min={0.1} max={64} decimals={1} logarithmic suffix="px" testId="sharpenRadius" onChange={(radius) => set({ radius })} />
+        <SliderRow label={t('Reduce Noise')} value={s.reduceNoise} min={0} max={100} suffix="%" testId="sharpenReduceNoise" onChange={(reduceNoise) => set({ reduceNoise })} />
+        <SliderRow label={t('Threshold')} value={s.threshold} min={0} max={255} testId="sharpenThreshold" onChange={(threshold) => set({ threshold })} />
+      </>
+    );
+    case 'High Pass': return (
+      <SliderRow label={t('Radius')} value={s.radius} min={0.1} max={250} decimals={1} logarithmic suffix="px" testId="highPassRadius" onChange={(radius) => set({ radius })} />
+    );
+    case 'Denoise': return (
+      <>
+        <SliderRow label={t('Luminance')} value={s.luminance} min={0} max={100} suffix="%" testId="denoiseLuminance" onChange={(luminance) => set({ luminance })} />
+        <SliderRow label={t('Color Noise')} value={s.colour} min={0} max={100} suffix="%" testId="denoiseColour" onChange={(colour) => set({ colour })} />
+      </>
+    );
   }
 }
 
@@ -675,6 +720,16 @@ export { FloatingPanel };
 
 const TITLES: Record<string, string> = { levels: 'Levels', hue: 'Hue/Saturation', curves: 'Curves', exposure: 'Exposure', gradientMap: 'Gradient Map', grain: 'Grain' };
 
+/** Straight RGBA of the composite under an adjustment layer, at most 256 px on the long side (Black & White Auto). */
+function sampleUnderneath(controller: EditorController, session: EditorSession, id: string): Uint8Array | null {
+  const document = session.document, gpu = controller.canvas?.gpu;
+  if (!document || !gpu) return null;
+  const scale = Math.min(1, 256 / Math.max(document.width, document.height));
+  const width = Math.max(1, Math.round(document.width * scale)), height = Math.max(1, Math.round(document.height * scale));
+  try { return gpu.readView(underneathDocument(document, id), width, height, { a: 1 / scale, b: 0, c: 0, d: 1 / scale, tx: 0, ty: 0 }, scale); }
+  catch { return null; } finally { controller.canvas?.redraw(); }
+}
+
 function AdjustmentPanel({ controller }: { controller: EditorController }) {
   const session = useSession(controller.session);
   const t = controller.t;
@@ -683,16 +738,20 @@ function AdjustmentPanel({ controller }: { controller: EditorController }) {
   useEffect(() => {
     if (session.adjustmentEditingId && !adjustmentLayerEditState(session) && !hasPixelEdit(session)) beginAdjustmentLayerEdit(session, session.adjustmentEditingId);
     const edit = adjustmentLayerEditState(session);
-    if (edit && resolveAdjustment(edit.value).kind === 'Levels') measureLayerHistogram(controller, session, edit.layerId);
+    if (edit && (edit.value.kind === 'Levels' || edit.value.kind === 'Threshold')) measureLayerHistogram(controller, session, edit.layerId);
   });
   const edit = currentEdit(session);
   if (!edit) return null;
   const busy = (edit.kind === 'levels' || edit.kind === 'hue' || edit.kind === 'filter') && edit.committing;
-  const title = edit.kind === 'filter' ? t(edit.filter) : t(TITLES[edit.kind]!);
+  const title = edit.kind === 'filter' || edit.kind === 'liveFilter' ? t(edit.filter) : edit.kind === 'p2' ? t(adjustmentName(edit.value.kind)) : t(TITLES[edit.kind]!);
   let body: ReactNode = null;
   if (edit.kind === 'levels') body = <LevelsControls controller={controller} session={session} edit={edit} />;
   else if (edit.kind === 'hue') body = <HueControls controller={controller} session={session} edit={edit} />;
-  else if (edit.kind === 'filter') body = <FilterControls controller={controller} session={session} edit={edit} />;
+  else if (edit.kind === 'filter') body = <FilterControls controller={controller} filter={edit.filter} settings={edit.settings} onChange={(s) => changeFilter(session, s)} />;
+  else if (edit.kind === 'liveFilter') body = <FilterControls controller={controller} filter={edit.filter} settings={edit.settings} onChange={(s) => updateLiveFilterEdit(session, s)} />;
+  else if (edit.kind === 'p2') body = <P2AdjustmentControls controller={controller} session={session} value={edit.value}
+    onChange={(value) => changeLayerValue(session, () => value)} histogram={panelState(session).layerHistogram?.bins ?? null}
+    sample={() => (layerEdit ? sampleUnderneath(controller, session, layerEdit.layerId) : null)} />;
   else {
     const value = resolveAdjustment(edit.value);
     if (edit.kind === 'curves') body = <CurvesControls controller={controller} settings={value.curves} onChange={(curves) => changeLayerValue(session,
@@ -705,8 +764,9 @@ function AdjustmentPanel({ controller }: { controller: EditorController }) {
       (v) => v.kind === 'Grain' ? { ...v, parameters: settings } : v)} />;
   }
   const onLayer = !!layerEdit;
+  const panelTitle = onLayer ? `${title} · ${t('Adjustment Layer')}` : edit.kind === 'liveFilter' ? `${title} · ${t('Smart Filter')}` : title;
   return (
-    <FloatingPanel name={title} title={onLayer ? `${title} · ${t('Adjustment Layer')}` : title} onClose={() => cancel(session)} closeLabel={t('Cancel')}>
+    <FloatingPanel name={title} title={panelTitle} onClose={() => cancel(session)} closeLabel={t('Cancel')}>
       <fieldset className={styles.panelBody} disabled={busy} onKeyDown={(event) => {
         // ⌥P toggles Preview (LevelsSheet); Escape cancels and Return confirms, as the panel's buttons do.
         if (event.altKey && event.code === 'KeyP') { setPreview(session, edit, !edit.preview); event.preventDefault(); }
@@ -716,7 +776,7 @@ function AdjustmentPanel({ controller }: { controller: EditorController }) {
         {body}
         <Check label={t('Preview')} checked={edit.preview} testId="adjustment-preview" onChange={(preview) => setPreview(session, edit, preview)} />
         {edit.kind === 'filter' && edit.error ? <p className={styles.panelError}>{edit.error}</p> : null}
-        {!onLayer && session.selection ? <p className={styles.panelNote}>{t('Limited to the selection')}</p> : null}
+        {!onLayer && edit.kind !== 'liveFilter' && session.selection ? <p className={styles.panelNote}>{t('Limited to the selection')}</p> : null}
       </fieldset>
       <div className={styles.dialogButtons}>
         <button type="button" className={styles.pill} disabled={busy} onClick={() => cancel(session)} data-testid="adjustment-cancel">{t('Cancel')}</button>
@@ -752,6 +812,7 @@ export function installAdjustments(controller: EditorController): void {
   controller.panels.push(() => <AdjustmentPanel controller={controller} />);
   const sampler = new SamplingTool(controller);
   controller.canvasInterceptors.push((session) => (samplingActive(session) ? sampler : null));
+  installAdjustP2(controller);
   controller.keyHandlers.push((event) => {
     const session = controller.session;
     if (!currentEdit(session)) return false;

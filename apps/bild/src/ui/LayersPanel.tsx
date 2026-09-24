@@ -582,6 +582,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
         if (session.selectedLayerIds.size > 1 && session.selectedLayerIds.has(id)) void session.deleteSelectedLayers();
         else void session.deleteLayer(id);
       } },
+      ...controller.layerMenuItems.flatMap((items) => items(session, id)),
     ];
   };
 
@@ -651,6 +652,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
                   onDragStart={found ? null : startDrag} onContext={(id, x, y) => setMenu({ id, x, y })}
                   context={!!found && !found.matchingIds.has(entry.layer.id)} effectsOpen={open} onToggleEffects={toggleEffects} />
                 {open ? <EffectRows controller={controller} session={session} entry={entry} /> : null}
+                {controller.layerSubRows.map((subRows, i) => <Fragment key={`sub-${i}`}>{subRows(session, entry)}</Fragment>)}
               </Fragment>
             );
           })}
@@ -674,7 +676,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
         <button type="button" className={styles.footerButton} aria-label={t('New adjustment layer')}
           title={adjustmentsAvailable ? t('New adjustment layer') : `${t('New adjustment layer')} — ${t('Not yet available in the browser port')}`}
           disabled={!session.canEditLayers || !adjustmentsAvailable}
-          onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setAdjustMenu({ x: r.left, y: r.top - 8 - 6 * 26 }); }}>
+          onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setAdjustMenu({ x: r.left, y: r.top - 8 - (controller.adjustmentLayerItems?.(false).length ?? 6) * 26 }); }}>
           <Icon name="adjustment" size={17} />
         </button>
         {layerStyles ? (
@@ -697,7 +699,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
       {artboardMenu ? <MenuPopup controller={controller} anchor={artboardMenu} items={artboardMenuItems(controller, session, artboardMenu.id)} onClose={() => setArtboardMenu(null)} /> : null}
       {adjustMenu ? (
         <MenuPopup controller={controller} anchor={adjustMenu} onClose={() => setAdjustMenu(null)}
-          items={ADJUSTMENT_KINDS.map((kind) => ({ label: t(kind), enabled: true, run: () => session.addAdjustment(kind) }))} />
+          items={controller.adjustmentLayerItems?.(false) ?? ADJUSTMENT_KINDS.map((kind) => ({ label: t(kind), enabled: true, run: () => session.addAdjustment(kind) }))} />
       ) : null}
     </aside>
   );
