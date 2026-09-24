@@ -189,3 +189,11 @@ artifact is a reproducible static ONNX repackaging of those weights and is
 downloaded on first use rather than shipped in this repository. Full immutable
 provenance, checksums, rationale, and the license text are in
 `MODEL_LICENSES.md` and `public/models/birefnet-lite.LICENSE.txt`.
+
+## Tauri host support crates
+
+The desktop host uses `tauri-plugin-single-instance` 2.4.5 (MIT or Apache-2.0)
+to route second-instance file-open events, `sha2` 0.10 (MIT or Apache-2.0) for
+native checksum/model-cache verification, and `windows-sys` 0.61 (MIT or
+Apache-2.0) for the Windows `GetICMProfileW` display-profile call. Exact
+transitive versions are pinned in `src-tauri/Cargo.lock`.

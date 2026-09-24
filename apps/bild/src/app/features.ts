@@ -11,13 +11,17 @@ import { installRetouch } from './retouchFeature';
 import { installAdjustments } from './adjustmentsFeature';
 import { installSubject } from './subjectFeature';
 import { installGuides } from './guidesFeature';
+import type { EditorProfile } from './profiles';
 
-export function installFeatures(controller: EditorController): void {
-  installCanvasOps(controller);
-  installSelection(controller);
-  installPainting(controller);
-  installRetouch(controller);
-  installAdjustments(controller);
-  installSubject(controller);
-  installGuides(controller);
+export function installFeatures(controller: EditorController, profile: EditorProfile = controller.profile): void {
+  const enabled = new Set(profile.modules);
+  if (enabled.has('canvas')) installCanvasOps(controller);
+  if (enabled.has('selection')) installSelection(controller);
+  if (enabled.has('painting')) installPainting(controller);
+  if (enabled.has('retouch')) installRetouch(controller);
+  if (enabled.has('adjustments')) installAdjustments(controller);
+  if (enabled.has('subject')) installSubject(controller);
+  if (enabled.has('guides')) installGuides(controller);
+  const tools = new Set(profile.tools);
+  for (const tool of controller.availableTools) if (!tools.has(tool)) controller.availableTools.delete(tool);
 }

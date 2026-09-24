@@ -5,13 +5,19 @@
 
 import type { HostAdapter } from '../../contracts';
 import type { ImageDecoderHost } from './imageDecoder';
+import { sha256Hex } from '../io/sha256';
+import type {
+  CapabilityHost, CodecHost, ComputeHost, FileSaveKind, FileSaveTarget, FileSystemHost, FontHost,
+  HostCapabilityMap, ModelHost, SystemFont,
+} from './hosts/types';
+import { bindCapabilityRegistry } from './hosts/types';
 
 export type { HostDecodedImage, ImageDecoderHost } from './imageDecoder';
 
 /** A place a file was saved to, which Save can overwrite later without asking again. */
-export interface SaveTarget { readonly name: string }
+export type SaveTarget = FileSaveTarget;
 
-export type SaveKind = 'project' | 'png' | 'jpeg';
+export type SaveKind = FileSaveKind;
 
 /**
  * Optional host capabilities beyond the shared contract: choosing where to save (null when the user cancels) and
@@ -19,7 +25,7 @@ export type SaveKind = 'project' | 'png' | 'jpeg';
  * Choosing comes first and on its own: a browser only shows its save dialog while it still counts the user's click
  * or key press, so the (possibly slow) encoding must happen afterwards.
  */
-export interface FileTargetHost extends HostAdapter, ImageDecoderHost {
+export interface FileTargetHost extends CapabilityHost, ImageDecoderHost {
   chooseSaveTarget?(suggestedName: string, kind: SaveKind): Promise<SaveTarget | null>;
   saveFileTo?(target: SaveTarget, blob: Blob): Promise<void>;
 }
@@ -31,6 +37,9 @@ const PICKER_TYPES = {
 } as const;
 
 interface HandleTarget extends SaveTarget { readonly handle: FileSystemFileHandle }
+
+interface LocalFontData { readonly family: string; readonly fullName: string; readonly postscriptName: string; blob(): Promise<Blob> }
+type QueryLocalFonts = () => Promise<readonly LocalFontData[]>;
 
 /** Writes through a writable stream: the browser swaps the file in only when the stream closes, so a failed save leaves the old file. */
 async function writeHandle(handle: FileSystemFileHandle, blob: Blob): Promise<void> {
@@ -54,11 +63,99 @@ function pick(accept: string, multiple: boolean): Promise<File[]> {
   });
 }
 
+function browserFonts(): FontHost {
+  const query = (globalThis as { queryLocalFonts?: QueryLocalFonts }).queryLocalFonts?.bind(globalThis);
+  const cache = new Map<string, LocalFontData>();
+  return {
+    version: 1,
+    async listSystemFonts(): Promise<readonly SystemFont[]> {
+      if (!query) return [];
+      const fonts = await query().catch(() => []);
+      cache.clear();
+      return fonts.map((font, index) => {
+        const id = `${font.postscriptName}\u0000${index}`;
+        cache.set(id, font);
+        return { id, family: font.family, style: font.fullName.slice(font.family.length).trim() || 'Regular', postscriptName: font.postscriptName };
+      });
+    },
+    async loadSystemFont(id: string): Promise<Uint8Array> {
+      let font = cache.get(id);
+      if (!font) { await this.listSystemFonts(); font = cache.get(id); }
+      if (!font) throw new Error('The selected system font is no longer available.');
+      return new Uint8Array(await (await font.blob()).arrayBuffer());
+    },
+  };
+}
+
+function browserCompute(): ComputeHost {
+  return {
+    version: 1,
+    async run(job, input) {
+      if (job !== 'checksum-sha256') return null;
+      return { bytes: new TextEncoder().encode(sha256Hex(input)), metadata: { algorithm: 'sha256' } };
+    },
+  };
+}
+
+function browserModels(): ModelHost {
+  const cacheName = 'fernwork-models-v1';
+  return {
+    version: 1,
+    async resolveModel(request, progress, signal) {
+      const key = new Request(`https://fernwork-model-cache.invalid/${encodeURIComponent(request.id)}/${request.sha256}`);
+      const storage = typeof caches === 'undefined' ? null : await caches.open(cacheName).catch(() => null);
+      const saved = await storage?.match(key);
+      if (saved) {
+        const bytes = new Uint8Array(await saved.arrayBuffer());
+        if (sha256Hex(bytes) === request.sha256) return { bytes, cacheHit: true };
+        await storage?.delete(key).catch(() => false);
+      }
+      const source = request.url;
+      if (!source || !request.userInitiated) return null;
+      const response = await fetch(source, { signal });
+      if (!response.ok) throw new Error(`Model download failed with HTTP ${response.status}.`);
+      const totalHeader = Number(response.headers.get('content-length'));
+      const total = Number.isFinite(totalHeader) && totalHeader >= 0 ? totalHeader : null;
+      const chunks: Uint8Array[] = [];
+      let length = 0;
+      if (response.body) {
+        const reader = response.body.getReader();
+        for (;;) {
+          const item = await reader.read();
+          if (item.done) break;
+          chunks.push(item.value); length += item.value.byteLength; progress?.(length, total);
+        }
+      } else {
+        const bytes = new Uint8Array(await response.arrayBuffer()); chunks.push(bytes); length = bytes.byteLength;
+      }
+      const bytes = new Uint8Array(length); let at = 0;
+      for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.byteLength; }
+      if (sha256Hex(bytes) !== request.sha256) throw new Error('Downloaded model checksum does not match its manifest.');
+      await storage?.put(key, new Response(bytes.slice())).catch(() => undefined);
+      return { bytes, cacheHit: false };
+    },
+  };
+}
+
 export function createBrowserHost(): FileTargetHost {
   // Bound to window: called detached, the browser throws "Illegal invocation".
   const pickerFunction = (globalThis as { showSaveFilePicker?: (options: unknown) => Promise<FileSystemFileHandle> }).showSaveFilePicker;
   const picker = pickerFunction?.bind(globalThis);
-  const targets = picker ? {
+  const openFunction = (globalThis as { showOpenFilePicker?: (options: unknown) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker?.bind(globalThis);
+  const listeners = new Set<(files: readonly { name: string; id: string }[]) => void>();
+  const recent: { name: string; id: string }[] = [];
+  const openHandles = new Map<string, FileSystemFileHandle>();
+  let nextHandle = 1;
+  const files: FileSystemHost | undefined = picker && openFunction ? {
+    version: 1,
+    async chooseFiles(kind) {
+      let handles: FileSystemFileHandle[];
+      try {
+        handles = await openFunction({ multiple: kind === 'images', types: kind === 'project'
+          ? [PICKER_TYPES.project] : [{ description: 'Images', accept: { 'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.avif', '.gif', '.tif', '.tiff', '.heic', '.heif'] } }] });
+      } catch (error) { if ((error as DOMException).name === 'AbortError') return []; throw error; }
+      return handles.map((handle) => { const id = `browser-handle-${nextHandle++}`; openHandles.set(id, handle); return { id, name: handle.name }; });
+    },
     async chooseSaveTarget(suggestedName: string, kind: SaveKind): Promise<SaveTarget | null> {
       let handle: FileSystemFileHandle;
       try { handle = await picker({ suggestedName, types: [PICKER_TYPES[kind]] }); } catch (error) {
@@ -67,9 +164,29 @@ export function createBrowserHost(): FileTargetHost {
       }
       return { name: handle.name, handle } as HandleTarget;
     },
-    async saveFileTo(target: SaveTarget, blob: Blob): Promise<void> { await writeHandle((target as HandleTarget).handle, blob); },
+    async writeFile(target: SaveTarget, blob: Blob): Promise<void> { await writeHandle((target as HandleTarget).handle, blob); },
+    async recentFiles() { return recent.slice(); },
+    async recordRecentFile(file) { const index = recent.findIndex((item) => item.id === file.id); if (index >= 0) recent.splice(index, 1); recent.unshift(file); recent.splice(20); },
+    onOpenFiles(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    async readFile(file) { const handle = openHandles.get(file.id); if (!handle) throw new Error('The browser file handle has expired.'); return handle.getFile(); },
+    saveTargetFor(file) { const handle = openHandles.get(file.id); return handle ? { name: file.name, handle } as HandleTarget : null; },
+  } : undefined;
+  const codecs: CodecHost = { version: 1 };
+  const capabilities: HostCapabilityMap = {
+    files,
+    fonts: browserFonts(),
+    codecs,
+    compute: browserCompute(),
+    models: browserModels(),
+    color: { version: 1, async displayProfile() { return { name: 'sRGB', bytes: null, assumed: true }; } },
+  };
+  const targets = files ? {
+    chooseSaveTarget: files.chooseSaveTarget.bind(files),
+    saveFileTo: files.writeFile.bind(files),
   } : {};
-  return {
+  const host: FileTargetHost = {
+    defaultProfile: 'lite',
+    capabilities,
     ...targets,
     async chooseImages() {
       return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,image/webp,image/avif,image/gif,.heic,.heif,.tif,.tiff,.webp,.avif,.gif', true);
@@ -87,4 +204,5 @@ export function createBrowserHost(): FileTargetHost {
     },
     reportError(error) { console.warn(`[compositor] ${error.code}: ${error.message}`); },
   };
+  return bindCapabilityRegistry(host);
 }

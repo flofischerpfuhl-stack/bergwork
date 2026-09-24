@@ -2,5 +2,5 @@
 export async function startStandalone(root: HTMLElement): Promise<void> {
   const { mountEditor } = await import('../index');
   const { createBrowserHost } = await import('../platform/browserHost');
-  await mountEditor(root, { host: createBrowserHost(), locale: navigator.language.startsWith('de') ? 'de' : 'en', theme: 'dark' });
+  await mountEditor(root, { host: createBrowserHost(), profile: 'lite', locale: navigator.language.startsWith('de') ? 'de' : 'en', theme: 'dark' });
 }

@@ -27,8 +27,8 @@ import { DEFAULT_JPEG, jpegBlob, pngBlob, type JpegOptions } from '../io/export'
 import { encodePng } from '../io/png';
 import { sha256Hex } from '../io/sha256';
 import type { GpuCompositor } from '../render/gpuCompositor';
-import type { FileTargetHost, SaveTarget } from '../platform/browserHost';
-import type { ImageDecoderHost } from '../platform/imageDecoder';
+import { capabilitiesOf, type FileSaveTarget, type HostCapabilityMap, type HostFileReference } from '../platform/hosts';
+import { profileFor, type EditorProfile } from '../app/profiles';
 import { translator, type Locale } from './i18n';
 import { createUiStore, type Dialog, type UiStore } from './store';
 import { describeError, isCancellation } from './errors';
@@ -67,11 +67,13 @@ function isCompZip(bytes: Uint8Array): boolean {
 }
 
 /** Where each project was last saved, for Save without asking again. */
-const saveTargets = new WeakMap<EditorSession, SaveTarget>();
+const saveTargets = new WeakMap<EditorSession, FileSaveTarget>();
 
 export class EditorController {
   readonly workspace: ProjectWorkspace;
   readonly host: HostAdapter;
+  readonly capabilities: HostCapabilityMap;
+  readonly profile: EditorProfile;
   readonly t: (text: string) => string;
   readonly locale: Locale;
   readonly theme: 'dark' | 'light';
@@ -156,8 +158,10 @@ export class EditorController {
   }
   jpegOptions: JpegOptions = { ...DEFAULT_JPEG, quality: storedQuality() };
 
-  constructor(host: HostAdapter, locale: Locale, theme: 'dark' | 'light') {
+  constructor(host: HostAdapter, locale: Locale, theme: 'dark' | 'light', profile: EditorProfile = profileFor('lite')) {
     this.host = host;
+    this.capabilities = capabilitiesOf(host);
+    this.profile = profile;
     this.locale = locale;
     this.theme = theme;
     this.t = translator(locale);
@@ -178,7 +182,7 @@ export class EditorController {
 
   /** Uses optional capabilities carried by the mount host without widening contracts.ts. */
   decodeImage(bytes: Uint8Array, remainingPixels: number) {
-    return decodeImageFile(bytes, remainingPixels, { host: this.host as HostAdapter & ImageDecoderHost });
+    return decodeImageFile(bytes, remainingPixels, { host: this.capabilities.codecs });
   }
 
   get session(): EditorSession { return this.workspace.current.session; }
@@ -317,6 +321,23 @@ export class EditorController {
     } catch (error) { this.reportError('import-failed', error, this.t('Import couldn’t finish')); }
   }
 
+  /** File-association/second-instance entry point supplied by FileSystemHost. */
+  async openHostFiles(files: readonly HostFileReference[]): Promise<void> {
+    const capability = this.capabilities.files;
+    if (!capability?.readFile) return;
+    for (const reference of files) {
+      try {
+        const blob = await capability.readFile(reference);
+        if (/\.(fwimg|zip|comp)$/i.test(reference.name)) {
+          await this.openArchive(blob, reference.name);
+          const target = capability.saveTargetFor?.(reference);
+          if (target) saveTargets.set(this.session, target);
+        } else await this.importFiles([new File([blob], reference.name)]);
+        await capability.recordRecentFile(reference);
+      } catch (error) { this.reportError('open-failed', error); }
+    }
+  }
+
   async openArchive(blob: Blob, name?: string): Promise<void> {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     // A zipped macOS Compositor package (`X.comp/…`, format com.compositor.project) or this port's own archive.
@@ -374,12 +395,12 @@ export class EditorController {
     try {
       session.commitTransform();
       const name = session.projectName ?? this.workspace.current.title;
-      const host = this.host as FileTargetHost;
-      const target = host.chooseSaveTarget ? await host.chooseSaveTarget(`${name}.comp.zip`, 'project') : null;
-      if (host.chooseSaveTarget && !target) return;
+      const files = this.capabilities.files;
+      const target = files ? await files.chooseSaveTarget(`${name}.comp.zip`, 'project') : null;
+      if (files && !target) return;
       const bytes = await writeCompZip(session.document ?? document, { name, activeLayerId: session.activeLayerId });
       const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/zip' });
-      if (target && host.saveFileTo) await host.saveFileTo(target, blob);
+      if (target && files) await files.writeFile(target, blob);
       else await this.host.saveFile(blob, `${name}.comp.zip`);
     } catch (error) { this.reportError('save-failed', error); }
   }
@@ -506,17 +527,17 @@ export class EditorController {
     if (!session.document || !this.workspace.canSwitch) return;
     try {
       const name = `${session.projectName ?? this.workspace.current.title}.fwimg`;
-      const host = this.host as FileTargetHost;
+      const files = this.capabilities.files;
       let target = saveAs ? undefined : saveTargets.get(session);
-      if (!target && host.chooseSaveTarget) {
-        const chosen = await host.chooseSaveTarget(name, 'project');
+      if (!target && files) {
+        const chosen = await files.chooseSaveTarget(name, 'project');
         // Cancelled: nothing is written, so the project stays unsaved.
         if (!chosen) return;
         target = chosen;
       }
       const blob = await this.archive(session);
-      if (target && host.saveFileTo) {
-        await host.saveFileTo(target, blob);
+      if (target && files) {
+        await files.writeFile(target, blob);
         saveTargets.set(session, target);
         session.projectName = target.name.replace(/(\.fwimg|\.compositor\.zip|\.zip)$/i, '');
       } else await this.host.saveFile(blob, name);
@@ -547,15 +568,15 @@ export class EditorController {
     if (!session.document) return;
     try {
       const name = `${session.projectName ?? this.workspace.current.title}.${format === 'png' ? 'png' : 'jpg'}`;
-      const host = this.host as FileTargetHost;
-      let target: SaveTarget | null = null;
-      if (host.chooseSaveTarget) {
-        target = await host.chooseSaveTarget(name, format);
+      const files = this.capabilities.files;
+      let target: FileSaveTarget | null = null;
+      if (files) {
+        target = await files.chooseSaveTarget(name, format);
         if (!target) return;
       }
       const blob = await this.exportBlob(format);
       if (format === 'jpeg') storeQuality(this.jpegOptions.quality);
-      if (target && host.saveFileTo) await host.saveFileTo(target, blob);
+      if (target && files) await files.writeFile(target, blob);
       else await this.host.saveFile(blob, name);
     } catch (error) { this.reportError('export-failed', error); }
   }
