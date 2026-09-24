@@ -27,7 +27,7 @@ import {
   LAYER_SAMPLINGS, type LayerTransform,
 } from '../core/geometry';
 import { Raster, TILE } from '../core/raster';
-import { decodePng, encodePng } from './png';
+import { decodePng, decodePngNativeRGBA, encodePng } from './png';
 import { sha256Hex } from './sha256';
 
 export const EXTENSION_KEY = 'org.compositor.port';
@@ -66,7 +66,12 @@ export function encodedAsset(raster: Raster): EncodedAsset {
   const cached = encodedCache.get(raster);
   if (cached) return cached;
   let asset: EncodedAsset;
-  if (raster.source) asset = { bytes: raster.source.bytes, mime: raster.source.mime, sha256: raster.source.sha256 };
+  // V1 has no bit-depth field. RGBA16 is therefore canonicalized to a self-describing PNG16 asset;
+  // retaining an original TIFF here would route reload through the legacy external RGBA8 decoder.
+  if (raster.format === 'rgba16') {
+    const bytes = encodePng(raster.toPixels16(), raster.width, raster.height, 4, { bitDepth: 16 });
+    asset = { bytes, mime: 'image/png', sha256: sha256Hex(bytes) };
+  } else if (raster.source) asset = { bytes: raster.source.bytes, mime: raster.source.mime, sha256: raster.source.sha256 };
   else {
     const bytes = encodePng(raster.toPixels(), raster.width, raster.height, raster.channels);
     asset = { bytes, mime: 'image/png', sha256: sha256Hex(bytes) };
@@ -255,7 +260,7 @@ interface HistorySnapshotFile {
   document: Omit<ProjectManifestV2, 'format' | 'version' | 'name' | 'assets' | 'history'> | null;
   activeLayerId: string | null;
   revision: number;
-  tileRasters?: readonly { id: string; width: number; height: number; channels: 1 | 4; tiles: readonly (string | null)[] }[];
+  tileRasters?: readonly { id: string; width: number; height: number; channels: 1 | 4; format?: string; tiles: readonly (string | null)[] }[];
 }
 
 function writeHistory(state: PersistedHistoryState, name: string, context: V2BuildContext, files: Zippable): ProjectHistoryV2 {
@@ -278,16 +283,18 @@ function writeHistory(state: PersistedHistoryState, name: string, context: V2Bui
         if (!raster || liveRasterIds.has(raster.id) || tileRasters.some((item) => item.id === raster.id)) continue;
         const tiles = raster.tiles.map((tile) => {
           if (!tile) return null;
-          const hash = sha256Hex(tile);
+          // 16-bit tiles are stored as their little-endian bytes; the raster's format says how to read them.
+          const bytes = new Uint8Array(tile.buffer, tile.byteOffset, tile.byteLength);
+          const hash = sha256Hex(bytes);
           const assetId = `history-tile-${hash}`;
           const path = `history/tiles/${hash}.bin`;
           if (!context.assets.has(assetId)) {
             context.assets.set(assetId, { id: assetId, path, mime: 'application/octet-stream', sha256: hash, role: 'history-tile' });
-            files[path] = [tile, { level: 0 }];
+            files[path] = [bytes, { level: 0 }];
           }
           return assetId;
         });
-        tileRasters.push({ id: raster.id, width: raster.width, height: raster.height, channels: raster.channels, tiles });
+        tileRasters.push({ id: raster.id, width: raster.width, height: raster.height, channels: raster.channels, format: raster.format, tiles });
       }
     }
     const value: HistorySnapshotFile = { document: built ? {
@@ -394,11 +401,16 @@ export async function readArchive(blob: Blob, decodeImage: ImageDecoder): Promis
     if (!bytes) throw new ProjectError('missing-image', 'An image inside the project is missing or damaged. The current document has not been replaced.');
     const hash = sha256Hex(bytes);
     if (hash !== record.sha256) throw new ProjectError('missing-image', 'An image inside the project is damaged (checksum mismatch). The current document has not been replaced.');
-    let pixels: { width: number; height: number; channels: 1 | 4; data: Uint8Array };
+    let pixels: { width: number; height: number; channels: 1 | 4; data: Uint8Array | Uint16Array; bitDepth: 8 | 16 };
     if (record.mime === 'image/png') {
-      const png = decodePng(bytes);
-      pixels = png;
-    } else pixels = await decodeImage(bytes, record.mime);
+      if (mask) {
+        const png = decodePng(bytes);
+        pixels = { ...png, bitDepth: 8 };
+      } else {
+        const png = decodePngNativeRGBA(bytes);
+        pixels = { ...png, channels: 4 };
+      }
+    } else pixels = { ...await decodeImage(bytes, record.mime), bitDepth: 8 };
     if (pixels.width !== record.width || pixels.height !== record.height) invalid('asset size does not match its record');
     let data = pixels.data;
     let channels = pixels.channels;
@@ -408,12 +420,15 @@ export async function readArchive(blob: Blob, decodeImage: ImageDecoder): Promis
       for (let i = 0; i < gray.length; i++) gray[i] = data[i * 4]!;
       data = gray; channels = 1;
     } else if (!mask && channels === 1) {
-      const rgba = new Uint8Array(pixels.width * pixels.height * 4);
-      for (let i = 0; i < data.length; i++) { const v = data[i]!; rgba.set([v, v, v, 255], i * 4); }
+      const rgba = pixels.bitDepth === 16
+        ? new Uint16Array(pixels.width * pixels.height * 4) : new Uint8Array(pixels.width * pixels.height * 4);
+      const maximum = pixels.bitDepth === 16 ? 65535 : 255;
+      for (let i = 0; i < data.length; i++) { const v = data[i]!; rgba.set([v, v, v, maximum], i * 4); }
       data = rgba; channels = 4;
     }
     const raster = Raster.fromPixels(pixels.width, pixels.height, channels, data, {
-      id, source: { bytes, mime: record.mime, sha256: hash } });
+      id, format: channels === 4 && pixels.bitDepth === 16 ? 'rgba16' : channels === 4 ? 'rgba8' : 'gray8',
+      source: { bytes, mime: record.mime, sha256: hash } });
     rasters.set(id, raster);
     return raster;
   };
@@ -558,7 +573,10 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
     if (mask ? record.role !== 'mask' : record.role !== 'image') invalid('raster asset role');
     const bytes = entries[record.path];
     if (!bytes || sha256Hex(bytes) !== record.sha256) throw new ProjectError('missing-image', 'An image inside the project is missing or damaged.');
-    const decoded = record.mime === 'image/png' ? decodePng(bytes) : await decodeImage(bytes, record.mime);
+    // Image assets keep their depth: PNG16 stays 16-bit (A3); masks and other codecs are 8-bit.
+    let decoded: { width: number; height: number; channels: 1 | 4; data: Uint8Array | Uint16Array; bitDepth: 8 | 16 };
+    if (record.mime === 'image/png') decoded = mask ? { ...decodePng(bytes), bitDepth: 8 } : { ...decodePngNativeRGBA(bytes), channels: 4 };
+    else decoded = { ...await decodeImage(bytes, record.mime), bitDepth: 8 };
     if (decoded.width !== record.width || decoded.height !== record.height) invalid('asset size does not match its record');
     let data = decoded.data, channels = decoded.channels;
     if (mask && channels === 4) {
@@ -566,12 +584,14 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
       for (let i = 0; i < gray.length; i++) gray[i] = data[i * 4]!;
       data = gray; channels = 1;
     } else if (!mask && channels === 1) {
-      const rgba = new Uint8Array(decoded.width * decoded.height * 4);
-      for (let i = 0; i < data.length; i++) { const v = data[i]!; rgba[i * 4] = v; rgba[i * 4 + 1] = v; rgba[i * 4 + 2] = v; rgba[i * 4 + 3] = 255; }
+      const maximum = decoded.bitDepth === 16 ? 65535 : 255;
+      const rgba = decoded.bitDepth === 16 ? new Uint16Array(decoded.width * decoded.height * 4) : new Uint8Array(decoded.width * decoded.height * 4);
+      for (let i = 0; i < data.length; i++) { const v = data[i]!; rgba[i * 4] = v; rgba[i * 4 + 1] = v; rgba[i * 4 + 2] = v; rgba[i * 4 + 3] = maximum; }
       data = rgba; channels = 4;
     }
-    const raster = Raster.fromPixels(decoded.width, decoded.height, channels, data,
-      { id, source: { bytes, mime: record.mime, sha256: record.sha256 } });
+    const raster = Raster.fromPixels(decoded.width, decoded.height, channels, data, {
+      id, format: channels === 4 && decoded.bitDepth === 16 ? 'rgba16' : channels === 4 ? 'rgba8' : 'gray8',
+      source: { bytes, mime: record.mime, sha256: record.sha256 } });
     rasters.set(id, raster);
     return raster;
   };

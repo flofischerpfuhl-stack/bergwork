@@ -180,6 +180,9 @@ class ContinuousBrushStroke implements Stroke {
     const baseTransform = placedMask ? maskTransform(options.layer) : options.layer.transform;
     const layerRaster = options.layer.raster;
     const source = this.isMask ? options.layer.mask?.raster ?? null : layerRaster;
+    if (source?.format === 'rgba16') {
+      throw new Error('The existing 8-bit brush kernel cannot paint an rgba16 layer yet.');
+    }
     const originalWidth = placedMask?.raster.width ?? layerRaster?.width ?? Math.max(1, Math.round(options.layer.transform.size.width));
     const originalHeight = placedMask?.raster.height ?? layerRaster?.height ?? Math.max(1, Math.round(options.layer.transform.size.height));
     const originalMapping = pixelToDocument(baseTransform, originalWidth, originalHeight);
@@ -453,7 +456,9 @@ class ContinuousBrushStroke implements Stroke {
     if (state) return state;
     const col = key % this.raster.cols, row = Math.floor(key / this.raster.cols);
     const width = this.raster.tileWidth(col), height = this.raster.tileHeight(row);
-    const existing = this.raster.tiles[key];
+    const native = this.raster.tiles[key];
+    if (native instanceof Uint16Array) throw new Error('The existing 8-bit brush kernel cannot paint an rgba16 layer yet.');
+    const existing = native;
     // Raster tiles are immutable, so BrushStroke.allocateTile's base snapshot can retain the
     // original tile instead of copying it.
     const base = existing ?? null;

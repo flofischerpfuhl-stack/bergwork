@@ -23,6 +23,7 @@ export interface CompositeOptions {
 }
 
 export interface CompositeResult { readonly rgba: Uint8Array; readonly adjustmentsApplied: boolean }
+export interface CompositeFloatResult { readonly rgba: Float32Array; readonly adjustmentsApplied: boolean }
 
 interface Stack { readonly base: Layer; readonly children: readonly Layer[] }
 
@@ -210,11 +211,12 @@ class BandRenderer {
         const tileCol = Math.floor(sx / TILE), tile = raster.tiles[tileRow * raster.cols + tileCol];
         if (!tile) continue;
         const source = (tileY * raster.tileWidth(tileCol) + sx - tileCol * TILE) * 4;
-        const alpha = tile[source + 3]! / 255 * opacity;
+        const maximum = raster.maximum;
+        const alpha = tile[source + 3]! / maximum * opacity;
         if (alpha <= 0) continue;
         const offset = (py * width + px) * 4;
-        const sr = tile[source]! / 255 * alpha, sg = tile[source + 1]! / 255 * alpha,
-          sb = tile[source + 2]! / 255 * alpha;
+        const sr = tile[source]! / maximum * alpha, sg = tile[source + 1]! / maximum * alpha,
+          sb = tile[source + 2]! / maximum * alpha;
         if (mode === 'normal') {
           const inverse = 1 - alpha;
           target[offset] = sr + target[offset]! * inverse;
@@ -472,6 +474,32 @@ export function compositeRegion(document: CanvasDocument, region: Rect, options:
   return { rgba, adjustmentsApplied: !renderer.skippedAdjustment };
 }
 
+/** Float straight-alpha reference output; no 8-bit round trip occurs between layers or adjustments. */
+export function compositeRegionFloat(document: CanvasDocument, region: Rect,
+  options: CompositeOptions = {}): CompositeFloatResult {
+  if (![region.x, region.y, region.width, region.height].every(Number.isInteger)
+    || region.width < 1 || region.height < 1 || region.width > 30_000 || region.height > 30_000
+    || region.width * region.height > 100_000_000) {
+    throw new RangeError('Composite region must be positive, at most 30,000 px per side and 100 megapixels');
+  }
+  const rgba = new Float32Array(region.width * region.height * 4);
+  const renderer = new BandRenderer(document, options);
+  for (let row = 0; row < region.height; row += BAND_ROWS) {
+    const height = Math.min(BAND_ROWS, region.height - row);
+    const premultiplied = renderer.render(region.width, height, region.x, region.y + row);
+    for (let offset = 0; offset < premultiplied.length; offset += 4) {
+      const alpha = clamp01(premultiplied[offset + 3]!), target = row * region.width * 4 + offset;
+      rgba[target + 3] = alpha;
+      if (alpha > 0) {
+        rgba[target] = clamp01(premultiplied[offset]! / alpha);
+        rgba[target + 1] = clamp01(premultiplied[offset + 1]! / alpha);
+        rgba[target + 2] = clamp01(premultiplied[offset + 2]! / alpha);
+      }
+    }
+  }
+  return { rgba, adjustmentsApplied: !renderer.skippedAdjustment };
+}
+
 /**
  * Composites a target pixel grid whose pixel centres map through `viewToDocument`.
  * This is the software equivalent of `GpuCompositor.composite` and keeps viewport work bounded
@@ -490,6 +518,31 @@ export function compositeView(document: CanvasDocument, width: number, height: n
     const bandHeight = Math.min(BAND_ROWS, height - row);
     const surface = renderer.render(width, bandHeight, 0, row);
     straightBytes(surface, rgba, row * width * 4);
+  }
+  return { rgba, adjustmentsApplied: !renderer.skippedAdjustment };
+}
+
+/** Float straight-alpha viewport equivalent of `compositeView`. */
+export function compositeViewFloat(document: CanvasDocument, width: number, height: number,
+  viewToDocument: Affine, options: CompositeOptions = {}): CompositeFloatResult {
+  if (![width, height].every(Number.isInteger) || width < 1 || height < 1 || width > 30_000 || height > 30_000
+    || width * height > 100_000_000 || !Object.values(viewToDocument).every(Number.isFinite)) {
+    throw new RangeError('Composite view must be finite, positive, at most 30,000 px per side and 100 megapixels');
+  }
+  const rgba = new Float32Array(width * height * 4);
+  const renderer = new BandRenderer(document, options, viewToDocument);
+  for (let row = 0; row < height; row += BAND_ROWS) {
+    const bandHeight = Math.min(BAND_ROWS, height - row);
+    const premultiplied = renderer.render(width, bandHeight, 0, row);
+    for (let offset = 0; offset < premultiplied.length; offset += 4) {
+      const alpha = clamp01(premultiplied[offset + 3]!), target = row * width * 4 + offset;
+      rgba[target + 3] = alpha;
+      if (alpha > 0) {
+        rgba[target] = clamp01(premultiplied[offset]! / alpha);
+        rgba[target + 1] = clamp01(premultiplied[offset + 1]! / alpha);
+        rgba[target + 2] = clamp01(premultiplied[offset + 2]! / alpha);
+      }
+    }
   }
   return { rgba, adjustmentsApplied: !renderer.skippedAdjustment };
 }

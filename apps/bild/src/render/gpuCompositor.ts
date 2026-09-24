@@ -19,6 +19,7 @@ import {
 import { apply, concat, invert, pixelToDocument, type Affine, type LayerTransform, type Rect } from '../core/geometry';
 import { TILE, type Raster } from '../core/raster';
 import { blendSeed } from '../core/blend';
+import { floatToRgba16, makePixelArray, type PixelArray } from '../core/pixel/format';
 import type { BrushSegment, GpuBrushPreview } from '../core/brush';
 import {
   adjustFragment, BLEND_INDEX, BRUSH_COVERAGE_FRAGMENT, BRUSH_MASK_FRAGMENT, BRUSH_MAX_FRAGMENT, BRUSH_PAINT_FRAGMENT, COVERAGE_FRAGMENT,
@@ -61,7 +62,7 @@ export interface AdjustmentProgram {
   readonly key: string;
   readonly glsl: string;
   params(layer: Layer): Float32Array; // up to 8 vec4
-  lut?(layer: Layer): { data: Uint8Array; width: number; height: number } | null;
+  lut?(layer: Layer): { data: Uint8Array | Float32Array; width: number; height: number } | null;
 }
 export type AdjustmentProgramProvider = (layer: Layer) => AdjustmentProgram | null;
 
@@ -122,6 +123,7 @@ const BRUSH_CHUNK_SIZE = TILE;
 const BRUSH_APRON = CHUNK_APRON;
 
 const IDENTITY9 = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+const UNORM16_TO_HALF = makeUnorm16ToHalf();
 
 function mat3(m: Affine): Float32Array {
   // Column-major mat3 for GLSL.
@@ -144,8 +146,9 @@ export class GpuCompositor {
   private lutSources = new Map<string, TextureSource>();
   private brushState: BrushGpuState | null = null;
   private readonly brushTargetPool: BrushTargets[] = [];
-  /** The LUT bytes last uploaded per layer, so an unchanged adjustment is not re-uploaded every frame. */
-  private lutUploaded = new Map<string, Uint8Array>();
+  /** The LUT samples last uploaded per layer, so an unchanged adjustment is not re-uploaded every frame. */
+  private lutUploaded = new Map<string, Uint8Array | Float32Array>();
+  private highPrecisionLuts = false;
   adjustmentPrograms: AdjustmentProgramProvider = adjustmentProgram;
   /** Adjustment layers drawn without a GPU implementation in the last composite. */
   skippedAdjustments = 0;
@@ -407,6 +410,17 @@ export class GpuCompositor {
     this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, system._premultiplyAlpha);
   }
 
+  private uploadRasterData(x: number, y: number, width: number, height: number, format: number,
+    data: PixelArray): void {
+    const gl = this.gl;
+    if (data instanceof Uint16Array) {
+      // `data` is always a fresh region buffer. Reusing it for binary16 avoids a second, twice-as-large
+      // float allocation for a 4096px texture chunk.
+      for (let i = 0; i < data.length; i++) data[i] = UNORM16_TO_HALF[data[i]!]!;
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, width, height, format, gl.HALF_FLOAT, data);
+    } else gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, width, height, format, gl.UNSIGNED_BYTE, data);
+  }
+
   /**
    * Sparse chunk textures for a raster, uploading only changed tiles and neighbouring aprons.
    * Mirrors TiledLayerRenderer.piece: disjoint interiors sample a surrounding margin so they meet.
@@ -416,7 +430,7 @@ export class GpuCompositor {
     const existing = this.slots.get(slotKey);
     if (existing && existing.raster === raster) { existing.lastUsed = this.frame; return existing; }
     const compatible = existing && existing.raster.width === raster.width && existing.raster.height === raster.height
-      && existing.raster.channels === raster.channels;
+      && existing.raster.channels === raster.channels && existing.raster.format === raster.format;
     let slot: Slot;
     if (compatible) {
       slot = existing!;
@@ -448,15 +462,15 @@ export class GpuCompositor {
       const textureWidth = width + CHUNK_APRON * 2, textureHeight = height + CHUNK_APRON * 2;
       const mips = Math.floor(Math.log2(Math.max(textureWidth, textureHeight))) + 1;
       const source = new TextureSource({
-        width: textureWidth, height: textureHeight, format: raster.channels === 4 ? 'rgba8unorm' : 'r8unorm', mipLevelCount: mips,
+        width: textureWidth, height: textureHeight,
+        format: raster.format === 'rgba16' ? 'rgba16float' : raster.channels === 4 ? 'rgba8unorm' : 'r8unorm', mipLevelCount: mips,
         autoGenerateMipmaps: false, scaleMode: 'linear', mipmapFilter: 'linear', addressMode: 'clamp-to-edge', maxAnisotropy: 1,
       });
       const chunk: TextureChunk = { col, row, x, y, width, height, source,
-        bytes: mipBytes(textureWidth, textureHeight, raster.channels) };
+        bytes: mipBytes(textureWidth, textureHeight, raster.channels, raster.format === 'rgba16' ? 2 : 1) };
       slot.chunks.set(key, chunk);
       this.renderer.texture.bindSource(source, 0);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, textureWidth, textureHeight,
-        raster.channels === 4 ? gl.RGBA : gl.RED, gl.UNSIGNED_BYTE,
+      this.uploadRasterData(0, 0, textureWidth, textureHeight, raster.channels === 4 ? gl.RGBA : gl.RED,
         readClamped(raster, x - CHUNK_APRON, y - CHUNK_APRON, textureWidth, textureHeight));
       gl.generateMipmap(gl.TEXTURE_2D);
       created.add(key);
@@ -483,7 +497,7 @@ export class GpuCompositor {
       this.renderer.texture.bindSource(chunk.source, 0);
       if (bulk) {
         const tw = chunk.width + CHUNK_APRON * 2, th = chunk.height + CHUNK_APRON * 2;
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, tw, th, format, gl.UNSIGNED_BYTE,
+        this.uploadRasterData(0, 0, tw, th, format,
           readClamped(raster, chunk.x - CHUNK_APRON, chunk.y - CHUNK_APRON, tw, th));
       } else {
         for (const index of changed) {
@@ -493,8 +507,8 @@ export class GpuCompositor {
           const x1 = Math.min(tx + raster.tileWidth(tileCol), chunk.x + chunk.width);
           const y1 = Math.min(ty + raster.tileHeight(tileRow), chunk.y + chunk.height);
           if (x1 <= x0 || y1 <= y0) continue;
-          gl.texSubImage2D(gl.TEXTURE_2D, 0, x0 - chunk.x + CHUNK_APRON, y0 - chunk.y + CHUNK_APRON, x1 - x0, y1 - y0,
-            format, gl.UNSIGNED_BYTE, raster.readRegion(x0, y0, x1 - x0, y1 - y0));
+          this.uploadRasterData(x0 - chunk.x + CHUNK_APRON, y0 - chunk.y + CHUNK_APRON, x1 - x0, y1 - y0,
+            format, raster.readRegionNative(x0, y0, x1 - x0, y1 - y0));
         }
         this.uploadAprons(chunk, raster, format);
       }
@@ -508,13 +522,13 @@ export class GpuCompositor {
 
   private uploadAprons(chunk: TextureChunk, raster: Raster, format: number): void {
     const gl = this.gl, tw = chunk.width + CHUNK_APRON * 2, th = chunk.height + CHUNK_APRON * 2;
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, tw, CHUNK_APRON, format, gl.UNSIGNED_BYTE,
+    this.uploadRasterData(0, 0, tw, CHUNK_APRON, format,
       readClamped(raster, chunk.x - CHUNK_APRON, chunk.y - CHUNK_APRON, tw, CHUNK_APRON));
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, th - CHUNK_APRON, tw, CHUNK_APRON, format, gl.UNSIGNED_BYTE,
+    this.uploadRasterData(0, th - CHUNK_APRON, tw, CHUNK_APRON, format,
       readClamped(raster, chunk.x - CHUNK_APRON, chunk.y + chunk.height, tw, CHUNK_APRON));
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, CHUNK_APRON, CHUNK_APRON, chunk.height, format, gl.UNSIGNED_BYTE,
+    this.uploadRasterData(0, CHUNK_APRON, CHUNK_APRON, chunk.height, format,
       readClamped(raster, chunk.x - CHUNK_APRON, chunk.y, CHUNK_APRON, chunk.height));
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, tw - CHUNK_APRON, CHUNK_APRON, CHUNK_APRON, chunk.height, format, gl.UNSIGNED_BYTE,
+    this.uploadRasterData(tw - CHUNK_APRON, CHUNK_APRON, CHUNK_APRON, chunk.height, format,
       readClamped(raster, chunk.x + chunk.width, chunk.y, CHUNK_APRON, chunk.height));
   }
 
@@ -743,6 +757,9 @@ export class GpuCompositor {
   composite(document: CanvasDocument, view: ViewSpec, hooks: CompositeHooks = DEFAULT_HOOKS): RenderTexture {
     this.frame++;
     this.skippedAdjustments = 0;
+    // Preserve the byte-exact legacy LUT path for RGBA8-only documents. A 16-bit source opts the
+    // whole document into float LUTs so adjustment layers never introduce an 8-bit bottleneck.
+    this.highPrecisionLuts = document.layers.some((layer) => hooks.raster(layer)?.format === 'rgba16');
     const { width, height } = view;
     let acc = this.acquire(width, height);
     this.clear(acc);
@@ -1075,21 +1092,25 @@ export class GpuCompositor {
     let lut: TextureSource = this.white;
     const lutData = program?.lut?.(layer);
     if (lutData) {
-      const lutKey = `${layer.id}`;
+      const useFloat = this.highPrecisionLuts && lutData.data instanceof Float32Array;
+      const uploadData = useFloat || lutData.data instanceof Uint8Array ? lutData.data : byteLut(lutData.data);
+      const lutKey = `${layer.id}:${useFloat ? 'float' : 'byte'}`;
       let source = this.lutSources.get(lutKey);
       if (!source || source.width !== lutData.width || source.height !== lutData.height) {
         source?.destroy();
         this.lutUploaded.delete(lutKey);
-        source = new TextureSource({ width: lutData.width, height: lutData.height, format: 'rgba8unorm',
+        source = new TextureSource({ width: lutData.width, height: lutData.height,
+          format: useFloat ? 'rgba16float' : 'rgba8unorm',
           scaleMode: 'linear', addressMode: 'clamp-to-edge' });
         this.lutSources.set(lutKey, source);
       }
-      if (this.lutUploaded.get(lutKey) !== lutData.data) {
+      if (this.lutUploaded.get(lutKey) !== uploadData) {
         this.renderer.texture.bindSource(source, 0);
         this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-        this.gl.texSubImage2D(this.gl.TEXTURE_2D, 0, 0, 0, lutData.width, lutData.height, this.gl.RGBA, this.gl.UNSIGNED_BYTE, lutData.data);
+        this.gl.texSubImage2D(this.gl.TEXTURE_2D, 0, 0, 0, lutData.width, lutData.height, this.gl.RGBA,
+          useFloat ? this.gl.FLOAT : this.gl.UNSIGNED_BYTE, uploadData);
         this.restoreUnpack();
-        this.lutUploaded.set(lutKey, lutData.data);
+        this.lutUploaded.set(lutKey, uploadData);
       }
       lut = source;
     }
@@ -1172,6 +1193,39 @@ export class GpuCompositor {
     return out;
   }
 
+  /** Straight-alpha float readback from the rgba16float pipeline. */
+  readRegionFloat(document: CanvasDocument, x: number, y: number, width: number, height: number,
+    hooks: CompositeHooks = DEFAULT_HOOKS): Float32Array {
+    return this.readViewFloat(document, width, height, { a: 1, b: 0, c: 0, d: 1, tx: x, ty: y }, 1, hooks);
+  }
+
+  readRegion16(document: CanvasDocument, x: number, y: number, width: number, height: number,
+    hooks: CompositeHooks = DEFAULT_HOOKS): Uint16Array {
+    return floatToRgba16(this.readRegionFloat(document, x, y, width, height, hooks));
+  }
+
+  readViewFloat(document: CanvasDocument, width: number, height: number, viewToDoc: Affine, scale: number,
+    hooks: CompositeHooks = DEFAULT_HOOKS): Float32Array {
+    if (!this.floatTargets) throw new Error('Float readback requires EXT_color_buffer_float.');
+    const out = new Float32Array(width * height * 4);
+    const step = Math.min(2048, this.maxTextureSize);
+    for (let ty = 0; ty < height; ty += step) for (let tx = 0; tx < width; tx += step) {
+      const w = Math.min(step, width - tx), h = Math.min(step, height - ty);
+      const view: ViewSpec = { width: w, height: h, scale, snap: false,
+        viewToDoc: concat({ a: 1, b: 0, c: 0, d: 1, tx, ty }, viewToDoc) };
+      const rt = this.composite(document, view, hooks);
+      const straight = RenderTexture.create({ width: w, height: h, format: 'rgba16float', antialias: false, resolution: 1 });
+      this.run(this.pass('unpremultiply'), straight, w, h, { uSource: rt.source }, {});
+      this.release(rt);
+      const pixels = this.readFloatPixels(straight, w, h);
+      straight.destroy(true);
+      for (let row = 0; row < h; row++) {
+        out.set(pixels.subarray(row * w * 4, (row + 1) * w * 4), ((ty + row) * width + tx) * 4);
+      }
+    }
+    return out;
+  }
+
   /** Reads an RGBA8 render texture top row first. */
   readPixels(rt: RenderTexture, width: number, height: number): Uint8Array {
     const gl = this.gl;
@@ -1184,6 +1238,17 @@ export class GpuCompositor {
       return flipped;
     }
     return pixels;
+  }
+
+  private readFloatPixels(rt: RenderTexture, width: number, height: number): Float32Array {
+    const gl = this.gl;
+    this.renderer.renderTarget.bind({ target: rt, clear: false });
+    const pixels = new Float32Array(width * height * 4);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.FLOAT, pixels);
+    if (!this.renderTargetFlipped()) return pixels;
+    const row = width * 4, flipped = new Float32Array(pixels.length);
+    for (let y = 0; y < height; y++) flipped.set(pixels.subarray(y * row, (y + 1) * row), (height - 1 - y) * row);
+    return flipped;
   }
 
   /** Whether Pixi stores render textures bottom-up in GL memory (probed once). */
@@ -1231,13 +1296,13 @@ function parseChunkKey(key: string): [number, number] {
 }
 
 /** Contiguous pixels with coordinates beyond the raster repeated from its outermost texels. */
-function readClamped(raster: Raster, x: number, y: number, width: number, height: number): Uint8Array {
+function readClamped(raster: Raster, x: number, y: number, width: number, height: number): PixelArray {
   const ch = raster.channels;
   const sx0 = Math.max(0, x), sy0 = Math.max(0, y);
   const sx1 = Math.min(raster.width, x + width), sy1 = Math.min(raster.height, y + height);
   const sourceWidth = sx1 - sx0, sourceHeight = sy1 - sy0;
-  const source = raster.readRegion(sx0, sy0, sourceWidth, sourceHeight);
-  const out = new Uint8Array(width * height * ch);
+  const source = raster.readRegionNative(sx0, sy0, sourceWidth, sourceHeight);
+  const out = makePixelArray(raster.format, width * height * ch);
   const left = sx0 - x;
   for (let dy = 0; dy < height; dy++) {
     const sy = Math.max(0, Math.min(sourceHeight - 1, y + dy - sy0));
@@ -1251,10 +1316,10 @@ function readClamped(raster: Raster, x: number, y: number, width: number, height
   return out;
 }
 
-function mipBytes(width: number, height: number, channels: 1 | 4): number {
+function mipBytes(width: number, height: number, channels: 1 | 4, bytesPerSample = 1): number {
   let bytes = 0;
   while (true) {
-    bytes += width * height * channels;
+    bytes += width * height * channels * bytesPerSample;
     if (width === 1 && height === 1) return bytes;
     width = Math.max(1, Math.floor(width / 2));
     height = Math.max(1, Math.floor(height / 2));
@@ -1282,6 +1347,27 @@ function intersect(a: Rect, b: Rect): Rect | null {
   const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
   const right = Math.min(a.x + a.width, b.x + b.width), bottom = Math.min(a.y + a.height, b.y + b.height);
   return right > x && bottom > y ? { x, y, width: right - x, height: bottom - y } : null;
+}
+
+function makeUnorm16ToHalf(): Uint16Array {
+  const table = new Uint16Array(65536);
+  for (let sample = 1; sample < 65536; sample++) {
+    const value = sample / 65535;
+    if (value < 2 ** -14) table[sample] = Math.round(value * 2 ** 24);
+    else {
+      let exponent = Math.floor(Math.log2(value));
+      let mantissa = Math.round((value / 2 ** exponent - 1) * 1024);
+      if (mantissa === 1024) { exponent++; mantissa = 0; }
+      table[sample] = ((exponent + 15) << 10) | mantissa;
+    }
+  }
+  return table;
+}
+
+function byteLut(data: Float32Array): Uint8Array {
+  const bytes = new Uint8Array(data.length);
+  for (let i = 0; i < data.length; i++) bytes[i] = Math.round(Math.min(1, Math.max(0, data[i]!)) * 255);
+  return bytes;
 }
 
 function unionRect(a: Rect | null, b: Rect): Rect {

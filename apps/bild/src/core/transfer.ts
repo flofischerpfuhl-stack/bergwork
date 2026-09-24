@@ -6,13 +6,15 @@
 
 import type { CanvasDocument, Layer } from './document';
 import { Raster, type Channels, type EncodedSource } from './raster';
+import type { PixelArray, RasterFormat } from './pixel/format';
 
 export interface RasterTransfer {
   id: string;
   width: number;
   height: number;
   channels: Channels;
-  tiles: (Uint8Array | null)[];
+  format: RasterFormat;
+  tiles: (PixelArray | null)[];
   source: EncodedSource | null;
 }
 export type LayerTransfer = Omit<Layer, 'raster' | 'mask'> & {
@@ -25,14 +27,17 @@ export type DocumentTransfer = Omit<CanvasDocument, 'layers' | 'selection'> & {
 };
 
 export function rasterToTransfer(raster: Raster): RasterTransfer {
-  return { id: raster.id, width: raster.width, height: raster.height, channels: raster.channels, tiles: raster.tiles.slice(), source: raster.source };
+  return { id: raster.id, width: raster.width, height: raster.height, channels: raster.channels,
+    format: raster.format, tiles: raster.tiles.slice(), source: raster.source };
 }
 
 export function rasterFromTransfer(value: RasterTransfer, known?: ReadonlyMap<string, Raster>): Raster {
   const original = known?.get(value.id);
   // Rasters are immutable: the same id always means the same pixels.
-  if (original && original.width === value.width && original.height === value.height && original.channels === value.channels) return original;
-  return new Raster(value.width, value.height, value.channels, value.tiles, { id: value.id, source: value.source });
+  if (original && original.width === value.width && original.height === value.height
+    && original.channels === value.channels && original.format === value.format) return original;
+  return new Raster(value.width, value.height, value.channels, value.tiles,
+    { id: value.id, source: value.source, format: value.format });
 }
 
 export function documentToTransfer(document: CanvasDocument): DocumentTransfer {

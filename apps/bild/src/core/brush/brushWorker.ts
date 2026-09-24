@@ -71,7 +71,8 @@ scope.addEventListener('message', (event: MessageEvent<BrushWorkerRequest>) => {
       const started = performance.now();
       const options = request.options;
       const source = options.target === 'mask' ? options.layer.mask?.raster : options.layer.raster;
-      sourceTiles = options.patchable && source ? source.tiles : null;
+      if (source?.format === 'rgba16') throw new Error('The existing 8-bit brush worker cannot paint an rgba16 layer yet.');
+      sourceTiles = options.patchable && source ? source.tiles as (Uint8Array | null)[] : null;
       stroke = beginSettledStroke({ layer: layerFromTransfer(options.layer), canvas: options.canvas,
         settings: options.settings, target: options.target, pixelLimit: options.pixelLimit, tilePartition: options.partition });
       previous = stroke.currentRaster();

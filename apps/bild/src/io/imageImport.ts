@@ -11,13 +11,14 @@
 
 import { Raster } from '../core/raster';
 import { MAX_SIDE } from '../core/document';
-import { decodePng, decodePngColorSamples, pngDimensions } from './png';
+import { decodePng, decodePngColorSamples, decodePngNativeRGBA, pngDimensions } from './png';
 import { decodeJpegSamples } from './jpeg';
 import { orientedSize, readJpegComponentCount, readJpegIccProfile, readJpegInfo, type JpegInfo } from './jpegMeta';
 import { sha256Hex } from './sha256';
-import { decodeTiff, TiffError, tiffDimensions } from './tiff';
+import { decodeTiffNative, TiffError, tiffDimensions } from './tiff';
 import { decodeHeic, HeicError, heicDimensions, isHeic, orientRgba, type HeicDecodeOptions } from './heic';
 import { IccError, loadLittleCms, type Chromaticities } from '../wasm/lcms';
+import { rgba8To16 } from '../core/pixel/format';
 
 export class ImageImportError extends Error {
   readonly code: 'unreadable' | 'unsupported' | 'too-large';
@@ -79,7 +80,9 @@ const SRGB_CHROMATICITIES: Chromaticities = {
   white: [0.3127, 0.3290], red: [0.64, 0.33], green: [0.30, 0.60], blue: [0.15, 0.06],
 };
 
-async function decodeManagedPng(bytes: Uint8Array): Promise<{ width: number; height: number; data: Uint8Array }> {
+async function decodeManagedPng(bytes: Uint8Array): Promise<{
+  width: number; height: number; data: Uint8Array | Uint16Array; bitDepth?: 8 | 16;
+}> {
   const png = decodePngColorSamples(bytes), lcms = await loadLittleCms();
   let profile = png.iccProfile;
   if (!profile) {
@@ -88,8 +91,11 @@ async function decodeManagedPng(bytes: Uint8Array): Promise<{ width: number; hei
       ? lcms.createGrayProfile(png.chromaticities?.white ?? SRGB_CHROMATICITIES.white, gamma)
       : lcms.createRgbProfile(png.chromaticities ?? SRGB_CHROMATICITIES, gamma, png.gamma === null ? 'srgb' : 'gamma');
   }
+  // The current LittleCMS WASM wrapper emits RGB8. Keep the 16-bit storage contract while
+  // documenting that profile conversion has already reduced the source precision.
+  const converted = lcms.transform(profile, png.colors, png.model, png.bits, png.alpha);
   return { width: png.width, height: png.height,
-    data: lcms.transform(profile, png.colors, png.model, png.bits, png.alpha) };
+    data: png.bits === 16 ? rgba8To16(converted) : converted, bitDepth: png.bits };
 }
 
 async function decodeJpeg(bytes: Uint8Array, info: JpegInfo): Promise<{ width: number; height: number; data: Uint8Array }> {
@@ -135,7 +141,7 @@ export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number
     throw new ImageImportError('unreadable');
   }
   if (width && height && (width > MAX_SIDE || height > MAX_SIDE || width * height > remainingPixels)) throw new ImageImportError('too-large');
-  let pixels: { width: number; height: number; data: Uint8Array };
+  let pixels: { width: number; height: number; data: Uint8Array | Uint16Array; bitDepth?: 8 | 16 };
   if (kind === 'image/png') {
     let png: ReturnType<typeof decodePng>;
     try { png = decodePng(bytes); } catch { throw new ImageImportError('unreadable'); }
@@ -147,28 +153,29 @@ export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number
       try { pixels = await decodeManagedPng(bytes); }
       catch (error) {
         if (!(error instanceof IccError) && !(error instanceof RangeError)) throw error;
-        pixels = png.channels === 4 ? png : grayToRgba(png.data, png.width, png.height);
+        const native = decodePngNativeRGBA(bytes);
+        pixels = { width: native.width, height: native.height, data: native.data, bitDepth: native.bitDepth };
       }
     }
-    else if (png.channels === 4) pixels = png;
     else {
-      pixels = grayToRgba(png.data, png.width, png.height);
+      const native = decodePngNativeRGBA(bytes);
+      pixels = { width: native.width, height: native.height, data: native.data, bitDepth: native.bitDepth };
     }
   } else if (kind === 'image/tiff') {
-    try { pixels = await decodeTiff(bytes); }
+    try { pixels = await decodeTiffNative(bytes); }
     catch (error) {
       if (error instanceof TiffError && error.code === 'dimensions') throw new ImageImportError('too-large');
       if (error instanceof TiffError && error.code === 'unsupported') throw new ImageImportError('unsupported', error.message);
       throw new ImageImportError('unreadable');
     }
   } else if (kind === 'image/heic') {
-    try { pixels = await decodeHeic(bytes, options); }
+    try { pixels = { ...await decodeHeic(bytes, options), bitDepth: 8 }; }
     catch (error) {
       if (error instanceof HeicError && error.code === 'unsupported') throw new ImageImportError('unsupported', error.message);
       throw new ImageImportError('unreadable');
     }
   } else if (kind === 'image/jpeg') {
-    try { pixels = await decodeJpeg(bytes, jpegInfo!); }
+    try { pixels = { ...await decodeJpeg(bytes, jpegInfo!), bitDepth: 8 }; }
     catch (error) {
       if (error instanceof ImageImportError) throw error;
       throw new ImageImportError('unreadable');
@@ -191,7 +198,10 @@ export async function decodeImageFile(bytes: Uint8Array, remainingPixels: number
     pixels = await decodeMeasuredNative(bytes, kind, options.nativeDecoder);
   }
   if (pixels.width > MAX_SIDE || pixels.height > MAX_SIDE || pixels.width * pixels.height > remainingPixels) throw new ImageImportError('too-large');
-  return Raster.fromPixels(pixels.width, pixels.height, 4, pixels.data, { source: { bytes, mime: kind, sha256: sha256Hex(bytes) } });
+  return Raster.fromPixels(pixels.width, pixels.height, 4, pixels.data, {
+    format: pixels.bitDepth === 16 ? 'rgba16' : 'rgba8',
+    source: { bytes, mime: kind, sha256: sha256Hex(bytes) },
+  });
 }
 
 async function decodeMeasuredNative(bytes: Uint8Array, kind: ImageKind,
