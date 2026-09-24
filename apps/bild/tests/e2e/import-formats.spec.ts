@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 
+// Resource-timing assertions below: the dev server loads more than the default 250 entries, after which the browser stops
+// recording, so a late lazy load (libheif, CanvasKit) would look absent.
+test.beforeEach(async ({ page }) => { await page.addInitScript(() => performance.setResourceTimingBufferSize(100_000)); });
+
 const ANIMATED_GIF = 'R0lGODlhBAACAPEAAP8AAAD/AP///wAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQAZAAAACH/C0ltYWdlTWFnaWNrDmdhbW1hPTAuNDU0NTQ1ACwAAAAABAACAAACBAQShgUAIfkEAGQAAAAh/wtJbWFnZU1hZ2ljaw5nYW1tYT0wLjQ1NDU0NQAsAAAAAAQAAgCAAAD/////AgOEbwUAOw==';
 const ANIMATED_WEBP = 'UklGRooAAABXRUJQVlA4WAoAAAACAAAAAwAAAQAAQU5JTQYAAAAAAP//AABBTk1GLgAAAAAAAAAAAAMAAAEAAOgDAAJWUDhMFgAAAC8DQAAAD7D/8x/zHxUUAgiAgiai//FBTk1GKAAAAAAAAAAAAAMAAAEAAOgDAABWUDhMDwAAAC8DQAAABxDR//4HIqL/AQA=';
 

@@ -1,6 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 import { exportedPixels, mountForTest } from './helpers';
 
+// Resource-timing assertions below: the dev server loads more than the default 250 entries, after which the browser stops
+// recording, so a late lazy load (libheif, CanvasKit) would look absent.
+test.beforeEach(async ({ page }) => { await page.addInitScript(() => performance.setResourceTimingBufferSize(100_000)); });
+
 /** The Type tool end to end (PRODUCT-PLAN A5, 6.6, P11): typing, formatting, undo, re-editing, scripts, fonts, export. */
 
 async function newCanvas(page: Page, width = 800, height = 500): Promise<void> {

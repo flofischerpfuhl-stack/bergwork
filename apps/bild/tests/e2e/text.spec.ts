@@ -1,5 +1,9 @@
 import { expect, test } from '@playwright/test';
 
+// Resource-timing assertions below: the dev server loads more than the default 250 entries, after which the browser stops
+// recording, so a late lazy load (libheif, CanvasKit) would look absent.
+test.beforeEach(async ({ page }) => { await page.addInitScript(() => performance.setResourceTimingBufferSize(100_000)); });
+
 const EXPECTED_TEXT_SHA256 = '522e3687d43de15bfeb1eff5842eda1283c6d4248db2932a0b97979aaddec978';
 
 test('A5 rich text model is deterministic, lazy, editable, and within the 500-character budget', async ({ page }, info) => {

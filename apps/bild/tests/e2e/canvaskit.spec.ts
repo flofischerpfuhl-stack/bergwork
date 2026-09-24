@@ -4,6 +4,10 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { expect, test } from '@playwright/test';
 
+// Resource-timing assertions below: the dev server loads more than the default 250 entries, after which the browser stops
+// recording, so a late lazy load (libheif, CanvasKit) would look absent.
+test.beforeEach(async ({ page }) => { await page.addInitScript(() => performance.setResourceTimingBufferSize(100_000)); });
+
 const EXPECTED_SHEET_SHA256 = '1349069eba083c0c4618488b7dd7ee560ed1253e4948988cfc5818acc5e3977e';
 
 function gzipBytes(file: string): number {

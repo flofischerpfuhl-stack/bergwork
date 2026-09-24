@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 
+// Resource-timing assertions below: the dev server loads more than the default 250 entries, after which the browser stops
+// recording, so a late lazy load (libheif, CanvasKit) would look absent.
+test.beforeEach(async ({ page }) => { await page.addInitScript(() => performance.setResourceTimingBufferSize(100_000)); });
+
 const fixture = readFileSync(new URL('./heic-quadrants.heic', import.meta.url)).toString('base64');
 
 async function mount(page: Page, enableWasm: boolean): Promise<void> {
