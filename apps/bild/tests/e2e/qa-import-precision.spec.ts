@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
-import { compareRgba, importAndRead, mountBare, QA_DIR, qaCorpus } from './qa-helpers';
+import { compareRgba, importAndRead, mountBare, QA_DIR, qaCorpus, qaCorpusUnavailable } from './qa-helpers';
 
 /**
  * QA: precision of the import paths. A 2048-step 16-bit ramp must keep far more than 256 levels whatever
@@ -9,6 +9,7 @@ import { compareRgba, importAndRead, mountBare, QA_DIR, qaCorpus } from './qa-he
  * and lossless formats must keep colour exactly, also under low alpha.
  */
 qaCorpus();
+test.beforeEach(() => { test.skip(!!qaCorpusUnavailable(), qaCorpusUnavailable() ?? ''); });
 
 const distinctRed = (pixels16: Uint16Array | null, width: number) => {
   const seen = new Set<number>();

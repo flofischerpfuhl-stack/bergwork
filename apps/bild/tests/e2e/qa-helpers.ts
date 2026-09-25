@@ -13,9 +13,20 @@ export interface QaCase {
   alpha?: boolean; bits?: 8 | 16; note?: string;
 }
 
+let unavailable: string | null = null;
+
+/** Why the generated corpus is missing (e.g. no numpy/Pillow in a sandbox), or null when it is there. */
+export function qaCorpusUnavailable(): string | null { return unavailable; }
+
 export function qaCorpus(): QaCase[] {
   if (!fs.existsSync(path.join(QA_DIR, 'manifest.json'))) {
-    execFileSync('python3', [fileURLToPath(new URL('../qa-tools/make_files.py', import.meta.url)), QA_DIR], { stdio: 'inherit' });
+    try {
+      execFileSync('python3', [fileURLToPath(new URL('../qa-tools/make_files.py', import.meta.url)), QA_DIR], { stdio: 'pipe' });
+    } catch (error) {
+      // The generator needs python3 with numpy and Pillow; environments without them skip these specs instead of failing.
+      unavailable = `QA corpus generator unavailable: ${(error as Error).message.split('\n')[0]}`;
+      return [];
+    }
   }
   return JSON.parse(fs.readFileSync(path.join(QA_DIR, 'manifest.json'), 'utf8')) as QaCase[];
 }
