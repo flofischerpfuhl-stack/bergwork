@@ -124,6 +124,58 @@ Status per row: `artifacts/roadmap-status.md`. New measurement findings M9–M11
 - **Nutzertest (A9):** collected later, by owner decision. Phase 1 counts as technically done.
 - **WebKitGTK:** the brush Pro budget of 16 ms is still not reached (M10).
 
+## Phase 2 (PRODUCT-PLAN.md), 2026-09-24/25
+
+Owner decisions: Phase 2 started in parallel with the close of Phase 1; the A9 user test with real Photoshop users is collected
+later; licence question M13 (MPL-2.0/Unicode-3.0 via Tauri) awaits legal advice, so the Tauri app stays an internal build.
+
+**Phase 1 closed.** A4 (swapping + journal) is merged. The 200-MP / 20-layer workflow (navigate, stroke on a swapped layer,
+adjustment, undo/redo, streaming save, reopen, 20/20 exact pixel checks) completes in Chromium (6.4 GiB peak RSS) and in the Linux
+Tauri build (4.3 GiB peak; before the fix it was killed at 16 GiB). Evidence: `artifacts/a4-storage.md`,
+`artifacts/a4d-memory.md`. The latency gates at 200 MP are still open.
+
+**Phase 2 in `integration`, each item with engine, UI, three-browser e2e and German UI:**
+- Text: CanvasKit, point and area text, typography, OpenType, missing-font handling. Identical pixels in all three browsers.
+- Vector: parametric shapes, pen, direct selection, booleans, vector masks, line markers.
+- Layer styles: drop shadow, stroke, outer glow, colour/gradient overlay. PSD import.
+- Export As: one pipeline for PNG/JPEG/WebP/AVIF/TIFF, @1x/2x/3x, per artboard/layer, size preview. Artboard tool with presets.
+- Adjustments: Basic, Colour Lookup (.cube), Colour (B&W/balance/selective), photo filter, channel mixer and more. Smart filters
+  as a live stack (sharpen, high pass, denoise). Dodge/burn/sponge as brush modes.
+- Embedded/linked content: Place, Replace Contents, Edit Contents, SVG. PDF only through a host capability, because the
+  Fernwork PDFium build is `releaseApproved: false`.
+- Object selection: SlimSAM (Apache-2.0), downloaded only after a user action. Refine Edge, Quick Mask, Colour Range.
+- Colour panel, swatches (.aco/.ase), recent colours, eyedropper everywhere (screen eyedropper via host capability).
+- 16-bit throughout: brush family, destructive ops, 16-bit ICC import.
+- PSD open/import: honest native fidelity 67 % (M14). The target of 90 % is not reached.
+
+**Core-task benchmarks (A9):** 13 green / 7 red (Phase 0: 1, Phase 1: 2). All red tasks need Phase-3 items: PSD write, CMYK
+soft-proof, RAW, recipes/batch, text on path, mesh warp, and the 30-layer 200-MP run needs more disk. Evidence:
+`artifacts/benchmarks.md`.
+
+**Found and fixed by own checks, QA and benchmarks** (each with a test):
+- data loss: guides in history, TIFF/ICC reopen, recovery race on save;
+- two A4b regressions (lost strokes, eviction thrash: effects p95 3.4 s → 2.3 ms);
+- CSP turning off the GPU renderer;
+- the Tauri build shipping no fonts or models;
+- Windows scratch index (fsync on a read-only handle);
+- align on vector layers and artboards;
+- effect sizes on oversampled text;
+- inside stroke without fill;
+- smart-object perspective;
+- PostScript font names;
+- a denoise that was too weak;
+- mask polarity. Integrator decision: Photoshop's "Reveal Selection" instead of the Mac original's inverse.
+
+**Open after Phase 2:**
+- PSD native fidelity from 67 % to 90 %. The remaining gaps: HDR/32-bit, blend-if, non-RGB adjustment ordering, pattern/bevel
+  effects.
+- Object-selection encoder takes 14–22 s on single-thread WASM (needs WebGPU or threads with COOP/COEP).
+- WebKitGTK brush Pro budget (M10); navigation/stroke latency at 200 MP.
+- Two CanvasKit instances when text and vector tools are both used.
+- PDF placement waits for an approved PDFium build.
+- Windows re-check of the scratch-index and bundled-fonts fixes.
+- Screen eyedropper on Windows not yet verified by hand.
+
 ## Tests (current master)
 
 | Suite | Result |
