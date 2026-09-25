@@ -19,4 +19,12 @@ describe('native RAW host bridge', () => {
     await expect(invokeRawDecoder(async () => ({ width: 2, height: 1, rgba: [1, 2, 3, 4] }), new Uint8Array(), {}, false))
       .rejects.toThrow(/invalid bitmap/);
   });
+
+  test('Linux LibRaw linear ProPhoto output is converted through Little CMS to 16-bit sRGB', async () => {
+    const decoded = await invokeRawDecoder(async () => ({ width: 1, height: 1, rgba: [32768, 32768, 32768, 40000] }),
+      new Uint8Array(), {}, true, 'linear-prophoto');
+    expect(decoded?.rgba[0]).toBeGreaterThan(47000);
+    expect(Math.abs(decoded!.rgba[0]! - decoded!.rgba[1]!)).toBeLessThan(80);
+    expect(decoded?.rgba[3]).toBe(40000);
+  });
 });

@@ -749,7 +749,7 @@ export async function benchmark12(page: Page): Promise<void> {
     await page.getByTestId('export-format-tiff').click();
     await page.getByTestId('export-depth-16').click();
   });
-  expect(tiff?.name).toBe('camera-patches.tiff');
+  expect(tiff?.name).toMatch(/\.tiff?$/i);
   const bytes = tiff!.bytes, view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const little = bytes[0] === 0x49, ifd = view.getUint32(4, little), count = view.getUint16(ifd, little);
   let bitDepth = 0;

@@ -123,10 +123,11 @@ export function isDng(bytes: Uint8Array): boolean {
 }
 
 export function dngDimensions(bytes: Uint8Array): { width: number; height: number } {
-  const tiff = new Tiff(bytes), { raw } = rawIfd(tiff);
+  const tiff = new Tiff(bytes), { raw, root } = rawIfd(tiff);
   const width = tiff.number(raw, TAG.width), height = tiff.number(raw, TAG.height);
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new DngError('invalid', 'The DNG dimensions are invalid.');
-  return { width, height };
+  const orientation = tiff.number(raw, TAG.orientation, tiff.number(root, TAG.orientation, 1));
+  return orientation >= 5 && orientation <= 8 ? { width: height, height: width } : { width, height };
 }
 
 class BitReader {
@@ -334,6 +335,25 @@ function temperatureNeutral(matrix: readonly number[], temperature: number, tint
 }
 function srgb(value: number): number { return value <= 0.0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - 0.055; }
 
+function orient16(rgba: Uint16Array, width: number, height: number, orientation: number): DecodedRaw {
+  if (orientation === 1 || orientation < 2 || orientation > 8) return { width, height, rgba };
+  const swapped = orientation >= 5, outWidth = swapped ? height : width, outHeight = swapped ? width : height;
+  const output = new Uint16Array(rgba.length);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    let dx = x, dy = y;
+    if (orientation === 2) dx = width - 1 - x;
+    else if (orientation === 3) { dx = width - 1 - x; dy = height - 1 - y; }
+    else if (orientation === 4) dy = height - 1 - y;
+    else if (orientation === 5) { dx = y; dy = x; }
+    else if (orientation === 6) { dx = height - 1 - y; dy = x; }
+    else if (orientation === 7) { dx = height - 1 - y; dy = width - 1 - x; }
+    else if (orientation === 8) { dx = y; dy = width - 1 - x; }
+    const source = (y * width + x) * 4, target = (dy * outWidth + dx) * 4;
+    output.set(rgba.subarray(source, source + 4), target);
+  }
+  return { width: outWidth, height: outHeight, rgba: output };
+}
+
 export function decodeDng(bytes: Uint8Array, options: RawDecodeOptions = {}): DecodedRaw {
   const tiff = new Tiff(bytes), { raw, root } = rawIfd(tiff);
   const value = (tag: number) => raw.entries.has(tag) ? tiff.numbers(raw, tag) : tiff.numbers(root, tag);
@@ -376,5 +396,5 @@ export function decodeDng(bytes: Uint8Array, options: RawDecodeOptions = {}): De
     for (let c = 0; c < 3; c++) rgba[p * 4 + c] = Math.round(Math.max(0, Math.min(1, srgb(Math.max(0, rgb[c]!)))) * 65535);
     rgba[p * 4 + 3] = 65535;
   }
-  return { width, height, rgba };
+  return orient16(rgba, width, height, value(TAG.orientation)[0] ?? 1);
 }

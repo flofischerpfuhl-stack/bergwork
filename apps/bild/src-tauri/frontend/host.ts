@@ -253,7 +253,8 @@ const codecs: CodecHost = {
   rawBackend: isWindows ? 'wic' : 'system-libraw',
   systemRawEnabled: () => isWindows || globalThis.localStorage?.getItem(rawPreferenceKey) === 'on',
   setSystemRawEnabled(enabled) { if (!isWindows) globalThis.localStorage?.setItem(rawPreferenceKey, enabled ? 'on' : 'off'); },
-  decodeRaw(bytes, options) { return invokeRawDecoder(window.__TAURI__.core.invoke, bytes, options, this.systemRawEnabled?.() ?? false); },
+  decodeRaw(bytes, options) { return invokeRawDecoder(window.__TAURI__.core.invoke, bytes, options,
+    this.systemRawEnabled?.() ?? false, isWindows ? 'srgb' : 'linear-prophoto'); },
 };
 
 /** Tauri implementation of the same optional capability registry as the browser host. */

@@ -63,12 +63,13 @@ function dataBytes(samples: Uint16Array): Uint8Array {
   return output;
 }
 
-export function makeDng(kind: DngFixtureKind, compression: 'none' | 'lossless-jpeg' = 'none', width = 18, height = 10): Uint8Array {
+export function makeDng(kind: DngFixtureKind, compression: 'none' | 'lossless-jpeg' = 'none', width = 18, height = 10, orientation = 1): Uint8Array {
   const { channels, samples } = encodedSamples(kind, width, height);
   const image = compression === 'lossless-jpeg' ? losslessJpeg(samples, width, height, channels) : dataBytes(samples);
   const fields: Field[] = [
     { tag: 256, type: 4, values: [width] }, { tag: 257, type: 4, values: [height] }, { tag: 258, type: 3, values: [16] },
     { tag: 259, type: 3, values: [compression === 'none' ? 1 : 7] }, { tag: 262, type: 3, values: [kind === 'linear' ? 34892 : 32803] },
+    { tag: 274, type: 3, values: [orientation] },
     { tag: 273, type: 4, values: [0] }, { tag: 277, type: 3, values: [channels] }, { tag: 278, type: 4, values: [height] },
     { tag: 279, type: 4, values: [image.length] }, { tag: 284, type: 3, values: [1] }, { tag: 50706, type: 1, values: [1, 4, 0, 0] },
     { tag: 50714, type: 5, values: [0] }, { tag: 50717, type: 4, values: [65535] },

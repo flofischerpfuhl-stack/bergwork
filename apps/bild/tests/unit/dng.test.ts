@@ -37,6 +37,15 @@ describe('pure TypeScript DNG decoder', () => {
     expect(lifted.rgba[(5 * 18 + 8) * 4 + 1]).toBeGreaterThan(normal.rgba[(5 * 18 + 8) * 4 + 1]!);
   });
 
+  test('applies TIFF orientation to 16-bit DNG pixels and dimensions', () => {
+    const bytes = makeDng('linear', 'none', 18, 10, 6), decoded = decodeDng(bytes);
+    expect(dngDimensions(bytes)).toEqual({ width: 10, height: 18 });
+    expect([decoded.width, decoded.height, decoded.rgba.length]).toEqual([10, 18, 10 * 18 * 4]);
+    // Orientation 6 rotates the original left red patch to the top.
+    const top = pixel(decoded.rgba, decoded.width, 5, 2);
+    expect(top[0]).toBeGreaterThan(top[1] * 3);
+  });
+
   test('lossless-JPEG DNG produces the same developed pixels as independently packed uncompressed DNG', () => {
     const plain = decodeDng(makeDng('bayer', 'none')).rgba;
     const file = makeDng('bayer', 'lossless-jpeg');

@@ -21,7 +21,7 @@ pub struct RawImage {
 mod platform {
     use super::{RawImage, RawOptions};
     use libloading::{Library, Symbol};
-    use std::ffi::{c_int, c_uint, c_void};
+    use std::{ffi::{c_int, c_uint, c_void}, sync::OnceLock};
 
     const CANDIDATES: &[&str] = &["libraw.so.23", "libraw.so.22", "libraw.so.21", "libraw.so.20", "libraw.so"];
     type Init = unsafe extern "C" fn(c_uint) -> *mut c_void;
@@ -47,12 +47,16 @@ mod platform {
     type MakeImage = unsafe extern "C" fn(*mut c_void, *mut c_int) -> *mut ProcessedImage;
     type ClearImage = unsafe extern "C" fn(*mut ProcessedImage);
 
-    fn library() -> Result<Library, String> {
-        for name in CANDIDATES {
-            // SAFETY: loading is explicitly user-enabled; symbols are resolved and used only while this handle lives.
-            if let Ok(value) = unsafe { Library::new(name) } { return Ok(value); }
-        }
-        Err("System LibRaw was not found. Install your distribution’s LibRaw package (for example `libraw23`) and try again.".into())
+    fn library() -> Result<&'static Library, String> {
+        static LIBRARY: OnceLock<Result<Library, String>> = OnceLock::new();
+        LIBRARY.get_or_init(|| {
+            for name in CANDIDATES {
+                // SAFETY: loading is explicitly user-enabled. Keep the handle for process lifetime: some LibRaw builds
+                // retain an OpenMP worker pool after processing, so dlclose would invalidate its worker entry points.
+                if let Ok(value) = unsafe { Library::new(name) } { return Ok(value); }
+            }
+            Err("System LibRaw was not found. Install your distribution’s LibRaw package (for example `libraw23`) and try again.".into())
+        }).as_ref().map_err(Clone::clone)
     }
 
     pub fn available() -> bool { library().is_ok() }
@@ -88,8 +92,10 @@ mod platform {
             if status != 0 { return Err(format!("LibRaw could not open this camera file (error {status}).")); }
             let status = unpack(raw);
             if status != 0 { return Err(format!("LibRaw could not unpack this camera file (error {status}).")); }
-            set_bps(raw, 16); set_color(raw, 1); set_demosaic(raw, 3); no_auto(raw, 1); // sRGB, AHD, no hidden exposure
-            set_gamma(raw, 0, 1.0 / 2.4); set_gamma(raw, 1, 12.92); // sRGB-like transfer
+            // Linear ProPhoto RGB preserves the developed gamut. The frontend then runs this through the same
+            // Little CMS transform as tagged 16-bit PNG/TIFF instead of accepting LibRaw's private sRGB conversion.
+            set_bps(raw, 16); set_color(raw, 4); set_demosaic(raw, 3); no_auto(raw, 1); // ProPhoto, AHD, no hidden exposure
+            set_gamma(raw, 0, 1.0); set_gamma(raw, 1, 1.0);
             set_highlight(raw, if options.highlight_recovery.unwrap_or(true) { 3 } else { 0 });
             set_bright(raw, 2.0_f32.powf(options.exposure.unwrap_or(0.0).clamp(-5.0, 5.0) as f32));
             let mode = options.white_balance.as_deref().unwrap_or("as-shot");
@@ -207,10 +213,69 @@ pub fn decode_raw(bytes: Vec<u8>, options: RawOptions, allow_system_libraw: bool
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
+    #[derive(Clone)]
+    struct Field { tag: u16, kind: u16, count: u32, bytes: Vec<u8> }
+    fn short(tag: u16, values: &[u16]) -> Field { Field { tag, kind: 3, count: values.len() as u32,
+        bytes: values.iter().flat_map(|v| v.to_le_bytes()).collect() } }
+    fn long(tag: u16, values: &[u32]) -> Field { Field { tag, kind: 4, count: values.len() as u32,
+        bytes: values.iter().flat_map(|v| v.to_le_bytes()).collect() } }
+    fn byte(tag: u16, values: &[u8]) -> Field { Field { tag, kind: 1, count: values.len() as u32, bytes: values.to_vec() } }
+    fn rational(tag: u16, values: &[f64], signed: bool) -> Field {
+        let mut bytes = Vec::new();
+        for value in values {
+            let numerator = (value * 1_000_000.0).round() as i32;
+            bytes.extend_from_slice(&numerator.to_le_bytes()); bytes.extend_from_slice(&1_000_000_i32.to_le_bytes());
+        }
+        Field { tag, kind: if signed { 10 } else { 5 }, count: values.len() as u32, bytes }
+    }
+    fn generated_dng() -> Vec<u8> {
+        const W: usize = 64; const H: usize = 64;
+        let matrix = [3.1338560476, -1.6168664939, -0.4906147860, -0.9787682523, 1.9161413676,
+            0.0334540738, 0.0719452886, -0.2289913726, 1.4052426768];
+        let mut image = Vec::with_capacity(W * H * 2);
+        let pattern = [0usize, 1, 1, 2];
+        let patches = [[0.72, 0.015, 0.012], [0.015, 0.68, 0.018], [0.012, 0.018, 0.74]];
+        for y in 0..H { for x in 0..W {
+            let patch = patches[(x * 3 / W).min(2)];
+            let value = (patch[pattern[(y & 1) * 2 + (x & 1)]] * 65535.0_f64).round() as u16;
+            image.extend_from_slice(&value.to_le_bytes());
+        }}
+        let mut fields = vec![long(256, &[W as u32]), long(257, &[H as u32]), short(258, &[16]), short(259, &[1]),
+            short(262, &[32803]), long(273, &[0]), short(274, &[1]), short(277, &[1]), long(278, &[H as u32]),
+            long(279, &[image.len() as u32]), short(284, &[1]), short(33421, &[2, 2]), byte(33422, &[0, 1, 1, 2]),
+            byte(50706, &[1, 4, 0, 0]), rational(50714, &[0.0], false), long(50717, &[65535]),
+            rational(50721, &matrix, true), rational(50728, &[1.0, 1.0, 1.0], false)];
+        fields.sort_by_key(|field| field.tag);
+        let ifd_bytes = 2 + fields.len() * 12 + 4;
+        let extra_bytes: usize = fields.iter().filter(|field| field.bytes.len() > 4).map(|field| field.bytes.len()).sum();
+        let image_offset = 8 + ifd_bytes + extra_bytes;
+        fields.iter_mut().find(|field| field.tag == 273).unwrap().bytes = (image_offset as u32).to_le_bytes().to_vec();
+        let mut output = vec![0u8; image_offset + image.len()]; output[..8].copy_from_slice(&[0x49, 0x49, 42, 0, 8, 0, 0, 0]);
+        output[8..10].copy_from_slice(&(fields.len() as u16).to_le_bytes());
+        let mut extra_at = 8 + ifd_bytes;
+        for (index, field) in fields.iter().enumerate() {
+            let at = 10 + index * 12;
+            output[at..at + 2].copy_from_slice(&field.tag.to_le_bytes());
+            output[at + 2..at + 4].copy_from_slice(&field.kind.to_le_bytes());
+            output[at + 4..at + 8].copy_from_slice(&field.count.to_le_bytes());
+            if field.bytes.len() <= 4 { output[at + 8..at + 8 + field.bytes.len()].copy_from_slice(&field.bytes); }
+            else {
+                output[at + 8..at + 12].copy_from_slice(&(extra_at as u32).to_le_bytes());
+                output[extra_at..extra_at + field.bytes.len()].copy_from_slice(&field.bytes); extra_at += field.bytes.len();
+            }
+        }
+        output[image_offset..].copy_from_slice(&image); output
+    }
+
     #[test]
     fn system_libraw_path_is_exercised_when_installed() {
         if !super::platform::available() { eprintln!("skipped: no system LibRaw installed"); return; }
-        let error = super::platform::decode(b"not a raw file", &Default::default()).unwrap_err();
-        assert!(error.contains("could not open"), "unexpected LibRaw error: {error}");
+        let image = super::platform::decode(&generated_dng(), &Default::default()).expect("system LibRaw decodes generated DNG");
+        assert_eq!((image.width, image.height, image.rgba.len()), (64, 64, 64 * 64 * 4));
+        let red = &image.rgba[(32 * 64 + 8) * 4..][..3];
+        let green = &image.rgba[(32 * 64 + 32) * 4..][..3];
+        let blue = &image.rgba[(32 * 64 + 56) * 4..][..3];
+        assert!(red[0] > red[1] * 2 && green[1] > green[0] * 2 && blue[2] > blue[1] * 2,
+            "unexpected developed patches: {red:?} {green:?} {blue:?}");
     }
 }
