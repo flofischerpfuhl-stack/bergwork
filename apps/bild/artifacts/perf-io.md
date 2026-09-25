@@ -116,3 +116,12 @@ Batch processing is deliberately sequential and keeps one document live. Backgro
 - Existing 46 MP export performance spec: **1 passed** in 1.4 min.
 - Web and Tauri frontend production builds pass. Bundle budget: Lite start chunk 281.26 kB gzip ≤ 400 kB.
 - `cargo test --manifest-path src-tauri/Cargo.toml raw_codec`: not completed because the build host lacks the required system `glib-2.0.pc`; see limitation above.
+
+## FIXREG follow-up (2026-09-25)
+
+Staggered warm-up remains enabled, but feature registration now invalidates shell UI without a session notification,
+so background installers cannot trigger full composites during an overlay-only gesture. Feature-only Q loads Object
+Selection on demand. PNG/JPEG below 2 MP use the direct decoder to preserve file-chooser/follow-up action ordering;
+larger images retain worker decoding. The 2048² exact-pixel PERFIO check used the worker for all three runs, with
+maximum timer gaps 5.20 / 5.20 / 8.13 ms versus 713.92 / 675.39 / 669.83 ms direct, and passed in 18.5 s.
+Final host capture after the focused timing runs: `22:36:56 up 1:23`, load averages `4.29, 4.63, 6.23`.

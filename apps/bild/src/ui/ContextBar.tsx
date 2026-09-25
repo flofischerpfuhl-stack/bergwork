@@ -6,7 +6,7 @@
 import { isValidElement, useEffect, useState, type ReactNode } from 'react';
 import styles from './editor.module.css';
 import type { EditorController } from './controller';
-import { useSessionSelector, useWorkspaceSelector } from './hooks';
+import { useSessionSelector, useUi, useWorkspaceSelector } from './hooks';
 import { Icon } from './icons';
 import { LAYER_SAMPLINGS, scalePercent, scaledToPercent, type LayerTransform } from '../core/geometry';
 import { makeTransform } from '../core/geometry';
@@ -132,16 +132,21 @@ function NavigationHeader({ controller, session }: { controller: EditorControlle
 
 export function ContextBar({ controller }: { controller: EditorController }) {
   markUiRender('ContextBar');
+  useUi(controller, () => controller.contextBars[controller.session.tool]);
+  useUi(controller, () => controller.statusHints[controller.session.tool]);
   useWorkspaceSelector(controller, (workspace) => workspace.selectedId);
   const session = controller.session;
   useSessionSelector(session, (current) => {
+    // Some feature wrappers choose their header from module-owned state (Quick Mask is the current example).
+    // The matching status hint is a cheap scalar snapshot and changes at the same state boundary.
+    const registeredHint = controller.statusHints[current.tool]?.(current) ?? '';
     if (current.tool === 'shape' || current.tool === 'pen' || current.tool === 'directSelect') {
       const node = controller.contextBars[current.tool]?.(current);
       const type = isValidElement(node) ? node.type : null;
-      return `${current.tool}|${typeof type === 'string' ? type : type ? (type as { name?: string }).name ?? 'component' : ''}`;
+      return `${current.tool}|${registeredHint}|${typeof type === 'string' ? type : type ? (type as { name?: string }).name ?? 'component' : ''}`;
     }
-    if (current.tool === 'text') return current.tool;
-    if (current.tool !== 'move') return current.tool;
+    if (current.tool === 'text') return `${current.tool}|${registeredHint}`;
+    if (current.tool !== 'move') return `${current.tool}|${registeredHint}`;
     const layer = current.activeLayer;
     const transform = current.transformEdit?.draft ?? (layer ? current.editedTransform(layer) : null);
     const size = current.transformPixelSize ?? layer?.transform.size ?? null;
@@ -175,6 +180,7 @@ export function statusHint(session: EditorSession, t: (s: string) => string): st
 
 export function StatusBar({ controller }: { controller: EditorController }) {
   markUiRender('StatusBar');
+  useUi(controller, () => controller.statusHints[controller.session.tool]);
   useWorkspaceSelector(controller, (workspace) => workspace.selectedId);
   const session = controller.session;
   useSessionSelector(session, (current) => JSON.stringify([

@@ -126,6 +126,8 @@ export class EditorController {
   availableTools = new Set<Tool>(['move', 'hand', 'zoom', 'idle']);
   /** Startup registry hook: fetches a lazy tool module before selecting it. */
   loadFeatureForTool: ((tool: Tool) => Promise<void>) | null = null;
+  /** Fetches the owner of a feature-only key before dispatching it; null means the key has no lazy owner. */
+  loadFeatureForKey: ((key: string) => Promise<void> | null) | null = null;
   /** Loads every remaining lazy feature module now (menus list their commands and submenus only once loaded). */
   loadAllFeatures: (() => Promise<void>) | null = null;
   contextBars: Partial<Record<Tool, (session: EditorSession) => ReactNode>> = {};

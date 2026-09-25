@@ -16,6 +16,8 @@ export type Dialog =
   | { kind: 'custom'; name: string };
 
 export interface UiState {
+  /** Incremented when a lazy feature extends controller-owned UI registries. */
+  featureRevision: number;
   dialog: Dialog | null;
   openMenu: string | null;
   layersWidth: number;
@@ -33,6 +35,7 @@ export type UiStore = ReturnType<typeof createUiStore>;
 export function createUiStore() {
   const saved = Number(globalThis.localStorage?.getItem('compositor.layersPanelWidth') ?? '');
   return createStore<UiState>(() => ({
+    featureRevision: 0,
     dialog: null,
     openMenu: null,
     layersWidth: Number.isFinite(saved) && saved >= 202 && saved <= 352 ? saved : 252,

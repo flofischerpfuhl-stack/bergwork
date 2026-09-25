@@ -65,3 +65,12 @@ No new dependency, network behavior, translation key or licence notice was added
 - `perf-ui.spec.ts`: Chromium, WebKit and the Intel `perf-gpu` project each passed with real opacity/brush state assertions and the render-count gates above.
 - Directly affected workflows: History, layer locks/fill/search, painting/color picker, and Hue/Saturation adjustment-layer editing passed in Chromium and WebKit. Focused Chromium text creation and vector-mask/thumbnail tests also passed after the final lazy-registration refinement. The first Chromium batch exposed the registered-panel lazy-load regression; the panel host was fixed and the failed color-picker case passed on rerun.
 - No full E2E or full cross-browser suite was run in this lane, per the shared-machine test-load rule.
+
+## FIXREG follow-up (2026-09-25)
+
+Fine-grained subscriptions remain in place. Selector subscriptions now close the render-to-effect race, Quick Mask's
+module-owned state participates in the context-bar snapshot, and lazy registry installation increments a UI-only
+revision consumed by the menu, tool rail, context/status bars, panels and layer extensions. The Chromium performance
+gate still reports zero layer-row and thumbnail renders for pan, opacity and brush input; its follow-up run passed in
+16.5 s (load averages at start: 2.55, 5.87, 7.22). Final host capture after the focused timing runs:
+`22:36:56 up 1:23`, load averages `4.29, 4.63, 6.23`.

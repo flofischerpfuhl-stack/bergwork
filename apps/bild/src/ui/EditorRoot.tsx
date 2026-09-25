@@ -128,6 +128,14 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
         return;
       }
       if (controller.keyHandlers.some((handler) => handler(event))) { event.preventDefault(); return; }
+      // Quick Mask's Q is feature-owned but does not select a tool. Load its owner on the first press, then dispatch
+      // that same DOM event once installation has registered the handler.
+      const lazyKey = !modified && !event.repeat ? controller.loadFeatureForKey?.(event.key.toLowerCase()) : null;
+      if (lazyKey) {
+        event.preventDefault();
+        void lazyKey.then(() => { controller.keyHandlers.some((handler) => handler(event)); }).catch(() => undefined);
+        return;
+      }
       view?.refreshCursor(event);
       if (event.key === ' ' && !event.repeat) {
         controller.ui.setState({ spaceHeld: true });
@@ -224,6 +232,7 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
 /** Feature panels subscribe for themselves; only lazy text-panel installation needs its host refreshed. */
 function RegisteredPanels({ controller }: { controller: EditorController }) {
   markUiRender('RegisteredPanels');
+  useUi(controller, () => controller.panels.length);
   useWorkspaceSelector(controller, (workspace) => workspace.selectedId);
   const session = controller.session;
   useSessionSelector(session, (current) => {

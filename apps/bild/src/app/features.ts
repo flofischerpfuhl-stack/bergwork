@@ -40,6 +40,10 @@ const toolOwners: Partial<Record<Tool, LazyFeature>> = {
   brush: 'painting', spotHealing: 'retouch', cloneStamp: 'painting', blur: 'painting', gradient: 'painting', eyedropper: 'painting',
 };
 
+// Keys which do not select a tool and are therefore not covered by toolOwners. Other feature key handlers are
+// reachable only after their owning tool, command or panel has loaded the module.
+const keyOwners: Readonly<Record<string, LazyFeature>> = { q: 'objectSelection' };
+
 const commandGroups: [LazyFeature, string[]][] = [
   ['canvas', ['canvasSize', 'imageSize']],
   ['selection', ['selectAll', 'deselect', 'inverse', 'loadLayerSelection', 'loadMaskSelection', 'expandSelection', 'contractSelection',
@@ -89,7 +93,9 @@ export function installFeatures(controller: EditorController, profile: EditorPro
       install(controller);
       installed.add(feature);
       if (controller.canvasView) for (const setup of controller.canvasSetups.slice(setupStart)) setup(controller.canvasView);
-      for (const tab of controller.workspace.tabs) tab.session.notify('ui');
+      // Registries are shell state, not document state. Invalidating them through every session also asks the canvas
+      // to composite while staggered warm-up is running (including in the middle of an overlay-only crop drag).
+      controller.ui.setState((state) => ({ featureRevision: state.featureRevision + 1 }));
     })().catch((error: unknown) => {
       controller.reportError('feature-load-failed', error);
       throw error;
@@ -128,6 +134,10 @@ export function installFeatures(controller: EditorController, profile: EditorPro
   controller.loadFeatureForTool = async (tool) => {
     const owner = toolOwners[tool];
     if (owner && allowed(owner) && !installed.has(owner)) await load(owner);
+  };
+  controller.loadFeatureForKey = (key) => {
+    const owner = keyOwners[key];
+    return owner && allowed(owner) && !installed.has(owner) ? load(owner) : null;
   };
   for (const tool of profile.tools) controller.availableTools.add(tool);
 

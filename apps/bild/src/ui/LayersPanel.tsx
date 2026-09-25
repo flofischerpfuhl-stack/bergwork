@@ -531,6 +531,8 @@ function PanelChrome({ controller, layerCount, layers }: {
 
 export function LayersPanel({ controller, inSheet = false }: { controller: EditorController; inSheet?: boolean }) {
   markUiRender('LayersPanel');
+  useUi(controller, () => `${controller.sidePanels.length}|${controller.layerThumbs.length}|${controller.layerSubRows.length}`
+    + `|${controller.features.adjustmentLayers ? 1 : 0}|${controller.layerStyles ? 1 : 0}`);
   useWorkspaceSelector(controller, (workspace) => workspace.selectedId);
   const session = controller.session;
   useSessionSelector(session, (current) => layersSnapshot(controller, current), sameLayersSnapshot);

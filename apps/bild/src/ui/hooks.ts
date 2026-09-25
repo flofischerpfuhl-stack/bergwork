@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef, useSyncExternalStore } from 'react';
 import { useStore } from 'zustand';
-import type { EditorSession } from '../core/session';
+import type { ChangeKind, EditorSession } from '../core/session';
 import type { ProjectWorkspace } from '../core/workspace';
 import type { EditorController } from './controller';
 import type { UiState } from './store';
@@ -26,13 +26,19 @@ export function useSessionSelector<T>(session: EditorSession, selector: (session
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const [, bump] = useReducer((value: number) => value + 1, 0);
-  useEffect(() => session.subscribe((kind) => {
-    if (!includeView && kind === 'view') return;
-    const next = selectorRef.current(session);
-    if (equalRef.current(selectedRef.current, next)) return;
-    selectedRef.current = next;
-    bump();
-  }), [session, includeView]);
+  useEffect(() => {
+    const check = (kind?: ChangeKind) => {
+      if (!includeView && kind === 'view') return;
+      const next = selectorRef.current(session);
+      if (equalRef.current(selectedRef.current, next)) return;
+      selectedRef.current = next;
+      bump();
+    };
+    const unsubscribe = session.subscribe(check);
+    // Close the render-to-effect gap: a synchronous feature install or document edit must not be lost.
+    check();
+    return unsubscribe;
+  }, [session, includeView]);
   return selected;
 }
 
@@ -51,12 +57,17 @@ export function useWorkspaceSelector<T>(controller: EditorController, selector: 
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const [, bump] = useReducer((value: number) => value + 1, 0);
-  useEffect(() => controller.workspace.subscribe(() => {
-    const next = selectorRef.current(controller.workspace);
-    if (equalRef.current(selectedRef.current, next)) return;
-    selectedRef.current = next;
-    bump();
-  }), [controller]);
+  useEffect(() => {
+    const check = () => {
+      const next = selectorRef.current(controller.workspace);
+      if (equalRef.current(selectedRef.current, next)) return;
+      selectedRef.current = next;
+      bump();
+    };
+    const unsubscribe = controller.workspace.subscribe(check);
+    check();
+    return unsubscribe;
+  }, [controller]);
   return selected;
 }
 

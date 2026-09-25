@@ -8,6 +8,8 @@
 import { Raster } from '../core/raster';
 import { decodeImageAsset, decodeImageFile, ImageImportError, sniffImage,
   type DecodedImageAsset, type ImageDecodeOptions } from '../io/imageImport';
+import { pngDimensions } from '../io/png';
+import { orientedSize, readJpegInfo } from '../io/jpegMeta';
 import type { ImageDecodeWorkerRequest, ImageDecodeWorkerResponse, ImageDecodeWorkerTiming } from './imageDecodeProtocol';
 
 export interface BackgroundImageDecodeTiming extends ImageDecodeWorkerTiming {
@@ -31,6 +33,28 @@ interface Pending {
 let worker: Worker | null = null;
 let nextId = 1;
 const pending = new Map<number, Pending>();
+
+// A worker turn is worthwhile for images large enough to stall interaction. For ordinary UI-sized PNG/JPEG files,
+// direct decoding also preserves the chooser ordering: the import settles in the same event-loop turn before a
+// follow-up shortcut or document command. The measured 2048² PERFIO fixture and larger files stay off-thread.
+const BACKGROUND_DECODE_PIXELS = 2_000_000;
+
+function shouldDecodeInBackground(bytes: Uint8Array): boolean {
+  const kind = sniffImage(bytes);
+  try {
+    if (kind === 'image/png') {
+      const { width, height } = pngDimensions(bytes);
+      return width * height >= BACKGROUND_DECODE_PIXELS;
+    }
+    if (kind === 'image/jpeg') {
+      const { width, height } = orientedSize(readJpegInfo(bytes));
+      return width * height >= BACKGROUND_DECODE_PIXELS;
+    }
+  } catch {
+    // Let the normal decoder produce the format-specific error.
+  }
+  return true;
+}
 
 function ensureWorker(): Worker | null {
   if (worker) return worker;
@@ -61,7 +85,7 @@ function workerSafe(bytes: Uint8Array, options: ImageDecodeOptions): boolean {
 
 function send(mode: 'asset' | 'tiles', bytes: Uint8Array, remainingPixels: number,
   options: ImageDecodeOptions): Promise<Extract<ImageDecodeWorkerResponse, { ok: true }>> | null {
-  if (!workerSafe(bytes, options)) return null;
+  if (!workerSafe(bytes, options) || !shouldDecodeInBackground(bytes)) return null;
   const target = ensureWorker();
   if (!target) return null;
   const id = nextId++, owned = bytes.slice();

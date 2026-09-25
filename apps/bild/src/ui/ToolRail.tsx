@@ -1,6 +1,6 @@
 import styles from './editor.module.css';
 import type { EditorController } from './controller';
-import { useSessionSelector, useWorkspaceSelector } from './hooks';
+import { useSessionSelector, useUi, useWorkspaceSelector } from './hooks';
 import { Icon, type IconName } from './icons';
 import { TOOL_LABELS, TOOLS, type Tool } from '../core/session';
 import { markUiRender } from './performance';
@@ -13,6 +13,7 @@ function toolIcon(controller: EditorController, tool: Tool): IconName {
 
 export function ToolRail({ controller }: { controller: EditorController }) {
   markUiRender('ToolRail');
+  useUi(controller, () => controller.toolIcon);
   useWorkspaceSelector(controller, (workspace) => workspace.selectedId);
   const session = controller.session;
   useSessionSelector(session, (current) => {
