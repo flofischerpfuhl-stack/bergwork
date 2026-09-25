@@ -413,9 +413,14 @@ function placedWarp(source: AgLayer, transform: LayerTransform,
     const right = warp.bounds?.right?.value ?? width, bottom = warp.bounds?.bottom?.value ?? height;
     const rangeX = Math.abs(right - left) > 1e-9 ? right - left : width;
     const rangeY = Math.abs(bottom - top) > 1e-9 ? bottom - top : height;
+    const units = envelope.meshPoints.map((point) => ({ x: (point.x - left) / rangeX, y: (point.y - top) / rangeY }));
+    // Writers such as ag-psd store an identity envelope on every placed layer; it must not hide a perspective quad.
+    const columns = dimensions.x * 3 + 1, rows = dimensions.y * 3 + 1;
+    const identity = units.every((point, index) => Math.abs(point.x - (index % columns) / (columns - 1)) < 1e-6
+      && Math.abs(point.y - Math.floor(index / columns) / (rows - 1)) < 1e-6);
+    if (identity) return quad;
     const map = unitToDocument(transform);
-    const points = envelope.meshPoints.map((point) => apply(map,
-      { x: (point.x - left) / rangeX, y: (point.y - top) / rangeY }));
+    const points = units.map((point) => apply(map, point));
     return { kind: 'mesh', schemaVersion: 1, splits: dimensions, points, preset: 'custom' };
   }
   const preset = warp.style === 'arc' || warp.style === 'flag' || warp.style === 'bulge' || warp.style === 'wave'

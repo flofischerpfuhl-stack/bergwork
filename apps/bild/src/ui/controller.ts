@@ -31,7 +31,7 @@ import type { ExportSizeEstimate } from '../io/exportPipeline';
 import { zipSync } from 'fflate';
 import { encodePng } from '../io/png';
 import { sha256Hex } from '../io/sha256';
-import { readPsdDocumentManaged, type PsdReadResult } from '../io/psd';
+import { psdFormatForName, readPsdDocumentManaged, writePsdDocument, type PsdReadResult, type PsdWriteNotice } from '../io/psd';
 import { uuid } from '../core/ids';
 import type { GpuCompositor } from '../render/gpuCompositor';
 import { capabilitiesOf, type FileSaveTarget, type HostCapabilityMap, type HostFileReference } from '../platform/hosts';
@@ -551,6 +551,12 @@ export class EditorController {
       `${notice.layerPath ? `${notice.layerPath}: ` : ''}${notice.message}`).join('\n') });
   }
 
+  private psdWriteNotices(notices: readonly PsdWriteNotice[]): void {
+    if (!notices.length) return;
+    this.host.reportError({ code: 'psd-write-notice', message: notices.map((notice) =>
+      `${notice.layerPath ? `${notice.layerPath}: ` : ''}${notice.message}`).join('\n') });
+  }
+
   private openPsd(imported: PsdReadResult, name: string, target: ProjectTab | null): void {
     const active = [...imported.document.layers].reverse().find((layer) => layer.visible)?.id ?? null;
     if (target) target.session.installProject(imported.document, active, name);
@@ -671,6 +677,8 @@ export class EditorController {
         if (/\.ps[db]$/i.test(reference.name)) {
           const imported = await readPsdDocumentManaged(new Uint8Array(await blob.arrayBuffer()));
           this.openPsd(imported, fileBaseName(reference.name), null);
+          const target = capability.saveTargetFor?.(reference);
+          if (target) saveTargets.set(this.session, target);
         } else if (/\.(fwimg|zip|comp)$/i.test(reference.name)) {
           await this.openArchive(blob, reference.name);
           const target = capability.saveTargetFor?.(reference);
@@ -994,8 +1002,34 @@ export class EditorController {
         target = chosen;
       }
       const sink = target && targetHost.openFileSink ? await targetHost.openFileSink(target) : null;
+      const photoshop = !!target && /\.ps[db]$/i.test(target.name);
       let savedDocument: CanvasDocument;
-      if (target && sink) {
+      if (target && photoshop) {
+        try {
+          await this.whenFullyResolved();
+          session.commitTransform();
+          await this.prepareRender();
+          const document = session.document;
+          if (!document) throw new ProjectError('no-document', 'There is no canvas to save.');
+          const hooks = {
+            transform: (layer: Layer) => session.displayedTransform(layer),
+            maskPlacement: (layer: Layer) => session.displayedMaskPlacement(layer),
+            blendMode: (layer: Layer) => session.displayedBlendMode(layer),
+            raster: (layer: Layer) => session.displayedRaster(layer),
+            maskRaster: (layer: Layer) => session.displayedMaskRaster(layer),
+          };
+          const written = await session.runHydrated('save', () => writePsdDocument(document,
+            { format: psdFormatForName(target.name, document), hooks }));
+          const blob = new Blob([written.bytes as Uint8Array<ArrayBuffer>], { type: 'image/vnd.adobe.photoshop' });
+          if (sink) { await sink.write(written.bytes); await sink.close(); }
+          else if (files) await files.writeFile(target, blob);
+          else throw new Error('The selected PSD destination is unavailable.');
+          savedDocument = document;
+          this.psdWriteNotices(written.notices);
+        } catch (error) { await sink?.abort().catch(() => {}); throw error; }
+        saveTargets.set(session, target);
+        session.projectName = target.name.replace(/\.(?:psd|psb)$/i, '');
+      } else if (target && sink) {
         try { const archived = await this.archiveResult(session, (chunk) => sink.write(chunk)); savedDocument = archived.document; await sink.close(); }
         catch (error) { await sink.abort().catch(() => {}); throw error; }
         saveTargets.set(session, target);

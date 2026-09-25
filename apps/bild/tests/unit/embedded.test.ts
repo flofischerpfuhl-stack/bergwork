@@ -153,6 +153,18 @@ describe('embedded rendering and persistence', () => {
     expect(() => validatePdfPlacement(new TextEncoder().encode('%PDF-1.7'), -1)).toThrow(/zero-based/);
   });
 
+  it('an identity envelope warp (written by ag-psd on every placed layer) keeps the perspective quad', () => {
+    const source = pngSource('source.png', [12, 34, 56, 255]);
+    const id = '30953ddb-9391-11ec-b4f1-c15674f50bc4';
+    const preview = new Uint8ClampedArray(4 * 4 * 4);
+    const psd: Psd = { width: 30, height: 30, children: [{ name: 'Perspective', top: 10, left: 8, bottom: 14, right: 12,
+      imageData: { width: 4, height: 4, data: preview }, placedLayer: { id, type: 'raster', width: 2, height: 2,
+        transform: [9, 10, 16, 10, 16, 18, 8, 18] } }], linkedFiles: [{ id, name: 'source.png', data: source.bytes }],
+      imageData: { width: 30, height: 30, data: new Uint8ClampedArray(30 * 30 * 4) } };
+    const layer = readPsdDocument(writePsdUint8Array(psd, { generateThumbnail: false })).document.layers[0]!;
+    expect(layer.warp?.kind).toBe('quad');
+  });
+
   it('PSD placed-layer import uses embedded source data and its non-destructive transform, never the PSD composite', () => {
     const source = pngSource('source.png', [12, 34, 56, 255]);
     const id = '20953ddb-9391-11ec-b4f1-c15674f50bc4';
