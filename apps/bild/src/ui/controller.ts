@@ -539,8 +539,8 @@ export class EditorController {
     const psdIds: string[] = [];
     for (const file of psd) {
       try {
-        const { readPsdDocumentManaged } = await import('../io/psd');
-        const imported = await readPsdDocumentManaged(new Uint8Array(await file.arrayBuffer()));
+        const { readPsdDocumentInBackground } = await import('../workers/psdClient');
+        const imported = await readPsdDocumentInBackground(new Uint8Array(await file.arrayBuffer()));
         if (importPsdAsLayers) psdIds.push(...this.importPsdLayers(imported, into, fileBaseName(file.name)));
         else this.openPsd(imported, fileBaseName(file.name), into.session.document ? null : into);
       } catch (error) {
@@ -692,8 +692,8 @@ export class EditorController {
       try {
         const blob = await capability.readFile(reference);
         if (/\.ps[db]$/i.test(reference.name)) {
-          const { readPsdDocumentManaged } = await import('../io/psd');
-          const imported = await readPsdDocumentManaged(new Uint8Array(await blob.arrayBuffer()));
+          const { readPsdDocumentInBackground } = await import('../workers/psdClient');
+          const imported = await readPsdDocumentInBackground(new Uint8Array(await blob.arrayBuffer()));
           this.openPsd(imported, fileBaseName(reference.name), null);
           const target = capability.saveTargetFor?.(reference);
           if (target) saveTargets.set(this.session, target);
@@ -811,8 +811,8 @@ export class EditorController {
       const sourceName = blob && typeof (blob as Blob & { name?: unknown }).name === 'string'
         ? (blob as Blob & { name: string }).name : undefined;
       if (blob && /\.ps[db]$/i.test(sourceName ?? '')) {
-        const { readPsdDocumentManaged } = await import('../io/psd');
-        const imported = await readPsdDocumentManaged(new Uint8Array(await blob.arrayBuffer()));
+        const { readPsdDocumentInBackground } = await import('../workers/psdClient');
+        const imported = await readPsdDocumentInBackground(new Uint8Array(await blob.arrayBuffer()));
         this.openPsd(imported, fileBaseName(sourceName!), null);
       } else if (blob) await this.openArchive(blob, sourceName);
     } catch (error) { this.reportError(error instanceof ProjectError ? error.code : 'open-failed', error); }
@@ -1044,16 +1044,23 @@ export class EditorController {
           await this.prepareRender();
           const document = session.document;
           if (!document) throw new ProjectError('no-document', 'There is no canvas to save.');
-          const hooks = {
-            transform: (layer: Layer) => session.displayedTransform(layer),
-            maskPlacement: (layer: Layer) => session.displayedMaskPlacement(layer),
-            blendMode: (layer: Layer) => session.displayedBlendMode(layer),
-            raster: (layer: Layer) => session.displayedRaster(layer),
-            maskRaster: (layer: Layer) => session.displayedMaskRaster(layer),
-          };
-          const { psdFormatForName, writePsdDocument } = await import('../io/psd');
-          const written = await session.runHydrated('save', () => writePsdDocument(document,
-            { format: psdFormatForName(target.name, document), hooks }));
+          // Resolve lazy display state once on the UI thread; the immutable tiles then transfer to
+          // the PSD worker. This is equivalent to the writer's former CompositeHooks projection.
+          const layers = document.layers.map((layer): Layer => {
+            let prepared = { ...layer, transform: session.displayedTransform(layer),
+              blendMode: session.displayedBlendMode(layer) } as Layer;
+            if ('raster' in prepared) prepared = { ...prepared, raster: session.displayedRaster(layer) } as Layer;
+            if (layer.mask) prepared = { ...prepared, mask: { ...layer.mask,
+              raster: session.displayedMaskRaster(layer) ?? layer.mask.raster,
+              placement: session.displayedMaskPlacement(layer) } } as Layer;
+            return prepared;
+          });
+          const prepared = { ...document, layers };
+          const [{ psdFormatForName }, { writePsdDocumentInBackground }] = await Promise.all([
+            import('../io/psd'), import('../workers/psdClient'),
+          ]);
+          const written = await session.runHydrated('save', () => writePsdDocumentInBackground(prepared,
+            { format: psdFormatForName(target.name, document) }));
           const blob = new Blob([written.bytes as Uint8Array<ArrayBuffer>], { type: 'image/vnd.adobe.photoshop' });
           if (sink) { await sink.write(written.bytes); await sink.close(); }
           else if (files) await files.writeFile(target, blob);
@@ -1183,6 +1190,27 @@ export class EditorController {
       if (files) {
         target = await files.chooseSaveTarget(name, single ? request.format : 'zip');
         if (!target) return false;
+      }
+      const targetHost = this.host as FileTargetHost;
+      const streamable = single && request.format === 'png' && !request.cmyk
+        && plan[0]!.width * plan[0]!.height >= 1_000_000;
+      const sink = streamable && target && targetHost.openFileSink ? await targetHost.openFileSink(target) : null;
+      if (sink) {
+        const pipeline = await import('../io/exportPipeline');
+        if (pipeline.canStreamPngExport(session.document, request)) {
+          try {
+            await this.whenFullyResolved();
+            session.commitTransform();
+            const renderer = await this.exportRenderer();
+            this.suppressCompositorHydration++;
+            try {
+              await this.trackResolution(session.runHydrated('export', () => pipeline.runPngExportToSink(
+                session.document, request, renderer, (chunk) => sink.write(chunk), options)));
+            } finally { this.suppressCompositorHydration--; }
+            await sink.close();
+            return true;
+          } catch (error) { await sink.abort().catch(() => {}); throw error; }
+        }
       }
       const encoded = await this.exportFiles(request, options, session);
       const blob = single
