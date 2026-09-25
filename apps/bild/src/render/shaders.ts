@@ -331,6 +331,46 @@ void main() {
 }
 `;
 
+/** Composites an already transformed and view-filtered premultiplied layer onto the ordinary backdrop. */
+export const FILTERED_LAYER_FRAGMENT = /* glsl */ `${COMMON}
+in vec2 vPos;
+out vec4 finalColor;
+uniform sampler2D uBackdrop;
+uniform sampler2D uLayer;
+uniform sampler2D uMask;
+uniform sampler2D uClip;
+uniform vec2 uFilterOffset;
+uniform mat3 uViewToDoc;
+uniform mat3 uDocToLayer;
+uniform mat3 uDocToWarp;
+uniform int uHasWarp;
+uniform vec2 uLayerSize;
+uniform int uHasCrop;
+uniform vec4 uCropRect;
+uniform float uCropFeather;
+uniform float uOpacity;
+uniform float uFillOpacity;
+uniform int uMode;
+uniform int uDissolveSeed;
+uniform int uHasMask;
+uniform int uHasClip;
+uniform int uSnap;
+void main(){
+  ivec2 targetPixel=ivec2(vPos),sourcePixel=ivec2(vPos+uFilterOffset);
+  vec4 dst=texelFetch(uBackdrop,targetPixel,0),sampled=texelFetch(uLayer,sourcePixel,0);
+  vec2 doc=(uViewToDoc*vec3(vPos,1.0)).xy;if(uSnap==1)doc=floor(doc)+0.5;
+  vec3 projective=uDocToWarp*vec3(doc,1.0);
+  vec2 lp=uHasWarp==1?projective.xy/projective.z*uLayerSize:(uDocToLayer*vec3(doc,1.0)).xy;
+  float coverage=1.0;
+  if(uHasCrop==1){vec2 cropEnd=uCropRect.xy+uCropRect.zw;
+    if(lp.x<uCropRect.x||lp.y<uCropRect.y||lp.x>=cropEnd.x||lp.y>=cropEnd.y)coverage=0.0;
+    else if(uCropFeather>0.0)coverage*=clamp(min(min(lp.x-uCropRect.x,cropEnd.x-lp.x),min(lp.y-uCropRect.y,cropEnd.y-lp.y))/uCropFeather,0.0,1.0);}
+  if(uHasMask==1)coverage*=texelFetch(uMask,targetPixel,0).r;
+  if(uHasClip==1)coverage*=texelFetch(uClip,targetPixel,0).r;
+  finalColor=compositeFill(uMode,dst,sampled,coverage,uOpacity,uFillOpacity,ivec2(floor(doc)),uDissolveSeed);
+}
+`;
+
 /** A forward-tessellated bicubic warp. Mesh UVs remain source-unit coordinates. */
 export const WARP_MESH_FRAGMENT = /* glsl */ `${COMMON}
 in vec2 vPos;

@@ -4,7 +4,8 @@ import { makeTransform } from '../../src/core/geometry';
 import { addNoise, applyFilter, carryMask, lensCorrection, motionBlur } from '../../src/core/filters/apply';
 import { defaultFilterSettings } from '../../src/core/filters/settings';
 import { EditorSession } from '../../src/core/session';
-import { applyFilterEdit, beginFilterEdit, cancelFilterEdit, updateFilterEdit } from '../../src/core/filters/editing';
+import { applyFilterEdit, beginFilterEdit, cancelFilterEdit, documentWithPixelFilterPreview,
+  setFilterViewPreviewEnabled, updateFilterEdit } from '../../src/core/filters/editing';
 
 describe('pixel filters', () => {
   it('FilterTests.gaussianBlurSoftensAHardEdgeWithoutFadingTheBorders', () => {
@@ -63,5 +64,23 @@ describe('pixel filters', () => {
     const again = beginFilterEdit(session, 'Lens Correction')!;
     await updateFilterEdit(session, { ...again.settings, distortion: -100 }, false);
     expect(await applyFilterEdit(session)).toBe(true); expect(session.history.undoCount).toBe(count + 1);
+  });
+
+  it('FilterEdit publishes GPU-only preview state without replacing the document raster', async () => {
+    const session = new EditorSession(); session.createDocument(8, 8);
+    const raster = Raster.fromPixels(8, 8, 4, new Uint8Array(8 * 8 * 4).fill(127));
+    session.insertRaster(raster, 'Square'); setFilterViewPreviewEnabled(session, true);
+    const edit = beginFilterEdit(session, 'Denoise')!;
+    await updateFilterEdit(session, { ...edit.settings, luminance: 42, colour: 17 }, true);
+    const preview = documentWithPixelFilterPreview(session);
+    const previewLayer = preview.layers.at(-1) as typeof preview.layers[number] & {
+      gpuFilterPreview?: { kind: string; settings: { luminance: number; colour: number } };
+    };
+    expect(session.activeLayer?.raster).toBe(raster);
+    expect(session.rasterOverrides.has(edit.layerId)).toBe(false);
+    expect(previewLayer.gpuFilterPreview).toMatchObject({ kind: 'Denoise',
+      settings: { luminance: 42, colour: 17 } });
+    cancelFilterEdit(session);
+    expect(documentWithPixelFilterPreview(session)).toBe(session.document);
   });
 });

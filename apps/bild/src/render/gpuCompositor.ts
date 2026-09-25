@@ -16,7 +16,7 @@ import {
 } from 'pixi.js';
 import { adjustmentProgram } from './adjustPrograms';
 import { ancestorIds, maskTransform as storedMaskTransform, type BlendMode, type CanvasDocument, type Layer } from '../core/document';
-import { apply, concat, invert, pixelToDocument, type Affine, type LayerTransform, type Rect } from '../core/geometry';
+import { apply, concat, invert, pixelToDocument, type Affine, type LayerTransform, type Point, type Rect } from '../core/geometry';
 import { Raster, TILE } from '../core/raster';
 import { blendSeed } from '../core/blend';
 import { floatToRgba16, makePixelArray, type PixelArray } from '../core/pixel/format';
@@ -28,10 +28,17 @@ import { tessellateMesh } from '../core/meshWarp';
 import {
   adjustFragment, BLEND_INDEX, BRUSH_COVERAGE_FRAGMENT, BRUSH_DAB_FRAGMENT, BRUSH_MASK_FRAGMENT, BRUSH_MAX_FRAGMENT, BRUSH_PAINT_FRAGMENT, BRUSH_SELECTION_FRAGMENT, COVERAGE_FRAGMENT,
   GROUP_FRAGMENT, IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT, STACK_FRAGMENT,
-  UNPREMULTIPLY_FRAGMENT, VERTEX, WARP_MESH_FRAGMENT,
+  UNPREMULTIPLY_FRAGMENT, VERTEX, WARP_MESH_FRAGMENT, FILTERED_LAYER_FRAGMENT,
 } from './shaders';
 import type { CmykLut } from '../core/color/cmyk';
-import { LiveFilterHookAdapter } from './liveFilterPasses';
+import { EffectLiveFilterHookAdapter } from './liveFilterPasses';
+import { defaultFilterSettings } from '../core/filters/settings';
+import { applyLiveFilters } from '../core/filters/live';
+import {
+  COMBINE_FRAGMENT, DENOISE_FRAGMENT, LENS_FRAGMENT, NOISE_FRAGMENT, QUANTIZE_FRAGMENT, SELECTION_MIX_FRAGMENT,
+  filterHalo, gaussianFragment, gaussianSupport, gaussianWeights, liveViewFilter, previewViewFilter,
+  usesRecursiveGaussian, type PreviewLayer, type ViewFilter,
+} from './gpuFilterPasses';
 
 export { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
 import { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
@@ -105,6 +112,9 @@ export interface GpuPerformanceCounters {
   readonly compositeRequests: number;
   readonly fullComposites: number;
   readonly unchangedFrameHits: number;
+  readonly viewFilterLayers: number;
+  readonly viewFilterPasses: number;
+  readonly cpuLiveFilterFallbacks: number;
 }
 
 /** GLSL for one adjustment kind plus how to fill its uniforms. Provided by the adjustment module. */
@@ -122,6 +132,8 @@ interface Pass {
   shader: Shader;
   uniforms: { uniforms: Record<string, unknown>; update(): void };
 }
+
+interface CustomPassSpec { readonly uniforms: Uniforms; readonly textures: readonly string[] }
 
 interface Slot {
   raster: Raster;
@@ -250,10 +262,11 @@ export class GpuCompositor {
   /** The LUT samples last uploaded per layer, so an unchanged adjustment is not re-uploaded every frame. */
   private lutUploaded = new Map<string, Uint8Array | Float32Array>();
   private activeDocument: CanvasDocument | undefined;
-  private readonly filteredHooks = new LiveFilterHookAdapter(DEFAULT_HOOKS);
+  private readonly effectFilteredHooks = new EffectLiveFilterHookAdapter(DEFAULT_HOOKS);
   private readonly performanceCounterValue = {
     effectRegenerations: 0, textureUploads: 0, targetAllocations: 0, drawPasses: 0, drawnPixels: 0,
     compositeRequests: 0, fullComposites: 0, unchangedFrameHits: 0,
+    viewFilterLayers: 0, viewFilterPasses: 0, cpuLiveFilterFallbacks: 0,
   };
   /** Set per composite: RGBA8 layers get half-float textures (see PRECISION_SENSITIVE_MODES). */
   private preciseTextures = false;
@@ -300,16 +313,17 @@ export class GpuCompositor {
     }
     const compositor = new GpuCompositor(renderer);
     await compositor.prepareBrushPipeline();
+    compositor.prepareFilterPipeline();
     return compositor;
   }
 
   destroy(): void {
-    for (const slot of this.slots.values()) for (const chunk of slot.chunks.values()) chunk.source.destroy();
+    for (const slot of this.slots.values()) for (const chunk of slot.chunks.values()) this.destroySource(chunk.source);
     this.slots.clear();
     this.destroyBrushCompositeCache();
     this.destroyViewportCompositeCache();
-    for (const rt of this.pool) rt.destroy(true);
-    for (const rt of this.inUse) rt.destroy(true);
+    for (const rt of this.pool) this.destroyTarget(rt);
+    for (const rt of this.inUse) this.destroyTarget(rt);
     for (const lut of this.lutSources.values()) lut.destroy();
     for (const source of this.proofSources.values()) source.destroy();
     for (const tip of this.tipSources.values()) tip.destroy();
@@ -318,6 +332,8 @@ export class GpuCompositor {
     for (const targets of this.brushTargetPool) for (const target of Object.values(targets)) target.destroy(true);
     this.brushTargetPool.length = 0;
     this.mesh.destroy();
+    for (const pass of this.passes.values()) pass.shader.destroy();
+    this.passes.clear();
     this.white.destroy();
     this.renderer.destroy();
   }
@@ -356,7 +372,7 @@ export class GpuCompositor {
         throw new RangeError('Invalid GPU texture chunk size');
       }
       if (size !== this.chunkSize) {
-        for (const slot of this.slots.values()) for (const chunk of slot.chunks.values()) chunk.source.destroy();
+        for (const slot of this.slots.values()) for (const chunk of slot.chunks.values()) this.destroySource(chunk.source);
         this.slots.clear();
         this.chunkSize = size;
       }
@@ -371,7 +387,7 @@ export class GpuCompositor {
 
   // MARK: Passes
 
-  private pass(name: string, fragment?: string): Pass {
+  private pass(name: string, fragment?: string, custom?: CustomPassSpec): Pass {
     const existing = this.passes.get(name);
     if (existing) return existing;
     const sources: Record<string, [string, Uniforms, string[]]> = {
@@ -410,6 +426,18 @@ export class GpuCompositor {
         uHasClip: { value: 0, type: 'i32' },
         uSnap: { value: 0, type: 'i32' },
         uReplace: { value: 0, type: 'i32' },
+      }, ['uBackdrop', 'uLayer', 'uMask', 'uClip']],
+      filteredLayer: [FILTERED_LAYER_FRAGMENT, {
+        uFilterOffset: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+        uDocToLayer: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+        uDocToWarp: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+        uHasWarp: { value: 0, type: 'i32' }, uLayerSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uHasCrop: { value: 0, type: 'i32' }, uCropRect: { value: new Float32Array(4), type: 'vec4<f32>' },
+        uCropFeather: { value: 0, type: 'f32' }, uOpacity: { value: 1, type: 'f32' },
+        uFillOpacity: { value: 1, type: 'f32' }, uMode: { value: 0, type: 'i32' },
+        uDissolveSeed: { value: 0, type: 'i32' }, uHasMask: { value: 0, type: 'i32' },
+        uHasClip: { value: 0, type: 'i32' }, uSnap: { value: 0, type: 'i32' },
       }, ['uBackdrop', 'uLayer', 'uMask', 'uClip']],
       warpMesh: [WARP_MESH_FRAGMENT, {
         uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
@@ -535,6 +563,7 @@ export class GpuCompositor {
       }, ['uComposite', 'uProofLut']],
     };
     let spec = sources[name];
+    if (!spec && fragment && custom) spec = [fragment, custom.uniforms, [...custom.textures]];
     if (!spec && fragment) {
       spec = [fragment, {
         uHasClip: { value: 0, type: 'i32' },
@@ -604,13 +633,14 @@ export class GpuCompositor {
 
   // MARK: Render targets
 
-  private acquire(width: number, height: number): RenderTexture {
-    const index = this.pool.findIndex((rt) => rt.width === width && rt.height === height);
+  private acquire(width: number, height: number, fullFloat = false): RenderTexture {
+    const format = this.floatTargets ? fullFloat ? 'rgba32float' : 'rgba16float' : 'rgba8unorm';
+    const index = this.pool.findIndex((rt) => rt.width === width && rt.height === height && rt.source.format === format);
     let rt: RenderTexture;
     if (index >= 0) rt = this.pool.splice(index, 1)[0]!;
     else {
       rt = RenderTexture.create({
-        width, height, format: this.floatTargets ? 'rgba16float' : 'rgba8unorm', antialias: false, resolution: 1,
+        width, height, format, antialias: false, resolution: 1,
       });
       this.performanceCounterValue.targetAllocations++;
     }
@@ -621,7 +651,24 @@ export class GpuCompositor {
     if (!rt || !this.inUse.has(rt)) return;
     this.inUse.delete(rt);
     this.pool.push(rt);
-    while (this.pool.length > 12) this.pool.shift()!.destroy(true);
+    while (this.pool.length > 12) this.destroyTarget(this.pool.shift()!);
+  }
+  private destroyTarget(target: RenderTexture): void {
+    this.detachSource(target.source);
+    target.destroy(true);
+  }
+  private destroySource(source: TextureSource): void {
+    this.detachSource(source);
+    source.destroy();
+  }
+  private detachSource(source: TextureSource): void {
+    for (const pass of this.passes.values()) {
+      const resources = pass.shader.resources as Record<string, unknown>;
+      for (const key of Object.getOwnPropertyNames(resources)) {
+        const resource = resources[key];
+        if (resource === source) resources[key] = this.white;
+      }
+    }
   }
   private clear(rt: RenderTexture, opaqueWhite = false): void {
     this.renderer.renderTarget.bind({ target: rt, clear: true,
@@ -714,14 +761,14 @@ export class GpuCompositor {
     if (compatible) {
       slot = existing!;
     } else {
-      if (existing) for (const chunk of existing.chunks.values()) chunk.source.destroy();
+      if (existing) for (const chunk of existing.chunks.values()) this.destroySource(chunk.source);
       slot = { raster, chunks: new Map(), lastUsed: this.frame, wide: wantsWide };
       this.slots.set(slotKey, slot);
     }
     const wide = slot.wide;
     const previous = compatible ? existing!.raster : null;
     for (const [key, chunk] of slot.chunks) {
-      if (!occupied.has(key)) { chunk.source.destroy(); slot.chunks.delete(key); }
+      if (!occupied.has(key)) { this.destroySource(chunk.source); slot.chunks.delete(key); }
     }
 
     const changed: number[] = [];
@@ -813,7 +860,7 @@ export class GpuCompositor {
   private collectTextures(enforceBudget = false): void {
     for (const [key, slot] of this.slots) {
       if (this.frame - slot.lastUsed > 120) {
-        for (const chunk of slot.chunks.values()) chunk.source.destroy();
+        for (const chunk of slot.chunks.values()) this.destroySource(chunk.source);
         this.slots.delete(key);
       }
     }
@@ -826,7 +873,7 @@ export class GpuCompositor {
       .sort((a, b) => a.chunk.lastUsed - b.chunk.lastUsed);
     for (const { key, slot, chunkKeyValue, chunk } of cold) {
       if (this.textureBytes <= this.textureByteBudget) break;
-      chunk.source.destroy();
+      this.destroySource(chunk.source);
       slot.chunks.delete(chunkKeyValue);
       if (!slot.chunks.size) this.slots.delete(key);
     }
@@ -848,6 +895,42 @@ export class GpuCompositor {
       BRUSH_CHUNK_SIZE + BRUSH_APRON * 2);
     for (const target of Object.values(targets)) this.clear(target);
     this.brushTargetPool.push(targets);
+  }
+
+  /** Link and execute every filter variant before a user's first slider movement. */
+  private prepareFilterPipeline(): void {
+    const first = RenderTexture.create({ width: 1, height: 1, format: this.floatTargets ? 'rgba32float' : 'rgba8unorm',
+      antialias: false, resolution: 1 });
+    const second = RenderTexture.create({ width: 1, height: 1, format: this.floatTargets ? 'rgba32float' : 'rgba8unorm',
+      antialias: false, resolution: 1 });
+    this.clear(first); this.clear(second);
+    let source = first, target = second;
+    const counters = { drawPasses: this.performanceCounterValue.drawPasses,
+      drawnPixels: this.performanceCounterValue.drawnPixels, viewFilterPasses: this.performanceCounterValue.viewFilterPasses };
+    const run = (pass: Pass, textures: Record<string, TextureSource> = {}, uniforms: Record<string, unknown> = {}) => {
+      this.runFilter(pass, target, source, textures, uniforms);
+      [source, target] = [target, source];
+    };
+    for (const support of [4, 8, 16, 32, 64, 96] as const) {
+      const weights = new Float32Array(support * 2 + 1); weights[support] = 1;
+      const extra = { uWeights: { value: new Float32Array(support * 2 + 1), type: 'f32' as const,
+        size: support * 2 + 1 } };
+      run(this.filterPass(`filter:gaussian:${support}`, gaussianFragment(support), ['uSource'], extra), {}, { uWeights: weights });
+      run(this.filterPass(`filter:motion:${support}`, gaussianFragment(support), ['uSource'], extra), {}, { uWeights: weights });
+    }
+    run(this.filterPass('filter:noise', NOISE_FRAGMENT, ['uSource']));
+    run(this.filterPass('filter:lens', LENS_FRAGMENT, ['uSource']));
+    run(this.filterPass('filter:denoise', DENOISE_FRAGMENT, ['uSource']));
+    run(this.filterPass('filter:combine', COMBINE_FRAGMENT, ['uSource', 'uSecond']), { uSecond: source.source });
+    run(this.filterPass('filter:quantize', QUANTIZE_FRAGMENT, ['uSource']), {},
+      { uParams: new Float32Array([255, 0, 0, 0]) });
+    run(this.filterPass('filter:selection', SELECTION_MIX_FRAGMENT, ['uSource', 'uSecond', 'uSelection']),
+      { uSecond: source.source, uSelection: source.source });
+    this.gl.finish();
+    this.performanceCounterValue.drawPasses = counters.drawPasses;
+    this.performanceCounterValue.drawnPixels = counters.drawnPixels;
+    this.performanceCounterValue.viewFilterPasses = counters.viewFilterPasses;
+    this.destroyTarget(first); this.destroyTarget(second);
   }
 
   private createBrushTargets(width: number, height: number): BrushTargets {
@@ -872,7 +955,9 @@ export class GpuCompositor {
     }
     for (const pass of this.passes.values()) {
       const resources = pass.shader.resources as Record<string, unknown>;
-      for (const [key, resource] of Object.entries(resources)) if (sources.has(resource as TextureSource)) resources[key] = this.white;
+      for (const key of Object.getOwnPropertyNames(resources)) {
+        if (sources.has(resources[key] as TextureSource)) resources[key] = this.white;
+      }
     }
     for (const chunk of this.brushState.chunks.values()) {
       const targets = { permanent: chunk.permanent, alternate: chunk.alternate, scratch: chunk.scratch,
@@ -890,7 +975,8 @@ export class GpuCompositor {
     if (!cache) return;
     for (const pass of this.passes.values()) {
       const resources = pass.shader.resources as Record<string, unknown>;
-      for (const [key, resource] of Object.entries(resources)) {
+      for (const key of Object.getOwnPropertyNames(resources)) {
+        const resource = resources[key];
         if (resource === cache.target.source) resources[key] = this.white;
       }
     }
@@ -1143,7 +1229,9 @@ export class GpuCompositor {
       this.tipSources.delete(oldest);
       for (const pass of this.passes.values()) {
         const resources = pass.shader.resources as Record<string, unknown>;
-        for (const [key, resource] of Object.entries(resources)) if (resource === old) resources[key] = this.white;
+        for (const key of Object.getOwnPropertyNames(resources)) {
+          if (resources[key] === old) resources[key] = this.white;
+        }
       }
       old.destroy();
     }
@@ -1240,7 +1328,6 @@ export class GpuCompositor {
     // Live filters change a layer's content; effects are then computed from the filtered alpha (Photoshop order).
     this.performanceCounterValue.compositeRequests++;
     this.activeDocument = document;
-    hooks = this.filteredHooks.use(hooks);
     const activeBrush = hooks.brush ?? null;
     const cacheable = view.cache === true && !activeBrush;
     const visualState = cacheable ? this.compositeVisualState(document, hooks) : null;
@@ -1251,15 +1338,21 @@ export class GpuCompositor {
       this.skippedAdjustments = viewportCache.skippedAdjustments;
       return viewportCache.target;
     }
-    document = documentWithLayerEffects(document, hooks, this.performanceCounterValue);
+    const needsCpuEffectSource = document.layers.some((layer) => layer.filters.some((filter) => filter.enabled)
+      && layer.effects.some((effect) => effect.enabled));
+    if (needsCpuEffectSource) this.performanceCounterValue.cpuLiveFilterFallbacks++;
+    document = documentWithLayerEffects(document,
+      needsCpuEffectSource ? this.effectFilteredHooks.use(hooks) : hooks, this.performanceCounterValue);
     this.frame++;
     this.performanceCounterValue.fullComposites++;
     this.skippedAdjustments = 0;
     // Float targets only: an 8-bit accumulation target would lose the precision again.
     // Keep a layer's texture encoding stable when a style is toggled; changing every RGBA8 upload
     // from browser-premultiplied bytes to half floats re-rounded unrelated translucent pixels.
-    this.preciseTextures = this.floatTargets
-      && document.layers.some((layer) => PRECISION_SENSITIVE_MODES.has(hooks.blendMode(layer)));
+    this.preciseTextures = this.floatTargets && document.layers.some((layer) =>
+      PRECISION_SENSITIVE_MODES.has(hooks.blendMode(layer))
+      || !!(layer as PreviewLayer).gpuFilterPreview
+      || layer.filters.some((filter) => filter.enabled));
     const { width, height } = view;
     let brushState: BrushGpuState | null = null;
     let cache = this.brushCompositeCache;
@@ -1536,14 +1629,243 @@ export class GpuCompositor {
     return { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
   }
 
+  private filterPass(name: string, fragment: string, textures: readonly string[], extra: Uniforms = {}): Pass {
+    return this.pass(name, fragment, { uniforms: {
+      uSourceSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+      uDirection: { value: new Float32Array(2), type: 'vec2<f32>' },
+      uViewToLayer: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+      uLayerToView: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+      uLayerSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+      uParams: { value: new Float32Array(4), type: 'vec4<f32>' },
+      uSeed: { value: 0, type: 'i32' },
+      ...extra,
+    }, textures });
+  }
+
+  private runFilter(pass: Pass, target: RenderTexture, source: RenderTexture, textures: Record<string, TextureSource>,
+    uniforms: Record<string, unknown>): void {
+    this.performanceCounterValue.viewFilterPasses++;
+    this.run(pass, target, target.width, target.height, { uSource: source.source, ...textures }, {
+      uSourceSize: new Float32Array([source.width, source.height]), uDirection: new Float32Array(2),
+      uViewToLayer: IDENTITY9, uLayerToView: IDENTITY9, uLayerSize: new Float32Array(2),
+      uParams: new Float32Array(4), uSeed: 0, ...uniforms,
+    });
+  }
+
+  private gaussianTarget(source: RenderTexture, sigma: number, xDirection: Point, yDirection: Point,
+    recursive = false): RenderTexture {
+    const xScale = Math.max(1e-6, Math.hypot(xDirection.x, xDirection.y));
+    const yScale = Math.max(1e-6, Math.hypot(yDirection.x, yDirection.y));
+    const xSigma = Math.max(0.01, sigma * xScale), ySigma = Math.max(0.01, sigma * yScale);
+    const xSupport = gaussianSupport(xSigma, recursive), ySupport = gaussianSupport(ySigma, recursive);
+    const xPass = this.filterPass(`filter:gaussian:${xSupport}`, gaussianFragment(xSupport), ['uSource'],
+      { uWeights: { value: new Float32Array(xSupport * 2 + 1), type: 'f32', size: xSupport * 2 + 1 } });
+    const yPass = this.filterPass(`filter:gaussian:${ySupport}`, gaussianFragment(ySupport), ['uSource'],
+      { uWeights: { value: new Float32Array(ySupport * 2 + 1), type: 'f32', size: ySupport * 2 + 1 } });
+    const horizontal = this.acquire(source.width, source.height, true);
+    const vertical = this.acquire(source.width, source.height, true);
+    this.runFilter(xPass, horizontal, source, {}, { uDirection: new Float32Array([xDirection.x / xScale, xDirection.y / xScale]),
+      uWeights: gaussianWeights(xSigma, xSupport, recursive) });
+    this.runFilter(yPass, vertical, horizontal, {}, { uDirection: new Float32Array([yDirection.x / yScale, yDirection.y / yScale]),
+      uWeights: gaussianWeights(ySigma, ySupport, recursive) });
+    this.release(horizontal);
+    return vertical;
+  }
+
+  private oneFilter(source: RenderTexture, filter: ViewFilter, layerToView: Affine, viewToLayer: Affine,
+    xDirection: Point, yDirection: Point, layerSize: { width: number; height: number }, maximum: number): RenderTexture {
+    const common = { uViewToLayer: mat3(viewToLayer), uLayerToView: mat3(layerToView),
+      uLayerSize: new Float32Array([layerSize.width, layerSize.height]), uDirection: new Float32Array([xDirection.x, xDirection.y]) };
+    if (filter.kind === 'Gaussian Blur') return this.gaussianTarget(source, filter.settings.radius, xDirection, yDirection,
+      usesRecursiveGaussian(layerSize.width, layerSize.height, filter.settings.radius, 2));
+    if (filter.kind === 'Motion Blur') {
+      const radians = filter.settings.angle * Math.PI / 180;
+      const direction = { x: xDirection.x * Math.cos(radians) - yDirection.x * Math.sin(radians),
+        y: xDirection.y * Math.cos(radians) - yDirection.y * Math.sin(radians) };
+      const scale = Math.max(1e-6, Math.hypot(direction.x, direction.y));
+      const sigma = Math.max(0.01, filter.settings.distance / Math.sqrt(12) * scale);
+      const sourceSigma = Math.max(0.01, filter.settings.distance / Math.sqrt(12));
+      const axisAligned = Math.abs(filter.settings.angle) < 1e-9 || Math.abs(Math.abs(filter.settings.angle) - 90) < 1e-9;
+      const recursive = axisAligned && usesRecursiveGaussian(layerSize.width, layerSize.height, sourceSigma, 1);
+      const out = this.acquire(source.width, source.height, true), support = gaussianSupport(sigma, recursive);
+      this.runFilter(this.filterPass(`filter:motion:${support}`, gaussianFragment(support), ['uSource'],
+        { uWeights: { value: new Float32Array(support * 2 + 1), type: 'f32', size: support * 2 + 1 } }), out, source, {},
+      { ...common, uDirection: new Float32Array([direction.x / scale, direction.y / scale]),
+        uWeights: gaussianWeights(sigma, support, recursive) });
+      return out;
+    }
+    if (filter.kind === 'Add Noise') {
+      const out = this.acquire(source.width, source.height, true);
+      this.runFilter(this.filterPass('filter:noise', NOISE_FRAGMENT, ['uSource']), out, source, {}, {
+        ...common, uParams: new Float32Array([filter.settings.amount, filter.settings.gaussian ? 1 : 0,
+          filter.settings.monochromatic ? 1 : 0, 0]), uSeed: filter.seed | 0,
+      });
+      return out;
+    }
+    if (filter.kind === 'Lens Correction') {
+      const out = this.acquire(source.width, source.height, true);
+      this.runFilter(this.filterPass('filter:lens', LENS_FRAGMENT, ['uSource']), out, source, {}, {
+        ...common, uParams: new Float32Array([filter.settings.distortion, 0, 0, 0]),
+      });
+      return out;
+    }
+    const denoiseTarget = (input: RenderTexture, luminance: number, colour: number, detail: number): RenderTexture => {
+      const ls = Math.min(1, Math.max(0, luminance / 100)), cs = Math.min(1, Math.max(0, colour / 100));
+      const radius = Math.max(2, Math.round(2 + 2 * Math.max(ls, cs))), out = this.acquire(input.width, input.height, true);
+      this.runFilter(this.filterPass('filter:denoise', DENOISE_FRAGMENT, ['uSource']), out, input, {}, {
+        ...common, uParams: new Float32Array([ls, cs, Math.min(1, Math.max(0, detail / 100)), radius]),
+      });
+      return out;
+    };
+    if (filter.kind === 'Denoise') return denoiseTarget(source, filter.settings.luminance,
+      filter.settings.colour, filter.settings.detail);
+    let sharpenSource = source, prepared: RenderTexture | null = null;
+    if (filter.kind === 'Smart Sharpen' && filter.settings.reduceNoise > 0) {
+      const denoised = denoiseTarget(source, filter.settings.reduceNoise * 0.35, filter.settings.reduceNoise, 50);
+      prepared = this.quantizeFilterTarget(denoised, maximum); this.release(denoised);
+      sharpenSource = prepared;
+    }
+    const blurred = this.gaussianTarget(sharpenSource, filter.settings.radius, xDirection, yDirection,
+      usesRecursiveGaussian(layerSize.width, layerSize.height, filter.settings.radius, 2));
+    const out = this.acquire(source.width, source.height, true);
+    this.runFilter(this.filterPass('filter:combine', COMBINE_FRAGMENT, ['uSource', 'uSecond']), out, sharpenSource,
+      { uSecond: blurred.source }, { ...common, uParams: new Float32Array([
+        filter.kind === 'High Pass' ? 0 : filter.settings.amount,
+        filter.kind === 'High Pass' ? 0 : filter.settings.threshold,
+        filter.kind === 'High Pass' ? 1 : 0, maximum,
+      ]) });
+    this.release(blurred); if (prepared) this.release(prepared);
+    return out;
+  }
+
+  private quantizeFilterTarget(source: RenderTexture, maximum: number): RenderTexture {
+    // Preserve the byte-quantized straight colour through premultiplication; half float can move a later stacked
+    // filter two byte values away even though each individual pass is within one.
+    const out = this.acquire(source.width, source.height, true);
+    this.runFilter(this.filterPass('filter:quantize', QUANTIZE_FRAGMENT, ['uSource']), out, source, {},
+      { uParams: new Float32Array([maximum, 0, 0, 0]) });
+    return out;
+  }
+
+  private drawFilteredLayer(backdrop: RenderTexture, layer: Layer, raster: Raster, filters: readonly ViewFilter[],
+    previewSelection: import('../core/selection').DocumentSelection | null, view: ViewSpec, hooks: CompositeHooks,
+    clip: RenderTexture | null, mode: BlendMode): RenderTexture {
+    const transform = hooks.transform(layer), gridToDoc = pixelToDocument(transform, raster.width, raster.height);
+    const docToView = invert(view.viewToDoc);
+    const map = (point: Point) => apply(docToView, apply(gridToDoc, point));
+    const origin = map({ x: 0, y: 0 }), x = map({ x: 1, y: 0 }), y = map({ x: 0, y: 1 });
+    const xDirection = { x: x.x - origin.x, y: x.y - origin.y }, yDirection = { x: y.x - origin.x, y: y.y - origin.y };
+    const halo = filterHalo(filters, Math.hypot(xDirection.x, xDirection.y), Math.hypot(yDirection.x, yDirection.y));
+    const expandedView: ViewSpec = { ...view, width: view.width + halo * 2, height: view.height + halo * 2, cache: false,
+      viewToDoc: { ...view.viewToDoc,
+        tx: view.viewToDoc.tx - view.viewToDoc.a * halo - view.viewToDoc.c * halo,
+        ty: view.viewToDoc.ty - view.viewToDoc.b * halo - view.viewToDoc.d * halo } };
+    if (expandedView.width > this.maxTextureSize || expandedView.height > this.maxTextureSize) {
+      throw new RangeError('Filtered view exceeds the GPU texture limit');
+    }
+    const empty = this.acquire(expandedView.width, expandedView.height); this.clear(empty);
+    const { gpuFilterPreview: _preview, ...plainLayer } = layer as PreviewLayer;
+    const rawLayer = { ...plainLayer, filters: [], effects: [], mask: null, vectorMask: null, crop: null,
+      opacity: 1, fillOpacity: 1, blendMode: 'normal' as const } as Layer;
+    let current = this.drawLayer(empty, rawLayer, expandedView, hooks, null, 'normal', true, true);
+    this.release(empty);
+
+    const expandedDocToView = invert(expandedView.viewToDoc), expandedMap = (point: Point) =>
+      apply(expandedDocToView, apply(gridToDoc, point));
+    const eo = expandedMap({ x: 0, y: 0 }), ex = expandedMap({ x: 1, y: 0 }), ey = expandedMap({ x: 0, y: 1 });
+    const layerToView: Affine = { a: ex.x - eo.x, b: ex.y - eo.y, c: ey.x - eo.x, d: ey.y - eo.y, tx: eo.x, ty: eo.y };
+    const viewToLayer = invert(layerToView);
+    const expandedX = { x: layerToView.a, y: layerToView.b }, expandedY = { x: layerToView.c, y: layerToView.d };
+    let selectionTarget: RenderTexture | null = null;
+    if (previewSelection) {
+      const placement: LayerTransform = { origin: { x: previewSelection.x, y: previewSelection.y },
+        size: { width: previewSelection.mask.width, height: previewSelection.mask.height }, rotation: 0,
+        flipX: false, flipY: false, sampling: 'High quality' };
+      selectionTarget = this.renderMask(null, previewSelection.mask, `filter-selection:${layer.id}`,
+        placement, expandedView, 0);
+    }
+    filters.forEach((filter, index) => {
+      const before = current;
+      let after = this.oneFilter(before, filter, layerToView, viewToLayer, expandedX, expandedY,
+        { width: raster.width, height: raster.height }, raster.maximum);
+      const quantized = this.quantizeFilterTarget(after, raster.maximum);
+      this.release(after); after = quantized;
+      if (index === 0 && selectionTarget) {
+        const mixed = this.acquire(after.width, after.height, true);
+        this.runFilter(this.filterPass('filter:selection', SELECTION_MIX_FRAGMENT,
+          ['uSource', 'uSecond', 'uSelection']), mixed, before,
+        { uSecond: after.source, uSelection: selectionTarget.source }, {});
+        this.release(after);
+        after = this.quantizeFilterTarget(mixed, raster.maximum);
+        this.release(mixed);
+      }
+      this.release(before); current = after;
+    });
+    this.release(selectionTarget);
+
+    let maskTarget: RenderTexture | null = null;
+    const maskEnabled = layer.mask?.enabled || layer.vectorMask?.enabled;
+    const maskRaster = maskEnabled ? hooks.maskRaster(layer) : null;
+    if (maskEnabled && maskRaster) {
+      const placement = hooks.maskPlacement(layer), maskPlace = placement ?? transform;
+      const drawnMask = this.residentLod(maskRaster, maskPlace, view);
+      maskTarget = this.renderMask(null, maskRaster, `mask:${layer.id}`, maskPlace, view,
+        placement ? maskBackground(drawnMask) : 0);
+    }
+    const brush = hooks.brush?.layerId === layer.id ? hooks.brush : null;
+    if (brush?.target === 'mask' && maskTarget) {
+      const painted = this.overlayBrushMask(maskTarget, brush, this.prepareBrush(brush), view);
+      this.release(maskTarget); maskTarget = painted;
+    }
+    const out = this.acquire(view.width, view.height), u = this.layerUniforms(raster, transform, view, layer.warp);
+    this.run(this.pass('filteredLayer'), out, view.width, view.height, {
+      uBackdrop: backdrop.source, uLayer: current.source, uMask: maskTarget?.source ?? this.white,
+      uClip: clip?.source ?? this.white,
+    }, {
+      uFilterOffset: new Float32Array([halo, halo]), uViewToDoc: mat3(view.viewToDoc),
+      uDocToLayer: u.uDocToLayer, uDocToWarp: u.uDocToWarp, uHasWarp: u.uHasWarp,
+      uLayerSize: u.uLayerSize, ...this.cropUniforms(layer, raster, raster),
+      uOpacity: layer.opacity, uFillOpacity: layer.fillOpacity, uMode: BLEND_INDEX[mode] ?? 0,
+      uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
+      uHasMask: maskTarget ? 1 : 0, uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0,
+    });
+    this.release(maskTarget); this.release(current);
+    this.performanceCounterValue.viewFilterLayers++;
+    return out;
+  }
+
   /** One layer pass onto `backdrop` → a new target. */
   private drawLayer(backdrop: RenderTexture, layer: Layer, view: ViewSpec, hooks: CompositeHooks, clip: RenderTexture | null,
-    mode: BlendMode, replace = false): RenderTexture {
+    mode: BlendMode, replace = false, fullFloatTarget = false): RenderTexture {
     const raster = hooks.raster(layer);
+    const preview = (layer as PreviewLayer).gpuFilterPreview;
+    const defaults = defaultFilterSettings();
+    const filters = [preview ? previewViewFilter(preview) : null,
+      ...layer.filters.map((filter) => liveViewFilter(filter, defaults))]
+      .filter((filter): filter is ViewFilter => !!filter);
+    const transform = hooks.transform(layer);
+    const targetPerSource = Math.max(transform.size.width / Math.max(1, raster?.width ?? 1),
+      transform.size.height / Math.max(1, raster?.height ?? 1)) * view.scale;
+    // A highly magnified icon should not be blurred on a much larger upsampled grid. The bounded native-grid
+    // path is exact and stays cheap; production-size layers remain view-space and never enter the CPU here.
+    if (raster && !preview && filters.length && raster.width * raster.height <= 16_384 && targetPerSource > 1) {
+      this.performanceCounterValue.cpuLiveFilterFallbacks++;
+      const filtered = applyLiveFilters(raster, layer.filters);
+      const plain = { ...layer, filters: [] };
+      const filteredHooks: CompositeHooks = {
+        transform: (item) => hooks.transform(item), maskPlacement: (item) => hooks.maskPlacement(item),
+        blendMode: (item) => hooks.blendMode(item), maskRaster: (item) => hooks.maskRaster(item),
+        raster: (item) => item.id === layer.id ? filtered : hooks.raster(item), brush: hooks.brush,
+      };
+      return this.drawLayer(backdrop, plain, view, filteredHooks, clip, mode, replace, fullFloatTarget);
+    }
+    if (raster && filters.length) return this.drawFilteredLayer(backdrop, layer, raster, filters,
+      preview?.selection ?? null, view, hooks, clip, mode);
     const brush = hooks.brush?.layerId === layer.id ? hooks.brush : null;
     const brushState = brush ? this.prepareBrush(brush) : null;
     const pixelBrush = brush?.target === 'pixels' ? brush : null;
-    let out = this.acquire(view.width, view.height);
+    let out = this.acquire(view.width, view.height, fullFloatTarget);
+    if (replace) this.copy(backdrop, out, view);
     let maskTarget: RenderTexture | null = null;
     const maskEnabled = layer.mask?.enabled || layer.vectorMask?.enabled;
     const maskRaster = maskEnabled ? hooks.maskRaster(layer) : null;
@@ -1570,7 +1892,7 @@ export class GpuCompositor {
       const only = slot.chunks.size === 1 ? slot.chunks.values().next().value as TextureChunk : null;
       const restricted = !only || only.x !== 0 || only.y !== 0
         || only.width !== drawnRaster.width || only.height !== drawnRaster.height;
-      if (!slot.chunks.size || restricted) this.copy(backdrop, out, view);
+      if (!replace && (!slot.chunks.size || restricted)) this.copy(backdrop, out, view);
       const gridToDoc = pixelToDocument(transform, drawnRaster.width, drawnRaster.height);
       for (const chunk of slot.chunks.values()) {
         const rect = layer.warp ? { x: 0, y: 0, width: view.width, height: view.height } : restricted
@@ -1958,7 +2280,7 @@ export class GpuCompositor {
         this.run(this.pass('unpremultiply'), straight, w, h, { uSource: rt.source }, {});
         this.releaseTarget(rt);
         const pixels = this.readPixels(straight, w, h);
-        straight.destroy(true);
+        this.destroyTarget(straight);
         for (let row = 0; row < h; row++) {
           out.set(pixels.subarray(row * w * 4, (row + 1) * w * 4), ((ty + row) * width + tx) * 4);
         }
@@ -1992,7 +2314,7 @@ export class GpuCompositor {
       this.run(this.pass('unpremultiply'), straight, w, h, { uSource: rt.source }, {});
       this.releaseTarget(rt);
       const pixels = this.readFloatPixels(straight, w, h);
-      straight.destroy(true);
+      this.destroyTarget(straight);
       for (let row = 0; row < h; row++) {
         out.set(pixels.subarray(row * w * 4, (row + 1) * w * 4), ((ty + row) * width + tx) * 4);
       }
@@ -2040,8 +2362,8 @@ export class GpuCompositor {
     this.renderer.renderTarget.bind({ target: rt, clear: false });
     const pixels = new Uint8Array(8);
     gl.readPixels(0, 0, 1, 2, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    rt.destroy(true);
-    source.destroy();
+    this.destroyTarget(rt);
+    this.destroySource(source);
     this.flippedProbe = pixels[3] === 0;
     return this.flippedProbe;
   }

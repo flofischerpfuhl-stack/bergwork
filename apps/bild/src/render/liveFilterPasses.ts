@@ -8,7 +8,7 @@ import type { CompositeHooks } from './hooks';
 
 /** Stable adapter for render loops whose source hooks can change between frames. */
 export class LiveFilterHookAdapter implements CompositeHooks {
-  constructor(private source: CompositeHooks) {}
+  constructor(protected source: CompositeHooks) {}
 
   use(source: CompositeHooks): CompositeHooks { this.source = source; return this; }
   readonly transform = (layer: Layer): LayerTransform => this.source.transform(layer);
@@ -20,6 +20,15 @@ export class LiveFilterHookAdapter implements CompositeHooks {
   };
   readonly maskRaster = (layer: Layer): Raster | null | undefined => this.source.maskRaster(layer);
   get brush(): GpuBrushPreview | null { return this.source.brush ?? null; }
+}
+
+/** CPU fallback only for style generation, whose distance fields still consume native-grid alpha. */
+export class EffectLiveFilterHookAdapter extends LiveFilterHookAdapter {
+  override readonly raster = (layer: Layer): Raster | null | undefined => {
+    const raster = this.source.raster(layer);
+    return raster && layer.filters.length && layer.effects.some((effect) => effect.enabled)
+      ? applyLiveFilters(raster, layer.filters) : raster;
+  };
 }
 
 const adapters = new WeakMap<CompositeHooks, CompositeHooks>();
