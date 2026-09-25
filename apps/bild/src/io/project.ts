@@ -846,7 +846,7 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
   for (const asset of manifest.assets) {
     if (!asset || typeof asset.id !== 'string' || !asset.id || records.has(asset.id) || !isSafeRelativePath(asset.path)
       || typeof asset.mime !== 'string' || typeof asset.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(asset.sha256)
-      || !['image', 'mask', 'pattern', 'embedded', 'font', 'lut', 'history-tile'].includes(asset.role)) invalid('v2 asset');
+      || !['image', 'mask', 'pattern', 'embedded', 'font', 'lut', 'history-tile', 'brushes'].includes(asset.role)) invalid('v2 asset');
     if (asset.width !== undefined && (!Number.isInteger(asset.width) || asset.width < 1 || asset.width > limits.maxSide)) invalid('v2 asset width');
     if (asset.height !== undefined && (!Number.isInteger(asset.height) || asset.height < 1 || asset.height > limits.maxSide)) invalid('v2 asset height');
     if (asset.width && asset.height && asset.width * asset.height > limits.maxPixels) {
@@ -858,7 +858,8 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
   const rasters = new Map<string, Raster>();
   const resourceValues = new Map<string, NonNullable<CanvasDocument['resources']>[number]>();
   for (const record of records.values()) {
-    if (record.role !== 'pattern' && record.role !== 'embedded' && record.role !== 'font' && record.role !== 'lut') continue;
+    if (record.role !== 'pattern' && record.role !== 'embedded' && record.role !== 'font' && record.role !== 'lut'
+      && record.role !== 'brushes') continue;
     const bytes = entries[record.path];
     if (!bytes || sha256Hex(bytes) !== record.sha256) throw new ProjectError('missing-image', 'An embedded project asset is missing or damaged.');
     if (record.role === 'lut') try { parseCubeLut(bytes); } catch { invalid('colour lookup resource'); }

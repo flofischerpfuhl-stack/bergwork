@@ -154,3 +154,102 @@ test('Undo requested immediately after pointer-up waits for and undoes the pendi
   expect(result.raster).toBeNull();
   expect(result.undoCount).toBe(0);
 });
+
+test('dab brushes (sampled, elliptic, scatter, flow): GPU preview matches the CPU and the worker commit is byte-identical', async ({ page }) => {
+  await mountForTest(page);
+  await page.waitForFunction(() => !!(window as any).__editorForTests?.canvasView?.gpu);
+  const results = await page.evaluate(async () => {
+    const load = <T,>(path: string): Promise<T> => import(/* @vite-ignore */ path) as Promise<T>;
+    const brush = await load<typeof import('../../src/core/brush/index.ts')>('/src/core/brush/index.ts');
+    const rasterModule = await load<typeof import('../../src/core/raster.ts')>('/src/core/raster.ts');
+    const editor = (window as unknown as { __editorForTests: { session: EditorSession; canvasView: CanvasView } }).__editorForTests;
+    const session = editor.session;
+    const gpu = editor.canvasView.gpu!;
+    const size = 300;
+    // A generated grainy tip (no third-party image): a hash-thresholded disc.
+    const tipSize = 120, tipData = new Uint8Array(tipSize * tipSize);
+    for (let y = 0; y < tipSize; y++) for (let x = 0; x < tipSize; x++) {
+      const d = Math.hypot(x + 0.5 - tipSize / 2, y + 0.5 - tipSize / 2) / (tipSize / 2);
+      const grain = ((Math.imul(x * 73856093 ^ y * 19349663, 0x9e3779b1) >>> 0) % 256);
+      tipData[y * tipSize + x] = d < 1 ? Math.round(grain * (1 - d)) : 0;
+    }
+    const tip = { id: 'e2e-grain', width: tipSize, height: tipSize, data: tipData };
+    const dyn = brush.DEFAULT_BRUSH_DYNAMICS;
+    const cases = [
+      { label: 'sampled-scatter', settings: { diameter: 42, hardness: 1, tip: { kind: 'sampled', image: tip, angle: 25, roundness: 0.8 },
+        dynamics: { ...dyn, spacing: 0.3, scatter: 0.9, count: 2, sizeJitter: 0.4, angleJitter: 0.25, flow: 0.8 } } },
+      { label: 'elliptic-soft-flow', settings: { diameter: 50, hardness: 0.2, tip: { kind: 'round', angle: -30, roundness: 0.35 },
+        dynamics: { ...dyn, spacing: 0.12, flow: 0.35, opacityJitter: 0.3 } } },
+      { label: 'hard-spaced-erase', settings: { diameter: 24, hardness: 1, mode: 'erase', dynamics: { ...dyn, spacing: 1.4 } } },
+      { label: 'mask-sampled', mask: true, settings: { diameter: 60, hardness: 1, tip: { kind: 'sampled', image: tip, angle: 0, roundness: 1 },
+        dynamics: { ...dyn, spacing: 0.4 } } },
+    ] as const;
+    const points = [{ x: 30.5, y: 60.25 }, { x: 80.75, y: 110.5 }, { x: 140.125, y: 70.25 }, { x: 200.5, y: 180.75 }, { x: 270.25, y: 150.5 }];
+    const output: { label: string; live: number; committed: number; exactDifferences: number; painted: number }[] = [];
+    for (const test of cases) {
+      session.createNewProject(size, size);
+      const bytes = new Uint8Array(size * size * 4);
+      for (let i = 0; i < size * size; i++) bytes.set([40, 120, 200, 255], i * 4);
+      const layer = session.activeLayer!;
+      if (layer.kind !== 'pixel') throw new Error('Expected pixel layer');
+      session.replaceDocument({ ...session.document!, layers: [{ ...layer, raster: rasterModule.Raster.fromPixels(size, size, 4, bytes) }] });
+      if ('mask' in test) session.addLayerMask(true);
+      session.tool = 'brush';
+      const settings = { ...brush.DEFAULT_BRUSH_SETTINGS, opacity: 0.85, red: 0.9, green: 0.2, blue: 0.1, mode: 'paint' as const,
+        ...(test.settings as object) } as import('../../src/core/brush/settings.ts').BrushSettings;
+      const before = session.activeLayer!;
+      brush.beginBrushStroke(session, points[0]!, { settings });
+      for (let i = 1; i < points.length; i++) brush.extendBrushStroke(session, points[i]!);
+      const cpu = brush.currentBrushPreview(session);
+      const active = brush.currentGpuBrushPreview(session);
+      if (!active?.dabs?.length) throw new Error(`${test.label}: expected GPU dabs`);
+      const viewToDoc = { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 };
+      const baseHooks = {
+        transform: (l: Layer) => session.displayedTransform(l), maskPlacement: (l: Layer) => session.displayedMaskPlacement(l),
+        blendMode: (l: Layer) => session.displayedBlendMode(l),
+      };
+      const gpuPixels = gpu.readView(session.document!, size, size, viewToDoc, 1, {
+        ...baseHooks, raster: (l: Layer) => l.raster, maskRaster: (l: Layer) => l.mask?.raster ?? null, brush: active });
+      const cpuPixels = gpu.readView(session.document!, size, size, viewToDoc, 1, {
+        ...baseHooks,
+        transform: (l: Layer) => cpu && !cpu.mask && cpu.layerId === l.id ? cpu.transform : l.transform,
+        raster: (l: Layer) => cpu && !cpu.mask && cpu.layerId === l.id ? cpu.raster : l.raster,
+        maskRaster: (l: Layer) => cpu?.mask && cpu.layerId === l.id ? cpu.raster : l.mask?.raster ?? null });
+      brush.finishBrushStroke(session);
+      const pendingPixels = gpu.readView(session.document!, size, size, viewToDoc, 1, {
+        ...baseHooks, raster: (l: Layer) => l.raster, maskRaster: (l: Layer) => l.mask?.raster ?? null, brush: brush.currentGpuBrushPreview(session) });
+      await brush.waitForBrushStroke(session);
+      const finalPixels = gpu.readView(session.document!, size, size, viewToDoc, 1, {
+        ...baseHooks, raster: (l: Layer) => l.raster, maskRaster: (l: Layer) => l.mask?.raster ?? null });
+      // Compared premultiplied: an erased pixel at alpha 38 cannot hold its straight colour to one level in any RGBA8 path.
+      const premultiplied = (pixels: ArrayLike<number>, i: number) => ((i & 3) === 3 ? pixels[i]! : pixels[i]! * pixels[i | 3]! / 255);
+      let live = 0, committed = 0, painted = 0;
+      for (let i = 0; i < gpuPixels.length; i++) {
+        live = Math.max(live, Math.abs(premultiplied(gpuPixels, i) - premultiplied(cpuPixels, i)));
+        committed = Math.max(committed, Math.abs(premultiplied(pendingPixels, i) - premultiplied(finalPixels, i)));
+      }
+      // The committed worker result against a synchronous replay of the same points on the main thread.
+      const replay = brush.beginStroke({ layer: before, canvas: { width: size, height: size }, settings: {
+        ...settings, ...('mask' in test ? { red: 0, green: 0, blue: 0 } : {}) }, target: 'mask' in test ? 'mask' : 'pixels' });
+      for (const point of points) replay.addPoints([point]);
+      const expected = replay.finish().raster;
+      const actual = 'mask' in test ? session.activeLayer!.mask!.raster : session.activeLayer!.raster!;
+      const a = actual.readRegion(0, 0, actual.width, actual.height), e = expected.readRegion(0, 0, expected.width, expected.height);
+      const original = ('mask' in test ? before.mask!.raster : before.raster!);
+      const o = original.width === actual.width ? original.readRegion(0, 0, actual.width, actual.height) : null;
+      let exactDifferences = actual.width === expected.width && actual.height === expected.height ? 0 : Infinity;
+      for (let i = 0; i < Math.min(a.length, e.length); i++) {
+        if (a[i] !== e[i]) exactDifferences++;
+        if (o ? a[i] !== o[i] : a[i] !== 255) painted++;
+      }
+      output.push({ label: test.label, live, committed, exactDifferences, painted });
+    }
+    return output;
+  });
+  for (const result of results) {
+    expect(result.painted, `${result.label} painted`).toBeGreaterThan(500);
+    expect(result.live, `${result.label} live CPU`).toBeLessThanOrEqual(2);
+    expect(result.committed, `${result.label} committed`).toBeLessThanOrEqual(2);
+    expect(result.exactDifferences, `${result.label} worker vs synchronous`).toBe(0);
+  }
+});

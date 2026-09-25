@@ -178,6 +178,7 @@ export function createBrowserHost(): FileTargetHost {
       let handles: FileSystemFileHandle[];
       try {
         handles = await openFunction({ multiple: kind === 'images', types: kind === 'project' ? [PICKER_TYPES.project]
+          : kind === 'brushes' ? [{ description: 'Photoshop brushes', accept: { 'application/octet-stream': ['.abr'] } }]
           : kind === 'content' ? [{ description: 'Placeable content', accept: {
             'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.avif', '.gif', '.tif', '.tiff', '.heic', '.heif', '.svg'],
             'application/pdf': ['.pdf'], 'application/zip': ['.fwimg'],

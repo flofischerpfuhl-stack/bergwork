@@ -29,6 +29,7 @@ import type { BrushRange } from '../core/brush/settings';
 import type { CanvasView } from '../ui/canvas/CanvasView';
 import { sampleColor, type SampleSize } from '../core/color/sample';
 import { colorState } from './color/state';
+import { BrushPresetControls, installBrushPresets } from './brush/ui';
 
 // MARK: Per-project tool state
 
@@ -111,7 +112,8 @@ class BrushTool implements ToolHandler {
       pixel = this.horizontal === null ? anchor : this.horizontal ? { x: pixel.x, y: anchor.y } : { x: anchor.x, y: pixel.y };
     } else { this.axisAnchor = null; this.horizontal = null; }
     this.last = pixel;
-    extendBrushStroke(session, pixel, c.pressure === null ? undefined : { pressure: c.pressure });
+    extendBrushStroke(session, pixel, c.pressure === null && (c.tilt ?? null) === null ? undefined
+      : { ...(c.pressure === null ? {} : { pressure: c.pressure }), ...(c.tilt == null ? {} : { tilt: c.tilt }) });
     syncPreview(session);
   }
   up(c: ToolContext): void {
@@ -262,11 +264,15 @@ function paintCursors(view: CanvasView) {
     if (point && isBrushLike(session.tool)) {
       const settings = session.tool === 'blur' ? paintState(session).smear : getBrushSettings(session);
       const radius = Math.max(1, brushOutlineRadius(settings.diameter, ppp));
+      // Elliptic procedural tips (brush presets) show their roundness and angle, like Photoshop's tip outline.
+      const tip = session.tool === 'blur' ? undefined : getBrushSettings(session).tip;
+      const roundness = tip?.kind === 'round' ? tip.roundness : 1, angle = (tip?.angle ?? 0) * Math.PI / 180;
       context.lineWidth = 1;
       for (const [color, r] of [['rgba(0,0,0,0.7)', radius + 0.5], ['rgba(255,255,255,0.9)', radius - 0.5]] as const) {
         context.strokeStyle = color;
         context.beginPath();
-        context.arc(point.x, point.y, Math.max(0.5, r), 0, Math.PI * 2);
+        if (roundness < 1) context.ellipse(point.x, point.y, Math.max(0.5, r), Math.max(0.5, radius * roundness + (r - radius)), angle, 0, Math.PI * 2);
+        else context.arc(point.x, point.y, Math.max(0.5, r), 0, Math.PI * 2);
         context.stroke();
       }
       if (settings.hardness < 1 && radius > 6) {
@@ -436,6 +442,7 @@ function BrushBar({ controller, session }: { controller: EditorController; sessi
           {seg(['This Layer', 'All Layers'] as const, clone.sampleAllLayers ? 'All Layers' : 'This Layer', (v) => setCloneSettings(session, { ...clone, sampleAllLayers: v === 'All Layers' }), 'Sample')}
         </>
       ) : null}
+      {smear ? null : <BrushPresetControls controller={controller} session={session} />}
       <NumberField label={t('Size')} suffix="px" width={48} value={settings.diameter} onChange={(v) => update({ diameter: Math.min(2000, Math.max(1, Math.round(v))) })} />
       <PercentField label={t('Hardness')} value={settings.hardness} onChange={(v) => update({ hardness: v })} />
       {/* Toning modes have no opacity (Photoshop): their strength is Exposure or Flow. */}
@@ -706,6 +713,7 @@ export function installPainting(controller: EditorController): void {
   });
   for (const tool of ['brush', 'cloneStamp', 'blur'] as const) controller.contextBars[tool] = (session) => <BrushBar controller={controller} session={session} />;
   controller.contextBars.gradient = (session) => <GradientBar controller={controller} session={session} />;
+  installBrushPresets(controller);
   controller.contextBars.eyedropper = (session) => <EyedropperBar controller={controller} session={session} />;
   const t = controller.t;
   const brushHints: Record<BrushMode, string> = { paint: 'Drag to paint', erase: 'Drag to erase', dodge: 'Drag to dodge', burn: 'Drag to burn', sponge: 'Drag to change saturation' };
@@ -714,7 +722,7 @@ export function installPainting(controller: EditorController): void {
     const keys = !toningStroke(s) ? '[ ] size · Shift-[ ] hardness · 1–0 opacity · Escape cancel · Space to pan'
       : mode === 'sponge' ? '[ ] size · Shift-[ ] hardness · 1–0 flow · Escape cancel · Space to pan'
       : '[ ] size · Shift-[ ] hardness · 1–0 exposure · Escape cancel · Space to pan';
-    return `${t(brushHints[mode])} · ${t(keys)}`;
+    return `${t(brushHints[mode])} · ${t(keys)} · ${t('Comma, period: brush presets')}`;
   };
   controller.statusHints.blur = (s) => `${paintState(s).smearMode === 'blur' ? t('Drag to soften') : paintState(s).smearMode === 'smudge' ? t('Drag to smudge') : t('Drag to push pixels')} · ${t('[ ] size · Shift-[ ] hardness · 1–0 strength · Space to pan')}`;
   controller.statusHints.cloneStamp = () => t('Option-click to set the source · Drag to clone · [ ] size · Shift-[ ] hardness · 1–0 opacity · Space to pan');

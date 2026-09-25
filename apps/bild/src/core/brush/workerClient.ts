@@ -4,6 +4,8 @@ import type { LayerTransfer, RasterTransfer } from '../transfer';
 import { apply, invert, type Affine, type Rect } from '../geometry';
 import type { BeginStrokeOptions, BrushSegment, StrokeResult } from './stroke';
 import type { BrushWorkerRequest, BrushWorkerResponse } from './workerProtocol';
+import { brushReach } from './tip';
+import type { BrushSettings } from './settings';
 
 const PREWARM_WORKERS = typeof Worker === 'undefined' ? 0
   : Math.min(8, Math.max(1, globalThis.navigator?.hardwareConcurrency ?? 1));
@@ -17,6 +19,21 @@ function makeWorker(index: number): Worker {
 if (PREWARM_WORKERS) {
   try { for (let index = 0; index < PREWARM_WORKERS; index++) workerPool.push(makeWorker(index)); }
   catch { for (const worker of workerPool.splice(0)) worker.terminate(); }
+}
+
+/** Sampled tip images each pooled worker already holds, so a 2500 px tip is copied to a worker once, not per stroke. */
+const workerTips = new WeakMap<Worker, Set<string>>();
+const EMPTY_TIP = new Uint8Array(0);
+function settingsFor(worker: Worker, settings: BrushSettings): BrushSettings {
+  const tip = settings.tip;
+  if (tip?.kind !== 'sampled') return settings;
+  let held = workerTips.get(worker);
+  if (!held) { held = new Set(); workerTips.set(worker, held); }
+  if (held.has(tip.image.id)) return { ...settings, tip: { ...tip, image: { ...tip.image, data: EMPTY_TIP } } };
+  held.add(tip.image.id);
+  // The worker keeps a few recent tips (brushWorker.ts); forget ours when it may have evicted one.
+  if (held.size > 4) { held.clear(); held.add(tip.image.id); }
+  return settings;
 }
 
 function takeWorker(index: number): Worker { return workerPool.pop() ?? makeWorker(index); }
@@ -63,7 +80,7 @@ export class BrushRasterWorker {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly source: Raster | null;
   private readonly geometry: WorkerGeometry;
-  private readonly diameter: number;
+  private readonly reach: number;
   private readonly loadedBaseTiles = new Set<number>();
   private remaining = 0;
   private finalMetadata: Omit<StrokeResult, 'raster'> | null = null;
@@ -84,15 +101,15 @@ export class BrushRasterWorker {
     this.latest = patchable ? source ?? Raster.blank(geometry.width, geometry.height, target === 'mask' ? 1 : 4) : null;
     this.source = patchable ? source : null;
     this.geometry = geometry;
-    this.diameter = options.settings.diameter;
+    this.reach = brushReach(options.settings);
     const concurrency = Math.max(1, globalThis.navigator?.hardwareConcurrency ?? 1);
     const count = patchable && source ? Math.min(8, concurrency) : 1;
     for (let index = 0; index < count; index++) {
       const worker = takeWorker(index);
       worker.onmessage = (event: MessageEvent<BrushWorkerResponse>) => this.receive(event.data, worker);
-      worker.onerror = (event) => { this.fail(new Error(event.message || 'Brush worker failed')); };
+      worker.onerror = (event) => { workerTips.delete(worker); this.fail(new Error(event.message || 'Brush worker failed')); };
       worker.postMessage({ type: 'init', options: { layer: layerTransfer(options.layer, target, !patchable), canvas: options.canvas,
-        settings: options.settings, target, pixelLimit: options.pixelLimit ?? 100_000_000, patchable,
+        settings: settingsFor(worker, options.settings), target, pixelLimit: options.pixelLimit ?? 100_000_000, patchable,
         partition: { index, count } } } satisfies BrushWorkerRequest);
       this.workers.push(worker);
     }
@@ -157,7 +174,7 @@ export class BrushRasterWorker {
     partitionCount: number): { index: number; data: ArrayBuffer }[] {
     const source = this.source;
     if (!source) return [];
-    const inverse = invert(this.geometry.mapping), reach = this.diameter / 2 + 2;
+    const inverse = invert(this.geometry.mapping), reach = this.reach;
     const wanted = new Set<number>();
     for (const segment of segments) {
       const x = Math.min(segment.x0, segment.x1) - reach, y = Math.min(segment.y0, segment.y1) - reach;

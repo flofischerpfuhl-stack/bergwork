@@ -31,7 +31,7 @@ interface PendingFinish {
 interface QueuedStroke {
   readonly point: Point;
   readonly options: BeginSessionStrokeOptions;
-  readonly additions: { readonly points: readonly Point[]; readonly pressure?: number | readonly number[] }[];
+  readonly additions: { readonly points: readonly Point[]; readonly pressure?: number | readonly number[]; readonly tilt?: number | readonly number[] }[];
   finished: boolean;
 }
 interface SessionBrushState {
@@ -164,11 +164,11 @@ export function beginBrushStroke(session: EditorSession, point: Point, options: 
 }
 
 export function extendBrushStroke(session: EditorSession, points: Point | readonly Point[],
-  options?: { readonly pressure?: number | readonly number[] }): StrokeUpdate | null {
+  options?: { readonly pressure?: number | readonly number[]; readonly tilt?: number | readonly number[] }): StrokeUpdate | null {
   const value = state(session), active = value.active;
   if (!active && value.queued && !value.queued.finished) {
     const list = (Array.isArray(points) ? points : [points]).map((point) => ({ ...point }));
-    value.queued.additions.push({ points: list, pressure: clonePressure(options?.pressure) });
+    value.queued.additions.push({ points: list, pressure: clonePressure(options?.pressure), tilt: clonePressure(options?.tilt) });
     session.notify('ui');
     return { dirty: [] };
   }
@@ -277,7 +277,8 @@ function settleBackgroundFinish(session: EditorSession, value: SessionBrushState
   else if (queued) {
     beginBrushStroke(session, queued.point, queued.options);
     for (const addition of queued.additions) {
-      extendBrushStroke(session, addition.points, addition.pressure === undefined ? undefined : { pressure: addition.pressure });
+      extendBrushStroke(session, addition.points, addition.pressure === undefined && addition.tilt === undefined ? undefined
+        : { ...(addition.pressure === undefined ? {} : { pressure: addition.pressure }), ...(addition.tilt === undefined ? {} : { tilt: addition.tilt }) });
     }
     if (queued.finished) finishBrushStroke(session);
   }

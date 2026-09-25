@@ -21,7 +21,7 @@ export interface AssetRecordV2 {
   height?: number;
   channels?: 1 | 4;
   sha256: string;
-  role: 'image' | 'mask' | 'pattern' | 'embedded' | 'font' | 'lut' | 'history-tile';
+  role: 'image' | 'mask' | 'pattern' | 'embedded' | 'font' | 'lut' | 'history-tile' | 'brushes';
 }
 
 export interface TextRunStyleRecordV2 {
