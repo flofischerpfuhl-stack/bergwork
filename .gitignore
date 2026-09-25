@@ -1,0 +1,8 @@
+.fontlab/
+.codex/out/
+node_modules/
+
+# Upstream editor builds: materialised from upstream.lock.json by `npm run sync:install`
+.cache/
+apps/*/upstream/
+target/

@@ -1,0 +1,42 @@
+<svg
+  width="256"
+  height="256"
+  viewBox="0 0 256 256"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <title>berg:work – Granite Mark (red adit)</title>
+
+  <g
+    id="Mountain-Low-Poly"
+    stroke="none"
+    fill-rule="evenodd"
+  >
+    <polygon fill="#F4F3F0" points="136 40 120 106 96 124"/>
+    <polygon fill="#E3E2DE" points="136 40 150 122 120 106"/>
+    <polygon fill="#B2B0AB" points="136 40 168 90 150 122"/>
+    <polygon fill="#96948F" points="168 90 186 106 150 122"/>
+    <polygon fill="#E3E2DE" points="78 108 96 124 64 176"/>
+    <polygon fill="#CDCBC6" points="50 146 78 108 64 176"/>
+    <polygon fill="#B2B0AB" points="16 206 50 146 64 176"/>
+    <polygon fill="#CDCBC6" points="96 124 120 106 104 162"/>
+    <polygon fill="#B2B0AB" points="120 106 150 122 104 162"/>
+    <polygon fill="#7A7874" points="150 122 170 160 104 162"/>
+    <polygon fill="#7A7874" points="150 122 186 106 170 160"/>
+    <polygon fill="#5F5D5A" points="186 106 214 150 170 160"/>
+    <polygon fill="#CDCBC6" points="96 124 104 162 64 176"/>
+    <polygon fill="#96948F" points="16 206 64 176 84 206"/>
+    <polygon fill="#B2B0AB" points="64 176 104 162 84 206"/>
+    <polygon fill="#7A7874" points="104 162 128 206 84 206"/>
+    <polygon fill="#5F5D5A" points="104 162 170 160 128 206"/>
+    <polygon fill="#474644" points="170 160 184 206 128 206"/>
+    <polygon fill="#474644" points="170 160 206 178 184 206"/>
+    <polygon fill="#474644" points="170 160 214 150 206 178"/>
+    <polygon fill="#31302F" points="214 150 240 206 206 178"/>
+    <polygon fill="#31302F" points="206 178 240 206 184 206"/>
+    <polygon fill="#CDCBC6" points="106 206 106 170 115 175 115 206"/>
+    <polygon fill="#E3E2DE" points="106 170 128 156 128 167 115 175"/>
+    <polygon fill="#B2B0AB" points="128 156 150 170 141 175 128 167"/>
+    <polygon fill="#96948F" points="150 170 150 206 141 206 141 175"/>
+    <polygon fill="#C81E1E" points="115 206 115 175 128 167 141 175 141 206"/>
+  </g>
+</svg>

@@ -1,0 +1,11 @@
+// Cloudflare static-assets deployment config.
+// Build command (working directory website/): node build.mjs
+// Generated deployment directory: website/dist. Do not deploy source files.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bergwork",
+  "compatibility_date": "2026-09-25",
+  "assets": {
+    "directory": "./dist"
+  }
+}

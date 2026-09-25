@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="berg:work">
+  <rect width="64" height="64" fill="#0a0a0a"/>
+  <path d="M6 54 L26 16 L34 30 L40 22 L58 54 Z" fill="#d7261e"/>
+  <path d="M26 16 L32.5 28.3 L28 25 L24 30 L20.6 27.5 Z" fill="#f3f0e6"/>
+  <rect x="6" y="54" width="52" height="4" fill="#f3f0e6"/>
+</svg>

@@ -1,0 +1,46 @@
+<svg
+  width="256"
+  height="256"
+  viewBox="0 0 256 256"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <title>berg:work – Schlägel und Eisen (on light)</title>
+
+  <g
+    id="Outline"
+    fill="#31302F"
+    stroke="#31302F"
+    stroke-width="9"
+    stroke-linejoin="round"
+  >
+    <polygon points="47.2 208.9 49.3 216.7 156.8 109.2 151.8 104.3"/>
+    <polygon points="49.3 216.7 57.1 218.8 161.7 114.2 156.8 109.2"/>
+    <polygon points="166.7 65.4 200.6 99.3 219 146 152.5 79.5"/>
+    <polygon points="152.5 79.5 219 146 172.3 127.6 138.4 93.7"/>
+    <polygon points="158.2 65.4 166.7 65.4 138.4 93.7 138.4 85.2"/>
+    <polygon points="182.9 218.8 190.7 216.7 83.2 109.2 78.3 114.2"/>
+    <polygon points="190.7 216.7 192.8 208.9 88.2 104.3 83.2 109.2"/>
+    <polygon points="25.2 107.8 81.8 51.2 91.7 52.7 26.7 117.7"/>
+    <polygon points="26.7 117.7 91.7 52.7 46.5 137.5"/>
+    <polygon points="91.7 52.7 111.5 72.5 46.5 137.5"/>
+    <polygon points="46.5 137.5 111.5 72.5 112.9 82.4 56.4 138.9"/>
+  </g>
+
+  <g
+    id="Hammer-Pick-Low-Poly"
+    stroke="none"
+    fill-rule="evenodd"
+  >
+    <polygon fill="#7A7874" points="47.2 208.9 49.3 216.7 156.8 109.2 151.8 104.3"/>
+    <polygon fill="#474644" points="49.3 216.7 57.1 218.8 161.7 114.2 156.8 109.2"/>
+    <polygon fill="#E3E2DE" points="166.7 65.4 200.6 99.3 219 146 152.5 79.5"/>
+    <polygon fill="#96948F" points="152.5 79.5 219 146 172.3 127.6 138.4 93.7"/>
+    <polygon fill="#CDCBC6" points="158.2 65.4 166.7 65.4 138.4 93.7 138.4 85.2"/>
+    <polygon fill="#96948F" points="182.9 218.8 190.7 216.7 83.2 109.2 78.3 114.2"/>
+    <polygon fill="#5F5D5A" points="190.7 216.7 192.8 208.9 88.2 104.3 83.2 109.2"/>
+    <polygon fill="#F4F3F0" points="25.2 107.8 81.8 51.2 91.7 52.7 26.7 117.7"/>
+    <polygon fill="#CDCBC6" points="26.7 117.7 91.7 52.7 46.5 137.5"/>
+    <polygon fill="#B2B0AB" points="91.7 52.7 111.5 72.5 46.5 137.5"/>
+    <polygon fill="#7A7874" points="46.5 137.5 111.5 72.5 112.9 82.4 56.4 138.9"/>
+  </g>
+</svg>

@@ -1,0 +1,66 @@
+<svg
+  width="256"
+  height="256"
+  viewBox="0 0 256 256"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <title>berg:work – Mine Cart (on light)</title>
+
+  <g
+    id="Outline"
+    fill="#31302F"
+    stroke="#31302F"
+    stroke-width="9"
+    stroke-linejoin="round"
+  >
+    <polygon points="20 214 236 214 236 222 20 222"/>
+    <polygon points="20 214 236 214 232 210 24 210"/>
+    <polygon points="48 112 78 80 112 100"/>
+    <polygon points="78 80 110 66 112 100"/>
+    <polygon points="110 66 146 54 112 100"/>
+    <polygon points="146 54 160 96 112 100"/>
+    <polygon points="146 54 184 76 160 96"/>
+    <polygon points="184 76 208 112 160 96"/>
+    <polygon points="48 112 112 100 128 112"/>
+    <polygon points="112 100 160 96 128 112"/>
+    <polygon points="160 96 208 112 128 112"/>
+    <polygon points="34 106 222 106 218 120 38 120"/>
+    <polygon points="38 120 92 120 100 186 62 186"/>
+    <polygon points="92 120 164 120 156 186 100 186"/>
+    <polygon points="164 120 218 120 194 186 156 186"/>
+    <polygon points="108.3 200.4 96.4 212.3 79.6 212.3 67.7 200.4 67.7 183.6 79.6 171.7 96.4 171.7 108.3 183.6"/>
+    <polygon points="67.7 183.6 79.6 171.7 96.4 171.7 108.3 183.6 88 192"/>
+    <polygon points="94.5 194.7 90.7 198.5 85.3 198.5 81.5 194.7 81.5 189.3 85.3 185.5 90.7 185.5 94.5 189.3"/>
+    <polygon points="188.3 200.4 176.4 212.3 159.6 212.3 147.7 200.4 147.7 183.6 159.6 171.7 176.4 171.7 188.3 183.6"/>
+    <polygon points="147.7 183.6 159.6 171.7 176.4 171.7 188.3 183.6 168 192"/>
+    <polygon points="174.5 194.7 170.7 198.5 165.3 198.5 161.5 194.7 161.5 189.3 165.3 185.5 170.7 185.5 174.5 189.3"/>
+  </g>
+
+  <g
+    id="Cart-Low-Poly"
+    stroke="none"
+    fill-rule="evenodd"
+  >
+    <polygon fill="#5F5D5A" points="20 214 236 214 236 222 20 222"/>
+    <polygon fill="#96948F" points="20 214 236 214 232 210 24 210"/>
+    <polygon fill="#E3E2DE" points="48 112 78 80 112 100"/>
+    <polygon fill="#F4F3F0" points="78 80 110 66 112 100"/>
+    <polygon fill="#CDCBC6" points="110 66 146 54 112 100"/>
+    <polygon fill="#B2B0AB" points="146 54 160 96 112 100"/>
+    <polygon fill="#96948F" points="146 54 184 76 160 96"/>
+    <polygon fill="#7A7874" points="184 76 208 112 160 96"/>
+    <polygon fill="#B2B0AB" points="48 112 112 100 128 112"/>
+    <polygon fill="#7A7874" points="112 100 160 96 128 112"/>
+    <polygon fill="#5F5D5A" points="160 96 208 112 128 112"/>
+    <polygon fill="#E3E2DE" points="34 106 222 106 218 120 38 120"/>
+    <polygon fill="#B2B0AB" points="38 120 92 120 100 186 62 186"/>
+    <polygon fill="#96948F" points="92 120 164 120 156 186 100 186"/>
+    <polygon fill="#5F5D5A" points="164 120 218 120 194 186 156 186"/>
+    <polygon fill="#31302F" points="108.3 200.4 96.4 212.3 79.6 212.3 67.7 200.4 67.7 183.6 79.6 171.7 96.4 171.7 108.3 183.6"/>
+    <polygon fill="#474644" points="67.7 183.6 79.6 171.7 96.4 171.7 108.3 183.6 88 192"/>
+    <polygon fill="#B2B0AB" points="94.5 194.7 90.7 198.5 85.3 198.5 81.5 194.7 81.5 189.3 85.3 185.5 90.7 185.5 94.5 189.3"/>
+    <polygon fill="#31302F" points="188.3 200.4 176.4 212.3 159.6 212.3 147.7 200.4 147.7 183.6 159.6 171.7 176.4 171.7 188.3 183.6"/>
+    <polygon fill="#474644" points="147.7 183.6 159.6 171.7 176.4 171.7 188.3 183.6 168 192"/>
+    <polygon fill="#B2B0AB" points="174.5 194.7 170.7 198.5 165.3 198.5 161.5 194.7 161.5 189.3 165.3 185.5 170.7 185.5 174.5 189.3"/>
+  </g>
+</svg>
