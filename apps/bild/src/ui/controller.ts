@@ -31,7 +31,7 @@ import type { ExportSizeEstimate } from '../io/exportPipeline';
 import { zipSync } from 'fflate';
 import { encodePng } from '../io/png';
 import { sha256Hex } from '../io/sha256';
-import { readPsdDocumentManaged, type PsdReadResult } from '../io/psd';
+import type { PsdReadResult } from '../io/psd';
 import { uuid } from '../core/ids';
 import type { GpuCompositor } from '../render/gpuCompositor';
 import { capabilitiesOf, type FileSaveTarget, type HostCapabilityMap, type HostFileReference } from '../platform/hosts';
@@ -119,6 +119,8 @@ export class EditorController {
   features: FeatureRegistry;
   /** Tools with a working canvas handler; the rest are shown disabled. */
   availableTools = new Set<Tool>(['move', 'hand', 'zoom', 'idle']);
+  /** Startup registry hook: fetches a lazy tool module before selecting it. */
+  loadFeatureForTool: ((tool: Tool) => Promise<void>) | null = null;
   contextBars: Partial<Record<Tool, (session: EditorSession) => ReactNode>> = {};
   statusHints: Partial<Record<Tool, (session: EditorSession) => string>> = {};
   toolIcon: ((tool: Tool) => IconName | null) | null = null;
@@ -169,6 +171,10 @@ export class EditorController {
     const special = this.toolKeyHandlers[key];
     if (special) { special(shift); return; }
     this.session.selectTool(tool);
+  }
+  async activateTool(tool: Tool, key = '', shift = false): Promise<void> {
+    try { await this.loadFeatureForTool?.(tool); } catch { return; }
+    this.selectToolByKey(tool, key, shift);
   }
   toolKeyHandlers: Record<string, (shift: boolean) => void> = {};
 
@@ -496,6 +502,7 @@ export class EditorController {
     const psdIds: string[] = [];
     for (const file of psd) {
       try {
+        const { readPsdDocumentManaged } = await import('../io/psd');
         const imported = await readPsdDocumentManaged(new Uint8Array(await file.arrayBuffer()));
         if (importPsdAsLayers) psdIds.push(...this.importPsdLayers(imported, into, fileBaseName(file.name)));
         else this.openPsd(imported, fileBaseName(file.name), into.session.document ? null : into);
@@ -639,46 +646,61 @@ export class EditorController {
       try {
         const blob = await capability.readFile(reference);
         if (/\.ps[db]$/i.test(reference.name)) {
+          const { readPsdDocumentManaged } = await import('../io/psd');
           const imported = await readPsdDocumentManaged(new Uint8Array(await blob.arrayBuffer()));
           this.openPsd(imported, fileBaseName(reference.name), null);
         } else if (/\.(fwimg|zip|comp)$/i.test(reference.name)) {
-          await this.openArchive(blob, reference.name);
+          const tab = await this.openArchive(blob, reference.name);
           const target = capability.saveTargetFor?.(reference);
-          if (target) saveTargets.set(this.session, target);
+          if (target) saveTargets.set(tab.session, target);
         } else await this.importFiles([new File([blob], reference.name)]);
         await capability.recordRecentFile(reference);
       } catch (error) { this.reportError('open-failed', error); }
     }
   }
 
-  async openArchive(blob: Blob, name?: string): Promise<void> {
-    // A zipped macOS Compositor package (`X.comp/…`, format com.compositor.project) or this port's own archive.
-    if (/\.comp$/i.test(name ?? '')) {
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      const loaded = await readCompZip(bytes);
-      this.installLoaded(loaded.document, loaded.activeLayerId, name?.replace(/\.comp$/i, '') ?? loaded.name);
-      return;
-    }
-    let loaded: Awaited<ReturnType<typeof readArchive>>;
+  async openArchive(blob: Blob, name?: string): Promise<ProjectTab> {
+    // Reserve and select the destination before the first await. A previous project must never remain
+    // observable as if it were the just-dropped archive, and concurrent drops keep input order even
+    // when their decoders finish out of order.
+    const loadingName = name ? fileBaseName(name.replace(/\.comp$/i, '')) : this.t('Opening…');
+    const tab = this.workspace.createTab(loadingName);
+    tab.session.isProjectBusy = true;
+    this.workspace.adopt(tab);
     try {
+      // A zipped macOS Compositor package (`X.comp/…`, format com.compositor.project) or this port's own archive.
+      if (/\.comp$/i.test(name ?? '')) {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const loaded = await readCompZip(bytes);
+        tab.session.isProjectBusy = false;
+        tab.session.installProject(loaded.document, loaded.activeLayerId, name?.replace(/\.comp$/i, '') ?? loaded.name);
+        return tab;
+      }
+      let loaded: Awaited<ReturnType<typeof readArchive>>;
       // Retained non-PNG sources must repeat ImageImporter.decode's colour/orientation pipeline;
       // PNG entries still take the reader's tile-streaming fast path when no conversion is needed.
-      loaded = await readArchive(blob, (data) => decodeImageAsset(data, this.limits.maxPixels,
-        { host: this.capabilities.codecs, maxSide: this.limits.maxSide }), this.limits, this.residency ?? undefined);
+      try {
+        loaded = await readArchive(blob, (data) => decodeImageAsset(data, this.limits.maxPixels,
+          { host: this.capabilities.codecs, maxSide: this.limits.maxSide }), this.limits, this.residency ?? undefined);
+      } catch (error) {
+        // Ambiguous legacy `.zip` files have no useful extension. Only pay for a contiguous copy
+        // after the streaming Fernwork reader has established that this is not its format.
+        if (!(error instanceof ProjectError) || error.code !== 'invalid' || /\.fwimg$/i.test(name ?? '')) throw error;
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        if (!isCompZip(bytes)) throw error;
+        const legacy = await readCompZip(bytes);
+        tab.session.isProjectBusy = false;
+        tab.session.installProject(legacy.document, legacy.activeLayerId, name ?? legacy.name);
+        return tab;
+      }
+      const projectName = name ? fileBaseName(name) : loaded.name;
+      tab.session.isProjectBusy = false;
+      tab.session.installProject(loaded.document, loaded.activeLayerId, projectName, loaded.history);
+      return tab;
     } catch (error) {
-      // Ambiguous legacy `.zip` files have no useful extension. Only pay for a contiguous copy
-      // after the streaming Fernwork reader has established that this is not its format.
-      if (!(error instanceof ProjectError) || error.code !== 'invalid' || /\.fwimg$/i.test(name ?? '')) throw error;
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      if (!isCompZip(bytes)) throw error;
-      const legacy = await readCompZip(bytes);
-      this.installLoaded(legacy.document, legacy.activeLayerId, name ?? legacy.name);
-      return;
+      this.workspace.removeTab(tab.id);
+      throw error;
     }
-    const projectName = name ? fileBaseName(name) : loaded.name;
-    const tab = this.workspace.createTab(projectName);
-    tab.session.installProject(loaded.document, loaded.activeLayerId, projectName, loaded.history);
-    this.workspace.adopt(tab);
   }
 
   private installLoaded(document: CanvasDocument, activeLayerId: string | null, name: string): void {
@@ -741,6 +763,7 @@ export class EditorController {
       const sourceName = blob && typeof (blob as Blob & { name?: unknown }).name === 'string'
         ? (blob as Blob & { name: string }).name : undefined;
       if (blob && /\.ps[db]$/i.test(sourceName ?? '')) {
+        const { readPsdDocumentManaged } = await import('../io/psd');
         const imported = await readPsdDocumentManaged(new Uint8Array(await blob.arrayBuffer()));
         this.openPsd(imported, fileBaseName(sourceName!), null);
       } else if (blob) await this.openArchive(blob, sourceName);

@@ -14,7 +14,7 @@
     "test:unit": "vitest run tests/unit",
     "psd:fidelity": "vitest run --config tests/psd/vitest.config.ts",
     "test:e2e": "playwright test",
-    "test:perf": "vitest run tests/performance"
+    "test:perf": "vite build && node scripts/check-bundle-budget.mjs && vitest run tests/performance"
   },
   "dependencies": {
     "canvaskit-wasm": "0.42.0",

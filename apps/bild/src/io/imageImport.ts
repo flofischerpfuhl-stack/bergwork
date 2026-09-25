@@ -12,12 +12,10 @@
 import { Raster } from '../core/raster';
 import { MAX_SIDE } from '../core/document';
 import { decodePng, decodePngColorSamples, decodePngNativeRGBA, pngDimensions } from './png';
-import { decodeJpegSamples } from './jpeg';
 import { orientedSize, readJpegComponentCount, readJpegIccProfile, readJpegInfo, type JpegInfo } from './jpegMeta';
 import { sha256Hex } from './sha256';
-import { decodeTiffNative, TiffError, tiffDimensions } from './tiff';
-import { decodeHeic, HeicError, heicDimensions, isHeic, orientRgba, type HeicDecodeOptions } from './heic';
-import { IccError, loadLittleCms, type Chromaticities } from '../wasm/lcms';
+import type { HeicDecodeOptions } from './heic';
+import type { Chromaticities } from '../wasm/lcms';
 
 export class ImageImportError extends Error {
   readonly code: 'unreadable' | 'unsupported' | 'too-large';
@@ -40,7 +38,7 @@ export function sniffImage(bytes: Uint8Array): ImageKind | null {
   if (b.length >= 12 && ascii(b, 0) === 'RIFF' && ascii(b, 8) === 'WEBP') return 'image/webp';
   if (b.length >= 16 && ascii(b, 4) === 'ftyp' && hasBrand(b, new Set(['avif', 'avis']))) return 'image/avif';
   if (b.length >= 6 && (ascii6(b) === 'GIF87a' || ascii6(b) === 'GIF89a')) return 'image/gif';
-  if (isHeic(b)) return 'image/heic';
+  if (b.length >= 16 && ascii(b, 4) === 'ftyp' && hasBrand(b, new Set(['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs', 'mif1', 'msf1']))) return 'image/heic';
   return null;
 }
 
@@ -93,6 +91,7 @@ async function decodeManagedPng(bytes: Uint8Array,
   limits: { readonly maxSide: number; readonly maxPixels: number }): Promise<{
   width: number; height: number; data: Uint8Array | Uint16Array; bitDepth?: 8 | 16;
 }> {
+  const { loadLittleCms } = await import('../wasm/lcms');
   const png = decodePngColorSamples(bytes, limits), lcms = await loadLittleCms();
   let profile = png.iccProfile;
   if (!profile) {
@@ -118,6 +117,9 @@ export function pngNeedsColorConversion(bytes: Uint8Array): boolean {
 }
 
 async function decodeJpeg(bytes: Uint8Array, info: JpegInfo): Promise<{ width: number; height: number; data: Uint8Array }> {
+  const [{ decodeJpegSamples }, { orientRgba }, { IccError, loadLittleCms }] = await Promise.all([
+    import('./jpeg'), import('./heic'), import('../wasm/lcms'),
+  ]);
   const embedded = readJpegIccProfile(bytes);
   const components = readJpegComponentCount(bytes);
   if (components !== 4 && !embedded) return browserDecode(bytes, 'image/jpeg');
@@ -153,13 +155,13 @@ export async function decodeImageAsset(bytes: Uint8Array, remainingPixels: numbe
       jpegInfo = readJpegInfo(bytes);
       ({ width, height } = orientedSize(jpegInfo));
     }
-    else if (kind === 'image/tiff') ({ width, height } = tiffDimensions(bytes, limits));
-    else if (kind === 'image/heic') ({ width, height } = heicDimensions(bytes));
+    else if (kind === 'image/tiff') ({ width, height } = (await import('./tiff')).tiffDimensions(bytes, limits));
+    else if (kind === 'image/heic') ({ width, height } = (await import('./heic')).heicDimensions(bytes));
     else if (kind === 'image/webp') ({ width, height } = (await import('./webp')).webpDimensions(bytes, limits));
     else if (kind === 'image/avif') ({ width, height } = (await import('./avif')).avifDimensions(bytes, limits));
     else ({ width, height } = (await import('./gif')).gifDimensions(bytes, limits));
   } catch (error) {
-    if ((error instanceof TiffError && error.code === 'dimensions') || errorCode(error) === 'dimensions') throw new ImageImportError('too-large');
+    if (errorCode(error) === 'dimensions') throw new ImageImportError('too-large');
     throw new ImageImportError('unreadable');
   }
   if (width && height && (width > maxSide || height > maxSide || width * height > remainingPixels)) throw new ImageImportError('too-large');
@@ -171,6 +173,7 @@ export async function decodeImageAsset(bytes: Uint8Array, remainingPixels: numbe
     // ImageImporter.swift renders into an sRGB CIContext. Do the equivalent explicitly so
     // workers and browsers agree, and so 16-bit sources reach ColorSync/lcms before RGBA8 quantization.
     if (managed) {
+      const { IccError } = await import('../wasm/lcms');
       try { pixels = await decodeManagedPng(bytes, limits); }
       catch (error) {
         if (!(error instanceof IccError) && !(error instanceof RangeError)) throw error;
@@ -183,6 +186,7 @@ export async function decodeImageAsset(bytes: Uint8Array, remainingPixels: numbe
       pixels = { width: native.width, height: native.height, data: native.data, bitDepth: native.bitDepth };
     }
   } else if (kind === 'image/tiff') {
+    const { decodeTiffNative, TiffError } = await import('./tiff');
     try { pixels = await decodeTiffNative(bytes, limits); }
     catch (error) {
       if (error instanceof TiffError && error.code === 'dimensions') throw new ImageImportError('too-large');
@@ -190,6 +194,7 @@ export async function decodeImageAsset(bytes: Uint8Array, remainingPixels: numbe
       throw new ImageImportError('unreadable');
     }
   } else if (kind === 'image/heic') {
+    const { decodeHeic, HeicError } = await import('./heic');
     try { pixels = { ...await decodeHeic(bytes, options), bitDepth: 8 }; }
     catch (error) {
       if (error instanceof HeicError && error.code === 'unsupported') throw new ImageImportError('unsupported', error.message);
