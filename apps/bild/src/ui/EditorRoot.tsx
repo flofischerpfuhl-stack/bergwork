@@ -175,7 +175,7 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
       if (key === 'd') { session.resetPaletteColors(); event.preventDefault(); return; }
       const tool = TOOL_KEYS[key];
       if (tool && controller.availableTools.has(tool)) {
-        if (!event.repeat) controller.selectToolByKey(tool, key, event.shiftKey);
+        if (!event.repeat) void controller.activateTool(tool, key, event.shiftKey);
         event.preventDefault();
       }
     };

@@ -3,13 +3,20 @@
  * confirmations (NSAlert) and error alerts.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import styles from './editor.module.css';
 import type { EditorController } from './controller';
 import { useUi } from './hooks';
 import { validDimension } from '../core/document';
-import { ExportDialog } from './ExportDialog';
-import { ProofSetupDialog } from './ProofSetupDialog';
+
+const importExportDialog = () => import('./ExportDialog');
+const ExportDialog = lazy(() => importExportDialog().then((module) => ({ default: module.ExportDialog })));
+const ProofSetupDialog = lazy(() => import('./ProofSetupDialog').then((module) => ({ default: module.ProofSetupDialog })));
+if (typeof window !== 'undefined') {
+  const preload = () => { void importExportDialog(); };
+  if ('requestIdleCallback' in window) window.requestIdleCallback(preload, { timeout: 1_500 });
+  else setTimeout(preload, 0);
+}
 
 export function NewCanvasSheet({ controller, welcome = false, onDone }: { controller: EditorController; welcome?: boolean; onDone?: () => void }) {
   const t = controller.t;
@@ -88,8 +95,16 @@ export function DialogHost({ controller }: { controller: EditorController }) {
   let content = null;
   const close = () => controller.showDialog(null);
   if (dialog.kind === 'newCanvas') content = <NewCanvasSheet controller={controller} onDone={close} />;
-  else if (dialog.kind === 'export') content = <ExportDialog controller={controller} close={close} />;
-  else if (dialog.kind === 'proofSetup') content = <ProofSetupDialog controller={controller} close={close} />;
+  else if (dialog.kind === 'export') content = (
+    <Suspense fallback={<div className={styles.dialog} role="dialog"><p className={styles.dialogMessage}>{controller.t('Working…')}</p></div>}>
+      <ExportDialog controller={controller} close={close} />
+    </Suspense>
+  );
+  else if (dialog.kind === 'proofSetup') content = (
+    <Suspense fallback={<div className={styles.dialog} role="dialog"><p className={styles.dialogMessage}>{controller.t('Working…')}</p></div>}>
+      <ProofSetupDialog controller={controller} close={close} />
+    </Suspense>
+  );
   else if (dialog.kind === 'alert') {
     content = (
       <div className={styles.dialog} role="alertdialog" aria-modal aria-labelledby="cmp-alert-title">
