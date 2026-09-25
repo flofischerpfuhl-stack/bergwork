@@ -120,7 +120,7 @@ export class SoftwareCompositor {
     // surfaces require a contiguous full raster and therefore cannot represent this mixed state.
     if (layers.some((layer) => hooks.raster(layer)?.hasSwappedTiles || hooks.maskRaster(layer)?.hasSwappedTiles)) return null;
     if (document.layers.some((layer) => layer.kind === 'group' && (layer.mask?.enabled || layer.vectorMask?.enabled))
-      || layers.some((layer) => layer.warp || layer.adjustment || layer.filters.length || layer.maskSourceId || layer.mask?.enabled || layer.vectorMask?.enabled
+      || layers.some((layer) => layer.warp || layer.crop || layer.adjustment || layer.filters.length || layer.maskSourceId || layer.mask?.enabled || layer.vectorMask?.enabled
       || hooks.blendMode(layer) !== 'normal')) return null;
     const documentToTarget = invert(view.viewToDoc);
     const commands: SoftwareDrawCommand[] = [];

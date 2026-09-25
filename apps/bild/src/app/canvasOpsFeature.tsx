@@ -11,19 +11,22 @@ import { useSession } from '../ui/hooks';
 import { NumberField } from '../ui/ContextBar';
 import {
   applyCropRatio, applyCropSnap, canvasSizeDraftValid, cropRatioChoice, cropSnapTargets, displayedCanvasDimension,
-  makeCanvasSizeDraft, setCanvasDimension, updateCropDrag, validCropRect,
+  makeCanvasSizeDraft, revealAllDocument, setCanvasDimension, updateCropDrag, validCropRect,
   type CanvasExtensionColor, type CanvasUnit, type CropDrag, type CropRatioChoice, type ImageResample,
 } from '../core/canvasOps';
 import { maskBackground } from '../core/distort';
 import { HANDLES, LAYER_SAMPLINGS, type LayerSampling, type LayerTransform, type Point, type Rect } from '../core/geometry';
 import type { Raster } from '../core/raster';
-import type { EditorSession } from '../core/session';
+import { cropTargetRects, type EditorSession } from '../core/session';
 import { documentFromTransfer, documentToTransfer, rasterFromTransfer, rasterToTransfer } from '../core/transfer';
 import { runInWorker } from '../workers/opsClient';
 import type { OpsRequest } from '../workers/opsProtocol';
 import type { ToolContext, ToolHandler } from '../ui/canvas/tools';
+import { selectedArtboard } from '../ui/artboardState';
+import { cropArtboard } from '../core/artboardCommands';
 
 const RATIOS: CropRatioChoice[] = ['Free', 'Original', '1:1', '4:3', '16:9'];
+const selectedArtboardCropTarget = (session: EditorSession): Rect | null => selectedArtboard(session)?.rect ?? null;
 
 /** Runs a document operation in the worker and installs the result as one undo step. */
 async function applyDocumentOp(controller: EditorController, session: EditorSession, name: string, request: (doc: ReturnType<typeof documentToTransfer>) => OpsRequest): Promise<boolean> {
@@ -56,7 +59,21 @@ async function applyDocumentOp(controller: EditorController, session: EditorSess
 async function commitCrop(controller: EditorController, session: EditorSession): Promise<void> {
   const rect = session.cropRect;
   if (!rect || !validCropRect(rect)) return;
-  const ok = await applyDocumentOp(controller, session, 'Crop', (document) => ({ op: 'crop', document, rect, options: {} }));
+  const artboard = selectedArtboard(session);
+  if (artboard) {
+    // Artboard commands normally refuse while a crop gesture is pending; resolve that view state before committing it.
+    session.cropRect = null;
+    if (!cropArtboard(session, artboard.id, rect, session.cropDeletePixels)) session.cropRect = rect;
+    session.notify('document');
+    return;
+  }
+  if (session.cropDeletePixels) {
+    for (const layer of session.document?.layers ?? []) {
+      if (layer.raster && session.refuseLayerEdit(layer.id, 'pixels')) return;
+    }
+  }
+  const ok = await applyDocumentOp(controller, session, 'Crop', (document) => ({ op: 'crop', document, rect,
+    options: { deletePixels: session.cropDeletePixels } }));
   if (ok) session.cropRect = null;
   session.notify('document');
 }
@@ -193,6 +210,8 @@ function CropBar({ controller, session }: { controller: EditorController; sessio
         {RATIOS.map((r) => <option key={r} value={r}>{t(r)}</option>)}
       </select>
       {rect ? <span className={styles.secondary} style={{ fontVariantNumeric: 'tabular-nums' }}>{Math.round(rect.width)} × {Math.round(rect.height)} px</span> : null}
+      <label className={styles.check}><input type="checkbox" checked={session.cropDeletePixels} data-testid="delete-cropped-pixels"
+        onChange={(event) => { session.cropDeletePixels = event.target.checked; session.notify('ui'); }} />{t('Delete Cropped Pixels')}</label>
       <span className={styles.spacer} />
       <button type="button" className={styles.pill} disabled={!rect || session.isProjectBusy} onClick={() => session.cancelCrop()}>{t('Cancel')}</button>
       <button type="button" className={`${styles.pill} ${styles.pillPrimary}`} disabled={!rect || session.isProjectBusy} data-testid="applyCrop"
@@ -346,6 +365,7 @@ function ImageSizeDialog({ controller, close }: { controller: EditorController; 
 }
 
 export function installCanvasOps(controller: EditorController): void {
+  if (!cropTargetRects.includes(selectedArtboardCropTarget)) cropTargetRects.push(selectedArtboardCropTarget);
   controller.availableTools.add('crop');
   controller.canvasSetups.push((view) => {
     view.tools.crop = new CropTool(controller);
@@ -364,6 +384,23 @@ export function installCanvasOps(controller: EditorController): void {
   controller.dialogs.imageSize = (close) => <ImageSizeDialog controller={controller} close={close} />;
   controller.features.canvasSize = { enabled: () => !!controller.session.document && controller.workspace.canSwitch, run: () => controller.showDialog({ kind: 'canvasSize' }) };
   controller.features.imageSize = { enabled: () => !!controller.session.document && controller.workspace.canSwitch, run: () => controller.showDialog({ kind: 'imageSize' }) };
+  controller.features.revealAll = { enabled: () => !!controller.session.document && controller.workspace.canSwitch, run: () => {
+    const session = controller.session, document = session.document;
+    if (!document) return;
+    const next = revealAllDocument(document);
+    if (next === document) return;
+    session.edit('Reveal All', () => session.replaceDocument(next));
+    session.viewport.fit(next);
+    session.notify('view');
+  } };
+  controller.features.cropLayerToSelection = { enabled: () => {
+    const session = controller.session;
+    return session.activeLayer?.kind === 'embedded' && !!session.document?.selection && session.canEditAppearance;
+  }, run: () => { controller.session.cropEmbeddedLayerToSelection(); } };
+  controller.features.clearLayerCrop = { enabled: () => {
+    const session = controller.session;
+    return session.activeLayer?.kind === 'embedded' && !!session.activeLayer.crop && session.canEditAppearance;
+  }, run: () => { controller.session.clearEmbeddedLayerCrop(); } };
   // Distort Apply resamples pixels into the quadrilateral in the worker.
   const distort = async (raster: Raster, transform: LayerTransform, corners: readonly Point[]) => {
     const mask = raster.channels === 1;

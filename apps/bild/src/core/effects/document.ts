@@ -5,6 +5,7 @@ import { Raster, TILE } from '../raster';
 import { renderEffectPasses, renderPsdInnerEffectPasses, type EffectPass, type PsdInnerEffect } from './render';
 import { homography } from '../distort';
 import { meshPoint } from '../meshWarp';
+import { layerCropCoverage } from '../crop';
 
 export interface EffectSourceHooks {
   transform(layer: Layer): LayerTransform;
@@ -103,6 +104,12 @@ function effectAlpha(layer: Layer, source: ResolvedEffectSource): Uint8Array {
     const width = raster.tileWidth(col), height = raster.tileHeight(row);
     for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
       alpha[(row * TILE + y) * raster.width + col * TILE + x] = Math.round(tile[(y * width + x) * 4 + 3]! * 255 / raster.maximum);
+    }
+  }
+  if (layer.crop) {
+    for (let y = 0; y < raster.height; y++) for (let x = 0; x < raster.width; x++) {
+      alpha[y * raster.width + x] = Math.round(alpha[y * raster.width + x]!
+        * layerCropCoverage(layer.crop, x + 0.5, y + 0.5));
     }
   }
   const mask = layer.mask, maskRaster = mask?.enabled ? source.maskRaster : null;
@@ -208,7 +215,7 @@ export function documentWithLayerEffects(document: CanvasDocument, hooks: Effect
     const effects = rasterEffects(layer, source.rasterScale);
     const patterns = psdPatternOverlays(layer);
     const innerEffects = psdInnerEffects(layer);
-    const key = `${JSON.stringify(effects)}|${JSON.stringify(innerEffects)}|${patterns.map((value) => `${value.pattern.serial}/${value.opacity}/${value.blendMode}/`
+    const key = `${JSON.stringify(layer.crop)}|${JSON.stringify(effects)}|${JSON.stringify(innerEffects)}|${patterns.map((value) => `${value.pattern.serial}/${value.opacity}/${value.blendMode}/`
       + `${value.scale}/${value.phase.x}/${value.phase.y}/${value.align ? 1 : 0}`).join(',')}|${document.globalLightAngle ?? 120}|${source.maskRaster?.serial ?? 0}`
       + `|${placementKey(transform)}|${placementKey(source.maskPlacement)}`;
     let variants = cache.get(raster);
