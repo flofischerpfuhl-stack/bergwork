@@ -12,6 +12,7 @@ import { rectUnion, type Affine, type Point } from '../../core/geometry';
 import type { EditorSession, Tool } from '../../core/session';
 import { currentBrushPreview, currentGpuBrushPreview } from '../../core/brush';
 import { documentWithPixelAdjustmentPreview } from '../../core/adjust/editing';
+import { documentWithPixelMovePreview } from '../../core/selectionCommands';
 import { GpuCompositor, type CompositeHooks, type ViewSpec } from '../../render/gpuCompositor';
 import { SoftwareCompositor } from '../../render/softwareCompositor';
 import type { CanvasHost, EditorController, SecondaryDrag } from '../controller';
@@ -269,7 +270,9 @@ export class CanvasView implements CanvasHost {
               tx: (x0 / renderScale - docRect.x) / ppp, ty: (y0 / renderScale - docRect.y) / ppp },
             cache: true,
           };
-          composite = gpu.composite(documentWithPixelAdjustmentPreview(session, document), view, this.hooks(session));
+          const previewDocument = documentWithPixelMovePreview(session,
+            documentWithPixelAdjustmentPreview(session, document));
+          composite = gpu.composite(previewDocument, view, this.hooks(session));
         }
         const proof = session.proofColors && session.proofLut ? { lut: session.proofLut, gamutWarning: session.gamutWarning } : undefined;
         gpu.present(composite, width, height, device, renderScale, session.showsPixelGrid && viewport.zoom >= 8,

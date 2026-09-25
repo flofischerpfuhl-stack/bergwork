@@ -492,6 +492,8 @@ export interface PixelMoveState {
   readonly duplicate: boolean;
   readonly origin: DocumentSelection;
   readonly originalRaster: Raster;
+  /** Source with the lifted selection cleared once. Duplicate moves keep the original by identity. */
+  readonly clearedRaster: Raster;
   readonly originalTransform: LayerTransform;
   readonly lifted: Raster;
   /** Lifted pixels in the original layer's pixel coordinates. */
@@ -569,7 +571,7 @@ function sampleLifted(raster: Raster, x: number, y: number, smooth: boolean): [n
 }
 
 function renderInPlacePixelMove(state: PixelMoveState, target: Rect, placed: Rect, toDocument: Affine): Raster {
-  const source = state.originalRaster;
+  const source = state.clearedRaster;
   const tiles = source.tiles, mutable = new Map<number, PixelArray>();
   const outputTiles = tiles.slice();
   const writable = (x: number, y: number): { tile: PixelArray; offset: number } => {
@@ -581,18 +583,6 @@ function renderInPlacePixelMove(state: PixelMoveState, target: Rect, placed: Rec
     }
     return { tile, offset: ((y - row * TILE) * source.tileWidth(col) + x - col * TILE) * 4 };
   };
-  if (!state.duplicate) {
-    for (let y = 0; y < state.liftedRect.height; y++) for (let x = 0; x < state.liftedRect.width; x++) {
-      const sx = state.liftedRect.x + x, sy = state.liftedRect.y + y;
-      const point = apply(toDocument, { x: sx + 0.5, y: sy + 0.5 });
-      const coverage = selectionSampleAt(state.origin, point.x, point.y) / 255;
-      if (coverage === 0 || rasterByte(source, sx, sy, 3) === 0) continue;
-      const pixel = writable(sx, sy); pixel.tile[pixel.offset + 3] = Math.round(pixel.tile[pixel.offset + 3]! * (1 - coverage));
-      if (pixel.tile[pixel.offset + 3] === 0) {
-        pixel.tile[pixel.offset] = 0; pixel.tile[pixel.offset + 1] = 0; pixel.tile[pixel.offset + 2] = 0;
-      }
-    }
-  }
   const draw = integralRect(placed), smooth = !Number.isInteger(target.x) || !Number.isInteger(target.y);
   for (let y = draw.y; y < draw.y + draw.height; y++) for (let x = draw.x; x < draw.x + draw.width; x++) {
     const rgba = sampleLifted(state.lifted, x + 0.5 - target.x, y + 0.5 - target.y, smooth);
@@ -624,20 +614,7 @@ function renderPixelMove(session: EditorSession, state: PixelMoveState, offset: 
   if (placed && bounds.x === 0 && bounds.y === 0 && bounds.width === source.width && bounds.height === source.height) {
     return { raster: renderInPlacePixelMove(state, target, placed, toDocument), transform: state.originalTransform, bounds };
   }
-  const out = source.readRegionNative(bounds.x, bounds.y, bounds.width, bounds.height);
-  if (!state.duplicate) {
-    for (let y = 0; y < state.liftedRect.height; y++) for (let x = 0; x < state.liftedRect.width; x++) {
-      const sx = state.liftedRect.x + x, sy = state.liftedRect.y + y;
-      const documentPoint = apply(toDocument, { x: sx + 0.5, y: sy + 0.5 });
-      const coverage = selectionSampleAt(state.origin, documentPoint.x, documentPoint.y) / 255;
-      if (coverage === 0) continue;
-      const ox = sx - bounds.x, oy = sy - bounds.y;
-      if (ox < 0 || oy < 0 || ox >= bounds.width || oy >= bounds.height) continue;
-      const index = (oy * bounds.width + ox) * 4;
-      out[index + 3] = Math.round(out[index + 3]! * (1 - coverage));
-      if (out[index + 3] === 0) { out[index] = 0; out[index + 1] = 0; out[index + 2] = 0; }
-    }
-  }
+  const out = state.clearedRaster.readRegionNative(bounds.x, bounds.y, bounds.width, bounds.height);
   if (placed) {
     const draw = integralRect(placed), smooth = !Number.isInteger(target.x) || !Number.isInteger(target.y);
     for (let sy = draw.y; sy < draw.y + draw.height; sy++) for (let sx = draw.x; sx < draw.x + draw.width; sx++) {
@@ -650,25 +627,90 @@ function renderPixelMove(session: EditorSession, state: PixelMoveState, offset: 
     transform: transformForPixelBounds(state.originalTransform, source.width, source.height, bounds), bounds };
 }
 
+/** SelectionEditTests.swift's cut step, computed once at pointer-down instead of once per move. */
+function clearedPixelMoveRaster(source: Raster, selection: DocumentSelection, transform: LayerTransform,
+  liftedRect: Rect, duplicate: boolean): Raster {
+  if (duplicate) return source;
+  const toDocument = pixelToDocument(transform, source.width, source.height);
+  const tiles = source.tiles.slice(), mutable = new Map<number, PixelArray>();
+  for (let y = 0; y < liftedRect.height; y++) for (let x = 0; x < liftedRect.width; x++) {
+    const sx = liftedRect.x + x, sy = liftedRect.y + y;
+    const point = apply(toDocument, { x: sx + 0.5, y: sy + 0.5 });
+    const coverage = selectionSampleAt(selection, point.x, point.y) / 255;
+    if (coverage === 0 || rasterByte(source, sx, sy, 3) === 0) continue;
+    const col = Math.floor(sx / TILE), row = Math.floor(sy / TILE), key = row * source.cols + col;
+    let tile = mutable.get(key);
+    if (!tile) {
+      tile = tiles[key]?.slice() ?? makePixelArray(source.format, source.tileWidth(col) * source.tileHeight(row) * 4);
+      mutable.set(key, tile); tiles[key] = tile;
+    }
+    const offset = ((sy - row * TILE) * source.tileWidth(col) + sx - col * TILE) * 4;
+    tile[offset + 3] = Math.round(tile[offset + 3]! * (1 - coverage));
+    if (tile[offset + 3] === 0) { tile[offset] = 0; tile[offset + 1] = 0; tile[offset + 2] = 0; }
+  }
+  for (const [key, tile] of mutable) if (!tile.some((value) => value !== 0)) tiles[key] = null;
+  return new Raster(source.width, source.height, 4, tiles, { format: source.format });
+}
+
 /** Starts Cmd-drag (cut) or Option-Cmd-drag (duplicate); the document remains untouched until commit. */
 export function beginPixelMove(session: EditorSession, duplicate = false): boolean {
   if (pixelMoves.has(session) || session.isMaskSelected || !canEditPixels(session)) return false;
   const document = session.document, layer = session.activeLayer, selection = session.selection;
   if (!document || !layer?.raster || !selection || selectionIsEmpty(selection)) return false;
   const lifted = liftPixels(document, layer, selection); if (!lifted) return false;
-  pixelMoves.set(session, { layerId: layer.id, duplicate, origin: selection, originalRaster: layer.raster,
+  const clearedRaster = clearedPixelMoveRaster(layer.raster, selection, layer.transform, lifted.rect, duplicate);
+  pixelMoves.set(session, { layerId: layer.id, duplicate, origin: selection, originalRaster: layer.raster, clearedRaster,
     originalTransform: layer.transform, lifted: lifted.raster, liftedRect: lifted.rect, offset: { x: 0, y: 0 },
     preview: null, previewTransform: null, previewBounds: null });
   return true;
 }
 
-/** Rebuilds the preview from the original pixels, so repeated pointer moves never accumulate. */
+/** Updates only geometry. The exact raster is built once on pointer-up. */
 export function movePixels(session: EditorSession, dx: number, dy: number): boolean {
   const state = pixelMoves.get(session); if (!state) return false;
-  const offset = { x: roundHalfAway(dx), y: roundHalfAway(dy) }, rendered = renderPixelMove(session, state, offset);
-  if (!rendered) { cancelPixelMove(session); return false; }
-  const next = { ...state, offset, preview: rendered.raster, previewTransform: rendered.transform, previewBounds: rendered.bounds };
-  pixelMoves.set(session, next); session.rasterOverrides.set(state.layerId, rendered.raster); session.notify('document'); return true;
+  const offset = { x: roundHalfAway(dx), y: roundHalfAway(dy) };
+  const source = session.layer(state.layerId);
+  if (source && (source.warp || source.crop || source.filters.length)) {
+    const rendered = renderPixelMove(session, state, offset);
+    if (!rendered) { cancelPixelMove(session); return false; }
+    pixelMoves.set(session, { ...state, offset, preview: rendered.raster,
+      previewTransform: rendered.transform, previewBounds: rendered.bounds });
+    session.rasterOverrides.set(state.layerId, rendered.raster); session.notify('document'); return true;
+  }
+  pixelMoves.set(session, { ...state, offset, preview: null, previewTransform: null, previewBounds: null });
+  session.notify('document'); return true;
+}
+
+/**
+ * Geometry-only move preview: an isolated transient group combines the cleared base and lifted
+ * patch before the original layer mask/opacity/blend is applied. Stored document state is untouched.
+ */
+export function documentWithPixelMovePreview(session: EditorSession,
+  document: CanvasDocument = session.document!): CanvasDocument {
+  const state = pixelMoves.get(session);
+  if (!state || (state.offset.x === 0 && state.offset.y === 0)) return document;
+  const index = document.layers.findIndex((layer) => layer.id === state.layerId);
+  const source = document.layers[index];
+  if (!source || source.raster !== state.originalRaster || source.warp || source.crop || source.filters.length) return document;
+  const toPixels = invert(pixelToDocument(state.originalTransform, state.originalRaster.width, state.originalRaster.height));
+  const zero = apply(toPixels, { x: 0, y: 0 }), shifted = apply(toPixels, state.offset);
+  const target = { x: state.liftedRect.x + shifted.x - zero.x, y: state.liftedRect.y + shifted.y - zero.y,
+    width: state.liftedRect.width, height: state.liftedRect.height };
+  const liftedTransform = transformForPixelBounds(state.originalTransform, state.originalRaster.width,
+    state.originalRaster.height, target);
+  const group = newLayer({ ...source, kind: 'group', raster: undefined, transform: source.transform }) as Layer & {
+    readonly psdIsolated?: boolean;
+  };
+  const isolated = { ...group, psdIsolated: true };
+  const childCommon = { visible: true, opacity: 1, fillOpacity: 1, blendMode: 'normal' as const,
+    locks: source.locks, colorLabel: source.colorLabel, mask: null, vectorMask: null, maskSourceId: null,
+    effects: [], filters: [], warp: null, crop: null };
+  const base = newLayer({ ...childCommon, id: `__fw-move-base:${source.id}`, name: 'Move base',
+    parentId: source.id, raster: state.clearedRaster, transform: state.originalTransform });
+  const lifted = newLayer({ ...childCommon, id: `__fw-move-lifted:${source.id}`, name: 'Moved pixels',
+    parentId: source.id, raster: state.lifted, transform: liftedTransform });
+  const layers = document.layers.slice(); layers.splice(index, 1, isolated, base, lifted);
+  return { ...document, layers };
 }
 
 function expandedMoveMask(layer: Layer, source: Raster, bounds: Rect): Layer['mask'] {
@@ -700,9 +742,7 @@ export function finishPixelMove(session: EditorSession): boolean {
   if (!current || current.raster !== state.originalRaster || !transformsEqual(current.transform, state.originalTransform)) {
     cancelPixelMove(session); return false;
   }
-  const rendered = state.preview && state.previewBounds && state.previewTransform
-    ? { raster: state.preview, bounds: state.previewBounds, transform: state.previewTransform }
-    : renderPixelMove(session, state, state.offset);
+  const rendered = renderPixelMove(session, state, state.offset);
   if (!rendered) { cancelPixelMove(session); return false; }
   const alpha = alphaBounds(rendered.raster);
   const local = alpha ?? { x: 0, y: 0, width: rendered.raster.width, height: rendered.raster.height };
