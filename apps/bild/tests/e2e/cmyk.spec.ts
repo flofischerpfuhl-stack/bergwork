@@ -89,19 +89,23 @@ test('Export As pipeline emits decodable CMYK TIFF 8/16 and CMYK JPEG with ICC',
     const cmyk = { profile, intent: options.intent, blackPointCompensation: options.blackPointCompensation };
     const output: any = {};
     for (const bitDepth of [8, 16] as const) {
-      const [file] = await controller.exportFiles(controller.exportRequest('tiff', {
-        bitDepth, transparent: false, tiffCompression: 'lzw', cmyk, metadata: { colorProfile: 'embed' },
-      }));
-      const decoded = await decodeTiffNative(file.bytes);
-      output[`tiff${bitDepth}`] = { bitDepth: decoded.bitDepth, hasIcc: decoded.hasIcc,
-        pixel: Array.from(decoded.data.slice(0, 4)), bytes: file.bytes.length };
+      try {
+        const [file] = await controller.exportFiles(controller.exportRequest('tiff', {
+          bitDepth, transparent: false, tiffCompression: 'lzw', cmyk, metadata: { colorProfile: 'embed' },
+        }));
+        const decoded = await decodeTiffNative(file.bytes);
+        output[`tiff${bitDepth}`] = { bitDepth: decoded.bitDepth, hasIcc: decoded.hasIcc,
+          pixel: Array.from(decoded.data.slice(0, 4)), bytes: file.bytes.length };
+      } catch (error) { throw new Error(`CMYK TIFF ${bitDepth}: ${error instanceof Error ? error.message : String(error)}`); }
     }
-    const [jpeg] = await controller.exportFiles(controller.exportRequest('jpeg', {
-      quality: 0.92, transparent: false, cmyk, metadata: { colorProfile: 'embed' },
-    }));
-    const decodedJpeg = await decodeJpegSamples(jpeg.bytes);
-    output.jpeg = { model: decodedJpeg.model, icc: readJpegIccProfile(jpeg.bytes)?.length ?? 0,
-      pixel: Array.from(decodedJpeg.data.slice(0, 4)), bytes: jpeg.bytes.length };
+    try {
+      const [jpeg] = await controller.exportFiles(controller.exportRequest('jpeg', {
+        quality: 0.92, transparent: false, cmyk, metadata: { colorProfile: 'embed' },
+      }));
+      const decodedJpeg = await decodeJpegSamples(jpeg.bytes);
+      output.jpeg = { model: decodedJpeg.model, icc: readJpegIccProfile(jpeg.bytes)?.length ?? 0,
+        pixel: Array.from(decodedJpeg.data.slice(0, 4)), bytes: jpeg.bytes.length };
+    } catch (error) { throw new Error(`CMYK JPEG: ${error instanceof Error ? error.message : String(error)}`); }
     return output;
   });
   expect(result.tiff8).toMatchObject({ bitDepth: 8, hasIcc: true });
@@ -112,4 +116,39 @@ test('Export As pipeline emits decodable CMYK TIFF 8/16 and CMYK JPEG with ICC',
   expect(result.tiff16.pixel).toHaveLength(4);
   expect(result.jpeg.pixel).toHaveLength(4);
   expect(result.jpeg.bytes).toBeGreaterThan(500);
+});
+
+test('a user-loaded CMYK ICC drives the exact proof LUT and export profile', async ({ page }) => {
+  await mountPro(page);
+  const bytes = await page.evaluate(async () => {
+    const load = (path: string): Promise<any> => import(/* @vite-ignore */ path);
+    const lcms = await (await load('/src/wasm/lcms/index.ts')).loadLittleCms();
+    return Array.from(lcms.createCmykProfile()) as number[];
+  });
+  await page.getByTestId('menu-View').click();
+  await page.getByTestId('menu-proof-setup').click();
+  await page.getByTestId('proof-icc-file').setInputFiles({ name: 'Press Output.icc', mimeType: 'application/vnd.iccprofile',
+    buffer: Buffer.from(bytes) });
+  await expect(page.getByTestId('proof-profile')).toHaveValue('user');
+  await page.getByTestId('proof-apply').click();
+  await expect(page.getByTestId('proof-setup-dialog')).toHaveCount(0);
+  const result = await page.evaluate(async () => {
+    const load = (path: string): Promise<any> => import(/* @vite-ignore */ path);
+    const controller = (window as any).__editorForTests, session = controller.session;
+    const lcms = await (await load('/src/wasm/lcms/index.ts')).loadLittleCms();
+    const rgb = new Uint8Array([0, 0, 0, 255, 128, 64, 192, 255, 255, 255, 255, 255]);
+    lcms.transformRgbToCmykInPlace(session.proofProfile.icc, rgb, session.proofOptions.intent,
+      session.proofOptions.blackPointCompensation);
+    const [file] = await controller.exportFiles(controller.exportRequest('tiff', { transparent: false,
+      cmyk: { profile: session.proofProfile, intent: session.proofOptions.intent,
+        blackPointCompensation: session.proofOptions.blackPointCompensation }, metadata: { colorProfile: 'embed' } }));
+    const { decodeTiffNative } = await load('/src/io/tiff.ts');
+    const decoded = await decodeTiffNative(file.bytes);
+    return { name: session.proofProfile.name, exactDevice: Array.from(rgb), hasIcc: decoded.hasIcc,
+      exportedProfile: Array.from(session.proofProfile.icc) };
+  });
+  expect(result.name).toBe('Press Output');
+  expect(result.exactDevice).not.toEqual([0, 0, 0, 255, 128, 64, 192, 255, 255, 255, 255, 255]);
+  expect(result.hasIcc).toBe(true);
+  expect(result.exportedProfile).toEqual(bytes);
 });

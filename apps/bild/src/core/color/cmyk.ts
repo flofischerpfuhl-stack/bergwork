@@ -1,14 +1,8 @@
 /**
  * CMYK output profiles and display proofing. The document remains straight-alpha sRGB; this
- * module is only used to build an output-device inverse LUT and an RGB display round trip.
- *
- * The committed Little CMS build exposes the output direction (CMYK -> PCS -> sRGB). We obtain
- * the reverse direction deterministically by sampling the output device and choosing the closest
- * device value for every RGB node. This also gives us an honest gamut error per node instead of
- * deriving a warning from clipped RGB channels.
+ * module is only used for exact output transforms and to build an RGB display proof LUT.
  */
 
-import { rgbToLab } from './convert';
 import { loadLittleCms } from '../../wasm/lcms';
 
 export type CmykRenderingIntent = 'perceptual' | 'relative-colorimetric';
@@ -18,9 +12,6 @@ export interface CmykProfile {
   readonly id: BundledCmykProfileId | 'user';
   readonly name: string;
   readonly icc: Uint8Array;
-  /** Device constraints used by the bundled approximations. */
-  readonly maximumChannel: number;
-  readonly inkLimit: number;
 }
 
 export interface ProofOptions {
@@ -50,8 +41,6 @@ export function bundledCmykProfile(id: BundledCmykProfileId): Promise<CmykProfil
   if (!cached) {
     cached = loadLittleCms().then((lcms) => ({
       id, name: PROFILE_NAMES[id], icc: lcms.createCmykProfile(),
-      maximumChannel: id === 'swop-approx' ? 218 : 225,
-      inkLimit: id === 'swop-approx' ? 3.0 : 3.3,
     }));
     profileCache.set(id, cached);
   }
@@ -60,73 +49,37 @@ export function bundledCmykProfile(id: BundledCmykProfileId): Promise<CmykProfil
 
 export function userCmykProfile(name: string, icc: Uint8Array): CmykProfile {
   if (icc.byteLength < 128) throw new RangeError('The ICC profile is too small.');
-  return { id: 'user', name: name.replace(/\.(icc|icm)$/i, '') || 'Custom CMYK profile', icc: icc.slice(),
-    maximumChannel: 255, inkLimit: 4 };
-}
-
-function deviceSamples(profile: CmykProfile): Uint8Array {
-  // Seven device steps keep a 17³ display LUT interactive even in WebKit's slower JS engine;
-  // interpolation supplies the continuous per-pixel transform after this one-time inverse search.
-  const steps = 7, values = Array.from({ length: steps }, (_, i) => Math.round(i * profile.maximumChannel / (steps - 1)));
-  const samples: number[] = [];
-  const maximumInk = profile.inkLimit * 255 + 0.5;
-  for (const k of values) for (const y of values) for (const m of values) for (const c of values) {
-    if (c + m + y + k <= maximumInk) samples.push(c, m, y, k);
-  }
-  return Uint8Array.from(samples);
-}
-
-function distance(r: number, g: number, b: number, samples: Uint8Array, at: number): number {
-  // The weighted gamma-RGB metric is only the coarse nearest-neighbour search. Gamut reporting
-  // below uses CIE Lab D50, and the selected node is always the real Little CMS result.
-  const dr = r - samples[at]!, dg = g - samples[at + 1]!, db = b - samples[at + 2]!;
-  return dr * dr * 0.30 + dg * dg * 0.59 + db * db * 0.11;
-}
-
-function deltaE76(a: readonly [number, number, number], b: readonly [number, number, number]): number {
-  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-}
-
-function lab(r: number, g: number, b: number): readonly [number, number, number] {
-  const value = rgbToLab({ red: r / 255, green: g / 255, blue: b / 255 });
-  return [value.l, value.a, value.b];
+  return { id: 'user', name: name.replace(/\.(icc|icm)$/i, '') || 'Custom CMYK profile', icc: icc.slice() };
 }
 
 /**
- * Builds the flattened 3D display LUT and the matching RGB->CMYK device LUT. Every proof RGB
- * sample is the result of a real Little CMS CMYK->RGB transform through the selected ICC profile.
+ * Builds the flattened 3D display LUT and matching RGB→CMYK device nodes. Both arrays come from
+ * Little CMS transforms configured with the selected output profile, intent and BPC setting.
  */
 export async function buildCmykLut(profile: CmykProfile, options: ProofOptions, size = 17): Promise<CmykLut> {
   if (!Number.isInteger(size) || size < 2 || size > 65) throw new RangeError('CMYK LUT size must be 2…65.');
   const lcms = await loadLittleCms();
-  const devices = deviceSamples(profile);
-  const rendered = lcms.transform(profile.icc, devices, 'cmyk', 8);
   const nodes = size ** 3, cmyk = new Uint8Array(nodes * 4), proof = new Uint8Array(nodes * 4);
+  const rgb = new Uint8Array(nodes * 3);
   let node = 0;
   for (let blue = 0; blue < size; blue++) for (let green = 0; green < size; green++) for (let red = 0; red < size; red++, node++) {
-    const targetR = Math.round(red * 255 / (size - 1)), targetG = Math.round(green * 255 / (size - 1));
-    const targetB = Math.round(blue * 255 / (size - 1));
-    let best = 0, bestDistance = Number.POSITIVE_INFINITY;
-    for (let sample = 0; sample < devices.length / 4; sample++) {
-      const value = distance(targetR, targetG, targetB, rendered, sample * 4);
-      if (value < bestDistance) { bestDistance = value; best = sample; }
-    }
-    const deviceAt = best * 4, proofAt = best * 4, out = node * 4;
-    cmyk.set(devices.subarray(deviceAt, deviceAt + 4), out);
-    let r = rendered[proofAt]!, g = rendered[proofAt + 1]!, b = rendered[proofAt + 2]!;
-    if (options.intent === 'perceptual') {
-      // A very small full-gamut compression makes the approximation continuous at its boundary.
-      r = Math.round(4 + r * 247 / 255); g = Math.round(4 + g * 247 / 255); b = Math.round(4 + b * 247 / 255);
-    }
-    if (options.blackPointCompensation) {
-      r = Math.max(r, 2); g = Math.max(g, 2); b = Math.max(b, 2);
-    }
-    if (options.simulatePaperWhite) {
-      r = Math.round(r * 0.975); g = Math.round(g * 0.968); b = Math.round(b * 0.94);
-    }
-    proof[out] = r; proof[out + 1] = g; proof[out + 2] = b;
-    const error = deltaE76(lab(targetR, targetG, targetB), lab(rendered[proofAt]!, rendered[proofAt + 1]!, rendered[proofAt + 2]!));
-    proof[out + 3] = Math.round(Math.min(1, Math.max(0, (error - 2) / 6)) * 255);
+    const at = node * 3;
+    rgb[at] = Math.round(red * 255 / (size - 1));
+    rgb[at + 1] = Math.round(green * 255 / (size - 1));
+    rgb[at + 2] = Math.round(blue * 255 / (size - 1));
+  }
+  for (let i = 0; i < nodes; i++) {
+    cmyk[i * 4] = rgb[i * 3]!; cmyk[i * 4 + 1] = rgb[i * 3 + 1]!; cmyk[i * 4 + 2] = rgb[i * 3 + 2]!; cmyk[i * 4 + 3] = 255;
+  }
+  lcms.transformRgbToCmykInPlace(profile.icc, cmyk, options.intent, options.blackPointCompensation);
+  const rendered = lcms.proofRgb(profile.icc, rgb, options.intent, options.blackPointCompensation,
+    options.simulatePaperWhite) as Uint8Array;
+  const gamut = lcms.proofRgb(profile.icc, rgb, options.intent, options.blackPointCompensation,
+    options.simulatePaperWhite, true) as Uint8Array;
+  for (let i = 0; i < nodes; i++) {
+    const input = i * 3, output = i * 4;
+    proof[output] = rendered[input]!; proof[output + 1] = rendered[input + 1]!; proof[output + 2] = rendered[input + 2]!;
+    proof[output + 3] = gamut[input] === 255 && gamut[input + 1] === 0 && gamut[input + 2] === 255 ? 255 : 0;
   }
   return { size, cmyk, proof };
 }
@@ -173,16 +126,9 @@ export function rgbToCmykPixels(pixels: Uint8Array | Uint16Array, lut: CmykLut):
   return out;
 }
 
-const exportLuts = new WeakMap<Uint8Array, Map<string, Promise<CmykLut>>>();
-
-export function exportCmykLut(profile: CmykProfile, intent: CmykRenderingIntent, blackPointCompensation: boolean): Promise<CmykLut> {
-  let profiles = exportLuts.get(profile.icc);
-  if (!profiles) { profiles = new Map(); exportLuts.set(profile.icc, profiles); }
-  const key = `${intent}:${blackPointCompensation ? 1 : 0}`;
-  let value = profiles.get(key);
-  if (!value) {
-    value = buildCmykLut(profile, { intent, blackPointCompensation, simulatePaperWhite: false });
-    profiles.set(key, value);
-  }
-  return value;
+/** Exact, chunked Little CMS export transform. The rendered RGBA storage becomes CMYK in place. */
+export async function rgbToCmykPixelsExact(pixels: Uint8Array | Uint16Array, profile: CmykProfile,
+  intent: CmykRenderingIntent, blackPointCompensation: boolean, rowWidth?: number): Promise<void> {
+  const lcms = await loadLittleCms();
+  lcms.transformRgbToCmykInPlace(profile.icc, pixels, intent, blackPointCompensation, rowWidth);
 }

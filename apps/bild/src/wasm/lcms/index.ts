@@ -1,6 +1,7 @@
 import createLcmsModule from './lcms.mjs';
 
 export type IccColorModel = 'gray' | 'rgb' | 'cmyk';
+export type LcmsRenderingIntent = 'perceptual' | 'relative-colorimetric';
 export interface Chromaticities {
   readonly white: readonly [number, number];
   readonly red: readonly [number, number];
@@ -19,6 +20,12 @@ export interface LittleCms {
   /** Precision-preserving TYPE_RGBA_16-equivalent conversion to straight sRGB RGBA16. */
   transform16(profile: Uint8Array, input: Uint16Array, model: IccColorModel,
     alpha?: Uint16Array | null): Uint16Array;
+  /** Exact sRGB→CMYK device transform. Reuses the RGBA storage as CMYK to bound peak memory. */
+  transformRgbToCmykInPlace(profile: Uint8Array, pixels: Uint8Array | Uint16Array,
+    intent: LcmsRenderingIntent, blackPointCompensation: boolean, rowWidth?: number): void;
+  /** Exact sRGB→CMYK→sRGB proof transform over packed RGB samples. */
+  proofRgb(profile: Uint8Array, input: Uint8Array | Uint16Array, intent: LcmsRenderingIntent,
+    blackPointCompensation: boolean, simulatePaperWhite: boolean, gamutCheck?: boolean): Uint8Array | Uint16Array;
   createRgbProfile(chromaticities: Chromaticities, gamma: number, transfer?: 'gamma' | 'srgb'): Uint8Array;
   createGrayProfile(white: readonly [number, number], gamma: number): Uint8Array;
   createCmykProfile(): Uint8Array;
@@ -45,6 +52,8 @@ class Arena {
 
 const MODEL: Readonly<Record<IccColorModel, number>> = { gray: 1, rgb: 3, cmyk: 4 };
 const CHANNELS: Readonly<Record<IccColorModel, number>> = { gray: 1, rgb: 3, cmyk: 4 };
+const INTENT: Readonly<Record<LcmsRenderingIntent, number>> = { perceptual: 0, 'relative-colorimetric': 1 };
+const CHUNK_PIXELS = 1_048_576;
 
 function validCoordinate(value: number): boolean { return Number.isFinite(value) && value > 0 && value <= 1; }
 function checkWhite(white: readonly [number, number]): void {
@@ -79,7 +88,7 @@ function makeLcms(module: Module): LittleCms {
         const profilePointer = arena.copy(profile);
         transform = module._lcms_create_transform(profilePointer, profile.byteLength, MODEL[model], bits, outputBits);
         if (!transform) throw new IccError(`The embedded ICC profile is invalid or is not ${model.toUpperCase()}`);
-        const chunkPixels = Math.min(pixels, 1_048_576), inputStride = channels * bytes;
+        const chunkPixels = Math.min(pixels, CHUNK_PIXELS), inputStride = channels * bytes;
         const outputBytes = outputBits / 8, outputStride = 3 * outputBytes;
         const inputPointer = arena.allocate(chunkPixels * inputStride), outputPointer = arena.allocate(chunkPixels * outputStride);
         const rgba = outputBits === 16 ? new Uint16Array(pixels * 4) : new Uint8Array(pixels * 4);
@@ -104,12 +113,58 @@ function makeLcms(module: Module): LittleCms {
         arena.release();
       }
     };
+  const exactTransform = (profile: Uint8Array, input: Uint8Array | Uint16Array, channels: 3 | 4,
+    create: (profilePointer: number, profileSize: number, bits: 8 | 16) => number,
+    output?: Uint8Array | Uint16Array, rowWidth?: number): Uint8Array | Uint16Array => {
+      if (profile.byteLength === 0) throw new IccError('The CMYK ICC profile is empty');
+      const bits: 8 | 16 = input instanceof Uint16Array ? 16 : 8;
+      if (input.length % channels !== 0) throw new RangeError('ICC input has an incomplete pixel');
+      const pixels = input.length / channels;
+      if (!Number.isSafeInteger(pixels) || pixels < 1 || pixels > 300_000_000) throw new RangeError('Invalid ICC pixel count');
+      if (rowWidth !== undefined && (!Number.isInteger(rowWidth) || rowWidth < 1 || pixels % rowWidth !== 0)) {
+        throw new RangeError('ICC row width does not match the pixel count');
+      }
+      const target = output ?? (bits === 16 ? new Uint16Array(input.length) : new Uint8Array(input.length));
+      if (target.length !== input.length || (target instanceof Uint16Array) !== (bits === 16)) {
+        throw new RangeError('ICC output does not match the input samples');
+      }
+      const arena = new Arena(module);
+      let handle = 0;
+      try {
+        const profilePointer = arena.copy(profile);
+        handle = create(profilePointer, profile.byteLength, bits);
+        if (!handle) throw new IccError('The ICC profile is invalid or is not CMYK');
+        const bounded = rowWidth === undefined ? CHUNK_PIXELS : Math.max(rowWidth, Math.floor(CHUNK_PIXELS / rowWidth) * rowWidth);
+        const chunkPixels = Math.min(pixels, bounded), stride = channels * bits / 8;
+        const inputPointer = arena.allocate(chunkPixels * stride), outputPointer = arena.allocate(chunkPixels * stride);
+        const inputBytes = new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+        const outputBytes = new Uint8Array(target.buffer, target.byteOffset, target.byteLength);
+        for (let first = 0; first < pixels; first += chunkPixels) {
+          const count = Math.min(chunkPixels, pixels - first), byteOffset = first * stride, byteLength = count * stride;
+          module.HEAPU8.set(inputBytes.subarray(byteOffset, byteOffset + byteLength), inputPointer);
+          module._lcms_do_transform(handle, inputPointer, outputPointer, count);
+          outputBytes.set(module.HEAPU8.subarray(outputPointer, outputPointer + byteLength), byteOffset);
+        }
+        return target;
+      } finally {
+        if (handle) module._lcms_delete_transform(handle);
+        arena.release();
+      }
+    };
   return {
     transform(profile, input, model, bits, alpha = null) {
       return transform(profile, input, model, bits, 8, alpha) as Uint8Array;
     },
     transform16(profile, input, model, alpha = null) {
       return transform(profile, input, model, 16, 16, alpha) as Uint16Array;
+    },
+    transformRgbToCmykInPlace(profile, pixels, intent, blackPointCompensation, rowWidth) {
+      exactTransform(profile, pixels, 4, (pointer, size, bits) => module._lcms_create_rgb_to_cmyk_transform(
+        pointer, size, bits, INTENT[intent], blackPointCompensation ? 1 : 0), pixels, rowWidth);
+    },
+    proofRgb(profile, input, intent, blackPointCompensation, simulatePaperWhite, gamutCheck = false) {
+      return exactTransform(profile, input, 3, (pointer, size, bits) => module._lcms_create_proof_transform(
+        pointer, size, bits, INTENT[intent], blackPointCompensation ? 1 : 0, simulatePaperWhite ? 1 : 0, gamutCheck ? 1 : 0));
     },
     createRgbProfile(chromaticities, gamma, transfer = 'gamma') {
       checkWhite(chromaticities.white);

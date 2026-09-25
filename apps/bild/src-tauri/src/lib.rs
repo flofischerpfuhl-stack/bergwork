@@ -160,6 +160,7 @@ pub fn run() {
             host::read_cached_model,
             host::write_cached_model,
             host::display_icc_profile,
+            host::list_output_profiles,
             screen_color::pick_screen_color,
             screen_color::screen_color_support,
             a4c_archive_path,

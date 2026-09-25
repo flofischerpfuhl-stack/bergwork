@@ -233,6 +233,10 @@ const color: ColorHost = {
     const profile = await window.__TAURI__.core.invoke<{ name: string; bytes: number[] | null; assumed: boolean }>('display_icc_profile');
     return { ...profile, bytes: profile.bytes ? Uint8Array.from(profile.bytes) : null };
   },
+  async outputProfiles() {
+    const profiles = await window.__TAURI__.core.invoke<{ name: string; bytes: number[] }[]>('list_output_profiles');
+    return profiles.map((profile) => ({ name: profile.name, bytes: Uint8Array.from(profile.bytes) }));
+  },
 };
 
 /** Screen eyedropper in Rust (X11 XGetImage, Windows GetPixel); WebView2 usually has the EyeDropper API first. */

@@ -94,6 +94,15 @@ describe('export planning and naming', () => {
     expect(code({ targets: [{ kind: 'document' }], format: 'png', sizes: [{ width: 30_000, height: 30_000 }] })).toBe('too-large');
     expect(code({ targets: [{ kind: 'document' }], format: 'jpeg', quality: 2 })).toBe('option');
   });
+
+  it('plans 200 MP only for the Pro CMYK output path', () => {
+    const size = [{ width: 20_000, height: 10_000 }] as const;
+    expect(() => planExport(fixture(), { targets: [{ kind: 'document' }], format: 'tiff', sizes: size })).toThrowError(ExportError);
+    const cmyk = { profile: { id: 'user' as const, name: 'Test press', icc: new Uint8Array(128) },
+      intent: 'relative-colorimetric' as const, blackPointCompensation: true };
+    expect(planExport(fixture(), { targets: [{ kind: 'document' }], format: 'tiff', sizes: size, cmyk })[0])
+      .toMatchObject({ width: 20_000, height: 10_000 });
+  });
 });
 
 describe('export pipeline: artboard pixels', () => {

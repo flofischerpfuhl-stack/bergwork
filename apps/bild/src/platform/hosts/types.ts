@@ -88,10 +88,13 @@ export interface ModelHost extends VersionedCapability {
 }
 
 export interface DisplayColorProfile { readonly name: string; readonly bytes: Uint8Array | null; readonly assumed: boolean }
+export interface InstalledColorProfile { readonly name: string; readonly bytes: Uint8Array }
 /** Fallback: assume an sRGB display. */
 export interface ColorHost extends VersionedCapability {
   readonly version: 1;
   displayProfile(): Promise<DisplayColorProfile>;
+  /** Optional host-owned discovery. Called only when the user opens Proof Setup. */
+  outputProfiles?(): Promise<readonly InstalledColorProfile[]>;
 }
 
 /** 8-bit sRGB from the screen. */

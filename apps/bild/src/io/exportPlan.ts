@@ -124,6 +124,7 @@ export const EXPORT_MIME: Record<ExportFormat, string> = {
 export const EXPORT_EXTENSION: Record<ExportFormat, string> = { png: 'png', jpeg: 'jpg', webp: 'webp', avif: 'avif', tiff: 'tif' };
 export const DEFAULT_EXPORT_METADATA: ExportMetadata = { colorProfile: 'embed', resolution: true, info: null };
 const WHITE: RGB = { red: 1, green: 1, blue: 1 };
+const CMYK_MAX_PIXELS = 300_000_000;
 const DEFAULT_QUALITY: Record<ExportFormat, number> = { png: 1, jpeg: 0.85, webp: 0.85, avif: 0.75, tiff: 1 };
 
 export function formatHasAlpha(format: ExportFormat): boolean { return format !== 'jpeg'; }
@@ -191,7 +192,7 @@ export function sizeSuffix(size: ExportSize, width: number, height: number): str
   return `-${width}x${height}`;
 }
 
-function outputSize(region: Rect, size: ExportSize): { width: number; height: number } {
+function outputSize(region: Rect, size: ExportSize, maxPixels: number): { width: number; height: number } {
   let width: number, height: number;
   if ('scale' in size) {
     if (!Number.isFinite(size.scale) || size.scale <= 0 || size.scale > 64) throw new ExportError('option', 'Export scale must be between 0 and 64.');
@@ -202,8 +203,8 @@ function outputSize(region: Rect, size: ExportSize): { width: number; height: nu
     width = w ?? Math.max(1, Math.round(region.width * h! / region.height));
     height = h ?? Math.max(1, Math.round(region.height * w! / region.width));
   }
-  if (width > MAX_SIDE || height > MAX_SIDE || width * height > MAX_PIXELS) {
-    throw new ExportError('too-large', 'Image export supports canvases up to 100 megapixels and 30,000 pixels per side.');
+  if (width > MAX_SIDE || height > MAX_SIDE || width * height > maxPixels) {
+    throw new ExportError('too-large', `Image export supports canvases up to ${maxPixels / 1_000_000} megapixels and 30,000 pixels per side.`);
   }
   return { width, height };
 }
@@ -242,7 +243,7 @@ export function planExport(document: CanvasDocument | null, request: ExportReque
   for (const target of request.targets) {
     const info = targetInfo(document, target, request.baseName ?? 'Untitled');
     for (const size of resolved.sizes) {
-      const { width, height } = outputSize(info.region, size);
+      const { width, height } = outputSize(info.region, size, request.cmyk ? CMYK_MAX_PIXELS : MAX_PIXELS);
       const stem = sanitizeFileStem(info.label), suffix = sizeSuffix(size, width, height), extension = EXPORT_EXTENSION[resolved.format];
       let name = `${stem}${suffix}.${extension}`;
       for (let n = 2; used.has(name.toLowerCase()); n++) name = `${stem} ${n}${suffix}.${extension}`;
