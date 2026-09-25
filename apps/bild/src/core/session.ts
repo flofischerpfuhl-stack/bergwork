@@ -2101,12 +2101,13 @@ export class EditorSession {
     this.edit(name, () => this.updateLayer(id, (l) => ({ ...l, mask: { ...l.mask!, raster } })));
   }
   /** Inserts pixels as a new layer above the active one (addPixelLayer). */
-  addPixelLayer(raster: Raster, origin: Point, name: string, editName: string, dropsSelection = true): string | null {
+  addPixelLayer(raster: Raster, origin: Point, name: string, editName: string, dropsSelection = true,
+    transform?: LayerTransform): string | null {
     const document = this.document;
     if (!document) return null;
     const active = this.activeLayer;
     const layer = newLayer({ id: uuid(), name, raster,
-      transform: makeTransform(origin, { width: raster.width, height: raster.height }),
+      transform: transform ?? makeTransform(origin, { width: raster.width, height: raster.height }),
       parentId: active?.kind === 'group' ? this.activeLayerId : active?.parentId ?? null });
     const index = document.layers.findIndex((l) => l.id === this.activeLayerId);
     this.finishOpacityEdit();

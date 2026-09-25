@@ -477,7 +477,7 @@ export class EditorController {
     this.alert(this.t('Fernwork Image Editor'), [
       this.t('Works offline. No account, no telemetry.'),
       this.t('Parts of this editor are based on Compositor by Wonder Assembly LLC (MIT License).'),
-      this.t('Third-party components and their licences include libwebp (BSD), libavif (BSD), dav1d (BSD), libaom (BSD), libjpeg-turbo (IJG/BSD), lcms / Little CMS (MIT), ONNX Runtime Web (MIT), U²-Netp (Apache-2.0), and BiRefNet (MIT, optional download). libheif is an opt-in HEIC capability (LGPL-3.0) and is not loaded by default. See THIRD_PARTY_NOTICES.md for the complete inventory.'),
+      this.t('Third-party components and their licences include libwebp (BSD), libavif (BSD), dav1d (BSD), libaom (BSD), libjpeg-turbo (IJG/BSD), lcms / Little CMS (MIT), ONNX Runtime Web (MIT), CanvasKit/Skia (BSD-3-Clause), PixiJS, React, zustand, immer, idb, fflate (MIT/ISC), U²-Netp (Apache-2.0), and the optional downloads BiRefNet (MIT), SlimSAM (Apache-2.0), MI-GAN (MIT) and Real-ESRGAN (BSD-3-Clause). libheif is an opt-in HEIC capability (LGPL-3.0) and is not loaded by default. See THIRD_PARTY_NOTICES.md for the complete inventory.'),
     ].join('\n\n'));
   }
   confirm(title: string, message: string, buttons: Extract<Dialog, { kind: 'confirm' }>['buttons']): Promise<string> {
