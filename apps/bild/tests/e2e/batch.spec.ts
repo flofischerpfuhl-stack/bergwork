@@ -119,10 +119,11 @@ async function queueImages(page: Page, count: number, options: { broken?: number
     for (let i = 0; i < count; i++) {
       if (i === broken) { files.push(new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4, 5, 6])], 'broken.png', { type: 'image/png' })); continue; }
       const w = width ?? 30 + i * 3, h = height ?? 20 + i * 2;
-      const canvas = new OffscreenCanvas(w, h), context = canvas.getContext('2d')!;
+      // A DOM canvas: WebKit on Windows has no OffscreenCanvas on the main thread.
+      const canvas = Object.assign(document.createElement('canvas'), { width: w, height: h }), context = canvas.getContext('2d')!;
       context.fillStyle = `rgb(${20 + i * 10}, 100, ${200 - i * 5})`; context.fillRect(0, 0, Math.floor(w / 2), h);
       context.fillStyle = `rgb(200, ${50 + i * 8}, 30)`; context.fillRect(Math.floor(w / 2), 0, w - Math.floor(w / 2), h);
-      files.push(new File([await canvas.convertToBlob({ type: 'image/png' })], `IMG_${1001 + i}.png`, { type: 'image/png' }));
+      files.push(new File([await new Promise<Blob>((resolve) => canvas.toBlob((blob) => resolve(blob!), 'image/png'))], `IMG_${1001 + i}.png`, { type: 'image/png' }));
     }
     (window as any).__openAnswer = files;
   }, { count, broken: options.broken ?? -1, width: options.width, height: options.height });

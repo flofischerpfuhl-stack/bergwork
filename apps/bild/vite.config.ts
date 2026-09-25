@@ -26,13 +26,27 @@ function bundleReport(): Plugin {
   };
 }
 
+/**
+ * Dev only: WebKit rejects a module a worker imports when the dev server revalidates it with a bare 304 (no COEP header),
+ * which stopped every worker under cross-origin isolation. Serving full responses keeps the headers on each module.
+ */
+function fullResponsesForWorkers(): Plugin {
+  return {
+    name: 'fernwork-dev-full-responses',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => { delete req.headers['if-none-match']; delete req.headers['if-modified-since']; next(); });
+    },
+  };
+}
+
 const isolationHeaders = {
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Embedder-Policy': 'require-corp',
 };
 
 export default defineConfig({
-  plugins: [react(), bundleReport()],
+  plugins: [fullResponsesForWorkers(), react(), bundleReport()],
   server: { host: '127.0.0.1', headers: isolationHeaders },
   preview: { headers: isolationHeaders },
   worker: { format: 'es' },
