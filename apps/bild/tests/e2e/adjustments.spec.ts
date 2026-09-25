@@ -126,3 +126,32 @@ test('Gaussian Blur softens an edge; Curves brightens midtones on an adjustment 
   expect(pixelAt(pixels, 30, 30)[0]).toBeGreaterThan(edge + 20);
   expect(pixelAt(pixels, 5, 30)[0]).toBeLessThan(5);
 });
+
+test('the Levels preview reaches the screen while dragging and Escape restores it (retained frame cache)', async ({ page, browserName }) => {
+  // Playwright WebKit screenshots of the WebGL canvas trail one presented frame (before/preview/OK read 89/100/127 for
+  // 100/128/128 at the integration commit before the retained cache), so the on-screen check runs in Chromium and Firefox.
+  test.skip(browserName === 'webkit', 'WebKit screenshots of WebGL lag one frame');
+  await canvasWith(page, 'gray.png', solidPng(60, 60, [100, 100, 100, 255]));
+  const centre = async (): Promise<number> => {
+    const box = (await page.getByTestId('editor-canvas').boundingBox())!;
+    const png = await page.screenshot({ clip: { x: box.x + box.width / 2 - 2, y: box.y + box.height / 2 - 2, width: 4, height: 4 } });
+    return page.evaluate(async (base64) => {
+      const bytes = Uint8Array.from(atob(base64), (value) => value.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+      const canvas = Object.assign(document.createElement('canvas'), { width: bitmap.width, height: bitmap.height });
+      const context = canvas.getContext('2d')!;
+      context.drawImage(bitmap, 0, 0);
+      return context.getImageData(1, 1, 1, 1).data[0]!;
+    }, png.toString('base64'));
+  };
+  await expect.poll(centre).toBeLessThan(110);
+  await page.getByTestId('compositor-editor').press(`${mod}+l`);
+  const panel = page.getByTestId('adjustment-panel');
+  await expect(panel.getByText('Loading histogram…')).toHaveCount(0, { timeout: 15_000 });
+  // White point 200: grey 100 is shown as about 128 on screen before anything is committed.
+  await page.getByTestId('levelsInputwhite').fill('200');
+  await expect.poll(centre, { timeout: 10_000 }).toBeGreaterThan(120);
+  await page.getByTestId('compositor-editor').press('Escape');
+  await expect(panel).toHaveCount(0);
+  await expect.poll(centre, { timeout: 10_000 }).toBeLessThan(110);
+});
