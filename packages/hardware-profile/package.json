@@ -1,0 +1,23 @@
+{
+  "name": "@bergwork/hardware-profile",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./quirks-v1.json": "./quirks-v1.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run typecheck && node --experimental-strip-types --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.2"
+  }
+}
+

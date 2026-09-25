@@ -1,0 +1,17 @@
+{
+  "name": "bergwork",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.18.0" },
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "hardware:quirks": "node scripts/generate-hardware-quirks.mjs",
+    "hardware:quirks:check": "node scripts/generate-hardware-quirks.mjs --check",
+    "sync:install": "node scripts/sync-upstream.mjs install",
+    "sync:check": "node scripts/sync-upstream.mjs check",
+    "sync:status": "node scripts/sync-upstream.mjs status",
+    "sync:update": "node scripts/sync-upstream.mjs update",
+    "test": "node --test scripts/*.test.mjs"
+  }
+}
