@@ -3,9 +3,11 @@ import { writePsdUint8Array, type Layer as AgLayer, type Psd } from 'ag-psd';
 import type { HostAdapter } from '../../contracts';
 import { applyAdjustment } from '../../src/core/adjust/apply';
 import { curvesTables } from '../../src/core/adjust/levels';
-import { defaultCurves } from '../../src/core/adjustments';
-import { newLayer } from '../../src/core/document';
+import { defaultCurves, defaultHueSaturation } from '../../src/core/adjustments';
+import { newLayer, type CanvasDocument, type Layer, type LayerAdjustment } from '../../src/core/document';
+import { renderPsdInnerEffectPasses } from '../../src/core/effects/render';
 import { makeTransform } from '../../src/core/geometry';
+import { Raster } from '../../src/core/raster';
 import { readRawPsdComposite } from '../../src/io/psd/composite';
 import { decodePsdLayerChannels } from '../../src/io/psd/layerChannels';
 import { readPsdDocument, readPsdDocumentManaged } from '../../src/io/psd';
@@ -29,6 +31,44 @@ function image(values: readonly number[]): { width: number; height: number; data
 }
 
 describe('PSD colour modes and product wiring', () => {
+  it('A7: applies Photoshop modern Brightness/Contrast and channel-wise Hue/Saturation lightness', () => {
+    const source = new Float32Array([0.2, 0.4, 0.8, 1]);
+    const brightness = { kind: 'Brightness/Contrast' as const, schemaVersion: 1 as const,
+      parameters: { brightness: 0, contrast: 0, legacy: false } };
+    const neutral = applyAdjustment(brightness, source, 1, 1, 0, 0);
+    expect(neutral[0]).toBeCloseTo(0.2, 6); expect(neutral[1]).toBeCloseTo(0.4, 6);
+    expect(neutral[2]).toBeCloseTo(0.8, 6); expect(neutral[3]).toBe(1);
+    const hue = { kind: 'Hue/Saturation' as const, schemaVersion: 1 as const,
+      parameters: { hue: 0, saturation: 0, lightness: 50, colorize: false,
+        settings: defaultHueSaturation(0, 0, 50) } };
+    const adjusted = applyAdjustment(hue, source, 1, 1, 0, 0);
+    expect(adjusted[0]).toBeCloseTo(0.6, 5); expect(adjusted[1]).toBeCloseTo(0.7, 5);
+    expect(adjusted[2]).toBeCloseTo(0.9, 5); expect(adjusted[3]).toBe(1);
+  });
+
+  it('A7: renders PSD inner styles from source alpha and embedded pattern-overlay pixels', () => {
+    const alpha = new Uint8Array(25);
+    for (let y = 1; y < 4; y++) for (let x = 1; x < 4; x++) alpha[y * 5 + x] = 255;
+    const pass = renderPsdInnerEffectPasses(alpha, 5, 5, [{ kind: 'innerGlow', opacity: 1,
+      blendMode: 'screen', color: { red: 1, green: 0, blue: 0 }, size: 2, choke: 0,
+      angle: 0, distance: 0, useGlobalLight: false, source: 'edge' }])[0]!;
+    const glow = pass.raster.toPixels();
+    expect(glow[(2 * 5 + 2) * 4 + 3]).toBeLessThan(glow[(1 * 5 + 2) * 4 + 3]!);
+    expect(glow[3]).toBe(0);
+
+    const transform = makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 });
+    const base = newLayer({ id: 'pattern', name: 'pattern', transform,
+      raster: Raster.fromPixels(2, 1, 4, new Uint8Array([0, 0, 0, 255, 0, 0, 0, 255])) });
+    const patterned = { ...base, psdPatternOverlays: [{
+      pattern: Raster.fromPixels(2, 1, 4, new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255])),
+      opacity: 1, blendMode: 'normal', scale: 1, phase: { x: 0, y: 0 }, align: true,
+    }] } as Layer & { readonly psdPatternOverlays: readonly unknown[] };
+    const document: CanvasDocument = { id: 'psd-style', width: 2, height: 1, resolution: 72,
+      layers: [patterned], selection: null };
+    expect(cpuCompositeRegion(document, { x: 0, y: 0, width: 2, height: 1 }))
+      .toEqual(new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]));
+  });
+
   it('A7: Photoshop Threshold, Posterize and Curves formulas match GPU programs', () => {
     const source = new Float32Array([1, 0, 0, 1, 0.2, 0.2, 0.2, 1]);
     const threshold = { kind: 'Threshold' as const, schemaVersion: 1 as const, parameters: { level: 70 } };
@@ -58,6 +98,18 @@ describe('PSD colour modes and product wiring', () => {
     for (let index = 0; index < 256; index++) {
       expect(gpuTable.data[index * 4]).toBeCloseTo(Math.min(1, Math.max(0, tables[index]!)), 7);
     }
+
+    const grayAdjustment = Object.assign({}, adjustment, { psdColorMode: 1 }) as LayerAdjustment;
+    const grayLayer = newLayer({ id: 'gray-curves', name: 'gray curves', transform, adjustment: grayAdjustment });
+    const grayProgram = adjustmentProgram(grayLayer)!;
+    expect(grayProgram.key).toBe('generic-cube-65:Curves');
+    const grayLut = grayProgram.lut!(grayLayer)!;
+    const sample = 13 / 64, expected = applyAdjustment(grayAdjustment,
+      new Float32Array([sample, sample, sample, 1]), 1, 1, 0, 0);
+    const textureIndex = (78 * grayLut.width + 273) * 4;
+    expect(grayLut.data[textureIndex]).toBeCloseTo(expected[0]!, 7);
+    expect(grayLut.data[textureIndex + 1]).toBeCloseTo(expected[1]!, 7);
+    expect(grayLut.data[textureIndex + 2]).toBeCloseTo(expected[2]!, 7);
   });
 
   it('decodes CMYK pixels from layer-owned channels without consulting the merged composite', () => {

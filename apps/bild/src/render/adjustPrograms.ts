@@ -191,10 +191,18 @@ function makeProgram(layer: Layer, document?: CanvasDocument): AdjustmentProgram
         ...lut.domainMin, 0, ...lut.domainMax, 0, adjustment.parameters.interpolation === 'tetrahedral' ? 1 : 0]); }, lut: texture };
   }
   const value = resolveAdjustment(layer.adjustment);
+  const psd = layer.adjustment as typeof layer.adjustment & { readonly psdColorMode?: number };
+  const generic = (): AdjustmentProgram => {
+    const texture = once(() => genericTexture(layer, document));
+    return { key: `generic-cube-65:${value.kind}`, glsl: LOOKUP_GLSL,
+      params: () => { const t = texture(); return params([65, t.columns, 0, t.height, 0, 0, 0, 0, 1, 1, 1, 0, 1]); }, lut: texture };
+  };
   switch (value.kind) {
     case 'Hue/Saturation': return { key: 'hsv-cube-33', glsl: HUE_GLSL, params: () => params(), lut: once(() => hueTexture(value.hsvSettings)) };
-    case 'Levels': return { key: 'levels-table', glsl: TABLE_GLSL, params: () => params(), lut: once(() => tableTexture(levelsTables(value.levels))) };
-    case 'Curves': return { key: 'curves-table', glsl: TABLE_GLSL, params: () => params(), lut: once(() => tableTexture(curvesTables(value.curves))) };
+    case 'Levels': return psd.psdColorMode === 1 ? generic()
+      : { key: 'levels-table', glsl: TABLE_GLSL, params: () => params(), lut: once(() => tableTexture(levelsTables(value.levels))) };
+    case 'Curves': return psd.psdColorMode === 1 ? generic()
+      : { key: 'curves-table', glsl: TABLE_GLSL, params: () => params(), lut: once(() => tableTexture(curvesTables(value.curves))) };
     case 'Exposure': return { key: 'exposure-linear', glsl: EXPOSURE_GLSL,
       params: () => params([value.exposureSettings.exposure, value.exposureSettings.offset, value.exposureSettings.gamma]) };
     case 'Gradient Map': {
@@ -208,9 +216,7 @@ function makeProgram(layer: Layer, document?: CanvasDocument): AdjustmentProgram
       params: () => params([layer.adjustment.kind === 'Threshold' ? layer.adjustment.parameters.level : 128]) };
     case 'Posterize': return { key: 'posterize', glsl: POSTERIZE_GLSL,
       params: () => params([layer.adjustment.kind === 'Posterize' ? layer.adjustment.parameters.levels : 4]) };
-    case 'Basic': case 'Colour': case 'Brightness/Contrast': case 'Photo Filter': case 'Channel Mixer':
-      { const texture = once(() => genericTexture(layer, document)); return { key: `generic-cube-65:${value.kind}`, glsl: LOOKUP_GLSL,
-        params: () => { const t = texture(); return params([65, t.columns, 0, t.height, 0, 0, 0, 0, 1, 1, 1, 0, 1]); }, lut: texture }; }
+    case 'Basic': case 'Colour': case 'Brightness/Contrast': case 'Photo Filter': case 'Channel Mixer': return generic();
     case 'Colour Lookup': return null;
   }
 }

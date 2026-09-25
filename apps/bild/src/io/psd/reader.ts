@@ -1,7 +1,7 @@
 import {
   initializeCanvas, readPsd, type BlendMode as AgBlendMode, type Layer as AgLayer,
   type BezierPath, type Color as AgColor, type EffectSolidGradient, type LayerEffectsInfo, type LayerTextData, type LinkedFile, type PixelData, type Psd,
-  type UnitsValue, type VectorContent,
+  type PatternInfo, type UnitsValue, type VectorContent,
 } from 'ag-psd';
 import {
   type BlendMode, type CanvasDocument, type ColorLabel, type FillParameters, type Layer, type LayerAdjustment, type LayerEffect,
@@ -122,11 +122,13 @@ interface ImportState {
   readonly documentWidth: number;
   readonly documentHeight: number;
   readonly bitsPerChannel: number;
+  readonly colorMode: number;
   readonly artboards: boolean;
   readonly resolution: number;
   readonly unsupported: PsdUnsupportedFeature[];
   readonly resources: NonNullable<CanvasDocument['resources']>[number][];
   readonly linkedFiles: ReadonlyMap<string, LinkedFile>;
+  readonly patterns: ReadonlyMap<string, PatternInfo>;
 }
 
 function issue(state: ImportState, code: string, message: string, impact: PsdUnsupportedImpact, layerPath?: string): void {
@@ -213,12 +215,95 @@ function importEffects(source: AgLayer, state: ImportState, layerPath: string): 
       position: stroke.position ?? 'outside', fill, opacity: stroke.opacity ?? 1,
       blendMode: effectBlend(stroke.blendMode, 'normal') });
   }
-  if (info.innerShadow?.some(rendered)) issue(state, 'inner-shadow', 'Inner shadow needs a Phase-3 rasterised effect pass.', 'not-rendered', layerPath);
-  if (rendered(info.innerGlow)) issue(state, 'inner-glow', 'Inner glow needs a Phase-3 rasterised effect pass.', 'not-rendered', layerPath);
   if (rendered(info.bevel)) issue(state, 'bevel', 'Bevel/emboss needs a rasterised effect pass.', 'not-rendered', layerPath);
   if (rendered(info.satin)) issue(state, 'satin', 'Satin needs a rasterised effect pass.', 'not-rendered', layerPath);
-  if (rendered(info.patternOverlay)) issue(state, 'pattern-overlay', 'Pattern overlay needs a rasterised effect pass.', 'not-rendered', layerPath);
   return result;
+}
+
+interface PsdPatternOverlay {
+  readonly pattern: Raster;
+  readonly opacity: number;
+  readonly blendMode: BlendMode;
+  readonly scale: number;
+  readonly phase: { readonly x: number; readonly y: number };
+  readonly align: boolean;
+}
+
+interface PsdInnerEffect {
+  readonly kind: 'innerShadow' | 'innerGlow';
+  readonly opacity: number;
+  readonly blendMode: BlendMode;
+  readonly color: RGB;
+  readonly size: number;
+  readonly choke: number;
+  readonly angle: number;
+  readonly distance: number;
+  readonly useGlobalLight: boolean;
+  readonly source: 'edge' | 'center';
+}
+
+function importedInnerEffects(source: AgLayer): readonly PsdInnerEffect[] {
+  const result: PsdInnerEffect[] = [];
+  for (const shadow of source.effects?.innerShadow ?? []) if (shadow.present !== false && shadow.enabled !== false) result.push({
+    kind: 'innerShadow', opacity: shadow.opacity ?? 1, blendMode: effectBlend(shadow.blendMode, 'multiply'),
+    color: rgb(shadow.color), size: units(shadow.size), choke: units(shadow.choke), angle: shadow.angle ?? 120,
+    distance: units(shadow.distance), useGlobalLight: shadow.useGlobalLight ?? false, source: 'edge',
+  });
+  const glow = source.effects?.innerGlow;
+  if (glow && glow.present !== false && glow.enabled !== false) result.push({
+    kind: 'innerGlow', opacity: glow.opacity ?? 1, blendMode: effectBlend(glow.blendMode, 'screen'), color: rgb(glow.color),
+    size: units(glow.size), choke: units(glow.choke), angle: 0, distance: 0, useGlobalLight: false,
+    source: glow.source ?? 'edge',
+  });
+  return result;
+}
+
+function importedPatternOverlays(source: AgLayer, state: ImportState, layerPath: string): readonly PsdPatternOverlay[] {
+  const overlay = source.effects?.patternOverlay;
+  if (!overlay || overlay.present === false || overlay.enabled === false) return [];
+  const pattern = overlay.pattern?.id ? state.patterns.get(overlay.pattern.id) : undefined;
+  if (!pattern || pattern.data.length !== pattern.bounds.w * pattern.bounds.h * 4) {
+    issue(state, 'pattern-overlay', 'Pattern overlay pixels are absent from the PSD pattern table.', 'not-rendered', layerPath);
+    return [];
+  }
+  return [{ pattern: Raster.fromPixels(pattern.bounds.w, pattern.bounds.h, 4, pattern.data),
+    opacity: overlay.opacity ?? 1, blendMode: effectBlend(overlay.blendMode, 'normal'),
+    scale: Math.max(0.01, overlay.scale ?? 1), phase: overlay.phase ?? { x: 0, y: 0 }, align: overlay.align !== false }];
+}
+
+function featherMask(source: Uint8Array, width: number, height: number, sigma: number,
+  outside: number): Uint8Array {
+  if (!(sigma > 0)) return source;
+  const radius = Math.ceil(sigma * 3);
+  const kernel = new Float64Array(radius * 2 + 1);
+  let kernelTotal = 0;
+  for (let offset = -radius; offset <= radius; offset++) {
+    const weight = Math.exp(-(offset * offset) / (2 * sigma * sigma));
+    kernel[offset + radius] = weight;
+    kernelTotal += weight;
+  }
+  for (let index = 0; index < kernel.length; index++) kernel[index] = kernel[index]! / kernelTotal;
+  const horizontal = new Float64Array(source.length);
+  const output = new Uint8Array(source.length);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    let total = 0;
+    for (let offset = -radius; offset <= radius; offset++) {
+      const sampleX = x + offset;
+      total += (sampleX < 0 || sampleX >= width ? outside : source[y * width + sampleX]!)
+        * kernel[offset + radius]!;
+    }
+    horizontal[y * width + x] = total;
+  }
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    let total = 0;
+    for (let offset = -radius; offset <= radius; offset++) {
+      const sampleY = y + offset;
+      total += (sampleY < 0 || sampleY >= height ? outside : horizontal[sampleY * width + x]!)
+        * kernel[offset + radius]!;
+    }
+    output[y * width + x] = Math.round(total);
+  }
+  return output;
 }
 
 function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportState,
@@ -233,15 +318,18 @@ function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportS
     return null;
   }
   const rgba = pixelDataToRgba8(mask.imageData);
-  const pixels = new Uint8Array(mask.imageData.width * mask.imageData.height);
-  const density = mask.userMaskDensity ?? 1;
+  let pixels: Uint8Array<ArrayBufferLike> = new Uint8Array(mask.imageData.width * mask.imageData.height);
+  const vectorParameters = mask.fromVectorData === true;
+  const density = (vectorParameters ? mask.vectorMaskDensity : mask.userMaskDensity) ?? 1;
   for (let pixel = 0; pixel < pixels.length; pixel++) {
     const coverage = rgba[pixel * 4]!;
     pixels[pixel] = Math.round(255 - (255 - coverage) * density);
   }
   if (density !== 1) issue(state, 'mask-density', 'Mask density was baked into its raster.', 'approximated', layerPath);
-  if ((mask.userMaskFeather ?? 0) > 0 || (mask.vectorMaskFeather ?? 0) > 0) {
-    issue(state, 'mask-feather', 'Mask feather is not rendered.', 'not-rendered', layerPath);
+  const feather = (vectorParameters ? mask.vectorMaskFeather : mask.userMaskFeather) ?? 0;
+  if (feather > 0) {
+    pixels = featherMask(pixels, mask.imageData.width, mask.imageData.height, feather, mask.defaultColor ?? 0);
+    issue(state, 'mask-feather', 'Mask feather was baked into its raster.', 'editability-only', layerPath);
   }
   const relative = mask.positionRelativeToLayer === true;
   const left = (mask.left ?? 0) + (relative ? layerTransform.origin.x : 0);
@@ -606,9 +694,11 @@ function pathDistanceSquared(paths: readonly FlatPath[], x: number, y: number): 
 }
 
 /** Layer-owned fallback for PSD generated fills whose high-depth records contain no pixel cache. */
-function generatedVectorRaster(source: AgLayer, paths: readonly VectorPath[], width: number, height: number): Raster | null {
+function generatedVectorRaster(source: AgLayer, paths: readonly VectorPath[], width: number, height: number,
+  patterns: ReadonlyMap<string, PatternInfo>, origin: { readonly x: number; readonly y: number }): Raster | null {
   const content = source.vectorFill;
-  if (!content || (content.type !== 'color' && content.type !== 'solid') || width * height > MAX_PIXELS) return null;
+  if (!content || (content.type !== 'color' && content.type !== 'solid' && content.type !== 'pattern')
+    || width * height > MAX_PIXELS) return null;
   const flat = flattenedPaths(paths);
   if (!flat.length) return null;
   const pixels = new Uint8Array(width * height * 4), samples = width * height <= 4_000_000 ? 4 : 1;
@@ -624,6 +714,8 @@ function generatedVectorRaster(source: AgLayer, paths: readonly VectorPath[], wi
   const stroke = source.vectorStroke?.strokeEnabled === true ? source.vectorStroke : null;
   const strokeWidth = stroke ? Math.max(0.01, units(stroke.lineWidth)) : 0;
   const strokeColor = stroke?.content?.type === 'color' ? rgb(stroke.content.color) : null;
+  const pattern = content.type === 'pattern' ? patterns.get(content.id) : undefined;
+  if (content.type === 'pattern' && (!pattern || pattern.data.length !== pattern.bounds.w * pattern.bounds.h * 4)) return null;
   const stopValue = (location: number): readonly [number, number, number, number] => {
     if (content.type === 'color') { const color = rgb(content.color); return [color.red, color.green, color.blue, 1]; }
     let left = stops[0]!, right = stops.at(-1)!;
@@ -672,7 +764,15 @@ function generatedVectorRaster(source: AgLayer, paths: readonly VectorPath[], wi
           : 1 - 0.5 * ((1 - location) * 2) ** 1.3;
       }
     }
-    const color = stopValue(Math.min(1, Math.max(0, location))), coverage = covered / samples;
+    let color: readonly [number, number, number, number];
+    if (pattern) {
+      const px = ((Math.floor(origin.x + x) - pattern.bounds.x) % pattern.bounds.w + pattern.bounds.w) % pattern.bounds.w;
+      const py = ((Math.floor(origin.y + y) - pattern.bounds.y) % pattern.bounds.h + pattern.bounds.h) % pattern.bounds.h;
+      const at = (py * pattern.bounds.w + px) * 4;
+      color = [pattern.data[at]! / 255, pattern.data[at + 1]! / 255,
+        pattern.data[at + 2]! / 255, pattern.data[at + 3]! / 255];
+    } else color = stopValue(Math.min(1, Math.max(0, location)));
+    const coverage = covered / samples;
     const strokeMix = strokeColor ? Math.min(1, stroked / covered) : 0;
     const at = (y * width + x) * 4, alpha = color[3] * coverage;
     pixels[at] = Math.round((color[0] * (1 - strokeMix) + (strokeColor?.red ?? 0) * strokeMix) * 255);
@@ -847,7 +947,9 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const isGroup = source.children !== undefined;
     const left = source.left ?? 0, top = source.top ?? 0;
     const width = Math.max(0, (source.right ?? left) - left), height = Math.max(0, (source.bottom ?? top) - top);
-    const adjustment = importedAdjustment(source, state, layerPath);
+    const nativeAdjustment = importedAdjustment(source, state, layerPath);
+    const adjustment = nativeAdjustment ? Object.assign({}, nativeAdjustment, { psdColorMode: state.colorMode,
+      psdBitsPerChannel: state.bitsPerChannel }) as LayerAdjustment : null;
     const image = source.adjustment ? undefined : source.imageData;
     const adjustmentMask = adjustment && source.mask?.imageData ? source.mask : null;
     const layerTransform = image ? transform(left, top, image.width, image.height)
@@ -882,7 +984,8 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
       ? transform(vectorBounds.x, vectorBounds.y, vectorBounds.width, vectorBounds.height) : editableTransform;
     const vectorPaths = vectorContent ? localPaths(globalVectorPaths, vectorTransform.origin.x, vectorTransform.origin.y) : [];
     const vectorRaster = vectorContent && !image
-      ? generatedVectorRaster(source, vectorPaths, Math.round(vectorTransform.size.width), Math.round(vectorTransform.size.height)) : null;
+      ? generatedVectorRaster(source, vectorPaths, Math.round(vectorTransform.size.width), Math.round(vectorTransform.size.height),
+        state.patterns, vectorTransform.origin) : null;
     const vectorStyle = vectorContent ? psdVectorStyle(source, state.resolution, state, layerPath) : null;
     if (vectorRaster) issue(state, 'generated-fill-cache',
       'A cache-less PSD generated fill is rendered from its editable descriptor and path; its paint is retained as PSD metadata.',
@@ -923,6 +1026,12 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
       effects: importEffects(source, state, layerPath),
       ...(adjustment ? { adjustment } : {}),
     });
+    const patternOverlays = importedPatternOverlays(source, state, layerPath);
+    if (patternOverlays.length) imported = { ...imported, psdPatternOverlays: patternOverlays } as Layer
+      & { readonly psdPatternOverlays: readonly PsdPatternOverlay[] };
+    const innerEffects = importedInnerEffects(source);
+    if (innerEffects.length) imported = { ...imported, psdInnerEffects: innerEffects } as Layer
+      & { readonly psdInnerEffects: readonly PsdInnerEffect[] };
     if (isGroup) imported = { ...imported,
       psdIsolated: sourceMode !== 'pass through', psdKnockout: source.knockout === true } as Layer
         & { readonly psdIsolated: boolean; readonly psdKnockout: boolean };
@@ -1088,8 +1197,9 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
     impact: 'editability-only' });
   const documentResolution = resolution(psd);
   const state: ImportState = { nextId: 1, documentWidth: psd.width, documentHeight: psd.height,
-    bitsPerChannel, artboards: !!psd.artboards, resolution: documentResolution,
-    unsupported, resources: [], linkedFiles: new Map((psd.linkedFiles ?? []).map((file) => [file.id, file])) };
+    bitsPerChannel, colorMode, artboards: !!psd.artboards, resolution: documentResolution,
+    unsupported, resources: [], linkedFiles: new Map((psd.linkedFiles ?? []).map((file) => [file.id, file])),
+    patterns: new Map((psd.patterns ?? []).map((pattern) => [pattern.id, pattern])) };
   const layers = importSiblings(psd.children ?? [], null, '', state);
   // PSD's negative layer-count flag is the native declaration that the merged result carries
   // transparency. Otherwise Photoshop composites the editable stack over an opaque white canvas.

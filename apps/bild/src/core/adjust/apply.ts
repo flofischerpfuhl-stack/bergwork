@@ -90,11 +90,62 @@ function resourceCube(id: string, resources: readonly DocumentResource[] | undef
   return lut;
 }
 
-function brightnessContrast(value: number, brightness: number, contrast: number, legacy: boolean): number {
-  if (legacy) return clamp01((value - 0.5) * (1 + contrast / 100) + 0.5 + brightness / 255);
-  const shifted = clamp01(value + brightness / 200);
-  const factor = Math.tan((Math.min(100, Math.max(-100, contrast)) + 100) * Math.PI / 400);
-  return clamp01((shifted - 0.5) * factor + 0.5);
+function naturalSpline(points: readonly { readonly x: number; readonly y: number }[], x: number): number {
+  if (x <= points[0]!.x) return points[0]!.y;
+  if (x >= points.at(-1)!.x) return points.at(-1)!.y;
+  const second = new Float64Array(points.length), work = new Float64Array(points.length - 1);
+  for (let i = 1; i < points.length - 1; i++) {
+    const before = points[i - 1]!, current = points[i]!, after = points[i + 1]!;
+    const span = after.x - before.x, sigma = (current.x - before.x) / span;
+    const pivot = sigma * second[i - 1]! + 2;
+    second[i] = (sigma - 1) / pivot;
+    work[i] = (6 * ((after.y - current.y) / (after.x - current.x)
+      - (current.y - before.y) / (current.x - before.x)) / span - sigma * work[i - 1]!) / pivot;
+  }
+  for (let i = points.length - 2; i >= 0; i--) second[i] = second[i]! * second[i + 1]! + work[i]!;
+  let index = 0;
+  while (index + 2 < points.length && x > points[index + 1]!.x) index++;
+  const left = points[index]!, right = points[index + 1]!, width = right.x - left.x;
+  const a = (right.x - x) / width, b = (x - left.x) / width;
+  return a * left.y + b * right.y + ((a ** 3 - a) * second[index]!
+    + (b ** 3 - b) * second[index + 1]!) * width * width / 6;
+}
+
+/** Photoshop's modern Brightness/Contrast is a composed spline, not an affine contrast pivot. */
+function brightnessContrastTable(brightness: number, contrast: number, legacy: boolean): Float32Array {
+  const table = new Float32Array(256);
+  if (legacy) {
+    for (let i = 0; i < 256; i++) table[i] = clamp01((i / 255 - 0.5) * (1 + contrast / 100) + 0.5 + brightness / 255);
+    return table;
+  }
+  const c = Math.min(100, Math.max(-100, contrast)) / 100;
+  const controls = [0, 63 / 255, 191 / 255, 1].map((x, index) => ({ x,
+    y: index === 1 ? x - c * 25 / 255 : index === 2 ? x + c * 25 / 255 : x }));
+  const b = Math.min(1, Math.max(-1, brightness / 150)), magnitude = Math.abs(b);
+  const curve = new Float64Array(256), rotatedX = new Float64Array(256), rotatedY = new Float64Array(256);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    const polynomial = (a: number, power: number): number => a * t ** power;
+    const h = 0.5 * (magnitude * (polynomial(1.65, 0.35) + polynomial(-1, 10))
+      + (1 - magnitude) * (polynomial(1.96, 0.4) + polynomial(1, 4)) + polynomial(1, 1.25));
+    curve[i] = b * t * (1 - t) * h;
+    rotatedX[i] = t - curve[i]!;
+    rotatedY[i] = naturalSpline(controls, t) + curve[i]!;
+  }
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let left = 0;
+    while (left < 254 && rotatedX[left + 1]! < t) left++;
+    const span = rotatedX[left + 1]! - rotatedX[left]!;
+    const amount = span > 1e-12 ? (t - rotatedX[left]!) / span : 0;
+    table[i] = clamp01(rotatedY[left]! + (rotatedY[left + 1]! - rotatedY[left]!) * amount);
+  }
+  return table;
+}
+
+function brightnessContrast(value: number, table: Float32Array): number {
+  const position = clamp01(value) * 255, low = Math.floor(position), high = Math.min(255, low + 1);
+  return table[low]! + (table[high]! - table[low]!) * (position - low);
 }
 
 export const applyAdjustment: AdjustmentApplier = (adjustment, rgba, width, height, originX, originY, resources) => {
@@ -103,11 +154,18 @@ export const applyAdjustment: AdjustmentApplier = (adjustment, rgba, width, heig
   const table = a.kind === 'Levels' ? levelsTables(a.levels) : a.kind === 'Curves' ? curvesTables(a.curves)
     : a.kind === 'Exposure' ? exposureTables(a.exposureSettings) : null;
   const cube = a.kind === 'Hue/Saturation' ? hueCube(a.hsvSettings) : null;
+  const brightnessTable = adjustment.kind === 'Brightness/Contrast'
+    ? brightnessContrastTable(adjustment.parameters.brightness, adjustment.parameters.contrast, adjustment.parameters.legacy) : null;
   const lookup = adjustment.kind === 'Colour Lookup' ? resourceCube(adjustment.parameters.resourceId, resources) : null;
+  const psd = adjustment as LayerAdjustment & { readonly psdColorMode?: number; readonly psdBitsPerChannel?: number };
+  const nativeGray = psd.psdColorMode === 1 && (adjustment.kind === 'Levels' || adjustment.kind === 'Curves');
+  const decodeGray = (value: number): number => Math.max(0, linearFromSrgb(clamp01(value))) ** (1 / 2.2);
+  const encodeGray = (value: number): number => clamp01(srgbFromLinear(clamp01(value) ** 2.2));
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     const i = (y * width + x) * 4;
     if (out[i + 3]! <= 0) continue;
     let r = out[i]!, g = out[i + 1]!, b = out[i + 2]!;
+    if (nativeGray) r = g = b = decodeGray((r + g + b) / 3);
     if (adjustment.kind === 'Basic') [r, g, b] = basicColor(r, g, b, adjustment.parameters);
     else if (lookup && adjustment.kind === 'Colour Lookup') [r, g, b] = lookupCube(lookup, r, g, b, adjustment.parameters.interpolation);
     else if (adjustment.kind === 'Colour') [r, g, b] = colourPanelColor(r, g, b, adjustment.parameters);
@@ -123,11 +181,10 @@ export const applyAdjustment: AdjustmentApplier = (adjustment, rgba, width, heig
       r = Math.min(steps, Math.floor(clamp01(r) * levels)) / steps;
       g = Math.min(steps, Math.floor(clamp01(g) * levels)) / steps;
       b = Math.min(steps, Math.floor(clamp01(b) * levels)) / steps;
-    } else if (adjustment.kind === 'Brightness/Contrast') {
-      const p = adjustment.parameters;
-      r = brightnessContrast(r, p.brightness, p.contrast, p.legacy);
-      g = brightnessContrast(g, p.brightness, p.contrast, p.legacy);
-      b = brightnessContrast(b, p.brightness, p.contrast, p.legacy);
+    } else if (brightnessTable) {
+      r = brightnessContrast(r, brightnessTable);
+      g = brightnessContrast(g, brightnessTable);
+      b = brightnessContrast(b, brightnessTable);
     } else if (adjustment.kind === 'Photo Filter') {
       const p = adjustment.parameters, oldLuma = colourLuminance(r, g, b), amount = p.density / 100;
       r = clamp01(r * (1 - amount) + p.color.red * amount); g = clamp01(g * (1 - amount) + p.color.green * amount);
@@ -146,6 +203,7 @@ export const applyAdjustment: AdjustmentApplier = (adjustment, rgba, width, heig
       const delta = grainDelta(r, g, b, originX + x + 0.5, originY + y + 0.5, a.grainSettings);
       r = clamp01(r + delta); g = clamp01(g + delta); b = clamp01(b + delta);
     }
+    if (nativeGray) r = g = b = encodeGray(r);
     out[i] = r; out[i + 1] = g; out[i + 2] = b;
   }
   return out;
