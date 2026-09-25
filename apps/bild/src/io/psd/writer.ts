@@ -18,6 +18,7 @@ import { DEFAULT_HOOKS, type CompositeHooks } from '../../render/hooks';
 import { srgbIccProfile } from '../iccProfile';
 import { sha256Hex } from '../sha256';
 import type { PsdUnsupportedFeature } from './reader';
+import { patchPsdLayerKnockouts, type PsdKnockoutMode } from './layerInfo';
 import { attachPsdIccProfile } from './writerIcc';
 import { promotePsdTo16, replacePsdComposite, type Native16Layer } from './writerDepth';
 import { meshWarpToPsd } from './warp';
@@ -61,6 +62,8 @@ interface State {
   readonly native16Layers: Native16Layer[];
   readonly patterns: PatternInfo[];
   readonly resources: ReadonlyMap<string, NonNullable<CanvasDocument['resources']>[number]>;
+  nextNativeLayerId: number;
+  readonly knockoutModes: Map<number, PsdKnockoutMode>;
 }
 
 function notice(state: State, code: string, message: string, impact: PsdWriteNotice['impact'], layerPath?: string): void {
@@ -271,6 +274,13 @@ function grayscaleTransferAdjustment(value: Extract<LayerAdjustment, { kind: 'Le
 }
 
 function adjustment(value: LayerAdjustment, state: State, path: string): AgAdjustment | null {
+  if ((value.kind === 'Invert' || value.kind === 'Posterize' || value.kind === 'Threshold')
+    && (value as LayerAdjustment & { readonly psdColorMode?: number }).psdColorMode === 1) {
+    notice(state, 'adjustment-grayscale-transfer',
+      `“${value.kind}” was rasterized because the RGB PSD writer cannot encode its source gray-profile transfer.`,
+      'editability-only', path);
+    return null;
+  }
   if ((value.kind === 'Levels' || value.kind === 'Curves')
     && (value as LayerAdjustment & { readonly psdColorMode?: number }).psdColorMode === 1) {
     notice(state, 'adjustment-grayscale-transfer',
@@ -425,7 +435,12 @@ function convertLayer(layer: Layer, path: string, children: AgLayer[], state: St
     delete output.imageData;
     output.children = children;
     output.blendMode = isolated ? BLENDS[blendMode] : 'pass through';
-    output.knockout = (layer as Layer & { readonly psdKnockout?: boolean }).psdKnockout === true;
+    const knockout = (layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | boolean }).psdKnockout;
+    output.knockout = !!knockout;
+    if (knockout) {
+      output.id = state.nextNativeLayerId++;
+      state.knockoutModes.set(output.id, knockout === 'shallow' ? 'shallow' : 'deep');
+    }
     const artboard = (layer as Layer & { readonly psdArtboardRect?: Rect }).psdArtboardRect;
     if (artboard) output.artboard = { rect: { top: artboard.y, left: artboard.x,
       bottom: artboard.y + artboard.height, right: artboard.x + artboard.width }, backgroundType: 3,
@@ -444,6 +459,8 @@ function convertLayer(layer: Layer, path: string, children: AgLayer[], state: St
         { x: 0, y: 0, width: state.document.width, height: state.document.height }, state.hooks);
       output.imageData = imageDataFromBytes(rendered, state.document.width, state.document.height, state.bits);
       output.left = 0; output.top = 0; output.right = state.document.width; output.bottom = state.document.height;
+      output.opacity = 1; output.fillOpacity = 1; output.blendMode = 'normal'; output.clipping = false;
+      delete output.mask;
     }
   } else if (layer.kind === 'text') {
     if (layer.textPath) notice(state, 'text-path-rasterized',
@@ -527,7 +544,7 @@ export function writePsdDocument(document: CanvasDocument, options: PsdWriteOpti
   validate(document, format);
   const hooks = options.hooks ?? DEFAULT_HOOKS, bits = options.bitsPerChannel ?? inferredDepth(document, hooks);
   const state: State = { document, hooks, bits, notices: [], linkedFiles: [], native16Layers: [],
-    patterns: [],
+    patterns: [], nextNativeLayerId: 1, knockoutModes: new Map(),
     resources: new Map((document.resources ?? []).map((resource) => [resource.id, resource])) };
   const composite8 = cpuCompositeRegion(document, { x: 0, y: 0, width: document.width, height: document.height }, hooks);
   const psd: Psd = { width: document.width, height: document.height, bitsPerChannel: 8, colorMode: 3,
@@ -552,6 +569,7 @@ export function writePsdDocument(document: CanvasDocument, options: PsdWriteOpti
   } else bytes = replacePsdComposite(bytes, composite8);
   const profile = options.iccProfile === undefined ? srgbIccProfile() : options.iccProfile;
   if (profile) bytes = attachPsdIccProfile(bytes, profile);
+  bytes = patchPsdLayerKnockouts(bytes, state.knockoutModes);
   return { bytes, format, bitsPerChannel: bits, notices: state.notices };
 }
 

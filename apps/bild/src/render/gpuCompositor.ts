@@ -1295,6 +1295,13 @@ export class GpuCompositor {
     const isolated = (layer: Layer): boolean => layer.kind === 'group'
       && ((layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === true
         || layer.opacity !== 1 || layer.fillOpacity !== 1 || layer.blendMode !== 'normal' || !!layer.maskSourceId);
+    const shallowBoundaryIds = new Set<string>();
+    for (const layer of document.layers) {
+      if ((layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout !== 'shallow') continue;
+      for (const id of ancestorIds(document.layers, layer.id)) {
+        const ancestor = byId.get(id); if (ancestor && !isolated(ancestor)) shallowBoundaryIds.add(id);
+      }
+    }
     const sequence = (parent: string | null): Layer[] => {
       const output: Layer[] = [];
       for (const layer of children.get(parent) ?? []) {
@@ -1347,10 +1354,11 @@ export class GpuCompositor {
       return coverage;
     };
 
-    const renderSequence = (layers: readonly Layer[], root = false): RenderTexture => {
+    const renderSequence = (layers: readonly Layer[], root = false, scopeParent: string | null = null): RenderTexture => {
       let surface = this.acquire(width, height); this.clear(surface, root
         && (document as CanvasDocument & { readonly psdOpaqueCanvas?: boolean }).psdOpaqueCanvas === true);
       let knockoutBase: RenderTexture | null = null;
+      const passThroughBases = new Map<string, RenderTexture>();
       const stacks = new Map<string, Layer[]>(), stacked = new Set<string>();
       layers.forEach((base, index) => {
         if (base.kind === 'group' || base.maskSourceId || base.adjustment) return;
@@ -1363,11 +1371,30 @@ export class GpuCompositor {
       });
       for (const layer of layers) {
         if (stacked.has(layer.id)) continue;
+        const passThroughAncestors: Layer[] = [];
+        let parent = layer.parentId;
+        while (parent && parent !== scopeParent) {
+          const ancestor = byId.get(parent);
+          if (!ancestor) break;
+          if (!isolated(ancestor)) passThroughAncestors.push(ancestor);
+          parent = ancestor.parentId;
+        }
+        for (const ancestor of passThroughAncestors) if (shallowBoundaryIds.has(ancestor.id)
+          && !passThroughBases.has(ancestor.id)) {
+          const base = this.acquire(width, height);
+          this.run(this.pass('copy'), base, width, height, { uSource: surface.source }, {});
+          passThroughBases.set(ancestor.id, base);
+        }
         if (layer.kind === 'group') {
-          const groupSurface = renderSequence(sequence(layer.id));
+          const groupSurface = renderSequence(sequence(layer.id), false, layer.id);
           const groupClip = layer.maskSourceId ? coverageOf(layer.maskSourceId, 1) : null;
           if (layer.maskSourceId && !groupClip) { this.release(groupSurface); continue; }
-          const next = this.drawGroupSurface(surface, groupSurface, knockoutBase, groupClip,
+          const knockout = (layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout;
+          const shallowBase = passThroughAncestors.map((ancestor) => passThroughBases.get(ancestor.id))
+            .find((candidate): candidate is RenderTexture => !!candidate);
+          const base = knockout === 'deep' ? knockoutBase
+            : knockout === 'shallow' && root ? shallowBase ?? surface : null;
+          const next = this.drawGroupSurface(surface, groupSurface, base, groupClip,
             layer, view, hooks.blendMode(layer));
           this.release(surface); this.release(groupSurface); surface = next; continue;
         }
@@ -1395,6 +1422,7 @@ export class GpuCompositor {
           this.run(this.pass('copy'), knockoutBase, width, height, { uSource: surface.source }, {});
         }
       }
+      for (const base of passThroughBases.values()) this.release(base);
       if (knockoutBase) this.release(knockoutBase);
       return surface;
     };
@@ -1855,11 +1883,12 @@ export class GpuCompositor {
     clip: RenderTexture | null, group: Layer, view: ViewSpec, mode: BlendMode): RenderTexture {
     const out = this.acquire(view.width, view.height);
     this.run(this.pass('group'), out, view.width, view.height, {
-      uBackdrop: backdrop.source, uSurface: surface.source, uKnockoutBase: knockoutBase?.source ?? this.white,
+      uBackdrop: backdrop.source, uSurface: surface.source,
+      uKnockoutBase: knockoutBase?.source ?? this.transparentSource(),
       uClip: clip?.source ?? this.white,
     }, { uMode: BLEND_INDEX[mode] ?? 0, uDissolveSeed: mode === 'dissolve' ? blendSeed(group.id) : 0,
       uOpacity: group.opacity, uFillOpacity: group.fillOpacity,
-      uKnockout: (group as Layer & { readonly psdKnockout?: boolean }).psdKnockout === true ? 1 : 0,
+      uKnockout: (group as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout ? 1 : 0,
       uHasClip: clip ? 1 : 0,
       uViewToDoc: mat3(view.viewToDoc) });
     return out;

@@ -3,6 +3,8 @@ import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
 const PSD = path.resolve('tests/fixtures/psd/corpus/1layer.psd');
+const PROFILE_ADJUSTMENTS = ['invert_grayscale.psd', 'invert_cmyk.psd'].map((name) =>
+  path.resolve('tests/fixtures/psd/corpus/adjustments', name));
 
 test('opens a corpus PSD through Open as a layered document', async ({ page }) => {
   // The psd-tools corpus is fetched by scripts/fetch-psd-corpus.sh and not committed (E5); without it there is nothing to open.
@@ -38,17 +40,84 @@ test('PSD isolated knockout groups match on the GPU and CPU compositors', async 
       raster: pixel([255, 255, 255, 255]), locks: { transparency: true, pixels: false, position: false, all: false } });
     const red = newLayer({ id: 'red', name: 'Red', transform, raster: pixel([255, 0, 0, 255]) });
     const group = { ...newLayer({ id: 'group', name: 'Knockout', kind: 'group', transform, fillOpacity: 0.5 }),
-      psdIsolated: true, psdKnockout: true };
+      psdIsolated: true, psdKnockout: 'deep' };
     const blue = newLayer({ id: 'blue', name: 'Blue', parentId: 'group', transform, raster: pixel([0, 0, 255, 255]) });
-    const document = { id: 'psd-groups', width: 1, height: 1, resolution: 72,
+    const deep = { id: 'psd-groups', width: 1, height: 1, resolution: 72,
       layers: [background, red, group, blue], selection: null };
-    const cpu = compositeRegion(document, { x: 0, y: 0, width: 1, height: 1 }).rgba;
-    const canvas = globalThis.document.createElement('canvas'); globalThis.document.body.append(canvas);
-    const gpu = await GpuCompositor.create(canvas, 1, 1), gpuPixels = gpu.readRegion(document, 0, 0, 1, 1);
-    gpu.destroy(); return { cpu: Array.from(cpu), gpu: Array.from(gpuPixels) };
-  }) as { cpu: number[]; gpu: number[] };
-  expect(result.cpu).toEqual([128, 128, 255, 255]);
-  result.gpu.forEach((value, index) => expect(Math.abs(value - result.cpu[index]!), `channel ${index}`).toBeLessThanOrEqual(1));
+    const outer = { ...newLayer({ id: 'outer', name: 'Pass through', kind: 'group', transform }), psdIsolated: false };
+    const green = newLayer({ id: 'green', name: 'Green', parentId: outer.id, transform, raster: pixel([0, 255, 0, 255]) });
+    const shallowGroup = { ...newLayer({ id: 'shallow', name: 'Shallow', parentId: outer.id,
+      kind: 'group', transform, fillOpacity: 128 / 255 }), psdIsolated: true, psdKnockout: 'shallow' };
+    const shallowBlue = newLayer({ id: 'shallow-blue', name: 'Blue', parentId: shallowGroup.id,
+      transform, raster: pixel([0, 0, 255, 255]) });
+    const shallow = { id: 'psd-shallow-group', width: 1, height: 1, resolution: 72,
+      layers: [{ ...background, raster: pixel([255, 0, 0, 255]) }, outer, green, shallowGroup, shallowBlue], selection: null };
+    const render = async (document: any) => {
+      const cpu = compositeRegion(document, { x: 0, y: 0, width: 1, height: 1 }).rgba;
+      const canvas = globalThis.document.createElement('canvas'); globalThis.document.body.append(canvas);
+      const gpu = await GpuCompositor.create(canvas, 1, 1), gpuPixels = gpu.readRegion(document, 0, 0, 1, 1);
+      gpu.destroy(); canvas.remove(); return { cpu: Array.from(cpu), gpu: Array.from(gpuPixels) };
+    };
+    return { deep: await render(deep), shallow: await render(shallow) };
+  }) as Record<'deep' | 'shallow', { cpu: number[]; gpu: number[] }>;
+  expect(result.deep.cpu).toEqual([128, 128, 255, 255]);
+  expect(result.shallow.cpu).toEqual([127, 0, 128, 255]);
+  for (const pair of [result.deep, result.shallow]) pair.gpu.forEach((value, index) =>
+    expect(Math.abs(value - pair.cpu[index]!), `channel ${index}`).toBeLessThanOrEqual(1));
+});
+
+test('PSD profile-space adjustments agree between GPU and CPU within one byte', async ({ page }) => {
+  test.skip(PROFILE_ADJUSTMENTS.some((fixture) => !fs.existsSync(fixture)), 'PSD corpus not fetched');
+  for (const fixture of PROFILE_ADJUSTMENTS) {
+    await page.goto('/');
+    const chooserPromise = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: 'Open project' }).click();
+    const chooser = await chooserPromise; await chooser.setFiles(fixture);
+    await page.waitForFunction(() => (window as any).__editorForTests?.session.document?.layers
+      .some((layer: any) => layer.adjustment?.psdColorMode === 1 || layer.adjustment?.psdColorMode === 4));
+    const result = await page.evaluate(async () => {
+      const load = (module: string): Promise<any> => import(/* @vite-ignore */ module);
+      const [{ GpuCompositor }, { compositeRegion }, { cpuCompositeRegion }, { adjustmentProgram }, { Raster }, { newLayer }, { makeTransform }] = await Promise.all([
+        load('/src/render/gpuCompositor.ts'), load('/src/core/composite.ts'), load('/src/render/cpuRender.ts'), load('/src/render/adjustPrograms.ts'),
+        load('/src/core/raster.ts'), load('/src/core/document.ts'), load('/src/core/geometry.ts'),
+      ]);
+      const imported = (window as any).__editorForTests.session.document;
+      const adjustmentIndex = imported.layers.findIndex((layer: any) => layer.adjustment?.psdColorMode === 1
+        || layer.adjustment?.psdColorMode === 4);
+      const importedAdjustment = imported.layers[adjustmentIndex].adjustment;
+      const region = { x: 0, y: 0, width: imported.width, height: imported.height };
+      const input = compositeRegion({ ...imported, layers: imported.layers.slice(0, adjustmentIndex) }, region).rgba;
+      const transform = makeTransform({ x: 0, y: 0 }, { width: imported.width, height: imported.height });
+      const base = newLayer({ id: 'profile-base', name: 'Profile base', transform,
+        raster: Raster.fromPixels(imported.width, imported.height, 4, input) });
+      const adjustment = newLayer({ id: 'profile-adjustment', name: 'Profile adjustment', transform,
+        adjustment: importedAdjustment });
+      const document = { id: 'profile-adjustment', width: imported.width, height: imported.height,
+        resolution: imported.resolution, layers: [base, adjustment], selection: null };
+      const cpu = cpuCompositeRegion(document, region);
+      const canvas = globalThis.document.createElement('canvas'); globalThis.document.body.append(canvas);
+      const gpu = await GpuCompositor.create(canvas, document.width, document.height);
+      gpu.adjustmentPrograms = adjustmentProgram;
+      const program = adjustmentProgram(adjustment, document), lut = program?.lut?.(adjustment);
+      const pixels = gpu.readRegion(document, 0, 0, document.width, document.height);
+      let maximum = 0, changed = 0, maximumIndex = 0;
+      for (let index = 0; index < pixels.length; index++) {
+        const difference = Math.abs(pixels[index]! - cpu[index]!);
+        if (difference > maximum) { maximum = difference; maximumIndex = index; }
+        if (difference) changed++;
+      }
+      const cpuAtMaximum = cpu[maximumIndex], gpuAtMaximum = pixels[maximumIndex];
+      const diagnostics = { floatTargets: gpu.floatTargets, glError: gpu.gl.getError(), program: program?.key,
+        lut: lut ? { width: lut.width, height: lut.height, first: Array.from(lut.data.slice(0, 4)),
+          middle: Array.from(lut.data.slice(lut.data.length >>> 1, (lut.data.length >>> 1) + 4)) } : null,
+        cpuFirst: Array.from(cpu.slice(0, 20)), gpuFirst: Array.from(pixels.slice(0, 20)),
+        inputFirst: Array.from(input.slice(0, 20)) };
+      gpu.destroy(); canvas.remove();
+      return { maximum, changed, pixels: pixels.length, maximumIndex, cpuAtMaximum, gpuAtMaximum, diagnostics };
+    });
+    expect(result.pixels).toBeGreaterThan(0);
+    expect(result.maximum, `${path.basename(fixture)} ${JSON.stringify(result)}`).toBeLessThanOrEqual(1);
+  }
 });
 
 test('PSD opaque-canvas declarations match on GPU and CPU for an empty layer stack', async ({ page }) => {

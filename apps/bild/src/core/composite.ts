@@ -61,6 +61,7 @@ class BandRenderer {
   private readonly blendSeeds = new Map<string, number>();
   private readonly documentToOutput: Affine | undefined;
   private readonly order: readonly Layer[];
+  private readonly shallowBoundaryIds = new Set<string>();
   skippedAdjustment = false;
 
   constructor(private readonly document: CanvasDocument, private readonly options: CompositeOptions,
@@ -71,6 +72,10 @@ class BandRenderer {
       && ((layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === true
         || layer.opacity !== 1 || layer.fillOpacity !== 1 || layer.blendMode !== 'normal' || !!layer.maskSourceId));
     const isolatedIds = new Set(isolated.map((layer) => layer.id));
+    for (const layer of document.layers) {
+      if ((layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout !== 'shallow') continue;
+      for (const id of ancestorIds(document.layers, layer.id)) if (!isolatedIds.has(id)) this.shallowBoundaryIds.add(id);
+    }
     const insideIsolated = new Set<string>();
     for (const group of isolated) for (const id of descendantIds(document.layers, group.id)) insideIsolated.add(id);
     this.order = hierarchyEntries(document.layers).filter((entry) => entry.visible
@@ -495,7 +500,7 @@ class BandRenderer {
     const nested = new BandRenderer({ ...this.document, layers }, this.options, this.outputToDocument, false).render(
       width, height, originX, originY);
     const mode = this.blendMode(groupLayer), seed = mode === 'dissolve' ? this.blendSeed(groupLayer) : 0;
-    const knockout = (groupLayer as Layer & { readonly psdKnockout?: boolean }).psdKnockout === true;
+    const knockout = !!(groupLayer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout;
     for (let py = 0; py < height; py++) for (let px = 0; px < width; px++) {
       const offset = (py * width + px) * 4, alpha = nested[offset + 3]!;
       if (alpha <= 0) continue;
@@ -525,9 +530,27 @@ class BandRenderer {
     if (this.rootKnockout
       && (this.document as CanvasDocument & { readonly psdOpaqueCanvas?: boolean }).psdOpaqueCanvas === true) target.fill(1);
     let knockoutBase: Float32Array | null = null;
+    const passThroughBases = new Map<string, Float32Array>();
     for (const layer of this.order) {
-      if (layer.kind === 'group') { this.drawIsolatedGroup(layer, target, width, height, originX, originY,
-        this.rootKnockout ? knockoutBase : null); continue; }
+      const ancestors = ancestorIds(this.document.layers, layer.id).map((id) => this.byId.get(id))
+        .filter((entry): entry is Layer => !!entry);
+      for (const ancestor of ancestors) {
+        const isolated = ancestor.kind === 'group'
+          && ((ancestor as Layer & { readonly psdIsolated?: boolean }).psdIsolated === true
+            || ancestor.opacity !== 1 || ancestor.fillOpacity !== 1 || ancestor.blendMode !== 'normal'
+            || !!ancestor.maskSourceId);
+        if (!isolated && this.shallowBoundaryIds.has(ancestor.id) && !passThroughBases.has(ancestor.id)) {
+          passThroughBases.set(ancestor.id, target.slice());
+        }
+      }
+      if (layer.kind === 'group') {
+        const knockout = (layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout;
+        const shallowBase = ancestors.map((ancestor) => passThroughBases.get(ancestor.id))
+          .find((candidate): candidate is Float32Array => !!candidate);
+        const base = knockout === 'deep' ? (this.rootKnockout ? knockoutBase : null)
+          : knockout === 'shallow' && this.rootKnockout ? shallowBase ?? target.slice() : null;
+        this.drawIsolatedGroup(layer, target, width, height, originX, originY, base); continue;
+      }
       if (this.stacked.has(layer.id)) continue;
       const stack = this.stacks.get(layer.id);
       if (stack) this.drawStack(stack, target, width, height, originX, originY);

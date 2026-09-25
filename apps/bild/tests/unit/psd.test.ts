@@ -10,6 +10,7 @@ import { makeTransform } from '../../src/core/geometry';
 import { Raster } from '../../src/core/raster';
 import { psdHasMergedTransparency, readRawPsdComposite } from '../../src/io/psd/composite';
 import { decodePsdLayerChannels } from '../../src/io/psd/layerChannels';
+import { patchPsdLayerKnockouts, readPsdLayerKnockouts } from '../../src/io/psd/layerInfo';
 import { readPsdDocument, readPsdDocumentManaged } from '../../src/io/psd';
 import { cpuCompositeRegion } from '../../src/render/cpuRender';
 import { adjustmentProgram } from '../../src/render/adjustPrograms';
@@ -102,14 +103,53 @@ describe('PSD colour modes and product wiring', () => {
     const grayAdjustment = Object.assign({}, adjustment, { psdColorMode: 1 }) as LayerAdjustment;
     const grayLayer = newLayer({ id: 'gray-curves', name: 'gray curves', transform, adjustment: grayAdjustment });
     const grayProgram = adjustmentProgram(grayLayer)!;
-    expect(grayProgram.key).toBe('generic-cube-65:Curves');
+    expect(grayProgram.key).toBe('psd-gray-8:Curves');
     const grayLut = grayProgram.lut!(grayLayer)!;
-    const sample = 13 / 64, expected = applyAdjustment(grayAdjustment,
-      new Float32Array([sample, sample, sample, 1]), 1, 1, 0, 0);
-    const textureIndex = (78 * grayLut.width + 273) * 4;
+    const sample = 13 / 64, quantized = Math.round(sample * 255) / 255, expected = applyAdjustment(grayAdjustment,
+      new Float32Array([quantized, quantized, quantized, 1]), 1, 1, 0, 0);
+    const textureIndex = Math.round(sample * 255) * 4;
     expect(grayLut.data[textureIndex]).toBeCloseTo(expected[0]!, 7);
     expect(grayLut.data[textureIndex + 1]).toBeCloseTo(expected[1]!, 7);
     expect(grayLut.data[textureIndex + 2]).toBeCloseTo(expected[2]!, 7);
+
+    const grayTransfer = new Float32Array([0, 0.2, 0.7, 1]);
+    const grayInvert = Object.assign({ kind: 'Invert' as const, schemaVersion: 1 as const, parameters: {} },
+      { psdColorMode: 1, psdGrayTransfer: grayTransfer }) as LayerAdjustment;
+    const grayInverted = applyAdjustment(grayInvert, new Float32Array([0.2, 0.2, 0.2, 1]), 1, 1, 0, 0);
+    expect(grayInverted[0]).toBeCloseTo(0.7, 7); expect(grayInverted[1]).toBeCloseTo(0.7, 7);
+    expect(grayInverted[2]).toBeCloseTo(0.7, 7); expect(grayInverted[3]).toBe(1);
+    const grayInvertLayer = newLayer({ id: 'gray-invert', name: 'gray invert', transform, adjustment: grayInvert });
+    expect(adjustmentProgram(grayInvertLayer)?.key).toBe('psd-gray-8:Invert');
+  });
+
+  it('parses native shallow and deep knockout bytes without collapsing their modes', () => {
+    const encoder = new TextEncoder();
+    const block = (key: string, value: Uint8Array) => join([encoder.encode(`8BIM${key}`), u32(value.length), value,
+      ...(value.length % 2 ? [new Uint8Array(1)] : [])]);
+    const bytes = join([block('lyid', u32(17)), block('knko', new Uint8Array([1, 0, 0, 0])),
+      block('lyid', u32(29)), block('knko', new Uint8Array([2, 0, 0, 0]))]);
+    expect([...readPsdLayerKnockouts(bytes)]).toEqual([[17, 'shallow'], [29, 'deep']]);
+    const patched = patchPsdLayerKnockouts(bytes, new Map([[17, 'deep'], [29, 'shallow']]));
+    expect([...readPsdLayerKnockouts(patched)]).toEqual([[17, 'deep'], [29, 'shallow']]);
+    expect([...readPsdLayerKnockouts(bytes)]).toEqual([[17, 'shallow'], [29, 'deep']]);
+  });
+
+  it('restores a pass-through group boundary for a nested shallow knockout', () => {
+    const transform = makeTransform({ x: 0, y: 0 }, { width: 1, height: 1 });
+    const pixel = (rgba: readonly number[]) => Raster.fromPixels(1, 1, 4, new Uint8Array(rgba));
+    const background = newLayer({ id: 'background', name: 'Background', transform,
+      raster: pixel([255, 0, 0, 255]), locks: { transparency: true, pixels: false, position: false, all: false } });
+    const outer = { ...newLayer({ id: 'outer', name: 'Outer', kind: 'group', transform }), psdIsolated: false };
+    const green = newLayer({ id: 'green', name: 'Green', parentId: outer.id, transform,
+      raster: pixel([0, 255, 0, 255]) });
+    const inner = { ...newLayer({ id: 'inner', name: 'Inner', parentId: outer.id, kind: 'group', transform,
+      fillOpacity: 128 / 255 }), psdIsolated: true, psdKnockout: 'shallow' as const };
+    const blue = newLayer({ id: 'blue', name: 'Blue', parentId: inner.id, transform,
+      raster: pixel([0, 0, 255, 255]) });
+    const document: CanvasDocument = { id: 'shallow-knockout', width: 1, height: 1, resolution: 72,
+      layers: [background, outer, green, inner, blue], selection: null };
+    expect(cpuCompositeRegion(document, { x: 0, y: 0, width: 1, height: 1 }))
+      .toEqual(new Uint8Array([127, 0, 128, 255]));
   });
 
   it('decodes CMYK pixels from layer-owned channels without consulting the merged composite', () => {

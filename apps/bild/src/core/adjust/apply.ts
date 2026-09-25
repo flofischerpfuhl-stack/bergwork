@@ -81,6 +81,45 @@ function cubeColor(cube: Float32Array, r: number, g: number, b: number): [number
   return output;
 }
 
+interface PsdCmykTransfer {
+  readonly inverseSize: number;
+  readonly inverse: Uint8Array;
+  readonly forwardSize: number;
+  readonly forward: Uint8Array;
+}
+
+function sampleCubeChannels(data: Uint8Array, size: number, channels: number,
+  r: number, g: number, b: number): number[] {
+  const values = [clamp01(r), clamp01(g), clamp01(b)].map((value) => value * (size - 1));
+  const low = values.map(Math.floor), high = low.map((value) => Math.min(size - 1, value + 1));
+  const fraction = values.map((value, index) => value - low[index]!);
+  const output = new Array<number>(channels).fill(0);
+  for (let dz = 0; dz < 2; dz++) for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+    const x = dx ? high[0]! : low[0]!, y = dy ? high[1]! : low[1]!, z = dz ? high[2]! : low[2]!;
+    const weight = (dx ? fraction[0]! : 1 - fraction[0]!) * (dy ? fraction[1]! : 1 - fraction[1]!)
+      * (dz ? fraction[2]! : 1 - fraction[2]!);
+    const at = ((z * size + y) * size + x) * 4;
+    for (let channel = 0; channel < channels; channel++) output[channel] = output[channel]! + data[at + channel]! * weight / 255;
+  }
+  return output;
+}
+
+function sampleCmykForward(transfer: PsdCmykTransfer, values: readonly number[]): [number, number, number] {
+  const size = transfer.forwardSize, positions = values.map((value) => clamp01(value) * (size - 1));
+  const low = positions.map(Math.floor), high = low.map((value) => Math.min(size - 1, value + 1));
+  const fraction = positions.map((value, index) => value - low[index]!);
+  const output: [number, number, number] = [0, 0, 0];
+  for (let dk = 0; dk < 2; dk++) for (let dy = 0; dy < 2; dy++) for (let dm = 0; dm < 2; dm++) for (let dc = 0; dc < 2; dc++) {
+    const c = dc ? high[0]! : low[0]!, m = dm ? high[1]! : low[1]!, y = dy ? high[2]! : low[2]!, k = dk ? high[3]! : low[3]!;
+    const weight = (dc ? fraction[0]! : 1 - fraction[0]!) * (dm ? fraction[1]! : 1 - fraction[1]!)
+      * (dy ? fraction[2]! : 1 - fraction[2]!) * (dk ? fraction[3]! : 1 - fraction[3]!);
+    const at = (((k * size + y) * size + m) * size + c) * 4;
+    output[0] += transfer.forward[at]! * weight / 255; output[1] += transfer.forward[at + 1]! * weight / 255;
+    output[2] += transfer.forward[at + 2]! * weight / 255;
+  }
+  return output;
+}
+
 const cubeCache = new WeakMap<Uint8Array, CubeLut>();
 function resourceCube(id: string, resources: readonly DocumentResource[] | undefined): CubeLut | null {
   const resource = resources?.find((value) => value.id === id && value.role === 'lut');
@@ -157,16 +196,55 @@ export const applyAdjustment: AdjustmentApplier = (adjustment, rgba, width, heig
   const brightnessTable = adjustment.kind === 'Brightness/Contrast'
     ? brightnessContrastTable(adjustment.parameters.brightness, adjustment.parameters.contrast, adjustment.parameters.legacy) : null;
   const lookup = adjustment.kind === 'Colour Lookup' ? resourceCube(adjustment.parameters.resourceId, resources) : null;
-  const psd = adjustment as LayerAdjustment & { readonly psdColorMode?: number; readonly psdBitsPerChannel?: number };
-  const nativeGray = psd.psdColorMode === 1 && (adjustment.kind === 'Levels' || adjustment.kind === 'Curves');
-  const decodeGray = (value: number): number => Math.max(0, srgbToLinear(clamp01(value))) ** (1 / 2.2);
-  const encodeGray = (value: number): number => clamp01(linearToSrgb(clamp01(value) ** 2.2));
+  const psd = adjustment as LayerAdjustment & { readonly psdColorMode?: number; readonly psdBitsPerChannel?: number;
+    readonly psdGrayTransfer?: Float32Array; readonly psdCmykTransfer?: PsdCmykTransfer };
+  const nativeGray = psd.psdColorMode === 1 && (adjustment.kind === 'Levels' || adjustment.kind === 'Curves'
+    || adjustment.kind === 'Invert' || adjustment.kind === 'Threshold' || adjustment.kind === 'Posterize');
+  const transfer = psd.psdGrayTransfer;
+  const decodeGray = (value: number): number => {
+    if (!transfer?.length) return Math.max(0, srgbToLinear(clamp01(value))) ** (1 / 2.2);
+    const target = clamp01(value);
+    let low = 0, high = transfer.length - 1;
+    while (low < high) { const middle = (low + high) >>> 1;
+      if (transfer[middle]! < target) low = middle + 1; else high = middle; }
+    if (low === 0) return 0;
+    const before = transfer[low - 1]!, after = transfer[low]!;
+    const amount = after > before ? (target - before) / (after - before) : 0;
+    return (low - 1 + Math.min(1, Math.max(0, amount))) / (transfer.length - 1);
+  };
+  const encodeGray = (value: number): number => {
+    if (!transfer?.length) return clamp01(linearToSrgb(clamp01(value) ** 2.2));
+    const position = clamp01(value) * (transfer.length - 1), low = Math.floor(position);
+    const high = Math.min(transfer.length - 1, low + 1), amount = position - low;
+    return transfer[low]! + (transfer[high]! - transfer[low]!) * amount;
+  };
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     const i = (y * width + x) * 4;
     if (out[i + 3]! <= 0) continue;
     let r = out[i]!, g = out[i + 1]!, b = out[i + 2]!;
     if (nativeGray) r = g = b = decodeGray((r + g + b) / 3);
-    if (adjustment.kind === 'Basic') [r, g, b] = basicColor(r, g, b, adjustment.parameters);
+    let nativeCmyk = false;
+    if (psd.psdCmykTransfer && (adjustment.kind === 'Invert' || adjustment.kind === 'Posterize'
+      || adjustment.kind === 'Threshold')) {
+      const cmyk = sampleCubeChannels(psd.psdCmykTransfer.inverse, psd.psdCmykTransfer.inverseSize, 4, r, g, b);
+      if (adjustment.kind === 'Invert') for (let channel = 0; channel < 4; channel++) cmyk[channel] = 1 - cmyk[channel]!;
+      else if (adjustment.kind === 'Threshold') {
+        // Photoshop's CMYK threshold result is process white or K-only process black,
+        // not RGB white/black converted after the adjustment.
+        const boundary = sampleCmykForward(psd.psdCmykTransfer,
+          [0, 0, 0, 1 - adjustment.parameters.level / 255]);
+        const ink = 0.299 * r + 0.587 * g + 0.114 * b
+          < 0.299 * boundary[0] + 0.587 * boundary[1] + 0.114 * boundary[2] ? 1 : 0;
+        cmyk.fill(0); cmyk[3] = ink;
+      }
+      else if (adjustment.kind === 'Posterize') {
+        const levels = Math.max(2, adjustment.parameters.levels), steps = levels - 1;
+        for (let channel = 0; channel < 4; channel++) cmyk[channel] = Math.min(steps, Math.floor(clamp01(cmyk[channel]!) * levels)) / steps;
+      }
+      [r, g, b] = sampleCmykForward(psd.psdCmykTransfer, cmyk); nativeCmyk = true;
+    }
+    if (nativeCmyk) { /* already evaluated in the document CMYK space */ }
+    else if (adjustment.kind === 'Basic') [r, g, b] = basicColor(r, g, b, adjustment.parameters);
     else if (lookup && adjustment.kind === 'Colour Lookup') [r, g, b] = lookupCube(lookup, r, g, b, adjustment.parameters.interpolation);
     else if (adjustment.kind === 'Colour') [r, g, b] = colourPanelColor(r, g, b, adjustment.parameters);
     else if (adjustment.kind === 'Invert') { r = 1 - r; g = 1 - g; b = 1 - b; }
