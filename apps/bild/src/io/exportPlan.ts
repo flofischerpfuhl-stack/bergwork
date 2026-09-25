@@ -12,6 +12,7 @@ import type { Affine, Rect } from '../core/geometry';
 import type { RGB } from '../core/model';
 import type { EncodeSpec, ExportFormat } from './exportEncode';
 import type { ExportInfo } from './exportMetadata';
+import type { CmykProfile, CmykRenderingIntent } from '../core/color/cmyk';
 
 export type { ExportFormat } from './exportEncode';
 export type { ExportInfo } from './exportMetadata';
@@ -52,7 +53,13 @@ export interface ExportRequest {
   /** AVIF encoder speed 0…10. Defaults to 6. */
   readonly speed?: number;
   /** TIFF compression. Defaults to deflate. */
-  readonly tiffCompression?: 'deflate' | 'none';
+  readonly tiffCompression?: 'lzw' | 'deflate' | 'none';
+  /** Pro output conversion. The working document remains RGB. Only TIFF/JPEG accept CMYK. */
+  readonly cmyk?: {
+    readonly profile: CmykProfile;
+    readonly intent: CmykRenderingIntent;
+    readonly blackPointCompensation: boolean;
+  };
   /** Keep transparency (default for PNG/WebP/AVIF/TIFF). JPEG is always flattened. */
   readonly transparent?: boolean;
   /** Colour under transparent pixels when flattening (0…1). Defaults to white. */
@@ -154,13 +161,16 @@ export function resolveExportRequest(request: ExportRequest): Resolved {
   const level = request.compressionLevel ?? 6;
   if (!Number.isInteger(level) || level < 0 || level > 9) throw new ExportError('option', 'Compression level must be 0…9.');
   if (request.lossless && format !== 'webp') throw new ExportError('option', 'Lossless is a WebP option (PNG and TIFF are always lossless).');
+  if (request.cmyk && format !== 'tiff' && format !== 'jpeg') throw new ExportError('option', 'CMYK export is available for TIFF and JPEG only.');
+  if (request.cmyk && request.transparent) throw new ExportError('option', 'CMYK export does not support transparency.');
   const matte = request.matte ?? WHITE;
   for (const channel of [matte.red, matte.green, matte.blue]) fraction(channel, 'Matte colour');
   const metadata = { ...DEFAULT_EXPORT_METADATA, ...request.metadata };
-  const alpha = formatHasAlpha(format) && (request.transparent ?? true);
+  const alpha = !request.cmyk && formatHasAlpha(format) && (request.transparent ?? true);
   return {
     format, sizes, bitDepth, alpha, matte, metadata,
-    spec: { format, alpha, quality, lossless: request.lossless ?? false, speed, level, tiffCompression: request.tiffCompression ?? 'deflate',
+    spec: { format, colorModel: request.cmyk ? 'cmyk' : 'rgb', alpha, quality, lossless: request.lossless ?? false, speed, level,
+      tiffCompression: request.tiffCompression ?? (request.cmyk ? 'lzw' : 'deflate'),
       info: metadata.info },
   };
 }

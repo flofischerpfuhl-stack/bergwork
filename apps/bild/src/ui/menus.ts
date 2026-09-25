@@ -6,6 +6,7 @@
 
 import { ADJUSTMENT_KINDS } from '../core/document';
 import type { EditorController } from './controller';
+import { profileHasFeature } from '../app/profiles';
 
 export interface MenuItem {
   label: string;
@@ -56,6 +57,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         // The one export path (P4): Photoshop's Export As shortcut, plus this editor's earlier export shortcuts.
         { label: t('Export As…'), shortcut: 'mod+alt+shift+w', aliases: ['mod+shift+e', 'mod+alt+shift+s'], enabled: !!document && canStart,
           run: () => controller.showDialog({ kind: 'export' }), testId: 'menu-export' },
+        { ...feature('batch', t('Batch…')), testId: 'menu-batch' },
         'separator',
         { label: t('Close Project'), shortcut: 'mod+alt+w', aliases: ['mod+w'], enabled: canStart, run: () => void controller.closeTab(controller.workspace.selectedId) },
       ],
@@ -74,7 +76,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         feature('fillForeground', t('Fill with Foreground Color'), 'alt+backspace'),
         feature('fillBackground', t('Fill with Background Color'), 'mod+backspace'),
         feature('clearSelection', t('Clear Selection Pixels')),
-        feature('contentAwareFill', t('Content-Aware Fill…'), 'shift+backspace'),
+        feature('contentAwareFill', t('Remove…'), 'shift+backspace'),
         'separator',
         { label: t('Transform'), enabled: session.canTransform, submenu: [
           feature('warp', t('Warp')), feature('perspective', t('Perspective')),
@@ -121,6 +123,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         feature('canvasSize', t('Canvas Size…'), 'mod+alt+c'),
         feature('imageSize', t('Image Size…'), 'mod+alt+i'),
         feature('straighten', t('Straighten')),
+        feature('upscale', t('Upscale…')),
         'separator',
         { label: t('Flip Canvas Horizontal'), enabled: session.canEditLayers, run: () => session.flipCanvas(true, controller.mirrorSelection ? (d) => controller.mirrorSelection!(d, true) : undefined) },
         { label: t('Flip Canvas Vertical'), enabled: session.canEditLayers, run: () => session.flipCanvas(false, controller.mirrorSelection ? (d) => controller.mirrorSelection!(d, false) : undefined) },
@@ -135,6 +138,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         'separator',
         feature('noise', `${t('Add Noise')}…`),
         feature('denoise', `${t('Reduce Noise')}…`),
+        feature('aiDenoise', `${t('Reduce Noise (AI)')}…`),
         'separator',
         feature('unsharpMask', `${t('Unsharp Mask')}…`),
         feature('smartSharpen', `${t('Smart Sharpen')}…`),
@@ -172,6 +176,8 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
           ? { label: t('Layer Style'), enabled: !!layer && controller.layerStyles.styleable(layer.id), testId: 'menu-layer-style',
             submenu: layer ? controller.layerStyles.menu(layer.id) : [] }
           : { label: t('Layer Style'), enabled: false },
+        { ...feature('saveRecipe', t('Save Recipe…')), testId: 'menu-save-recipe' },
+        { label: t('Apply Recipe'), enabled: !!controller.recipeMenu, submenu: controller.recipeMenu?.() ?? [], testId: 'menu-apply-recipe' },
         { label: t('Layer Mask'), enabled: !!layer && session.canEditMask && !layer.mask, testId: 'menu-layer-mask', submenu: [
           { label: t('Reveal All'), enabled: !session.selection, run: () => controller.addMask(true) },
           { label: t('Hide All'), enabled: !session.selection, run: () => controller.addMask(false) },
@@ -224,6 +230,14 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         { label: t('Zoom Out'), shortcut: 'mod+-', enabled: !!document, run: () => session.zoomTo(session.viewport.zoom / 1.25) },
         'separator',
         { label: t('Pixel Grid (800% and above)'), enabled: true, checked: session.showsPixelGrid, run: () => { session.showsPixelGrid = !session.showsPixelGrid; session.notify('view'); } },
+        ...(profileHasFeature(controller.profile, 'softproof', controller.capabilities) ? [
+          'separator' as const,
+          { label: t('Proof Setup…'), enabled: !!document, run: () => controller.showDialog({ kind: 'proofSetup' }), testId: 'menu-proof-setup' },
+          { label: t('Proof Colors'), shortcut: 'mod+y', enabled: !!document, checked: session.proofColors,
+            run: () => { void controller.toggleProofColors(); }, testId: 'menu-proof-colors' },
+          { label: t('Gamut Warning'), shortcut: 'mod+shift+y', enabled: !!document, checked: session.gamutWarning,
+            run: () => { void controller.toggleGamutWarning(); }, testId: 'menu-gamut-warning' },
+        ] satisfies MenuEntry[] : []),
         feature('toggleRulers', t('Rulers'), 'mod+r'),
         feature('toggleGuides', t('Show Guides'), 'mod+;'),
         feature('snapToGuides', t('Snap to Guides')),

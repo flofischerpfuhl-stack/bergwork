@@ -20,6 +20,8 @@ import { installColor } from './color/colorFeature';
 import { installObjectSelection } from './objsel/install';
 import { installWarp } from './warpFeature';
 import { installRaw } from './rawFeature';
+import { installGenAi } from './genaiFeature';
+import { installBatch } from './batch/install';
 import type { EditorProfile } from './profiles';
 
 export function installFeatures(controller: EditorController, profile: EditorProfile = controller.profile): void {
@@ -39,6 +41,8 @@ export function installFeatures(controller: EditorController, profile: EditorPro
   if (enabled.has('vector')) installVector(controller);
   if (enabled.has('color')) installColor(controller);
   installWarp(controller);
+  installGenAi(controller);
+  if (enabled.has('automation')) installBatch(controller);
   // Last: it extends the Brush header while Quick Mask is on.
   if (enabled.has('selection')) installObjectSelection(controller);
   const tools = new Set(profile.tools);

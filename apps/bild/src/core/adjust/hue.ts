@@ -112,20 +112,56 @@ export function fromHsl(hue: number, saturation: number, lightness: number): [nu
   return rgb.map((v) => Math.min(1, Math.max(0, v + base))) as [number, number, number];
 }
 
+function hslToHsv(saturation: number, lightness: number): [number, number] {
+  const value = lightness + saturation * Math.min(lightness, 1 - lightness);
+  return [value > 0 ? 2 * (1 - lightness / value) : 0, value];
+}
+
+function hsvToHsl(saturation: number, value: number): [number, number] {
+  const lightness = value * (1 - saturation / 2);
+  const denominator = Math.min(lightness, 1 - lightness);
+  return [denominator > 0 ? (value - lightness) / denominator : 0, lightness];
+}
+
+function photoshopSaturation(value: number, amount: number): number {
+  const normalized = Math.min(1, Math.max(-1, amount / 100));
+  return Math.min(1, Math.max(0, normalized > 0 ? value / (1 - normalized + 0.01) : value * (1 + normalized)));
+}
+
 export function adjustHueColor(red: number, green: number, blue: number, settings: HueSaturationSettings,
   response = hueResponse(settings)): [number, number, number] {
   let [hue, saturation, lightness] = toHsl(red, green, blue);
-  let lightnessAmount: number;
   if (settings.colorize) {
     const a = settings.adjustments[settings.range] ?? defaultRangeAdjustment();
-    hue = wrapHue(a.hue); saturation = Math.min(1, Math.max(0, a.saturation / 100)); lightnessAmount = a.lightness / 100;
-  } else {
-    const sampled = response[Math.min(response.length - 1, Math.max(0, Math.round(hue)))]!;
-    lightnessAmount = sampled.lightness / 100; hue = wrapHue(hue + sampled.shift);
-    saturation = Math.min(1, Math.max(0, saturation * (1 + sampled.saturation / 100)));
+    hue = wrapHue(a.hue); saturation = Math.min(1, Math.max(0, a.saturation / 100));
+    const amount = Math.min(1, Math.max(-1, a.lightness / 100));
+    lightness = amount >= 0 ? lightness + (1 - lightness) * amount : lightness * (1 + amount);
+    return fromHsl(hue, saturation, Math.min(1, Math.max(0, lightness)));
   }
-  const amount = Math.min(1, Math.max(-1, lightnessAmount));
-  lightness = amount >= 0 ? lightness + (1 - lightness) * amount : lightness * (1 + amount);
+
+  const master = settings.adjustments.Master ?? defaultRangeAdjustment();
+  const masterLightness = Math.min(1, Math.max(-1, master.lightness / 100));
+  if (masterLightness !== 0) {
+    const apply = (value: number): number => masterLightness > 0
+      ? value * (1 - masterLightness) + masterLightness : value * (1 + masterLightness);
+    red = apply(red); green = apply(green); blue = apply(blue);
+    [hue, saturation, lightness] = toHsl(red, green, blue);
+  }
+  const sampled = response[Math.min(response.length - 1, Math.max(0, Math.round(hue)))]!;
+  const rangeHue = sampled.shift - master.hue;
+  const rangeSaturation = sampled.saturation - master.saturation;
+  const rangeLightness = Math.min(1, Math.max(-1, (sampled.lightness - master.lightness) / 100));
+  let hsvSaturation: number, value: number;
+  [hsvSaturation, value] = hslToHsv(saturation, lightness);
+  if (rangeLightness < 0) value *= 1 + rangeLightness * hsvSaturation;
+  if (rangeLightness >= 0) hsvSaturation *= 1 - rangeLightness;
+  else if (hsvSaturation > 1e-6) {
+    const inverse = 1 / (hsvSaturation + 0.001);
+    hsvSaturation = 1 + (inverse - 1) / (Math.abs(rangeLightness) - inverse + 0.001);
+  }
+  [saturation, lightness] = hsvToHsl(Math.min(1, Math.max(0, hsvSaturation)), Math.min(1, Math.max(0, value)));
+  hue = wrapHue(hue + master.hue + rangeHue);
+  saturation = photoshopSaturation(photoshopSaturation(saturation, master.saturation), rangeSaturation);
   return fromHsl(hue, saturation, Math.min(1, Math.max(0, lightness)));
 }
 

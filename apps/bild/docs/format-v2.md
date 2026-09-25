@@ -74,6 +74,14 @@ as `null` in their raster tile list and have no ZIP member.
 Linked embedded layers store a URI as metadata and do not cause runtime network access. An embedded
 layer instead names an `embedded` asset. Readers must never fetch a URI automatically.
 
+A `brushes` asset (MIME `application/vnd.fernwork.brush-presets+json`, listed in `resources`) holds the
+document's brush presets as UTF-8 JSON `{format: "fernwork-brush-presets", version: 1, presets: [...]}`. Each
+preset has `id`, `name`, `diameter` (px), `hardness`, `opacity`, `tip` (`{kind: "round", angle, roundness}` or
+`{kind: "sampled", angle, roundness, image: {id, width, height, zlib}}` with the 8-bit tip, 255 = full paint,
+zlib-compressed and base64-encoded) and `dynamics` (`spacing` or null, `flow`, `sizeJitter`, `sizeControl`,
+`minimumDiameter`, `angleJitter`, `scatter`, `scatterBothAxes`, `count`, `opacityJitter`, `opacityControl`).
+Invalid presets are dropped on read.
+
 ## Layer common object
 
 Every entry has a discriminating `kind`: `pixel`, `group`, `adjustment`, `fill`, `vector`, `text`, or

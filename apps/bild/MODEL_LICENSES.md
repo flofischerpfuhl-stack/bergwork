@@ -79,3 +79,39 @@ for local tests or self-hosting.
 Copyright (c) 2024 ZhengPeng. The complete license is in
 `public/models/birefnet-lite.LICENSE.txt` and at
 https://github.com/ZhengPeng7/BiRefNet/blob/main/LICENSE.
+
+## MI-GAN 512 Places2 pipeline (optional download)
+
+- Purpose: local selection-guided object removal/inpainting.
+- Official source and export recipe: https://github.com/Picsart-AI-Research/MI-GAN
+- Weight license: a dedicated `LICENSE-WEIGHTS` file grants the MIT License:
+  https://github.com/Picsart-AI-Research/MI-GAN/blob/main/LICENSE-WEIGHTS
+- Browser ONNX artifact: the official author's `migan_pipeline_v2.onnx`, immutable revision
+  `406830d0fa60666da0071c342ad2fbc8f30c5c64`.
+- Size: 28,079,181 bytes. SHA-256:
+  `6f1f3530a1a2324b19752018ce756088b07973cda8d7d890034ace5c8a48c40b`.
+- Training data: Places2/Places365. The upstream model README identifies this training set. The Places365 tooling and
+  released models carry MIT, but the source-image copyrights are not individually relicensed by the dataset. That
+  provenance caveat is recorded in `artifacts/genai.md`; it does not change the checkpoint's explicit MIT grant.
+
+The model is not bundled. `ModelHost` downloads and SHA-256-verifies it only after the user presses the download
+button, then retains it for offline use.
+
+## Real-ESRGAN x2plus / x4plus (optional downloads)
+
+- Purpose: local 2× and 4× super-resolution.
+- Official implementation and checkpoints: https://github.com/xinntao/Real-ESRGAN
+- License: BSD 3-Clause, with no code/weight carve-out:
+  https://github.com/xinntao/Real-ESRGAN/blob/master/LICENSE
+- Browser artifacts: reproducible ONNX exports documented at
+  https://huggingface.co/fernandotonon/QtMeshEditor-realesrgan-onnx, immutable revision
+  `766bac4b35aaeefe85a065ece8ee2f827b1314d8`.
+- x2: 67,156,218 bytes; SHA-256
+  `35d016524a6eb7e9a99f192cfa81b6cf1f80fdf8f1b51605d77f0763f5ccba7f`.
+- x4: 67,132,609 bytes; SHA-256
+  `c999e5e3365a23cda6d627c407005076c160f420d6b122a0ef7c9d4210aee96a`.
+- Training data: the official paper identifies DIV2K, Flickr2K and OutdoorSceneTraining. Their source-image licenses
+  are heterogeneous and are not redistributed here. The released checkpoint itself is covered by the upstream
+  BSD-3-Clause grant; the provenance caveat is recorded in `artifacts/genai.md`.
+
+The ONNX files are not bundled and are resolved through `ModelHost` only after a user action.

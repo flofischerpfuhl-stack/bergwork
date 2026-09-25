@@ -11,11 +11,13 @@ import { withJpegDensity } from './jpegMeta';
 import { encodeTiff } from './tiffEncode';
 import { openDeflateEnd } from './deflateJoin';
 import { concat, exifBlock, jpegWithMetadata, pngIccpPayload, webpWithMetadata, type ExportInfo } from './exportMetadata';
+import { encodeCmykJpeg } from './jpegCmykEncode';
 
 export type ExportFormat = 'png' | 'jpeg' | 'webp' | 'avif' | 'tiff';
 
 export interface EncodeSpec {
   readonly format: ExportFormat;
+  readonly colorModel?: 'rgb' | 'cmyk';
   /** Write an alpha channel. False: the pixels were flattened onto a matte (alpha is 255). */
   readonly alpha: boolean;
   /** 0…1 for JPEG/WebP/AVIF. */
@@ -25,7 +27,7 @@ export interface EncodeSpec {
   readonly speed: number;
   /** Deflate level for PNG and TIFF. */
   readonly level: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
-  readonly tiffCompression: 'deflate' | 'none';
+  readonly tiffCompression: 'lzw' | 'deflate' | 'none';
   readonly dpi: number | null;
   readonly icc: Uint8Array | null;
   readonly info: ExportInfo | null;
@@ -43,7 +45,7 @@ export async function encodePixels(pixels: Uint8Array | Uint16Array, width: numb
     }
     case 'tiff':
       return encodeTiff(pixels, width, height, { alpha: spec.alpha, compression: spec.tiffCompression, level: spec.level,
-        dpi: spec.dpi, iccProfile: spec.icc, info: spec.info });
+        colorModel: spec.colorModel, dpi: spec.dpi, iccProfile: spec.icc, info: spec.info });
     case 'jpeg': return encodeJpeg(pixels as Uint8Array, width, height, spec);
     case 'webp': {
       const encoded = await encodeWebp(pixels as Uint8Array, width, height, { quality: spec.quality, lossless: spec.lossless, alphaQuality: 1 });
@@ -62,6 +64,11 @@ function hasTransparency(pixels: Uint8Array): boolean {
 }
 
 async function encodeJpeg(pixels: Uint8Array, width: number, height: number, spec: EncodeSpec): Promise<Uint8Array> {
+  if (spec.colorModel === 'cmyk') {
+    let bytes = encodeCmykJpeg(pixels, width, height, spec.quality);
+    if (spec.dpi) bytes = withJpegDensity(bytes, spec.dpi);
+    return jpegWithMetadata(bytes, { icc: spec.icc, exif: spec.info ? exifBlock(spec.info) : null });
+  }
   const image = new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer, pixels.byteOffset, pixels.byteLength), width, height);
   // The browser's JPEG encoder (libjpeg-turbo in every engine) via OffscreenCanvas, which exists in
   // windows and workers of all supported browsers; there is no DOM canvas fallback in the engine.

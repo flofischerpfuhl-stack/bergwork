@@ -12,6 +12,7 @@ import { downsampleLevel, prepareSampler, type RasterSampler } from '../core/res
 import type { ViewSpec } from './gpuCompositor';
 import { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
 import { prepareCpuRender } from './cpuRender';
+import { applyProofLut, type CmykLut } from '../core/color/cmyk';
 
 export interface SoftwareSurface {
   readonly width: number;
@@ -174,7 +175,8 @@ export class SoftwareCompositor {
   /** Workspace/checkerboard presentation matching shaders.ts PRESENT_FRAGMENT. */
   present(composite: SoftwareSurface | null, width: number, height: number,
     canvasRect: { x: number; y: number; width: number; height: number }, pointScale: number,
-    grid: boolean, pixelSize: number, compositeOrigin: { x: number; y: number } = { x: 0, y: 0 }): void {
+    grid: boolean, pixelSize: number, compositeOrigin: { x: number; y: number } = { x: 0, y: 0 },
+    proof?: { readonly lut: CmykLut; readonly gamutWarning: boolean }): void {
     this.resize(width, height);
     const context = this.context;
     context.setTransform(1, 0, 0, 1, 0, 0);
@@ -196,7 +198,8 @@ export class SoftwareCompositor {
     }
     context.restore();
 
-    if (composite?.commands) this.presentCommands(composite, compositeOrigin);
+    if (composite && proof) this.presentProofed(composite, compositeOrigin, canvasRect, pointScale, proof);
+    else if (composite?.commands) this.presentCommands(composite, compositeOrigin);
     else if (composite) this.presentPixels(composite, compositeOrigin, canvasRect, pointScale);
     if (grid && pixelSize > 0) {
       context.save(); context.beginPath(); context.rect(left, top, right - left, bottom - top); context.clip();
@@ -213,6 +216,25 @@ export class SoftwareCompositor {
     context.strokeStyle = 'rgba(255,255,255,.13)'; context.lineWidth = 1;
     context.strokeRect(Math.floor(canvasRect.x) + .5, Math.floor(canvasRect.y) + .5,
       Math.max(0, Math.ceil(canvasRect.width) - 1), Math.max(0, Math.ceil(canvasRect.height) - 1));
+  }
+
+  private presentProofed(surface: SoftwareSurface, origin: { x: number; y: number },
+    canvasRect: { x: number; y: number; width: number; height: number }, pointScale: number,
+    proof: { readonly lut: CmykLut; readonly gamutWarning: boolean }): void {
+    let pixels = surface.pixels;
+    if (!pixels) {
+      const canvas = new OffscreenCanvas(surface.width, surface.height), context = canvas.getContext('2d');
+      if (!context) throw new Error('Canvas 2D is unavailable for soft-proofing.');
+      for (const command of surface.commands!) {
+        const transform = command.transform;
+        context.setTransform(transform.a, transform.b, transform.c, transform.d, transform.tx, transform.ty);
+        context.globalAlpha = command.opacity; context.imageSmoothingEnabled = command.smoothing;
+        context.imageSmoothingQuality = command.quality; context.drawImage(command.source, 0, 0);
+      }
+      pixels = new Uint8Array(context.getImageData(0, 0, surface.width, surface.height).data);
+    }
+    this.presentPixels({ width: surface.width, height: surface.height, pixels: applyProofLut(pixels, proof.lut, proof.gamutWarning), commands: null },
+      origin, canvasRect, pointScale);
   }
 
   private presentCommands(surface: SoftwareSurface, origin: { x: number; y: number }): void {

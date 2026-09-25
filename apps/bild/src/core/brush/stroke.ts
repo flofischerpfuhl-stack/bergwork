@@ -7,10 +7,14 @@ import { Raster, TILE } from '../raster';
 import { makePixelArray, type PixelArray } from '../pixel/format';
 import type { DocumentSelection } from '../selection';
 import { falloff, validateBrushSettings, type BrushSettings } from './settings';
+import { usesDabs } from './tip';
+import { DabBrushStroke, beginSettledDabStroke } from './dabs';
 
 export interface BrushSegment {
   x0: number; y0: number; x1: number; y1: number; pressure: number;
   vx: number; vy: number; length: number; ux: number; uy: number;
+  /** Pen tilt 0 (flat)…1 (upright); only dab brushes with a tilt control record it. */
+  tilt?: number;
 }
 type Segment = BrushSegment;
 interface IntRect { x: number; y: number; width: number; height: number }
@@ -78,7 +82,7 @@ export interface StrokeResult {
 }
 
 export interface Stroke {
-  addPoints(points: readonly Point[], options?: { readonly pressure?: number | readonly number[] }): StrokeUpdate;
+  addPoints(points: readonly Point[], options?: { readonly pressure?: number | readonly number[]; readonly tilt?: number | readonly number[] }): StrokeUpdate;
   currentRaster(): Raster;
   /** Where `currentRaster()` sits on the document (the working grid may extend past the layer). */
   currentTransform(): LayerTransform;
@@ -96,11 +100,13 @@ export interface SettledStroke {
 
 /** CPU port of MetalBrushCoverage.continuousBrush and BrushStroke's replaceable tail. */
 export function beginStroke(options: BeginStrokeOptions): Stroke {
+  if (usesDabs(options.settings)) return new DabBrushStroke(options);
   return new ContinuousBrushStroke(options);
 }
 
 /** MetalBrushCoverage.swift's permanent/tail split, with only permanent segments accepted here. */
 export function beginSettledStroke(options: BeginStrokeOptions): SettledStroke {
+  if (usesDabs(options.settings)) return beginSettledDabStroke(options);
   const stroke = new ContinuousBrushStroke(options);
   return {
     addSettled: (segments) => stroke.addSettled(segments),
@@ -112,6 +118,7 @@ export function beginSettledStroke(options: BeginStrokeOptions): SettledStroke {
 
 /** Straightforward pixel-major path used to prove optimized irregular-stroke equivalence. */
 export function beginReferenceStroke(options: BeginStrokeOptions): Stroke {
+  if (usesDabs(options.settings)) return new DabBrushStroke(options);
   return new ContinuousBrushStroke(options, true);
 }
 
@@ -844,10 +851,12 @@ export function brushModeColor(r: number, g: number, b: number, settings: BrushS
     Math.min(1, Math.max(0, luma + (g - luma) * factor)), Math.min(1, Math.max(0, luma + (b - luma) * factor))];
 }
 
-export function brushSegment(a: Point, b: Point, pressure: number): BrushSegment {
+export function brushSegment(a: Point, b: Point, pressure: number, tilt?: number): BrushSegment {
   const vx = b.x - a.x, vy = b.y - a.y, length = Math.hypot(vx, vy);
-  return { x0: a.x, y0: a.y, x1: b.x, y1: b.y, pressure, vx, vy, length,
+  const result: BrushSegment = { x0: a.x, y0: a.y, x1: b.x, y1: b.y, pressure, vx, vy, length,
     ux: length > 0 ? vx / length : 0, uy: length > 0 ? vy / length : 0 };
+  if (tilt !== undefined) result.tilt = tilt;
+  return result;
 }
 
 const segment = brushSegment;
@@ -855,7 +864,7 @@ const segment = brushSegment;
 /** Centripetal Catmull-Rom with BrushStroke's 0.2-document-pixel adaptive chords. */
 export function continuousBrushCurve(start: Point, end: Point, before: Point, after: Point,
   startPressure: number, endPressure: number,
-  tolerance: number): Segment[] {
+  tolerance: number, startTilt?: number, endTilt?: number): Segment[] {
   const knot = (t: number, a: Point, b: Point) => t + Math.max(0.0001, Math.sqrt(Math.hypot(b.x - a.x, b.y - a.y)));
   const mix = (a: Point, b: Point, ta: number, tb: number, t: number): Point => {
     const wa = (tb - t) / (tb - ta), wb = (t - ta) / (tb - ta);
@@ -879,7 +888,9 @@ export function continuousBrushCurve(start: Point, end: Point, before: Point, af
     const mid = (lo + hi) / 2, m = point(mid);
     const deviation = Math.max(error(m), error(point((lo + mid) / 2)), error(point((mid + hi) / 2)));
     if (deviation <= tolerance || depth >= 10) {
-      result.push(segment(a, b, (startPressure * (1 - (lo + hi) / 2) + endPressure * ((lo + hi) / 2))));
+      const middle = (lo + hi) / 2;
+      result.push(segment(a, b, (startPressure * (1 - middle) + endPressure * middle),
+        startTilt === undefined || endTilt === undefined ? undefined : startTilt * (1 - middle) + endTilt * middle));
       return;
     }
     subdivide(a, m, lo, mid, depth + 1);
@@ -999,7 +1010,7 @@ function densityCoverage(density: number): number {
   return COVERAGE_LUT[Math.round(density / 20 * COVERAGE_LUT_SIZE)]!;
 }
 
-function initialRaster(width: number, height: number, channels: 1 | 4, source: Raster | null, sourceRect: Rect, mask: boolean): Raster {
+export function initialRaster(width: number, height: number, channels: 1 | 4, source: Raster | null, sourceRect: Rect, mask: boolean): Raster {
   if (source && source.width === width && source.height === height && source.channels === channels
     && sourceRect.x === 0 && sourceRect.y === 0) return source;
   const cols = Math.ceil(width / TILE), rows = Math.ceil(height / TILE);
@@ -1026,7 +1037,7 @@ function initialRaster(width: number, height: number, channels: 1 | 4, source: R
   return new Raster(width, height, channels, tiles, { format });
 }
 
-function cropTiled(source: Raster, rect: Rect): Raster {
+export function cropTiled(source: Raster, rect: Rect): Raster {
   const cols = Math.ceil(rect.width / TILE), rows = Math.ceil(rect.height / TILE);
   const tiles: (PixelArray | null)[] = [];
   for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {

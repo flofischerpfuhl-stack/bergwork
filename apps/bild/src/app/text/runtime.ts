@@ -10,7 +10,7 @@ import {
 } from '../../core/text';
 import { DEFAULT_TEXT_STYLE, newLayer } from '../../core/document';
 import { TextRasterCache } from '../../render/textRasterCache';
-import { derivedLayerSources, type EditorSession } from '../../core/session';
+import { derivedLayerSources, derivedPlacements, type EditorSession } from '../../core/session';
 import type { CanvasDocument, Layer, TextLayer } from '../../core/document';
 import { makeTransform, pixelToDocument, type Affine, type LayerTransform, type Point, type Rect, type Size } from '../../core/geometry';
 import type { FontHost, SystemFont } from '../../platform/hosts';
@@ -27,16 +27,27 @@ interface SessionText {
   missing: readonly MissingFont[] | null;
 }
 
-/** Raster-space geometry of one shaped text layer (UTF-16 offsets, raster pixels). */
+/**
+ * Geometry of one shaped text layer (UTF-16 offsets). Caret and range rectangles are in layout pixels, where lines are
+ * straight; `toRaster`/`polygon` carry them onto the drawn raster, bending them along a path or through a warp (for
+ * straight text layout and raster pixels coincide).
+ */
 export interface TextGeometry {
   readonly layer: TextLayer;
   readonly width: number;
   readonly height: number;
   /** Raster pixels → document pixels, as the layer is drawn. */
   readonly toDocument: Affine;
+  /** Text on a path or warped text: layout and raster pixels differ. */
+  readonly bent: boolean;
+  /** Caret index at a raster point. */
   caretIndex(local: Point): number;
+  /** Caret index at a layout point. */
+  layoutIndex(point: Point): number;
   caretRect(index: number): Rect;
   selectionRects(from: number, to: number): readonly Rect[];
+  toRaster(point: Point): Point;
+  polygon(rect: Rect): Point[];
 }
 
 export const BUNDLED_FAMILIES = [...new Set(BUNDLED_TEXT_FONTS.map((font) => font.family))];
@@ -89,6 +100,9 @@ export class TextRuntime {
     private readonly failed: (error: unknown) => void) {
     this.ready = this.start();
     derivedLayerSources.push((session, layer) => this.pixels(session, layer));
+    // Text on a path and warped text reach past their frame: a dragged transform places their pixels accordingly.
+    derivedPlacements.push((session, layer, transform) => (layer.kind === 'text'
+      ? this.states.get(session)?.cache.placementFor(layer, transform) ?? null : null));
   }
 
   private async start(): Promise<void> {
@@ -271,7 +285,7 @@ export class TextRuntime {
     const state = this.states.get(session);
     const layer = session.layer(layerId);
     if (!state || layer?.kind !== 'text' || !state.cache.layout(layerId)) return null;
-    return state.cache.transform(layer).size;
+    return state.cache.frameSize(layerId);
   }
 
   geometry(session: EditorSession, layerId: string): TextGeometry | null {
@@ -281,13 +295,18 @@ export class TextRuntime {
     const shaped = state?.cache.layout(layerId);
     if (!state || !shaped || layer?.kind !== 'text') return null;
     const local = rasterSpace(shaped);
-    const width = shaped.raster.width, height = shaped.raster.height;
+    const width = shaped.raster.width, bent = shaped.rasterOffset.x !== 0 || shaped.rasterOffset.y !== 0 || shaped.onPath;
+    // Straight text: the raster is the line box; bent text: vertical caret moves stay within the laid-out lines.
+    const height = bent ? shaped.layoutHeight : shaped.raster.height;
     const clamp = (index: number) => Math.max(0, Math.min(layer.text.length, Math.round(index)));
     return {
-      layer, width, height, toDocument: pixelToDocument(this.displayTransform(state, layer), width, height),
+      layer, width, height, bent, toDocument: pixelToDocument(this.displayTransform(state, layer), width, shaped.raster.height),
       caretIndex: (point) => { try { return clamp(local.caretPosition(point)); } catch { return layer.text.length; } },
-      caretRect: (index) => { try { return local.caretRectangle(clamp(index)); } catch { return { x: 0, y: 0, width: 1, height } } },
-      selectionRects: (from, to) => { try { return local.selectionRectangles(clamp(from), clamp(to)); } catch { return []; } },
+      layoutIndex: (point) => { try { return clamp(shaped.layoutIndexAt(point)); } catch { return layer.text.length; } },
+      caretRect: (index) => { try { return shaped.layoutCaretRect(clamp(index)); } catch { return { x: 0, y: 0, width: 1, height } } },
+      selectionRects: (from, to) => { try { return shaped.layoutSelectionRects(clamp(from), clamp(to)); } catch { return []; } },
+      toRaster: (point) => shaped.toRaster(point),
+      polygon: (rect) => shaped.polygon(rect),
     };
   }
 

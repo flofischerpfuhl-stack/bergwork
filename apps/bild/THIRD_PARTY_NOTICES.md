@@ -583,6 +583,23 @@ downloaded on first use rather than shipped in this repository. Full immutable
 provenance, checksums, rationale, and the license text are in
 `MODEL_LICENSES.md` and `public/models/birefnet-lite.LICENSE.txt`.
 
+## Optional MI-GAN model weights
+
+Local Remove can download the MI-GAN 512 Places2 ONNX pipeline by Picsart AI
+Research. The implementation and model weights are MIT licensed; the weights
+have a dedicated upstream `LICENSE-WEIGHTS`. The artifact is not bundled and is
+downloaded only after a user action. Immutable provenance, checksum and the
+training-data note are recorded in `MODEL_LICENSES.md` and `artifacts/genai.md`.
+
+## Optional Real-ESRGAN model weights
+
+Local 2×/4× Upscale can download ONNX exports of RealESRGAN_x2plus and
+RealESRGAN_x4plus by Xintao Wang and contributors. The implementation and
+released weights are under the BSD 3-Clause License. The artifacts are not
+bundled and are downloaded only after a user action. Immutable provenance,
+checksums and the training-data note are recorded in `MODEL_LICENSES.md` and
+`artifacts/genai.md`.
+
 ## Tauri host support crates
 
 The desktop host uses `tauri-plugin-single-instance` 2.4.5 (MIT or Apache-2.0)

@@ -21,14 +21,16 @@ import { Raster, TILE } from '../core/raster';
 import { blendSeed } from '../core/blend';
 import { floatToRgba16, makePixelArray, type PixelArray } from '../core/pixel/format';
 import type { BrushSegment, GpuBrushPreview } from '../core/brush';
+import { prepareDab, tipAtlas, type BrushDab, type BrushTipImage, type PreparedDab } from '../core/brush/tip';
 import { documentWithLayerEffects } from '../core/effects';
 import { inverseHomographyMatrix } from '../core/distort';
 import { tessellateMesh } from '../core/meshWarp';
 import {
-  adjustFragment, BLEND_INDEX, BRUSH_COVERAGE_FRAGMENT, BRUSH_MASK_FRAGMENT, BRUSH_MAX_FRAGMENT, BRUSH_PAINT_FRAGMENT, COVERAGE_FRAGMENT,
+  adjustFragment, BLEND_INDEX, BRUSH_COVERAGE_FRAGMENT, BRUSH_DAB_FRAGMENT, BRUSH_MASK_FRAGMENT, BRUSH_MAX_FRAGMENT, BRUSH_PAINT_FRAGMENT, COVERAGE_FRAGMENT,
   GROUP_FRAGMENT, IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT, STACK_FRAGMENT,
   UNPREMULTIPLY_FRAGMENT, VERTEX, WARP_MESH_FRAGMENT,
 } from './shaders';
+import type { CmykLut } from '../core/color/cmyk';
 import { LiveFilterHookAdapter } from './liveFilterPasses';
 
 export { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
@@ -144,6 +146,9 @@ interface BrushGpuState {
   tailKeys: Set<string>;
   tail: readonly BrushSegment[];
   dirty: Rect | null;
+  /** Dab brushes: settled dabs already drawn and the tail dabs currently in the tail targets. */
+  appliedDabs?: number;
+  tailDabs?: readonly PreparedDab[];
 }
 
 interface BrushCompositeCache {
@@ -191,10 +196,14 @@ export class GpuCompositor {
   private frame = 0;
   private readonly white: TextureSource;
   private lutSources = new Map<string, TextureSource>();
+  private readonly proofSources = new Map<Uint8Array, TextureSource>();
+  private readonly proofWarnings = new WeakMap<CmykLut, Uint8Array>();
   private brushState: BrushGpuState | null = null;
   private brushCompositeCache: BrushCompositeCache | null = null;
   private renderClip: Rect | null = null;
   private readonly brushTargetPool: BrushTargets[] = [];
+  /** Sampled brush tip atlases (all mip levels in one R8 texture), most recent last. */
+  private readonly tipSources = new Map<string, TextureSource>();
   /** The LUT samples last uploaded per layer, so an unchanged adjustment is not re-uploaded every frame. */
   private lutUploaded = new Map<string, Uint8Array | Float32Array>();
   private activeDocument: CanvasDocument | undefined;
@@ -255,6 +264,9 @@ export class GpuCompositor {
     for (const rt of this.pool) rt.destroy(true);
     for (const rt of this.inUse) rt.destroy(true);
     for (const lut of this.lutSources.values()) lut.destroy();
+    for (const source of this.proofSources.values()) source.destroy();
+    for (const tip of this.tipSources.values()) tip.destroy();
+    this.tipSources.clear();
     this.destroyBrushState();
     for (const targets of this.brushTargetPool) for (const target of Object.values(targets)) target.destroy(true);
     this.brushTargetPool.length = 0;
@@ -412,6 +424,17 @@ export class GpuCompositor {
         uColor: { value: new Float32Array(3), type: 'vec3<f32>' }, uOpacity: { value: 1, type: 'f32' },
       }, ['uBase', 'uPermanent', 'uTail']],
       brushMax: [BRUSH_MAX_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uFirst', 'uSecond']],
+      brushDab: [BRUSH_DAB_FRAGMENT, {
+        uPixelToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+        uGridOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uCanvas: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uDab: { value: new Float32Array(4), type: 'vec4<f32>' },
+        uShape: { value: new Float32Array(3), type: 'vec3<f32>' },
+        uHardness: { value: 1, type: 'f32' }, uAntialias: { value: 1, type: 'f32' },
+        uSampled: { value: 0, type: 'i32' },
+        uLevel: { value: new Float32Array(4), type: 'vec4<f32>' },
+        uScale: { value: new Float32Array(2), type: 'vec2<f32>' },
+      }, ['uTip']],
       brushMask: [BRUSH_MASK_FRAGMENT, {
         uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
         uDocToMask: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
@@ -446,7 +469,8 @@ export class GpuCompositor {
         uHasComposite: { value: 0, type: 'i32' },
         uCompositeOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
         uCompositeSize: { value: new Float32Array(2), type: 'vec2<f32>' },
-      }, ['uComposite']],
+        uProof: { value: 0, type: 'i32' }, uGamutWarning: { value: 0, type: 'i32' }, uProofSize: { value: 2, type: 'i32' },
+      }, ['uComposite', 'uProofLut']],
     };
     let spec = sources[name];
     if (!spec && fragment) {
@@ -725,7 +749,7 @@ export class GpuCompositor {
 
   /** Compile/link at compositor startup and retain one cleared native-grid tile for the first sample. */
   private async prepareBrushPipeline(): Promise<void> {
-    const programs = ['brushCoverage', 'brushPaint', 'brushMax', 'brushMask'].map((name) =>
+    const programs = ['brushCoverage', 'brushPaint', 'brushMax', 'brushMask', 'brushDab'].map((name) =>
       this.renderer.shader._getProgramData(this.pass(name).shader.glProgram).program);
     const parallel = this.gl.getExtension('KHR_parallel_shader_compile') as { COMPLETION_STATUS_KHR: number } | null;
     if (parallel) {
@@ -876,6 +900,7 @@ export class GpuCompositor {
     }
     const state = this.brushState;
     if (state.revision === preview.revision) return state;
+    if (preview.dabs) return this.prepareDabBrush(preview, state);
     const changed = new Set<string>();
     let dirty: Rect | null = null;
     while (state.applied < preview.settled.length) {
@@ -907,6 +932,104 @@ export class GpuCompositor {
     state.revision = preview.revision;
     state.dirty = dirty;
     return state;
+  }
+
+  // MARK: Dab brushes (core/brush/tip.ts)
+
+  /** Draws new settled dabs into the permanent targets and replaces the tail targets' dabs; same dabs as the CPU. */
+  private prepareDabBrush(preview: GpuBrushPreview, state: BrushGpuState): BrushGpuState {
+    const dabs = preview.dabs!, m = preview.mapping;
+    const antialias = Math.max(0.001, Math.min(Math.hypot(m.a, m.b), Math.hypot(m.c, m.d)));
+    const tip = preview.settings.tip;
+    const tipSource = tip?.kind === 'sampled' ? this.tipSource(tip.image) : this.white;
+    const changed = new Set<string>();
+    let dirty: Rect | null = null;
+    const draw = (target: 'permanent' | 'tail', dab: PreparedDab) => {
+      dirty = unionMaybe(dirty, this.dabPixelRect(preview, dab));
+      for (const key of this.dabKeys(preview, dab)) {
+        const chunk = this.brushChunk(state, key);
+        this.renderDab(chunk[target], preview, chunk, dab, tipSource, antialias);
+        changed.add(key);
+      }
+    };
+    let applied = state.appliedDabs ?? 0;
+    while (applied < dabs.length) draw('permanent', prepareDab(dabs[applied++]!, tip, antialias));
+    state.appliedDabs = applied;
+    const tailKeys = new Set<string>();
+    for (const dab of state.tailDabs ?? []) {
+      dirty = unionMaybe(dirty, this.dabPixelRect(preview, dab));
+      for (const key of this.dabKeys(preview, dab)) tailKeys.add(key);
+    }
+    const nextTail = (preview.tailDabs ?? []).map((dab: BrushDab) => prepareDab(dab, tip, antialias));
+    for (const dab of nextTail) for (const key of this.dabKeys(preview, dab)) tailKeys.add(key);
+    for (const key of tailKeys) { this.clear(this.brushChunk(state, key).tail); changed.add(key); }
+    for (const dab of nextTail) draw('tail', dab);
+    state.tailDabs = nextTail;
+    state.tailKeys = tailKeys;
+    for (const key of changed) this.paintBrushChunk(preview, this.brushChunk(state, key));
+    state.revision = preview.revision;
+    state.dirty = dirty;
+    return state;
+  }
+
+  private dabPixelRect(preview: GpuBrushPreview, dab: PreparedDab): Rect | null {
+    const pixels = affineBounds(invert(preview.mapping), { x: dab.x - dab.reach, y: dab.y - dab.reach, width: dab.reach * 2, height: dab.reach * 2 });
+    return intersect({ x: Math.floor(pixels.x), y: Math.floor(pixels.y),
+      width: Math.ceil(pixels.x + pixels.width) - Math.floor(pixels.x), height: Math.ceil(pixels.y + pixels.height) - Math.floor(pixels.y) },
+    { x: 0, y: 0, width: preview.width, height: preview.height });
+  }
+
+  private dabKeys(preview: GpuBrushPreview, dab: PreparedDab): string[] {
+    const rect = this.dabPixelRect(preview, dab);
+    if (!rect) return [];
+    const result: string[] = [];
+    for (let row = Math.floor(rect.y / BRUSH_CHUNK_SIZE); row <= Math.floor((rect.y + rect.height - 1) / BRUSH_CHUNK_SIZE); row++) {
+      for (let col = Math.floor(rect.x / BRUSH_CHUNK_SIZE); col <= Math.floor((rect.x + rect.width - 1) / BRUSH_CHUNK_SIZE); col++) result.push(chunkKey(col, row));
+    }
+    return result;
+  }
+
+  private renderDab(target: RenderTexture, preview: GpuBrushPreview, chunk: BrushChunk, dab: PreparedDab, tip: TextureSource, antialias: number): void {
+    const pixels = this.dabPixelRect(preview, dab);
+    if (!pixels) return;
+    const originX = chunk.x - BRUSH_APRON, originY = chunk.y - BRUSH_APRON;
+    const x = Math.max(0, pixels.x - originX), y = Math.max(0, pixels.y - originY);
+    const right = Math.min(target.width, pixels.x + pixels.width - originX), bottom = Math.min(target.height, pixels.y + pixels.height - originY);
+    if (right <= x || bottom <= y) return;
+    const interior = intersect({ x: x + originX, y: y + originY, width: right - x, height: bottom - y },
+      { x: chunk.x, y: chunk.y, width: chunk.width, height: chunk.height });
+    if (interior) chunk.bounds = unionRect(chunk.bounds, interior);
+    const level = dab.level;
+    this.mesh.state.blendMode = 'normal';
+    this.run(this.pass('brushDab'), target, target.width, target.height, { uTip: tip }, {
+      uPixelToDoc: mat3(preview.mapping), uGridOrigin: new Float32Array([originX, originY]),
+      uCanvas: new Float32Array([preview.canvas.width, preview.canvas.height]),
+      uDab: new Float32Array([dab.x, dab.y, dab.cos, dab.sin]), uShape: new Float32Array([dab.radius, dab.minor, dab.alpha]),
+      uHardness: preview.settings.hardness, uAntialias: antialias, uSampled: level ? 1 : 0,
+      uLevel: new Float32Array(level ? [level.atlasX, level.atlasY, level.width, level.height] : [0, 0, 1, 1]),
+      uScale: new Float32Array([dab.scaleX, dab.scaleY]),
+    }, { x, y, width: right - x, height: bottom - y });
+    this.mesh.state.blend = false;
+  }
+
+  /** The tip's R8 atlas; the most recent four tips stay resident. */
+  private tipSource(image: BrushTipImage): TextureSource {
+    const existing = this.tipSources.get(image.id);
+    if (existing) { this.tipSources.delete(image.id); this.tipSources.set(image.id, existing); return existing; }
+    const atlas = tipAtlas(image);
+    const source = new TextureSource({ width: atlas.width, height: atlas.height, format: 'r8unorm', scaleMode: 'nearest', addressMode: 'clamp-to-edge' });
+    this.uploadWhole(source, atlas.data, atlas.width, atlas.height, 1);
+    this.tipSources.set(image.id, source);
+    if (this.tipSources.size > 4) {
+      const [oldest, old] = this.tipSources.entries().next().value!;
+      this.tipSources.delete(oldest);
+      for (const pass of this.passes.values()) {
+        const resources = pass.shader.resources as Record<string, unknown>;
+        for (const [key, resource] of Object.entries(resources)) if (resource === old) resources[key] = this.white;
+      }
+      old.destroy();
+    }
+    return source;
   }
 
   private brushSegmentPixelRect(preview: GpuBrushPreview, segment: BrushSegment): Rect | null {
@@ -952,7 +1075,7 @@ export class GpuCompositor {
       uSourceSize: new Float32Array([source?.width ?? 1, source?.height ?? 1]),
       uBaseOrigin: new Float32Array([baseOriginX, baseOriginY]),
       uBaseTextureSize: new Float32Array([baseWidth, baseHeight]), uBaseApron: baseApron, uHasBase: hasBase,
-      uMask: preview.target === 'mask' ? 1 : 0, uHard: preview.settings.hardness >= 1 ? 1 : 0,
+      uMask: preview.target === 'mask' ? 1 : 0, uHard: preview.settings.hardness >= 1 && !preview.dabs ? 1 : 0,
       uErase: preview.settings.mode === 'erase' ? 1 : 0,
       uBrushMode: preview.settings.mode === 'dodge' ? 1 : preview.settings.mode === 'burn' ? 2 : preview.settings.mode === 'sponge' ? 3 : 0,
       uRange: preview.settings.range === 'shadows' ? 0 : preview.settings.range === 'highlights' ? 2 : 1,
@@ -1553,13 +1676,40 @@ export class GpuCompositor {
 
   /** Draws the workspace, canvas rectangle, checkerboard and composite to the screen canvas. */
   present(composite: RenderTexture | null, width: number, height: number, canvasRect: { x: number; y: number; width: number; height: number },
-    pointScale: number, grid: boolean, pixelSize: number, compositeOrigin: { x: number; y: number } = { x: 0, y: 0 }): void {
+    pointScale: number, grid: boolean, pixelSize: number, compositeOrigin: { x: number; y: number } = { x: 0, y: 0 },
+    proof?: { readonly lut: CmykLut; readonly gamutWarning: boolean }): void {
     this.resize(width, height);
-    this.run(this.pass('present'), null, width, height, { uComposite: composite?.source ?? this.white }, {
+    let proofSource = this.white;
+    if (proof) {
+      let proofPixels = proof.lut.proof;
+      if (proof.gamutWarning) {
+        let warning = this.proofWarnings.get(proof.lut);
+        if (!warning) {
+          warning = proof.lut.proof.slice();
+          for (let at = 0; at < warning.length; at += 4) if (warning[at + 3]! > 38) {
+            warning[at] = 209; warning[at + 1] = 0; warning[at + 2] = 209;
+          }
+          this.proofWarnings.set(proof.lut, warning);
+        }
+        proofPixels = warning;
+      }
+      let uploaded = this.proofSources.get(proofPixels);
+      if (!uploaded) {
+        uploaded = new TextureSource({ width: proof.lut.size * proof.lut.size, height: proof.lut.size, format: 'rgba8unorm' });
+        this.renderer.texture.bindSource(uploaded, 0);
+        this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        this.gl.texSubImage2D(this.gl.TEXTURE_2D, 0, 0, 0, proof.lut.size * proof.lut.size, proof.lut.size,
+          this.gl.RGBA, this.gl.UNSIGNED_BYTE, proofPixels);
+        this.restoreUnpack(); this.proofSources.set(proofPixels, uploaded);
+      }
+      proofSource = uploaded;
+    }
+    this.run(this.pass('present'), null, width, height, { uComposite: composite?.source ?? this.white, uProofLut: proofSource }, {
       uCanvasRect: new Float32Array([canvasRect.x, canvasRect.y, canvasRect.width, canvasRect.height]),
       uPointScale: pointScale, uGrid: grid ? 1 : 0, uPixelSize: pixelSize, uHasComposite: composite ? 1 : 0,
       uCompositeOrigin: new Float32Array([compositeOrigin.x, compositeOrigin.y]),
       uCompositeSize: new Float32Array([composite?.width ?? 0, composite?.height ?? 0]),
+      uProof: proof ? 1 : 0, uGamutWarning: 0, uProofSize: proof?.lut.size ?? 2,
     });
   }
 

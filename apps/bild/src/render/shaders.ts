@@ -754,6 +754,7 @@ export const PRESENT_FRAGMENT = /* glsl */ `${COMMON}
 in vec2 vPos;
 out vec4 finalColor;
 uniform sampler2D uComposite;
+uniform sampler2D uProofLut;
 uniform vec4 uCanvasRect;   // device px: x, y, width, height
 uniform float uPointScale;  // device px per point
 uniform int uGrid;
@@ -761,6 +762,19 @@ uniform float uPixelSize;   // device px per document px
 uniform int uHasComposite;
 uniform vec2 uCompositeOrigin;
 uniform vec2 uCompositeSize;
+uniform int uProof;
+uniform int uGamutWarning;
+uniform int uProofSize;
+vec4 proofFetch(ivec3 p) { return texelFetch(uProofLut, ivec2(p.x + p.y * uProofSize, p.z), 0); }
+vec4 proofColor(vec3 color) {
+  vec3 q = clamp(color, 0.0, 1.0) * float(uProofSize - 1);
+  ivec3 lo = ivec3(floor(q)); ivec3 hi = min(lo + ivec3(1), ivec3(uProofSize - 1)); vec3 f = fract(q);
+  vec4 a = mix(proofFetch(ivec3(lo.x, lo.y, lo.z)), proofFetch(ivec3(hi.x, lo.y, lo.z)), f.x);
+  vec4 b = mix(proofFetch(ivec3(lo.x, hi.y, lo.z)), proofFetch(ivec3(hi.x, hi.y, lo.z)), f.x);
+  vec4 d = mix(proofFetch(ivec3(lo.x, lo.y, hi.z)), proofFetch(ivec3(hi.x, lo.y, hi.z)), f.x);
+  vec4 e = mix(proofFetch(ivec3(lo.x, hi.y, hi.z)), proofFetch(ivec3(hi.x, hi.y, hi.z)), f.x);
+  return mix(mix(a, b, f.y), mix(d, e, f.y), f.z);
+}
 void main() {
   vec3 workspace = vec3(0.105);
   vec2 p = vPos;
@@ -780,6 +794,15 @@ void main() {
   vec2 cp = p - uCompositeOrigin;
   vec4 c = uHasComposite == 1 && cp.x >= 0.0 && cp.y >= 0.0 && cp.x < uCompositeSize.x && cp.y < uCompositeSize.y
     ? texelFetch(uComposite, ivec2(cp), 0) : vec4(0.0);
+  if (uProof == 1 && c.a > 0.0) {
+    vec4 converted = proofColor(c.rgb / c.a);
+    vec3 proofed = converted.rgb;
+    if (uGamutWarning == 1 && converted.a > 0.15) {
+      float stripe = mod(floor(p.x / 3.0) + floor(p.y / 3.0), 2.0) < 0.5 ? 0.82 : 0.55;
+      proofed = vec3(stripe, 0.0, stripe);
+    }
+    c.rgb = proofed * c.a;
+  }
   vec3 color = c.rgb + vec3(checker) * (1.0 - c.a);
   if (uGrid == 1) {
     vec2 g = rel / uPixelSize;
@@ -789,5 +812,60 @@ void main() {
   // Hairline border, 13% white.
   if (rel.x < 1.0 || rel.y < 1.0 || rel.x >= uCanvasRect.z - 1.0 || rel.y >= uCanvasRect.w - 1.0) color = mix(color, vec3(1.0), 0.13);
   finalColor = vec4(color, 1.0);
+}
+`;
+
+/**
+ * One dab of a dab brush (core/brush/tip.ts `dabCoverage`): elliptic procedural tip or a sampled tip read from one
+ * mip level of the tip atlas with the same manual bilinear filter as the CPU. Blended "over" into the coverage
+ * target, which is the CPU's c ← c + a·(1 − c).
+ */
+export const BRUSH_DAB_FRAGMENT = /* glsl */ `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+in vec2 vPos;
+out vec4 finalColor;
+uniform mat3 uPixelToDoc;
+uniform vec2 uGridOrigin;
+uniform vec2 uCanvas;
+uniform vec4 uDab;
+uniform vec3 uShape;
+uniform float uHardness;
+uniform float uAntialias;
+uniform int uSampled;
+uniform vec4 uLevel;
+uniform vec2 uScale;
+uniform sampler2D uTip;
+
+float falloff(float t) {
+  const float edge = 0.08208499862; // exp(-2.5)
+  return max(0.0, (exp(-2.5 * t * t) - edge) / (1.0 - edge));
+}
+float tipTexel(ivec2 p) {
+  if (p.x < 0 || p.y < 0 || p.x >= int(uLevel.z) || p.y >= int(uLevel.w)) return 0.0;
+  return texelFetch(uTip, p + ivec2(uLevel.xy), 0).r;
+}
+void main() {
+  vec2 grid = uGridOrigin + vPos;
+  vec2 p = (uPixelToDoc * vec3(grid, 1.0)).xy;
+  if (any(lessThan(p, vec2(0.0))) || any(greaterThanEqual(p, uCanvas))) { finalColor = vec4(0.0); return; }
+  vec2 d = p - uDab.xy;
+  float lx = uDab.z * d.x + uDab.w * d.y, ly = -uDab.w * d.x + uDab.z * d.y;
+  float coverage;
+  if (uSampled == 1) {
+    float tx = lx * uScale.x + uLevel.z * 0.5 - 0.5, ty = ly * uScale.y + uLevel.w * 0.5 - 0.5;
+    float x0 = floor(tx), y0 = floor(ty), fx = tx - x0, fy = ty - y0;
+    ivec2 q = ivec2(int(x0), int(y0));
+    float top = tipTexel(q) * (1.0 - fx) + tipTexel(q + ivec2(1, 0)) * fx;
+    float bottom = tipTexel(q + ivec2(0, 1)) * (1.0 - fx) + tipTexel(q + ivec2(1, 1)) * fx;
+    coverage = top * (1.0 - fy) + bottom * fy;
+  } else {
+    vec2 n = vec2(lx / uShape.x, ly / uShape.y);
+    float u = sqrt(n.x * n.x + n.y * n.y);
+    if (uHardness >= 1.0) coverage = clamp((1.0 - u) * uShape.y / uAntialias + 0.5, 0.0, 1.0);
+    else coverage = u >= 1.0 ? 0.0 : falloff(clamp((u - uHardness) / (1.0 - uHardness), 0.0, 1.0));
+  }
+  finalColor = vec4(coverage * uShape.z);
 }
 `;

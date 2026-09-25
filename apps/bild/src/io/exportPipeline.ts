@@ -18,6 +18,7 @@ import {
 } from './exportPlan';
 import { srgbIccProfile } from './iccProfile';
 import { defaultExportEncoder } from '../workers/exportClient';
+import { exportCmykLut, rgbToCmykPixels } from '../core/color/cmyk';
 
 export * from './exportPlan';
 
@@ -27,7 +28,14 @@ const BAND_ROWS = 1024;
 function encodeSpec(request: ExportRequest, item: ExportPlanItem): EncodeSpec {
   const resolved = resolveExportRequest(request);
   return { ...resolved.spec, dpi: resolved.metadata.resolution ? item.dpi : null,
-    icc: resolved.metadata.colorProfile === 'embed' ? srgbIccProfile() : null };
+    icc: request.cmyk?.profile.icc ?? (resolved.metadata.colorProfile === 'embed' ? srgbIccProfile() : null) };
+}
+
+async function convertForOutput(pixels: Uint8Array | Uint16Array, request: ExportRequest): Promise<Uint8Array | Uint16Array> {
+  const output = request.cmyk;
+  if (!output) return pixels;
+  const lut = await exportCmykLut(output.profile, output.intent, output.blackPointCompensation);
+  return rgbToCmykPixels(pixels, lut);
 }
 
 // MARK: What each target renders
@@ -151,7 +159,7 @@ export async function runExport(document: CanvasDocument | null, request: Export
   for (const [index, item] of items.entries()) {
     throwIfAborted(options.signal);
     const warnings = new Set<string>();
-    const pixels = renderExportItem(document!, item, request, renderer, warnings);
+    const pixels = await convertForOutput(renderExportItem(document!, item, request, renderer, warnings), request);
     if (resolved.format === 'avif' && resolved.metadata.info) warnings.add('AVIF export does not write EXIF creator fields.');
     const bytes = await encoder.encode(pixels, item.width, item.height, encodeSpec(request, item), options.signal);
     files.push({ name: item.name, mime: EXPORT_MIME[resolved.format], bytes, width: item.width, height: item.height,
@@ -199,7 +207,7 @@ export async function estimateExportSize(document: CanvasDocument | null, reques
     const spec = encodeSpec(request, item);
     const total = item.width * item.height;
     if (total <= exactLimit) {
-      const pixels = renderExportItem(document!, item, request, renderer);
+      const pixels = await convertForOutput(renderExportItem(document!, item, request, renderer), request);
       const bytes = await encoder.encode(pixels, item.width, item.height, spec, options.signal);
       results.push({ item, bytes: bytes.length, exact: true, sampledPixels: total });
       continue;
@@ -221,9 +229,10 @@ export async function estimateExportSize(document: CanvasDocument | null, reques
     }
     throwIfAborted(options.signal);
     // The encoder may take ownership of the buffer (worker transfer): copy the probe pixel first.
+    const converted = await convertForOutput(mosaic, request);
     const unit = deep ? new Uint16Array(4) : new Uint8Array(4);
-    unit.set(mosaic.subarray(0, 4));
-    const sample = (await encoder.encode(mosaic, mw, mh, spec, options.signal)).length;
+    unit.set(converted.subarray(0, 4));
+    const sample = (await encoder.encode(converted, mw, mh, spec, options.signal)).length;
     const overhead = (await encoder.encode(unit, 1, 1, spec, options.signal)).length;
     const bytes = Math.round(overhead + Math.max(0, sample - overhead) * total / (mw * mh));
     results.push({ item, bytes, exact: false, sampledPixels: mw * mh });

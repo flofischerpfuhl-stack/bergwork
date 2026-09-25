@@ -9,3 +9,6 @@ export * from './cursor';
 export * from './commands';
 export * from './gpuPreview';
 export { lastBrushWorkerTiming } from './workerClient';
+export * from './tip';
+export { DabBrushStroke } from './dabs';
+export * from './presets';

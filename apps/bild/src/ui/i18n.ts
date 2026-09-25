@@ -5,6 +5,9 @@
 import { ADJUST_P2_DE, ADJUST_P2_EN } from '../app/adjust/strings';
 import { COLOR_DE } from '../app/color/strings';
 import { OBJSEL_DE } from '../app/objsel/strings';
+import { BRUSH_DE } from '../app/brush/strings';
+import { TEXT_PATH_DE } from '../app/text/strings';
+import { BATCH_DE } from '../app/batch/strings';
 
 export type Locale = 'de' | 'en';
 
@@ -12,6 +15,9 @@ const de: Record<string, string> = {
   ...COLOR_DE,
   ...OBJSEL_DE,
   ...ADJUST_P2_DE,
+  ...BRUSH_DE,
+  ...TEXT_PATH_DE,
+  ...BATCH_DE,
   'Layers': 'Ebenen', 'Blend': 'Modus', 'Opacity': 'Deckkraft', 'No layers yet': 'Noch keine Ebenen',
   'Create a canvas or import an image.': 'Erstelle eine Leinwand oder importiere ein Bild.',
   'Import an image or add a blank layer.': 'Importiere ein Bild oder füge eine leere Ebene hinzu.',
@@ -36,6 +42,12 @@ const de: Record<string, string> = {
   'Fit': 'Einpassen', 'Zoom in': 'Vergrößern', 'Zoom out': 'Verkleinern', 'Ready when you are': 'Bereit, wenn du es bist',
   'Working…': 'Wird bearbeitet …', 'Importing images…': 'Bilder werden importiert …',
   'File': 'Ablage', 'Edit': 'Bearbeiten', 'Select': 'Auswahl', 'Image': 'Bild', 'Filter': 'Filter', 'Layer': 'Ebene', 'View': 'Ansicht',
+  'Proof Setup…': 'Proof einrichten …', 'Proof Colors': 'Farbproof', 'Gamut Warning': 'Farbumfang-Warnung',
+  'Proof Setup': 'Proof einrichten', 'Profile': 'Profil', 'ICC file': 'ICC-Datei',
+  'Intent': 'Wiedergabeziel', 'Perceptual': 'Perzeptiv', 'Relative Colorimetric': 'Relativ farbmetrisch',
+  'Black Point Compensation': 'Tiefenkompensierung', 'Simulate Paper White': 'Papierweiß simulieren',
+  'Soft-proofing changes only the display. The working document remains RGB.': 'Der Softproof ändert nur die Anzeige. Das Arbeitsdokument bleibt RGB.',
+  'Preparing…': 'Wird vorbereitet …', 'Preparing profile…': 'Profil wird vorbereitet …',
   'New Canvas…': 'Neue Leinwand …', 'Open Project…': 'Projekt öffnen …', 'Import Images…': 'Bilder importieren …',
   'Preferences…': 'Einstellungen …', 'Preferences': 'Einstellungen', 'Done': 'Fertig',
   'Develop camera RAW': 'Kamera-RAW entwickeln', 'Apply these settings to the selected RAW files.': 'Diese Einstellungen auf die ausgewählten RAW-Dateien anwenden.',
@@ -48,7 +60,18 @@ const de: Record<string, string> = {
   'Close Project': 'Projekt schließen', 'Undo': 'Widerrufen', 'Redo': 'Wiederholen', 'Cut': 'Ausschneiden', 'Copy': 'Kopieren',
   'Copy Merged': 'Auf eine Ebene reduziert kopieren', 'Paste': 'Einsetzen', 'Fill with Foreground Color': 'Mit Vordergrundfarbe füllen',
   'Fill with Background Color': 'Mit Hintergrundfarbe füllen', 'Clear Selection Pixels': 'Auswahlpixel löschen',
-  'Content-Aware Fill…': 'Inhaltsbasierte Füllung …', 'All': 'Alles', 'Deselect': 'Auswahl aufheben', 'Inverse': 'Auswahl umkehren',
+  'Content-Aware Fill…': 'Inhaltsbasierte Füllung …', 'Remove…': 'Entfernen …', 'Removed': 'Entfernt',
+  'Upscale…': 'Hochskalieren …', 'Upscale': 'Hochskalieren', 'Download and Upscale': 'Herunterladen und hochskalieren',
+  'Download AI model': 'KI-Modell herunterladen', 'Denoise strength': 'Entrauschstärke', 'Reduce Noise (AI)': 'Rauschen reduzieren (KI)',
+  'MI-GAN runs on this device. The result is placed on a new layer.': 'MI-GAN läuft auf diesem Gerät. Das Ergebnis wird auf einer neuen Ebene abgelegt.',
+  'Using the built-in content-aware fallback. Download MI-GAN for local AI removal.': 'Die eingebaute inhaltsbasierte Ersatzmethode wird verwendet. Lade MI-GAN für lokales KI-Entfernen herunter.',
+  'Filling the selection locally…': 'Auswahl wird lokal gefüllt …', 'Running local AI…': 'Lokale KI wird ausgeführt …',
+  'Blending tiles…': 'Kacheln werden überblendet …', 'Loading the model…': 'Modell wird geladen …',
+  'AI Remove supports images up to 12 megapixels. Use the local fallback for this image.': 'KI-Entfernen unterstützt Bilder bis 12 Megapixel. Verwende für dieses Bild die lokale Ersatzmethode.',
+  'The layer keeps its placed size and gains pixel detail.': 'Die platzierte Ebenengröße bleibt gleich, die Pixeldetails nehmen zu.',
+  'AI Upscale accepts RGBA layers up to 12 megapixels within the document limits.': 'KI-Hochskalieren akzeptiert RGBA-Ebenen bis 12 Megapixel innerhalb der Dokumentgrenzen.',
+  'Select a pixel layer first.': 'Wähle zuerst eine Pixelebene aus.',
+  'All': 'Alles', 'Deselect': 'Auswahl aufheben', 'Inverse': 'Auswahl umkehren',
   "Layer's Pixels": 'Pixel der Ebene', "Mask's Black Areas": 'Schwarze Bereiche der Maske',
   'Curves…': 'Gradationskurven …', 'Levels…': 'Tonwertkorrektur …', 'Hue/Saturation…': 'Farbton/Sättigung …',
   'Exposure…': 'Belichtung …', 'Gradient Map…': 'Verlaufsumsetzung …', 'Grain…': 'Körnung …', 'Invert': 'Umkehren', 'Invert Mask': 'Maske umkehren',
@@ -162,7 +185,8 @@ const de: Record<string, string> = {
   'Fernwork Image Editor': 'Fernwork Bildeditor',
   'Works offline. No account, no telemetry.': 'Läuft offline. Kein Konto, keine Telemetrie.',
   'Parts of this editor are based on Compositor by Wonder Assembly LLC (MIT License).': 'Teile dieses Editors basieren auf Compositor von Wonder Assembly LLC (MIT-Lizenz).',
-  'Third-party components and their licences include libwebp (BSD), libavif (BSD), dav1d (BSD), libaom (BSD), libjpeg-turbo (IJG/BSD), lcms / Little CMS (MIT), ONNX Runtime Web (MIT), U²-Netp (Apache-2.0), and BiRefNet (MIT, optional download). libheif and system LibRaw are opt-in LGPL capabilities and are not loaded by default. See THIRD_PARTY_NOTICES.md for the complete inventory.': 'Komponenten Dritter und ihre Lizenzen sind unter anderem libwebp (BSD), libavif (BSD), dav1d (BSD), libaom (BSD), libjpeg-turbo (IJG/BSD), lcms / Little CMS (MIT), ONNX Runtime Web (MIT), U²-Netp (Apache-2.0) und BiRefNet (MIT, optionaler Download). libheif und System-LibRaw sind optionale LGPL-Funktionen und werden standardmäßig nicht geladen. Das vollständige Verzeichnis steht in THIRD_PARTY_NOTICES.md.',
+  'Third-party components and their licences include libwebp (BSD), libavif (BSD), dav1d (BSD), libaom (BSD), libjpeg-turbo (IJG/BSD), lcms / Little CMS (MIT), ONNX Runtime Web (MIT), CanvasKit/Skia (BSD-3-Clause), PixiJS, React, zustand, immer, idb, fflate (MIT/ISC), U²-Netp (Apache-2.0), and the optional downloads BiRefNet (MIT), SlimSAM (Apache-2.0), MI-GAN (MIT) and Real-ESRGAN (BSD-3-Clause). libheif and system LibRaw are opt-in LGPL capabilities and are not loaded by default. See THIRD_PARTY_NOTICES.md for the complete inventory.':
+    'Drittkomponenten und ihre Lizenzen: libwebp (BSD), libavif (BSD), dav1d (BSD), libaom (BSD), libjpeg-turbo (IJG/BSD), lcms / Little CMS (MIT), ONNX Runtime Web (MIT), CanvasKit/Skia (BSD-3-Clause), PixiJS, React, zustand, immer, idb, fflate (MIT/ISC), U²-Netp (Apache-2.0) sowie die optionalen Downloads BiRefNet (MIT), SlimSAM (Apache-2.0), MI-GAN (MIT) und Real-ESRGAN (BSD-3-Clause). libheif und System-LibRaw sind zuschaltbare LGPL-Funktionen und werden standardmäßig nicht geladen. Die vollständige Liste steht in THIRD_PARTY_NOTICES.md.',
   'Move / Transform (V)': 'Verschieben / Transformieren (V)',
   'Marquee (M)': 'Auswahlrechteck (M)',
   'Lasso (L)': 'Lasso (L)',

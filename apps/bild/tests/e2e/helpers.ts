@@ -9,9 +9,9 @@ export function solidPng(width: number, height: number, rgba: [number, number, n
 }
 
 /** Mounts the editor through the public API with a host that records downloads and errors. */
-export async function mountForTest(page: Page, options: { locale?: 'de' | 'en'; fileTargets?: boolean } = {}): Promise<void> {
+export async function mountForTest(page: Page, options: { locale?: 'de' | 'en'; fileTargets?: boolean; profile?: 'pro' | 'lite' } = {}): Promise<void> {
   await page.goto('/?harness=ui');
-  await page.evaluate(async ({ locale, fileTargets }) => {
+  await page.evaluate(async ({ locale, fileTargets, profile }) => {
     document.body.style.cssText = 'margin:0;width:100vw;height:100vh;overflow:hidden';
     const root = document.getElementById('root')!;
     const load = (path: string): Promise<any> => import(/* @vite-ignore */ path);
@@ -32,7 +32,7 @@ export async function mountForTest(page: Page, options: { locale?: 'de' | 'en'; 
     w.__errors = [];
     w.__targetWrites = [];
     w.__handle = await mountEditor(root, {
-      locale, theme: 'dark',
+      locale, theme: 'dark', profile,
       host: {
         ...base,
         ...targets,
@@ -40,7 +40,7 @@ export async function mountForTest(page: Page, options: { locale?: 'de' | 'en'; 
         reportError(error: { code: string; message: string }) { (w.__errors as unknown[]).push(error); },
       },
     });
-  }, { locale: options.locale ?? 'en', fileTargets: options.fileTargets ?? false });
+  }, { locale: options.locale ?? 'en', fileTargets: options.fileTargets ?? false, profile: options.profile });
 }
 
 export async function manifest(page: Page): Promise<any> {

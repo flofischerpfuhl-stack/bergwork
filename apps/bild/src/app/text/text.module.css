@@ -39,6 +39,8 @@
 .fontFooter { display: flex; flex-direction: column; gap: 6px; padding: 6px 4px 2px; border-top: 1px solid var(--cmp-border); }
 
 .panelPopover { width: 460px; }
+.warpPopover { width: 340px; }
+.pathPopover { width: 320px; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 14px; align-items: center; }
 .cell { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; font-size: 11px; color: var(--cmp-text-secondary); }
 .cell > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

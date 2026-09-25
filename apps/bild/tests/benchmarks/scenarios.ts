@@ -1,7 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import { writePsdUint8Array, type Psd } from 'ag-psd';
-import { encodePng } from '../../src/io/png';
+import { unzipSync } from 'fflate';
+import { decodePng, encodePng } from '../../src/io/png';
 import {
   PLAN,
   applyGaussianBlur,
@@ -780,6 +781,7 @@ export async function benchmark13(page: Page): Promise<void> {
 }
 
 export async function benchmark14(page: Page): Promise<void> {
+  test.setTimeout(300_000);
   await createCanvas(page, 40, 40);
   await importPng(page, 'series-01.png', solidPng(40, 40, [80, 80, 80, 255]));
   await page.getByTestId('compositor-editor').press(process.platform === 'darwin' ? 'Meta+l' : 'Control+l');
@@ -789,7 +791,57 @@ export async function benchmark14(page: Page): Promise<void> {
   // Levels now applies asynchronously ("Applying…"); the panel closes when the pixels are committed.
   await expect(page.getByTestId('adjustment-panel')).toHaveCount(0, { timeout: 30_000 });
   expect(rgbaAt(await exportedPixels(page), 20, 20)[0]).toBeGreaterThan(110);
-  missing('recordable recipes and applying one recipe to a 50-image queue', task(14));
+
+  // Phase 3: the series look as a recipe. A Levels adjustment layer (white point 200) above the photo, saved from it
+  // with Layer › Save Recipe… (6.9: recipes hold live steps, not recorded actions).
+  await menuPath(page, 'Layer', 'New Adjustment Layer', 'Levels…');
+  await expect(page.getByTestId('adjustment-panel')).toBeVisible();
+  await page.getByTestId('levelsInputwhite').fill('200');
+  await page.getByTestId('levelsInputwhite').press('Enter');
+  await page.getByTestId('adjustment-ok').click();
+  await expect(page.getByTestId('adjustment-panel')).toHaveCount(0);
+  await menuPath(page, 'Layer', 'Save Recipe…');
+  await expect(page.getByTestId('recipe-step')).toHaveCount(1);
+  await page.getByTestId('recipe-name').fill('Hochzeit');
+  await page.getByTestId('recipe-save').click();
+  await expect(page.getByTestId('recipe-row').filter({ hasText: 'Hochzeit' })).toBeVisible();
+
+  // File › Batch…: 50 photos of the series (different sizes and tones), the recipe, PNG @1x. This host has no folder
+  // picker, so the files arrive as one ZIP (the Firefox/WebKit path); the queue reads them one at a time.
+  const series = Array.from({ length: 50 }, (_, i) => ({
+    name: `DSC_${String(4001 + i)}.png`, width: 48 + (i % 5) * 8, height: 32 + (i % 3) * 8,
+    left: [40 + i * 3, 90, 200 - i * 2] as const, right: [180, 30 + i * 2, 60] as const,
+  }));
+  await menuPath(page, 'File', 'Batch…');
+  await expect(page.getByTestId('batch-dialog')).toBeVisible();
+  const files = page.waitForEvent('filechooser');
+  await page.getByTestId('batch-add-files').click();
+  await (await files).setFiles(series.map((photo) => ({ name: photo.name, mimeType: 'image/png', buffer: patternedPng(photo.width, photo.height,
+    (x) => (x < photo.width / 2 ? [...photo.left, 255] : [...photo.right, 255])) })));
+  await expect(page.getByTestId('batch-item')).toHaveCount(50);
+  await expect(page.getByTestId('batch-recipe').locator('option:checked')).toHaveText('Hochzeit');
+  await expect(page.getByTestId('batch-zip-note')).toBeVisible();
+  await page.getByTestId('batch-pattern').fill('Hochzeit-{index}');
+  await page.getByTestId('batch-run').click();
+  await expect(page.getByTestId('batch-summary')).toHaveText('50 exported · 0 failed · 0 waiting', { timeout: 240_000 });
+  const zip = await page.evaluate(async () => {
+    const saved = (window as unknown as { __saved: { name: string; blob: Blob }[] }).__saved.find((file) => file.name.endsWith('.zip'))!;
+    return { name: saved.name, bytes: Array.from(new Uint8Array(await saved.blob.arrayBuffer())) };
+  });
+  expect(zip.name).toBe('Batch export.zip');
+  const entries = unzipSync(Uint8Array.from(zip.bytes));
+  expect(Object.keys(entries)).toEqual(series.map((_, i) => `Hochzeit-${String(i + 1).padStart(2, '0')}.png`));
+  const levels = (value: number) => Math.min(255, Math.round(value * 255 / 200));
+  series.forEach((photo, i) => {
+    const png = decodePng(entries[`Hochzeit-${String(i + 1).padStart(2, '0')}.png`]!);
+    expect([png.width, png.height], photo.name).toEqual([photo.width, photo.height]);
+    const y = Math.floor(photo.height / 2);
+    for (const [x, source] of [[4, photo.left], [photo.width - 4, photo.right]] as const) {
+      const at = (y * png.width + x) * 4;
+      source.forEach((value, channel) => expect(Math.abs(png.data[at + channel]! - levels(value)), `${photo.name} (${x}, ${y}) channel ${channel}`)
+        .toBeLessThanOrEqual(1));
+    }
+  });
 }
 
 export async function benchmark15(page: Page): Promise<void> {

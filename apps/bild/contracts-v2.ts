@@ -21,7 +21,7 @@ export interface AssetRecordV2 {
   height?: number;
   channels?: 1 | 4;
   sha256: string;
-  role: 'image' | 'mask' | 'pattern' | 'embedded' | 'font' | 'lut' | 'history-tile';
+  role: 'image' | 'mask' | 'pattern' | 'embedded' | 'font' | 'lut' | 'history-tile' | 'brushes';
 }
 
 export interface TextRunStyleRecordV2 {
@@ -100,6 +100,25 @@ export interface VectorPathRecordV2 {
   closed: boolean;
   fillRule?: 'nonzero' | 'evenodd';
   points: readonly { anchor: PointV2; in: PointV2; out: PointV2; kind?: 'corner' | 'smooth' }[];
+}
+/** Text on a path (Phase 3): the path in the layer's frame pixels, range fractions, flip and baseline offset (points). */
+export interface TextPathRecordV2 {
+  schemaVersion: 1;
+  path: VectorPathRecordV2;
+  start: number;
+  end: number;
+  flipped: boolean;
+  baselineOffset: number;
+}
+/** Warp Text envelope (Phase 3); percentages −100…100. */
+export interface TextWarpRecordV2 {
+  schemaVersion: 1;
+  style: 'arc' | 'arcLower' | 'arcUpper' | 'arch' | 'bulge' | 'shellLower' | 'shellUpper' | 'flag' | 'wave' | 'fish' | 'rise'
+    | 'fisheye' | 'inflate' | 'squeeze' | 'twist';
+  orientation: 'horizontal' | 'vertical';
+  bend: number;
+  horizontalDistortion: number;
+  verticalDistortion: number;
 }
 export interface VectorMaskRecordV2 { schemaVersion?: 1; enabled: boolean; inverted: boolean; density?: number; feather?: number; paths: readonly VectorPathRecordV2[] }
 
@@ -215,7 +234,9 @@ export type LayerRecordV2 =
   | (LayerCommonV2 & { kind: 'text'; textSchemaVersion: 1; text: string; runs: readonly TextRunRecordV2[];
       paragraphs: readonly TextParagraphRecordV2[]; box: { width: number; height: number } | null;
       alignment: 'left' | 'center' | 'right' | 'justify'; previewAssetId: AssetIdV2 | null;
-      previewTransform: LayerTransformV2 | null })
+      previewTransform: LayerTransformV2 | null;
+      /** Optional; absent in files written before Phase 3 (read as none). */
+      textPath?: TextPathRecordV2 | null; textWarp?: TextWarpRecordV2 | null })
   | (LayerCommonV2 & { kind: 'embedded'; content: { mode: 'embedded' | 'linked'; mediaType: 'image' | 'svg' | 'pdf' | 'project'; assetId?: AssetIdV2; uri?: string; sourceName: string }; previewAssetId: AssetIdV2 | null });
 
 export interface ArtboardRecordV2 {

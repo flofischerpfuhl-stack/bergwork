@@ -9,6 +9,7 @@ import type { EditorController } from './controller';
 import { useUi } from './hooks';
 import { validDimension } from '../core/document';
 import { ExportDialog } from './ExportDialog';
+import { ProofSetupDialog } from './ProofSetupDialog';
 
 export function NewCanvasSheet({ controller, welcome = false, onDone }: { controller: EditorController; welcome?: boolean; onDone?: () => void }) {
   const t = controller.t;
@@ -88,6 +89,7 @@ export function DialogHost({ controller }: { controller: EditorController }) {
   const close = () => controller.showDialog(null);
   if (dialog.kind === 'newCanvas') content = <NewCanvasSheet controller={controller} onDone={close} />;
   else if (dialog.kind === 'export') content = <ExportDialog controller={controller} close={close} />;
+  else if (dialog.kind === 'proofSetup') content = <ProofSetupDialog controller={controller} close={close} />;
   else if (dialog.kind === 'alert') {
     content = (
       <div className={styles.dialog} role="alertdialog" aria-modal aria-labelledby="cmp-alert-title">
