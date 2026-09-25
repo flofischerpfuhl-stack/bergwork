@@ -37,8 +37,61 @@ export { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
 import { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
 
 const residentViews = new WeakMap<Raster, { signature: string; raster: Raster }>();
+const residentUploadLods = new WeakMap<Raster, Raster>();
+const premultipliedUploadLods = new WeakSet<Raster>();
+const tileUploadLods = new WeakMap<PixelArray, Map<string, PixelArray>>();
+const opaqueTileCache = new WeakMap<PixelArray, boolean>();
 const zeroTiles = new Map<string, PixelArray>();
 const occupiedChunkCache = new WeakMap<Raster, Map<number, ReadonlySet<string>>>();
+
+function opaqueTile(tile: PixelArray, maximum: number): boolean {
+  const cached = opaqueTileCache.get(tile);
+  if (cached !== undefined) return cached;
+  let opaque = true;
+  for (let index = 3; index < tile.length; index += 4) if (tile[index] !== maximum) { opaque = false; break; }
+  opaqueTileCache.set(tile, opaque);
+  return opaque;
+}
+
+function halvePremultipliedRgba(source: PixelArray, width: number, height: number,
+  format: Raster['format'], maximum: number, sourcePremultiplied: boolean): PixelArray {
+  const nextWidth = Math.ceil(width / 2), nextHeight = Math.ceil(height / 2);
+  const next = makePixelArray(format, nextWidth * nextHeight * 4);
+  // Raster tiles are normally 256². Keep that hot path branch-free; only the document-edge tile
+  // needs the general zero-padded loop below.
+  if (width % 2 === 0 && height % 2 === 0) {
+    for (let y = 0; y < height; y += 2) for (let x = 0; x < width; x += 2) {
+      const a = (y * width + x) * 4, b = a + 4, c = a + width * 4, d = c + 4;
+      const target = ((y / 2) * nextWidth + x / 2) * 4;
+      next[target + 3] = Math.round((source[a + 3]! + source[b + 3]! + source[c + 3]! + source[d + 3]!) / 4);
+      for (let channel = 0; channel < 3; channel++) {
+        const sum = sourcePremultiplied
+          ? source[a + channel]! + source[b + channel]! + source[c + channel]! + source[d + channel]!
+          : Math.round(source[a + channel]! * source[a + 3]! / maximum)
+            + Math.round(source[b + channel]! * source[b + 3]! / maximum)
+            + Math.round(source[c + channel]! * source[c + 3]! / maximum)
+            + Math.round(source[d + channel]! * source[d + 3]! / maximum);
+        next[target + channel] = Math.round(sum / 4);
+      }
+    }
+    return next;
+  }
+  for (let y = 0; y < nextHeight; y++) for (let x = 0; x < nextWidth; x++) {
+    const target = (y * nextWidth + x) * 4;
+    for (let channel = 0; channel < 4; channel++) {
+      let sum = 0;
+      for (let oy = 0; oy < 2; oy++) for (let ox = 0; ox < 2; ox++) {
+        const sx = x * 2 + ox, sy = y * 2 + oy;
+        if (sx >= width || sy >= height) continue;
+        const at = (sy * width + sx) * 4, value = source[at + channel]!;
+        sum += !sourcePremultiplied && channel < 3
+          ? Math.round(value * source[at + 3]! / maximum) : value;
+      }
+      next[target + channel] = Math.round(sum / 4);
+    }
+  }
+  return next;
+}
 
 function occupiedChunks(raster: Raster, chunkSize: number): ReadonlySet<string> {
   let sizes = occupiedChunkCache.get(raster);
@@ -53,6 +106,61 @@ function occupiedChunks(raster: Raster, chunkSize: number): ReadonlySet<string> 
   if (!sizes) { sizes = new Map(); occupiedChunkCache.set(raster, sizes); }
   sizes.set(chunkSize, occupied);
   return occupied;
+}
+
+/** Upstream `Rendering/DownsampleCache.swift` (`halve`): three premultiplied halvings, tile-local here. */
+function residentUploadLod(source: Raster): Raster {
+  const cached = residentUploadLods.get(source);
+  if (cached) return cached;
+  const level = 3, factor = 2 ** level;
+  const width = Math.ceil(source.width / factor), height = Math.ceil(source.height / factor);
+  const cols = Math.ceil(width / TILE), rows = Math.ceil(height / TILE);
+  const output: (PixelArray | null)[] = new Array(cols * rows).fill(null);
+  const destination = (col: number, row: number): PixelArray => {
+    const index = row * cols + col;
+    let tile = output[index];
+    if (!tile) {
+      tile = makePixelArray(source.format,
+        Math.min(TILE, width - col * TILE) * Math.min(TILE, height - row * TILE) * 4);
+      output[index] = tile;
+    }
+    return tile;
+  };
+  for (let sourceRow = 0; sourceRow < source.rows; sourceRow++) for (let sourceCol = 0; sourceCol < source.cols; sourceCol++) {
+    const tile = source.tiles[sourceRow * source.cols + sourceCol];
+    if (!tile) continue;
+    const tileWidth = source.tileWidth(sourceCol), tileHeight = source.tileHeight(sourceRow);
+    const key = `${source.format}:${tileWidth}:${tileHeight}:${level}`;
+    let variants = tileUploadLods.get(tile);
+    const existing = variants?.get(key);
+    let reduced = existing;
+    if (!reduced) {
+      let current = tile, currentWidth = tileWidth, currentHeight = tileHeight;
+      let premultiplied = opaqueTile(tile, source.maximum);
+      for (let step = 0; step < level; step++) {
+        current = halvePremultipliedRgba(current, currentWidth, currentHeight,
+          source.format, source.maximum, premultiplied);
+        currentWidth = Math.ceil(currentWidth / 2); currentHeight = Math.ceil(currentHeight / 2); premultiplied = true;
+      }
+      reduced = current;
+      if (!variants) { variants = new Map(); tileUploadLods.set(tile, variants); }
+      variants.set(key, reduced);
+    }
+    const reducedWidth = Math.ceil(tileWidth / factor), reducedHeight = Math.ceil(tileHeight / factor);
+    const originX = sourceCol * (TILE / factor), originY = sourceRow * (TILE / factor);
+    for (let row = 0; row < reducedHeight; row++) {
+      const y = originY + row, destinationRow = Math.floor(y / TILE), localY = y - destinationRow * TILE;
+      const x = originX, destinationCol = Math.floor(x / TILE), localX = x - destinationCol * TILE;
+      const target = destination(destinationCol, destinationRow);
+      const targetWidth = Math.min(TILE, width - destinationCol * TILE);
+      target.set(reduced.subarray(row * reducedWidth * 4, (row + 1) * reducedWidth * 4),
+        (localY * targetWidth + localX) * 4);
+    }
+  }
+  const raster = new Raster(width, height, 4, output, { format: source.format });
+  residentUploadLods.set(source, raster);
+  premultipliedUploadLods.add(raster);
+  return raster;
 }
 
 /** A sparse full-resolution view containing every resolved tile and no swapped tile. */
@@ -105,6 +213,10 @@ export interface GpuPerformanceCounters {
   readonly compositeRequests: number;
   readonly fullComposites: number;
   readonly unchangedFrameHits: number;
+  readonly panReprojections: number;
+  readonly panExposedPixels: number;
+  readonly residentLodBuilds: number;
+  readonly residentLodSourcePixels: number;
 }
 
 /** GLSL for one adjustment kind plus how to fill its uniforms. Provided by the adjustment module. */
@@ -200,6 +312,11 @@ interface ViewportCompositeCache {
   readonly skippedAdjustments: number;
 }
 
+interface PanReuse {
+  readonly target: RenderTexture;
+  readonly clips: readonly Rect[];
+}
+
 // A 64 px margin leaves one neighbour texel at the deepest supported sharp halving (level 6).
 // TiledLayerRenderer.support grows its piece margin for the same reason.
 const CHUNK_APRON = 64;
@@ -217,6 +334,20 @@ in vec2 vPos;
 out vec4 finalColor;
 uniform sampler2D uSource;
 void main() { finalColor = texelFetch(uSource, ivec2(vPos), 0); }
+`;
+
+const REPROJECT_FRAGMENT = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 vPos;
+out vec4 finalColor;
+uniform sampler2D uSource;
+uniform vec2 uSourceOffset;
+uniform vec2 uSourceSize;
+void main() {
+  ivec2 p = ivec2(floor(vPos + uSourceOffset));
+  finalColor = p.x >= 0 && p.y >= 0 && p.x < int(uSourceSize.x) && p.y < int(uSourceSize.y)
+    ? texelFetch(uSource, p, 0) : vec4(0.0);
+}
 `;
 
 function mat3(m: Affine): Float32Array {
@@ -243,7 +374,7 @@ export class GpuCompositor {
   private brushState: BrushGpuState | null = null;
   private brushCompositeCache: BrushCompositeCache | null = null;
   private viewportCompositeCache: ViewportCompositeCache | null = null;
-  private renderClip: Rect | null = null;
+  private renderClips: readonly Rect[] | null = null;
   private readonly brushTargetPool: BrushTargets[] = [];
   /** Sampled brush tip atlases (all mip levels in one R8 texture), most recent last. */
   private readonly tipSources = new Map<string, TextureSource>();
@@ -253,7 +384,8 @@ export class GpuCompositor {
   private readonly filteredHooks = new LiveFilterHookAdapter(DEFAULT_HOOKS);
   private readonly performanceCounterValue = {
     effectRegenerations: 0, textureUploads: 0, targetAllocations: 0, drawPasses: 0, drawnPixels: 0,
-    compositeRequests: 0, fullComposites: 0, unchangedFrameHits: 0,
+    compositeRequests: 0, fullComposites: 0, unchangedFrameHits: 0, panReprojections: 0, panExposedPixels: 0,
+    residentLodBuilds: 0, residentLodSourcePixels: 0,
   };
   /** Set per composite: RGBA8 layers get half-float textures (see PRECISION_SENSITIVE_MODES). */
   private preciseTextures = false;
@@ -509,6 +641,10 @@ export class GpuCompositor {
         uMipLevel: { value: 0, type: 'i32' }, uSnap: { value: 0, type: 'i32' },
       }, ['uBackdrop', 'uPainted']],
       copy: [COPY_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uSource']],
+      reproject: [REPROJECT_FRAGMENT, {
+        uSourceOffset: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uSourceSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+      }, ['uSource']],
       opaque: [OPAQUE_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uSource']],
       stack: [STACK_FRAGMENT, {
         uHasClip: { value: 0, type: 'i32' },
@@ -556,10 +692,6 @@ export class GpuCompositor {
 
   private run(pass: Pass, target: RenderTexture | null, width: number, height: number, textures: Record<string, TextureSource>,
     uniforms: Record<string, unknown>, rect?: Rect): void {
-    const drawRect = this.renderClip
-      ? intersect(rect ?? { x: 0, y: 0, width, height }, this.renderClip)
-      : rect;
-    if (this.renderClip && !drawRect) return;
     for (const [key, value] of Object.entries(uniforms)) {
       const current = pass.uniforms.uniforms[key];
       if (current instanceof Float32Array && value instanceof Float32Array) current.set(value);
@@ -568,11 +700,17 @@ export class GpuCompositor {
     pass.uniforms.update();
     for (const [key, source] of Object.entries(textures)) (pass.shader.resources as Record<string, unknown>)[key] = source;
     this.mesh.shader = pass.shader;
-    this.mesh.position.set(drawRect?.x ?? 0, drawRect?.y ?? 0);
-    this.mesh.scale.set(drawRect?.width ?? width, drawRect?.height ?? height);
-    this.performanceCounterValue.drawPasses++;
-    this.performanceCounterValue.drawnPixels += Math.ceil((drawRect?.width ?? width) * (drawRect?.height ?? height));
-    this.renderer.render({ container: this.mesh, target: target ?? undefined, clear: false });
+    const requested = rect ?? { x: 0, y: 0, width, height };
+    const drawRects = this.renderClips
+      ? this.renderClips.map((clip) => intersect(requested, clip)).filter((clip): clip is Rect => clip !== null)
+      : [rect];
+    for (const drawRect of drawRects) {
+      this.mesh.position.set(drawRect?.x ?? 0, drawRect?.y ?? 0);
+      this.mesh.scale.set(drawRect?.width ?? width, drawRect?.height ?? height);
+      this.performanceCounterValue.drawPasses++;
+      this.performanceCounterValue.drawnPixels += Math.ceil((drawRect?.width ?? width) * (drawRect?.height ?? height));
+      this.renderer.render({ container: this.mesh, target: target ?? undefined, clear: false });
+    }
   }
 
   private meshGeometry(warp: Extract<NonNullable<Layer['warp']>, { kind: 'mesh' }>, view: ViewSpec): MeshGeometry {
@@ -729,7 +867,8 @@ export class GpuCompositor {
       if (!previous || previous.tiles[index] !== raster.tiles[index]) changed.push(index);
     }
     const created = new Set<string>();
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, raster.channels === 4);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,
+      raster.channels === 4 && !premultipliedUploadLods.has(raster));
     for (const key of desired) {
       if (slot.chunks.has(key)) continue;
       const [col, row] = parseChunkKey(key);
@@ -836,7 +975,7 @@ export class GpuCompositor {
 
   /** Compile/link at compositor startup and retain one cleared native-grid tile for the first sample. */
   private async prepareBrushPipeline(): Promise<void> {
-    const programs = ['brushCoverage', 'brushPaint', 'brushMax', 'brushMask', 'brushDab', 'brushSelection'].map((name) =>
+    const programs = ['brushCoverage', 'brushPaint', 'brushMax', 'brushMask', 'brushDab', 'brushSelection', 'reproject'].map((name) =>
       this.renderer.shader._getProgramData(this.pass(name).shader.glProgram).program);
     const parallel = this.gl.getExtension('KHR_parallel_shader_compile') as { COMPLETION_STATUS_KHR: number } | null;
     if (parallel) {
@@ -1222,14 +1361,45 @@ export class GpuCompositor {
       const raster = hooks.raster(layer), mask = hooks.maskRaster(layer);
       // A4 residency changes storage in place. Include its resolved resident view so hydration can
       // replace navigation LOD pixels even though the immutable Raster identity did not change.
-      layerValues.push(raster, raster?.reducedCopy, raster?.hasSwappedTiles ? residentView(raster) : raster,
-        mask, mask?.reducedCopy, mask?.hasSwappedTiles ? residentView(mask) : mask, hooks.blendMode(layer));
+      layerValues.push(raster, raster?.hasSwappedTiles ? raster.reducedCopy : null,
+        raster?.hasSwappedTiles ? residentView(raster) : raster,
+        mask, mask?.hasSwappedTiles ? mask.reducedCopy : null,
+        mask?.hasSwappedTiles ? residentView(mask) : mask, hooks.blendMode(layer));
       addTransform(hooks.transform(layer));
       addTransform(hooks.maskPlacement(layer));
     }
     const brush = hooks.brush ?? null;
     layerValues.push(brush, brush?.revision ?? -1);
     return { documentValues, layerValues };
+  }
+
+  /** Reprojects an unchanged cached view when the new sample grid is an exact integer translation. */
+  private preparePanReuse(cache: ViewportCompositeCache, view: ViewSpec): PanReuse | null {
+    const before = cache.view, a = view.viewToDoc;
+    if (before.width !== view.width || before.height !== view.height || before.scale !== view.scale
+      || before.snap !== view.snap || before.viewToDoc.a !== a.a || before.viewToDoc.b !== a.b
+      || before.viewToDoc.c !== a.c || before.viewToDoc.d !== a.d || a.b !== 0 || a.c !== 0
+      || a.a === 0 || a.d === 0) return null;
+    const rawX = (a.tx - before.viewToDoc.tx) / a.a;
+    const rawY = (a.ty - before.viewToDoc.ty) / a.d;
+    const dx = Math.round(rawX), dy = Math.round(rawY);
+    if (Math.abs(rawX - dx) > 1e-6 || Math.abs(rawY - dy) > 1e-6 || (!dx && !dy)
+      || Math.abs(dx) >= view.width || Math.abs(dy) >= view.height) return null;
+    const clips: Rect[] = [];
+    if (dx > 0) clips.push({ x: view.width - dx, y: 0, width: dx, height: view.height });
+    else if (dx < 0) clips.push({ x: 0, y: 0, width: -dx, height: view.height });
+    const remainingX = dx < 0 ? -dx : 0, remainingWidth = view.width - Math.abs(dx);
+    if (dy > 0 && remainingWidth > 0) clips.push({ x: remainingX, y: view.height - dy, width: remainingWidth, height: dy });
+    else if (dy < 0 && remainingWidth > 0) clips.push({ x: remainingX, y: 0, width: remainingWidth, height: -dy });
+    const exposed = clips.reduce((sum, clip) => sum + clip.width * clip.height, 0);
+    if (!clips.length || exposed * 2 >= view.width * view.height) return null;
+    const target = this.acquire(view.width, view.height);
+    this.run(this.pass('reproject'), target, view.width, view.height, { uSource: cache.target.source }, {
+      uSourceOffset: new Float32Array([dx, dy]), uSourceSize: new Float32Array([view.width, view.height]),
+    });
+    this.performanceCounterValue.panReprojections++;
+    this.performanceCounterValue.panExposedPixels += exposed;
+    return { target, clips };
   }
 
   /**
@@ -1251,9 +1421,13 @@ export class GpuCompositor {
       this.skippedAdjustments = viewportCache.skippedAdjustments;
       return viewportCache.target;
     }
+    const panReuse = visualState && viewportCache && sameVisualState(viewportCache.state, visualState)
+      && !document.layers.some((layer) => layer.warp?.kind === 'mesh')
+      ? this.preparePanReuse(viewportCache, view) : null;
+    if (panReuse) this.renderClips = panReuse.clips;
     document = documentWithLayerEffects(document, hooks, this.performanceCounterValue);
     this.frame++;
-    this.performanceCounterValue.fullComposites++;
+    if (panReuse === null) this.performanceCounterValue.fullComposites++;
     this.skippedAdjustments = 0;
     // Float targets only: an 8-bit accumulation target would lose the precision again.
     // Keep a layer's texture encoding stable when a style is toggled; changing every RGBA8 upload
@@ -1275,9 +1449,10 @@ export class GpuCompositor {
         return cache.target;
       } else {
         const gridToDoc = pixelToDocument(activeBrush.transform, activeBrush.width, activeBrush.height);
-        this.renderClip = this.gridRect(brushState.dirty.x, brushState.dirty.y, brushState.dirty.width,
+        const brushClip = this.gridRect(brushState.dirty.x, brushState.dirty.y, brushState.dirty.width,
           brushState.dirty.height, gridToDoc, view);
-        if (!this.renderClip) {
+        this.renderClips = brushClip ? [brushClip] : null;
+        if (!brushClip) {
           brushState.dirty = null;
           return cache.target;
         }
@@ -1438,7 +1613,12 @@ export class GpuCompositor {
       }
       brushState.dirty = null;
     }
-    this.renderClip = null;
+    if (panReuse) {
+      this.run(this.pass('copy'), panReuse.target, width, height, { uSource: acc.source }, {});
+      this.release(acc);
+      acc = panReuse.target;
+    }
+    this.renderClips = null;
     if (this.frame % 60 === 0 || this.textureBytes > this.textureByteBudget) this.collectTextures(true);
     if (visualState) {
       const previous = this.viewportCompositeCache;
@@ -1484,8 +1664,22 @@ export class GpuCompositor {
   }
 
   private residentLod(raster: Raster, transform: LayerTransform, view: ViewSpec): Raster {
-    if (!raster.hasSwappedTiles) return raster;
     const pixelsPerSourcePixel = transform.size.width / Math.max(1, raster.width) * view.scale;
+    if (!raster.hasSwappedTiles) {
+      // Build the first three premultiplied mip levels tile-wise before upload. At fit zoom this
+      // avoids sending a 46–200 MP resident source merely so WebGL can discard 63/64 of its texels.
+      if (transform.sampling !== 'Nearest' && pixelsPerSourcePixel <= 1 / 8
+        && (raster.width > TILE || raster.height > TILE)) {
+        const existing = residentUploadLods.get(raster);
+        const reduced = existing ?? residentUploadLod(raster);
+        if (!existing) {
+          this.performanceCounterValue.residentLodBuilds++;
+          this.performanceCounterValue.residentLodSourcePixels += raster.width * raster.height;
+        }
+        return reduced;
+      }
+      return raster;
+    }
     if (pixelsPerSourcePixel > 1 / 8 && this.requestHydration) {
       const docToGrid = invert(pixelToDocument(transform, raster.width, raster.height));
       const corners = [
@@ -1598,7 +1792,7 @@ export class GpuCompositor {
         if (layer.warp?.kind === 'mesh') this.runWarpMesh(layer.warp, view, this.pass('warpMesh'), out, textures, uniforms);
         else this.run(this.pass('layer'), out, view.width, view.height, textures, uniforms, rect);
       }
-      if (drawnRaster !== raster) {
+      if (raster.hasSwappedTiles && drawnRaster !== raster) {
         // Product-plan A4: retain the navigation result only under unresolved tiles; every
         // resolved chunk is recomposited against the original backdrop at full resolution.
         const sharp = residentView(raster);

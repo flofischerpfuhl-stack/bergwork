@@ -10,7 +10,7 @@ export default defineConfig({
   workers: 1,
   timeout: 300_000,
   reporter: 'line',
-  outputDir: '/tmp/pw-out-perfview',
+  outputDir: '/tmp/pw-out-pview2',
   use: { baseURL: `http://127.0.0.1:${port}`, headless: true },
   projects: [
     { name: 'perf-gpu', use: { ...devices['Desktop Chrome'], launchOptions: { args: [
