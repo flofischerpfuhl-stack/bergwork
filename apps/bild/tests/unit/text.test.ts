@@ -76,6 +76,15 @@ describe('P2 text engine integration', () => {
     } finally { layout.dispose(); }
   });
 
+  it('resolves a bundled PSD font by its PostScript name', async () => {
+    await fonts.loadBundledFallbacks();
+    expect(fonts.resolution('NotoSans-Regular')).toEqual({
+      requested: 'NotoSans-Regular',
+      families: ['Noto Sans', 'Noto Sans Arabic', 'Noto Sans Devanagari'],
+      substitute: null,
+    });
+  });
+
   it('A5 renderer hook reshapes at the target resolution instead of resampling its prior cache', async () => {
     const layer = textLayer();
     const document: CanvasDocument = { id: 'doc', width: 500, height: 300, resolution: 72, layers: [layer], selection: null };
@@ -153,5 +162,32 @@ describe('P2 text engine integration', () => {
     expect((layer as TextLayer).runs[0]!.style.color.alpha).toBeCloseTo(128 / 255);
     expect((layer as TextLayer).paragraphs[0]!.style.alignment).toBe('center');
     expect(imported.unsupported.some((value) => value.code === 'text')).toBe(false);
+  });
+
+  it('positions PSD point text from its baseline transform when no area-text box exists', async () => {
+    const width = 200, height = 70;
+    const psd: Psd = { width, height, imageData: { width, height, data: new Uint8ClampedArray(width * height * 4) },
+      children: [{ name: 'Headline', left: 10, top: 10, right: 190, bottom: 60,
+        imageData: { width: 180, height: 50, data: new Uint8ClampedArray(180 * 50 * 4) },
+        text: { text: 'Summer Sale', transform: [1, 0, 0, 1, 12, 48],
+          style: { font: { name: 'NotoSans-Regular' }, fontSize: 32,
+            fillColor: { r: 20, g: 30, b: 120 } } } }] };
+    const imported = readPsdDocument(writePsdUint8Array(psd,
+      { generateThumbnail: false, invalidateTextLayers: false }));
+    const layer = imported.document.layers[0] as TextLayer;
+    expect(layer.kind).toBe('text');
+    expect(layer.box).toBeNull();
+    expect(layer.transform.origin.x).toBe(12);
+    expect(layer.transform.origin.y).toBeGreaterThanOrEqual(0);
+    expect(layer.transform.origin.y).toBeLessThan(48);
+    expect(layer.transform.size.width).toBeGreaterThan(100);
+    const missing = await fonts.prepareDocument(imported.document);
+    expect(missing).toEqual([]);
+    const layout = layoutTextLayer(engine, fonts, imported.document, layer, 1, missing);
+    try {
+      expect(layout.transform.origin.y).toBe(layer.transform.origin.y);
+      expect(layout.raster.width).toBeGreaterThan(100);
+      expect(layout.raster.height).toBeGreaterThan(20);
+    } finally { layout.dispose(); }
   });
 });

@@ -29,6 +29,7 @@ export interface FileSystemHost extends VersionedCapability {
 export interface SystemFont {
   readonly id: string;
   readonly family: string;
+  readonly fullName?: string;
   readonly style: string;
   readonly postscriptName?: string;
 }

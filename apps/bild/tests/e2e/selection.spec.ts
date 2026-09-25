@@ -61,7 +61,7 @@ test('marquee selection clears and fills pixels, lasso polygon adds, all undoabl
   expect(m.layers).toHaveLength(2);
 });
 
-test('add mask from a selection hides the selected area', async ({ page }) => {
+test('Add Layer Mask reveals the active selection', async ({ page }) => {
   await mountForTest(page);
   await page.getByTestId('widthInput').fill('60');
   await page.getByTestId('heightInput').fill('40');
@@ -72,8 +72,19 @@ test('add mask from a selection hides the selected area', async ({ page }) => {
   const m = await manifest(page);
   expect(m.layers[1].mask).toBeTruthy();
   const pixels = await exportedPixels(page);
-  // A white mask made from a selection has the selected area black: everything hidden.
-  expect(pixels.data[3]).toBe(0);
+  expect(pixels.data.slice(0, 4)).toEqual([255, 0, 0, 255]);
+});
+
+test('Option-click Add Layer Mask hides the active selection', async ({ page }) => {
+  await mountForTest(page);
+  await page.getByTestId('widthInput').fill('60');
+  await page.getByTestId('heightInput').fill('40');
+  await page.getByTestId('createCanvas').click();
+  await importThroughMenu(page, [{ name: 'red.png', mimeType: 'image/png', buffer: solidPng(60, 40, [255, 0, 0, 255]) }]);
+  await page.getByTestId('compositor-editor').press(`${mod}+a`);
+  await page.getByTestId('addMask').click({ modifiers: ['Alt'] });
+  expect((await manifest(page)).layers[1].mask).toBeTruthy();
+  expect((await exportedPixels(page)).data[3]).toBe(0);
 });
 
 test('Cmd-drag inside the selection moves its pixels as one undo step', async ({ page }) => {

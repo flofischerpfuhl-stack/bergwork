@@ -679,7 +679,8 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
         <button type="button" className={styles.footerButton} aria-label={t('New folder')} title={t('Group Selected Layers')} disabled={!session.canEditLayers}
           onClick={() => session.groupSelectedLayers()}><Icon name="folderPlus" size={17} /></button>
         <button type="button" className={styles.footerButton} aria-label={t('Add layer mask')} title={t('Add layer mask')}
-          disabled={!session.canEditMask || !!session.activeLayer?.mask} data-testid="addMask" onClick={() => controller.addMask(true)}><Icon name="mask" size={17} /></button>
+          disabled={!session.canEditMask || !!session.activeLayer?.mask} data-testid="addMask"
+          onClick={(event) => controller.addMask(!event.altKey)}><Icon name="mask" size={17} /></button>
         <button type="button" className={styles.footerButton} aria-label={t('New adjustment layer')}
           title={adjustmentsAvailable ? t('New adjustment layer') : `${t('New adjustment layer')} — ${t('Not yet available in the browser port')}`}
           disabled={!session.canEditLayers || !adjustmentsAvailable}

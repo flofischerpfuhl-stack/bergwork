@@ -86,7 +86,7 @@ describe('P2 Basic, Colour and lookup adjustments', () => {
     const adjustment = { kind: 'Colour Lookup' as const, schemaVersion: 1 as const,
       parameters: { resourceId: 'lut', interpolation: 'tetrahedral' as const } };
     const base = newLayer({ id: 'base', name: 'Base', transform, raster: Raster.blank(2, 2, 4),
-      filters: [{ kind: 'denoise', schemaVersion: 1, enabled: false, luminance: 20, colour: 30 }] });
+      filters: [{ kind: 'denoise', schemaVersion: 1, enabled: false, luminance: 20, colour: 30, detail: 65 }] });
     const live = newLayer({ id: 'adjust', name: 'Lookup', transform, adjustment });
     const document = { id: 'doc', width: 2, height: 2, resolution: 72, layers: [base, live], resources: [resource], selection: null };
     const archive = writeArchive(document, 'Roundtrip', live.id);

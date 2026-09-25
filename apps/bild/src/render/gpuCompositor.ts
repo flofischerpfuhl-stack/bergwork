@@ -22,6 +22,7 @@ import { blendSeed } from '../core/blend';
 import { floatToRgba16, makePixelArray, type PixelArray } from '../core/pixel/format';
 import type { BrushSegment, GpuBrushPreview } from '../core/brush';
 import { documentWithLayerEffects } from '../core/effects';
+import { inverseHomographyMatrix } from '../core/distort';
 import {
   adjustFragment, BLEND_INDEX, BRUSH_COVERAGE_FRAGMENT, BRUSH_MASK_FRAGMENT, BRUSH_MAX_FRAGMENT, BRUSH_PAINT_FRAGMENT, COVERAGE_FRAGMENT,
   GROUP_FRAGMENT, IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT, STACK_FRAGMENT,
@@ -295,6 +296,8 @@ export class GpuCompositor {
         uTarget: { value: new Float32Array(2), type: 'vec2<f32>' },
         uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
         uDocToLayer: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+        uDocToWarp: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+        uHasWarp: { value: 0, type: 'i32' },
         uLayerSize: { value: new Float32Array(2), type: 'vec2<f32>' },
         uLayerEdge: { value: new Float32Array(2), type: 'vec2<f32>' },
         uChunkOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
@@ -521,7 +524,11 @@ export class GpuCompositor {
     const gl = this.gl;
     const existing = this.slots.get(slotKey);
     // Once widened a slot stays wide until it is recreated, so previewing modes does not re-upload back and forth.
-    const wantsWide = raster.format === 'rgba16' || (raster.channels === 4 && this.preciseTextures);
+    // Generated style passes benefit from premultiplication at half-float precision on Firefox/WebKit,
+    // but widening the source layer itself when a style is added changes its translucent RGBA8 bytes.
+    const effectPass = slotKey.includes(':effect:');
+    const wantsWide = raster.format === 'rgba16'
+      || (raster.channels === 4 && (this.preciseTextures || (this.floatTargets && effectPass)));
     if (existing && existing.raster === raster && (existing.wide || !wantsWide)) { existing.lastUsed = this.frame; return existing; }
     const compatible = existing && existing.raster.width === raster.width && existing.raster.height === raster.height
       && existing.raster.channels === raster.channels && existing.raster.format === raster.format && (existing.wide || !wantsWide);
@@ -901,9 +908,10 @@ export class GpuCompositor {
     this.frame++;
     this.skippedAdjustments = 0;
     // Float targets only: an 8-bit accumulation target would lose the precision again.
-    const hasEffects = this.activeDocument.layers.some((layer) => layer.effects?.some((effect) => effect.enabled));
-    this.preciseTextures = this.floatTargets && (hasEffects
-      || document.layers.some((layer) => PRECISION_SENSITIVE_MODES.has(hooks.blendMode(layer))));
+    // Keep a layer's texture encoding stable when a style is toggled; changing every RGBA8 upload
+    // from browser-premultiplied bytes to half floats re-rounded unrelated translucent pixels.
+    this.preciseTextures = this.floatTargets
+      && document.layers.some((layer) => PRECISION_SENSITIVE_MODES.has(hooks.blendMode(layer)));
     const { width, height } = view;
     const activeBrush = hooks.brush ?? null;
     let brushState: BrushGpuState | null = null;
@@ -1064,7 +1072,8 @@ export class GpuCompositor {
     if (rt !== this.brushCompositeCache?.target) this.release(rt);
   }
 
-  private layerUniforms(raster: Pick<Raster, 'width' | 'height'>, transform: LayerTransform, view: ViewSpec) {
+  private layerUniforms(raster: Pick<Raster, 'width' | 'height'>, transform: LayerTransform, view: ViewSpec,
+    warp: Layer['warp'] = null) {
     const docToGrid = invert(pixelToDocument(transform, raster.width, raster.height));
     // Target px per grid px along each local axis, for edge AA and mip choice.
     const gx = Math.hypot(transform.size.width / raster.width, 0) * (view.snap ? 1 : view.scale);
@@ -1073,6 +1082,8 @@ export class GpuCompositor {
     const nearest = transform.sampling === 'Nearest';
     return {
       uDocToLayer: mat3(docToGrid),
+      uDocToWarp: warp ? inverseHomographyMatrix(warp.corners) : IDENTITY9,
+      uHasWarp: warp ? 1 : 0,
       uLayerSize: new Float32Array([raster.width, raster.height]),
       uLayerEdge: new Float32Array([gx, gy]),
       uSampling: nearest ? 0 : (mipLevel > 0 ? 2 : 1),
@@ -1146,12 +1157,12 @@ export class GpuCompositor {
       const transform = hooks.transform(layer);
       const drawnRaster = this.residentLod(raster, transform, view);
       const slot = this.texture(`px:${layer.id}${drawnRaster === raster ? '' : ':lod'}`, drawnRaster);
-      const u = this.layerUniforms(drawnRaster, transform, view);
+      const u = this.layerUniforms(drawnRaster, transform, view, layer.warp);
       const restricted = slot.chunks.size > 1;
       if (!slot.chunks.size || restricted) this.copy(backdrop, out, view);
       const gridToDoc = pixelToDocument(transform, drawnRaster.width, drawnRaster.height);
       for (const chunk of slot.chunks.values()) {
-        const rect = restricted
+        const rect = layer.warp ? { x: 0, y: 0, width: view.width, height: view.height } : restricted
           ? this.gridRect(chunk.x, chunk.y, chunk.width, chunk.height, gridToDoc, view)
           : { x: 0, y: 0, width: view.width, height: view.height };
         if (!rect) continue;
@@ -1160,7 +1171,8 @@ export class GpuCompositor {
           uClip: clip?.source ?? this.white,
         }, {
           uTarget: new Float32Array([view.width, view.height]), uViewToDoc: mat3(view.viewToDoc),
-          uDocToLayer: u.uDocToLayer, uLayerSize: u.uLayerSize, uLayerEdge: u.uLayerEdge, uSampling: u.uSampling,
+          uDocToLayer: u.uDocToLayer, uDocToWarp: u.uDocToWarp, uHasWarp: u.uHasWarp,
+          uLayerSize: u.uLayerSize, uLayerEdge: u.uLayerEdge, uSampling: u.uSampling,
           uChunkOrigin: new Float32Array([chunk.x, chunk.y]), uChunkSize: new Float32Array([chunk.width, chunk.height]),
           uTextureSize: new Float32Array([chunk.width + CHUNK_APRON * 2, chunk.height + CHUNK_APRON * 2]), uApron: CHUNK_APRON,
           uMipLevel: u.uMipLevel, uRestrictChunk: restricted ? 1 : 0,
@@ -1178,17 +1190,19 @@ export class GpuCompositor {
         const sharpSlot = this.texture(`px:${layer.id}:resident`, sharp);
         const sharpOut = this.acquire(view.width, view.height);
         this.copy(out, sharpOut, view);
-        const sharpUniforms = this.layerUniforms(sharp, transform, view);
+        const sharpUniforms = this.layerUniforms(sharp, transform, view, layer.warp);
         const sharpGridToDoc = pixelToDocument(transform, sharp.width, sharp.height);
         for (const chunk of sharpSlot.chunks.values()) {
-          const rect = this.gridRect(chunk.x, chunk.y, chunk.width, chunk.height, sharpGridToDoc, view);
+          const rect = layer.warp ? { x: 0, y: 0, width: view.width, height: view.height }
+            : this.gridRect(chunk.x, chunk.y, chunk.width, chunk.height, sharpGridToDoc, view);
           if (!rect) continue;
           this.run(this.pass('layer'), sharpOut, view.width, view.height, {
             uBackdrop: backdrop.source, uLayer: chunk.source, uMask: maskTarget?.source ?? this.white,
             uClip: clip?.source ?? this.white,
           }, {
             uTarget: new Float32Array([view.width, view.height]), uViewToDoc: mat3(view.viewToDoc),
-            uDocToLayer: sharpUniforms.uDocToLayer, uLayerSize: sharpUniforms.uLayerSize,
+            uDocToLayer: sharpUniforms.uDocToLayer, uDocToWarp: sharpUniforms.uDocToWarp,
+            uHasWarp: sharpUniforms.uHasWarp, uLayerSize: sharpUniforms.uLayerSize,
             uLayerEdge: sharpUniforms.uLayerEdge, uSampling: sharpUniforms.uSampling,
             uChunkOrigin: new Float32Array([chunk.x, chunk.y]), uChunkSize: new Float32Array([chunk.width, chunk.height]),
             uTextureSize: new Float32Array([chunk.width + CHUNK_APRON * 2, chunk.height + CHUNK_APRON * 2]), uApron: CHUNK_APRON,
@@ -1218,7 +1232,8 @@ export class GpuCompositor {
           uClip: clip?.source ?? this.white,
         }, {
           uTarget: new Float32Array([view.width, view.height]), uViewToDoc: mat3(view.viewToDoc),
-          uDocToLayer: u.uDocToLayer, uLayerSize: u.uLayerSize, uLayerEdge: u.uLayerEdge, uSampling: u.uSampling,
+          uDocToLayer: u.uDocToLayer, uDocToWarp: IDENTITY9, uHasWarp: 0,
+          uLayerSize: u.uLayerSize, uLayerEdge: u.uLayerEdge, uSampling: u.uSampling,
           uChunkOrigin: new Float32Array([chunk.x, chunk.y]), uChunkSize: new Float32Array([chunk.width, chunk.height]),
           uTextureSize: new Float32Array([chunk.painted.width, chunk.painted.height]), uApron: BRUSH_APRON,
           uMipLevel: u.uMipLevel, uRestrictChunk: 1,

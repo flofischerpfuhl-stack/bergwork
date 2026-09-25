@@ -35,7 +35,7 @@ export function filterSettingsOf(filter: LiveFilter): FilterSettings {
     case 'unsharpMask': return { ...base, amount: filter.amount, radius: filter.radius, threshold: filter.threshold };
     case 'smartSharpen': return { ...base, amount: filter.amount, radius: filter.radius, threshold: filter.threshold, reduceNoise: filter.reduceNoise };
     case 'highPass': return { ...base, radius: filter.radius };
-    case 'denoise': return { ...base, luminance: filter.luminance, colour: filter.colour };
+    case 'denoise': return { ...base, luminance: filter.luminance, colour: filter.colour, detail: filter.detail ?? 50 };
   }
 }
 
@@ -49,7 +49,7 @@ export function liveFilterFrom(kind: LiveFilterKind, value: FilterSettings, enab
     case 'unsharpMask': return { kind, schemaVersion: 1, enabled, amount: s.amount, radius: s.radius, threshold: s.threshold };
     case 'smartSharpen': return { kind, schemaVersion: 1, enabled, amount: s.amount, radius: s.radius, threshold: s.threshold, reduceNoise: s.reduceNoise };
     case 'highPass': return { kind, schemaVersion: 1, enabled, radius: s.radius };
-    case 'denoise': return { kind, schemaVersion: 1, enabled, luminance: s.luminance, colour: s.colour };
+    case 'denoise': return { kind, schemaVersion: 1, enabled, luminance: s.luminance, colour: s.colour, detail: s.detail };
   }
 }
 

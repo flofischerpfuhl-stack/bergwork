@@ -14,7 +14,11 @@ export function NewCanvasSheet({ controller, welcome = false, onDone }: { contro
   const t = controller.t;
   const [width, setWidth] = useState('1920');
   const [height, setHeight] = useState('1080');
-  const valid = validDimension(width) !== null && validDimension(height) !== null;
+  const parsedWidth = validDimension(width), parsedHeight = validDimension(height);
+  const dimensionsValid = parsedWidth !== null && parsedHeight !== null;
+  const withinProfile = dimensionsValid && parsedWidth <= controller.limits.maxSide && parsedHeight <= controller.limits.maxSide
+    && parsedWidth * parsedHeight <= controller.limits.maxPixels;
+  const valid = dimensionsValid && withinProfile;
   const first = useRef<HTMLInputElement>(null);
   useEffect(() => {
     // Suggest the clipboard image's size when one is available (NewCanvasSheet.clipboardDimensions).
@@ -27,7 +31,7 @@ export function NewCanvasSheet({ controller, welcome = false, onDone }: { contro
   }, [controller, welcome]);
   const create = () => {
     const w = validDimension(width), h = validDimension(height);
-    if (w === null || h === null) return;
+    if (w === null || h === null || !withinProfile) return;
     if (welcome) controller.session.createNewProject(w, h);
     else controller.newCanvasTab(w, h);
     onDone?.();
@@ -51,7 +55,11 @@ export function NewCanvasSheet({ controller, welcome = false, onDone }: { contro
           </label>
         ))}
       </div>
-      <div className={valid ? styles.secondary : styles.warning}>{valid ? t('Transparent canvas · sRGB') : t('Enter whole numbers from 1 to 30,000 pixels.')}</div>
+      <div className={valid ? styles.secondary : styles.warning}>{valid ? t('Transparent canvas · sRGB')
+        : dimensionsValid ? (controller.profile.id === 'lite'
+          ? t('Lite supports canvases up to 100 megapixels. Fernwork Bildeditor Pro supports up to 300 megapixels.')
+          : t('Pro supports canvases up to 300 megapixels.'))
+          : t('Enter whole numbers from 1 to 30,000 pixels.')}</div>
       <div className={styles.buttonRow}>
         <button type="button" className={styles.pill} onClick={() => { onDone?.(); void controller.chooseAndOpen(); }}>{t('Open project')}</button>
         <button type="button" className={styles.pill} onClick={() => { onDone?.(); void controller.chooseAndImport(); }} data-testid="welcome-import">{t('Import image')}</button>

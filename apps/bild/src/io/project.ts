@@ -1194,7 +1194,9 @@ function validLiveFilter(value: import('../../contracts-v2').FilterRecordV2): bo
   if (value.kind === 'unsharpMask') return num(value.amount) && num(value.radius) && num(value.threshold);
   if (value.kind === 'smartSharpen') return num(value.amount) && num(value.radius) && num(value.threshold) && num(value.reduceNoise);
   if (value.kind === 'highPass') return num(value.radius);
-  return value.kind === 'denoise' && num(value.luminance) && num(value.colour);
+  if (value.kind !== 'denoise' || !num(value.luminance) || !num(value.colour)) return false;
+  const detail = (value as typeof value & { readonly detail?: unknown }).detail;
+  return detail === undefined || num(detail);
 }
 
 async function readHistory(history: ProjectHistoryV2, entries: Record<string, Uint8Array>, records: ReadonlyMap<string, AssetRecordV2>,

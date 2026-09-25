@@ -100,6 +100,23 @@ describe('layer effects (PRODUCT-PLAN 6.7)', () => {
       new Uint8Array([0, 255, 0, 255, 0, 0, 0, 0, 0, 255, 0, 255]));
   });
 
+  it('scales document-pixel effects to an oversampled derived raster', () => {
+    const raster = Raster.fromPixels(16, 16, 4, new Uint8Array(16 * 16 * 4).fill(255));
+    const layer = newLayer({ id: 'text', name: 'Text', kind: 'text', text: 'A', raster,
+      transform: makeTransform({ x: 2, y: 2 }, { width: 4, height: 4 }),
+      effects: [{ kind: 'stroke', schemaVersion: 1, enabled: true, width: 1,
+        position: 'outside', color: green }] });
+    const hooks = { transform: (value: typeof layer) => value.transform,
+      maskPlacement: (value: typeof layer) => value.mask?.placement ?? null,
+      raster: (value: typeof layer) => value.raster, maskRaster: (value: typeof layer) => value.mask?.raster };
+    const expanded = documentWithLayerEffects({ id: 'doc', width: 8, height: 8, resolution: 72,
+      selection: null, layers: [layer] }, hooks);
+    const effect = expanded.layers[1]!;
+    // One document pixel is four cache pixels; transparent padding stays aligned to that cache grid.
+    expect(effect.raster?.width).toBe(32);
+    expect(effect.transform.size.width).toBeCloseTo(8);
+  });
+
   it('derives effects from alpha after the layer mask', () => {
     const layer = newLayer({ id: 'masked', name: 'Masked', raster: Raster.fromPixels(2, 1, 4,
       [255, 255, 255, 255, 255, 255, 255, 255]), transform: makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 }),

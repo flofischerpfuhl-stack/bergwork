@@ -33,23 +33,35 @@ export function highPass(raster: Raster, radius: number): Raster {
   return rasterFromFloat(raster, out);
 }
 
-/** Edge-aware 3×3 luminance/chroma denoise; strengths are percentages and alpha is untouched. */
-export function denoise(raster: Raster, luminanceStrength: number, colourStrength: number): Raster {
+/** Multiscale bilateral luminance/chroma denoise; strengths/detail are percentages and alpha is untouched. */
+export function denoise(raster: Raster, luminanceStrength: number, colourStrength: number,
+  detailPreservation = 50): Raster {
   if (raster.channels !== 4) throw new RangeError('Denoise requires an RGBA raster');
   const source = floatPixels(raster), out = source.slice(), w = raster.width, h = raster.height;
-  const ls = clamp(luminanceStrength / 100), cs = clamp(colourStrength / 100);
+  const ls = clamp(luminanceStrength / 100), cs = clamp(colourStrength / 100), detail = clamp(detailPreservation / 100);
   if (ls === 0 && cs === 0) return raster;
+  const count = w * h, luminance = new Float32Array(count), blueDifference = new Float32Array(count), redDifference = new Float32Array(count);
+  for (let pixel = 0, at = 0; pixel < count; pixel++, at += 4) {
+    const r = source[at]!, g = source[at + 1]!, b = source[at + 2]!;
+    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    luminance[pixel] = y; blueDifference[pixel] = b - y; redDifference[pixel] = r - y;
+  }
+  // A wider kernel handles real photographic grain. The range term still separates a 90-level edge
+  // while admitting the benchmark's ±30-level grain; `detailPreservation` narrows that range.
+  const radius = Math.max(2, Math.round(2 + 2 * Math.max(ls, cs)));
+  const spatialSigma = Math.max(1, radius * 0.65), rangeSigma = 0.04 + (1 - detail) * 0.24;
+  const spatialDenominator = 2 * spatialSigma * spatialSigma, rangeDenominator = 2 * rangeSigma * rangeSigma;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const at = (y * w + x) * 4, cr = source[at]!, cg = source[at + 1]!, cb = source[at + 2]!;
-    const centerY = 0.2126 * cr + 0.7152 * cg + 0.0722 * cb;
+    const pixel = y * w + x, at = pixel * 4, centerY = luminance[pixel]!;
     let sumW = 0, sumY = 0, sumCb = 0, sumCr = 0;
-    for (let yy = Math.max(0, y - 1); yy <= Math.min(h - 1, y + 1); yy++) for (let xx = Math.max(0, x - 1); xx <= Math.min(w - 1, x + 1); xx++) {
-      const i = (yy * w + xx) * 4, r = source[i]!, g = source[i + 1]!, b = source[i + 2]!;
-      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b, weight = Math.exp(-Math.abs(lum - centerY) * 20);
-      sumW += weight; sumY += lum * weight; sumCb += (b - lum) * weight; sumCr += (r - lum) * weight;
+    for (let yy = Math.max(0, y - radius); yy <= Math.min(h - 1, y + radius); yy++) for (let xx = Math.max(0, x - radius); xx <= Math.min(w - 1, x + radius); xx++) {
+      const sample = yy * w + xx, lum = luminance[sample]!, delta = lum - centerY;
+      const dx = xx - x, dy = yy - y;
+      const weight = Math.exp(-(dx * dx + dy * dy) / spatialDenominator - delta * delta / rangeDenominator);
+      sumW += weight; sumY += lum * weight; sumCb += blueDifference[sample]! * weight; sumCr += redDifference[sample]! * weight;
     }
     const smoothY = sumY / sumW, smoothCb = sumCb / sumW, smoothCr = sumCr / sumW;
-    const oldCb = cb - centerY, oldCr = cr - centerY, nextY = centerY + (smoothY - centerY) * ls;
+    const oldCb = blueDifference[pixel]!, oldCr = redDifference[pixel]!, nextY = centerY + (smoothY - centerY) * ls;
     const nextCb = oldCb + (smoothCb - oldCb) * cs, nextCr = oldCr + (smoothCr - oldCr) * cs;
     out[at] = clamp(nextY + nextCr); out[at + 2] = clamp(nextY + nextCb);
     out[at + 1] = clamp((nextY - 0.2126 * out[at]! - 0.0722 * out[at + 2]!) / 0.7152);

@@ -12,6 +12,7 @@ import {
   mapPlacement, maskBackground, preparePlacement, prepareSampler, sampleMask, sampleRgba,
   type PreparedPlacement, type RasterSampler,
 } from './resample';
+import { inverseHomography } from './distort';
 
 export type AdjustmentApplier = (adjustment: LayerAdjustment, rgba: Float32Array,
   width: number, height: number, originX: number, originY: number,
@@ -230,7 +231,7 @@ class BandRenderer {
   private drawAlignedOneToOne(layer: Layer, target: Float32Array, width: number, height: number,
     originX: number, originY: number, mode: BlendMode): boolean {
     const raster = this.raster(layer), transform = this.transform(layer);
-    if (this.outputToDocument || !raster || raster.channels !== 4 || transform.rotation % 360 !== 0 || transform.flipX || transform.flipY
+    if (this.outputToDocument || layer.warp || !raster || raster.channels !== 4 || transform.rotation % 360 !== 0 || transform.flipX || transform.flipY
       || transform.size.width !== raster.width || transform.size.height !== raster.height
       || !Number.isInteger(transform.origin.x) || !Number.isInteger(transform.origin.y)) return false;
     const opacity = clamp01(layer.opacity), fillOpacity = clamp01(layer.fillOpacity);
@@ -263,6 +264,22 @@ class BandRenderer {
     const sampler = this.rgbaSampler(layer, documentToOutput);
     if (!sampler) return 0;
     const raster = this.raster(layer)!;
+    if (layer.warp) {
+      const unit = inverseHomography(layer.warp.corners)({ x, y });
+      if (!Number.isFinite(unit.x) || !Number.isFinite(unit.y)
+        || unit.x < 0 || unit.x >= 1 || unit.y < 0 || unit.y >= 1) return 0;
+      const px = unit.x * raster.width, py = unit.y * raster.height;
+      const transform = this.transform(layer), output = documentToOutput;
+      const viewScaleX = output ? Math.hypot(output.a, output.b) : 1;
+      const viewScaleY = output ? Math.hypot(output.c, output.d) : 1;
+      // Match LayerRenderer's half-pixel edge ramp so CPU export and WebGL agree at a projective boundary.
+      const cx = clamp01(0.5 + Math.min(px, raster.width - px) * transform.size.width / raster.width * viewScaleX);
+      const cy = clamp01(0.5 + Math.min(py, raster.height - py) * transform.size.height / raster.height * viewScaleY);
+      const coverage = cx * cy;
+      if (coverage <= 0) return 0;
+      sampleRgba(sampler, px, py, sample);
+      return coverage;
+    }
     const prepared = this.preparedPlacement(`source:${layer.id}`, this.transform(layer), raster.width,
       raster.height, documentToOutput);
     mapPlacement(prepared, x, y, this.location);

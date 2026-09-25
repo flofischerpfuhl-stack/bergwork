@@ -164,6 +164,12 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
           ? { label: t('Layer Style'), enabled: !!layer && controller.layerStyles.styleable(layer.id), testId: 'menu-layer-style',
             submenu: layer ? controller.layerStyles.menu(layer.id) : [] }
           : { label: t('Layer Style'), enabled: false, note: pending },
+        { label: t('Layer Mask'), enabled: !!layer && session.canEditMask && !layer.mask, testId: 'menu-layer-mask', submenu: [
+          { label: t('Reveal All'), enabled: !session.selection, run: () => controller.addMask(true) },
+          { label: t('Hide All'), enabled: !session.selection, run: () => controller.addMask(false) },
+          { label: t('Reveal Selection'), enabled: !!session.selection, run: () => controller.addMask(true) },
+          { label: t('Hide Selection'), enabled: !!session.selection, run: () => controller.addMask(false) },
+        ] },
         { label: t('Vector Mask'), enabled: !!features.vectorMaskRevealAll && !!layer, testId: 'menu-vector-mask', submenu: [
           feature('vectorMaskRevealAll', t('Reveal All')), feature('vectorMaskHideAll', t('Hide All')), feature('vectorMaskCurrentPath', t('Current Path')),
           'separator', feature('vectorMaskToggle', layer?.vectorMask?.enabled === false ? t('Enable Vector Mask') : t('Disable Vector Mask')),

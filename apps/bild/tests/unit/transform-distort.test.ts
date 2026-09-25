@@ -33,6 +33,19 @@ function distort(session: EditorSession, corners: readonly Point[]): void {
 }
 
 describe('session distort mask parity (Distort.swift)', () => {
+  it('keeps a Free Transform perspective edit as the live WarpQuad used by embedded rendering', () => {
+    const session = new EditorSession();
+    const transform = makeTransform({ x: 10, y: 10 }, { width: 4, height: 4 });
+    const source = newLayer({ id: 'smart', name: 'Smart Object', kind: 'embedded', transform, raster: rgba(4, 4),
+      content: { mode: 'embedded', mediaType: 'image', sourceName: 'source.png', width: 4, height: 4 } });
+    session.installProject({ id: 'document', width: 100, height: 80, resolution: 72,
+      layers: [source], selection: null }, source.id, null);
+    const corners = [{ x: 10, y: 10 }, { x: 18, y: 9 }, { x: 16, y: 15 }, { x: 9, y: 14 }] as const;
+    distort(session, corners);
+    expect(session.activeLayer!.raster).toBe(source.raster);
+    expect(session.activeLayer!.warp).toEqual({ kind: 'quad', schemaVersion: 1, corners });
+  });
+
   it('commitTransform raster-distorts an attached linked mask and undo restores both sources', () => {
     const session = new EditorSession();
     const transform = makeTransform({ x: 10, y: 10 }, { width: 4, height: 4 });

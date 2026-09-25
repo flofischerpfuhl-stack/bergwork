@@ -20,7 +20,7 @@ export function unionRect(rects: readonly Rect[]): Rect | null {
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 }
 
-/** Units for the selected ids; folders stand for their pixel-carrying descendants. Units without pixels are skipped. */
+/** Units for the selected ids; folders stand for every displayed descendant. */
 export function alignUnits(document: CanvasDocument, selected: readonly string[], box: (layer: Layer) => Rect = (l) => boundingBox(l.transform)): AlignUnit[] {
   const byId = new Map(document.layers.map((l) => [l.id, l]));
   const units: AlignUnit[] = [];
@@ -29,8 +29,7 @@ export function alignUnits(document: CanvasDocument, selected: readonly string[]
     const layer = byId.get(id);
     if (!layer || covered.has(id)) continue;
     const members = layer.kind === 'group' ? [...descendantIds(document.layers, id)].map((d) => byId.get(d)!).filter((l) => l && l.kind !== 'group') : [layer];
-    const withPixels = members.filter((l) => !!l.raster);
-    const rect = unionRect(withPixels.map(box));
+    const rect = unionRect(members.map(box));
     if (!rect) continue;
     for (const m of members) covered.add(m.id);
     units.push({ ids: members.map((m) => m.id), box: rect });

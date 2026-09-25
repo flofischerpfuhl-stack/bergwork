@@ -62,8 +62,9 @@ export function homography(corners: readonly Point[]): (point: Point) => Point {
   };
 }
 
-function inverseHomography(corners: DistortCorners): (point: Point) => Point {
-  const m = coefficients(corners);
+/** Document point to unit-square coordinates for a projective quad. */
+export function inverseHomography(corners: readonly Point[]): (point: Point) => Point {
+  const m = coefficients(corners as DistortCorners);
   const a = m.a, b = m.b, c = m.x0, d = m.d, e = m.e, f = m.y0, g = m.g, h = m.h;
   const A = e - f * h, B = c * h - b, C = b * f - c * e;
   const D = f * g - d, E = a - c * g, F = c * d - a * f;
@@ -72,6 +73,16 @@ function inverseHomography(corners: DistortCorners): (point: Point) => Point {
     const w = G * p.x + H * p.y + I;
     return { x: (A * p.x + B * p.y + C) / w, y: (D * p.x + E * p.y + F) / w };
   };
+}
+
+/** Column-major inverse homography for GLSL (`doc -> unit`, homogeneous divide required). */
+export function inverseHomographyMatrix(corners: readonly Point[]): Float32Array {
+  const m = coefficients(corners as DistortCorners);
+  const a = m.a, b = m.b, c = m.x0, d = m.d, e = m.e, f = m.y0, g = m.g, h = m.h;
+  const A = e - f * h, B = c * h - b, C = b * f - c * e;
+  const D = f * g - d, E = a - c * g, F = c * d - a * f;
+  const G = d * h - e * g, H = b * g - a * h, I = a * e - b * d;
+  return new Float32Array([A, D, G, B, E, H, C, F, I]);
 }
 
 function imageCorners(c: DistortCorners, flipX: boolean, flipY: boolean): DistortCorners {
@@ -109,7 +120,7 @@ function sampleBilinear(raster: Raster, edgeX: number, edgeY: number, out: numbe
 
 function insideUnit(p: Point): boolean { return p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1; }
 
-function boundsOf(corners: DistortCorners): Rect {
+export function distortBounds(corners: readonly Point[]): Rect {
   const xs = corners.map((p) => p.x), ys = corners.map((p) => p.y);
   const x = Math.floor(Math.min(...xs)), y = Math.floor(Math.min(...ys));
   return { x, y, width: Math.ceil(Math.max(...xs)) - x, height: Math.ceil(Math.max(...ys)) - y };
@@ -126,7 +137,7 @@ export function warpRaster(raster: Raster, transform: LayerTransform, corners: r
 function warp(raster: Raster, transform: LayerTransform, corners: readonly Point[],
   background: number, maskBackground: boolean): WarpResult {
   if (!isUsableDistort(corners)) throw new RangeError('This is not a valid Compositor project, or its metadata is damaged.');
-  const bounds = boundsOf(corners);
+  const bounds = distortBounds(corners);
   if (bounds.width < 1 || bounds.height < 1 || bounds.width > 30_000 || bounds.height > 30_000
     || bounds.width * bounds.height > 100_000_000) {
     throw new RangeError('This project exceeds the supported canvas, layer, file-size, or 100-megapixel image limit.');

@@ -24,6 +24,7 @@ import {
 import { DocumentHistory, type HistorySnapshot, type PersistedHistoryState } from './history';
 import { uuid } from './ids';
 import { alignOffsets, alignUnits, distributeOffsets, type AlignEdge, type AlignUnit, type DistributeMode } from './align';
+import { artboardMembership } from './artboards';
 import { translated } from './canvasOps';
 import { selectionBounds } from './selectionOps';
 import { Raster } from './raster';
@@ -1292,7 +1293,9 @@ export class EditorSession {
   beginDistort(): void {
     const edit = this.transformEdit;
     if (!edit || edit.corners || !isValidTransform(edit.draft)) return;
-    this.transformEdit = { ...edit, persistent: true, corners: transformCorners(edit.draft) };
+    const layer = this.layer(edit.layerId);
+    this.transformEdit = { ...edit, persistent: true,
+      corners: !edit.group && layer?.warp ? layer.warp.corners.map((point) => ({ ...point })) : transformCorners(edit.draft) };
     this.notify('document');
   }
 
@@ -1569,7 +1572,10 @@ export class EditorSession {
           const target = edit.group
             ? groupDistortTarget(edit.group.originals.get(id)!, edit.group.box, edit.draft, quad)
             : { transform: edit.draft, corners: quad };
-          if (target) this.updateLayer(id, () => distortLayer(layer, target.transform, target.corners));
+          if (target) this.updateLayer(id, () => layer.kind === 'embedded' || layer.warp
+            ? { ...layer, transform: target.transform,
+              warp: { kind: 'quad', schemaVersion: 1, corners: [...target.corners] as [Point, Point, Point, Point] } }
+            : distortLayer(layer, target.transform, target.corners));
         } catch (error) {
           this.errorMessage = (error as Error).message;
         }
@@ -1604,7 +1610,8 @@ export class EditorSession {
       for (const id of ids) {
         this.updateLayer(id, (l) => {
           const flipped = mirrored(l.transform, horizontally, axis);
-          return { ...l, transform: flipped, mask: l.mask ? { ...l.mask, placement: maskPlacementMoving(l.mask, l.transform, flipped) } : null };
+          return vectorLayerWithTransform({ ...l,
+            mask: l.mask ? { ...l.mask, placement: maskPlacementMoving(l.mask, l.transform, flipped) } : null }, flipped);
         });
       }
     });
@@ -1823,16 +1830,24 @@ export class EditorSession {
   canAlign(): boolean { return this.canEditLayers && alignUnits(this.document!, this.alignSelection(), (l) => boundingBox(this.displayedTransform(l))).length >= 1; }
   canDistribute(): boolean { return this.canEditLayers && alignUnits(this.document!, this.alignSelection(), (l) => boundingBox(this.displayedTransform(l))).length >= 3; }
 
-  /** Photoshop's rule: several layers align to their common box; one layer to the selection, or else to the canvas. */
+  /** Photoshop's rule: several layers align to their common box; one layer to the selection, its artboard, or the canvas. */
   alignLayers(edge: AlignEdge): void {
     const document = this.document;
     if (!document || !this.canEditLayers) return;
     const units = alignUnits(document, this.alignSelection(), (l) => boundingBox(this.displayedTransform(l)));
     if (!units.length) return;
     const selection = this.selection;
-    const target = units.length > 1 ? null
-      : selection ? selectionBounds(selection) ?? { x: 0, y: 0, width: document.width, height: document.height }
-        : { x: 0, y: 0, width: document.width, height: document.height };
+    let target: Rect | null = null;
+    if (units.length === 1) {
+      target = selection ? selectionBounds(selection) : null;
+      if (!target) {
+        const membership = artboardMembership(document, (layer) => layer.kind === 'group'
+          || layer.kind === 'adjustment' ? null : boundingBox(this.displayedTransform(layer)));
+        const boardIds = new Set(units[0]!.ids.map((id) => membership.get(id)).filter((id): id is string => !!id));
+        const board = boardIds.size === 1 ? document.artboards?.find((value) => boardIds.has(value.id)) : null;
+        target = board?.rect ?? { x: 0, y: 0, width: document.width, height: document.height };
+      }
+    }
     this.moveUnits(units, alignOffsets(units, edge, target), 'Align Layers');
   }
 
@@ -1853,7 +1868,7 @@ export class EditorSession {
     this.edit(name, () => {
       this.document = { ...this.document!, layers: this.document!.layers.map((l) => {
         const o = moves.get(l.id);
-        return o ? translated(l, Math.round(o.dx), Math.round(o.dy)) : l;
+        return o ? translated(l, o.dx, o.dy) : l;
       }) };
     });
   }

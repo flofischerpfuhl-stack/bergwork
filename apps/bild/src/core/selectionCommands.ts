@@ -229,13 +229,14 @@ export function invertPixels(session: EditorSession): boolean {
   return installEdit(session, target, editRaster(target.raster, target.transform, session.selection, 'invert'), target.mask ? 'Invert Mask' : 'Invert');
 }
 
-/** LayerMask.swift `addMask`: base colour with the selected area painted the opposite. */
+/** PRODUCT-PLAN decision: Photoshop Reveal Selection is white inside and black outside. */
 export function addMaskFromSelection(session: EditorSession, revealing = true): boolean {
   const selection = session.selection, layer = session.activeLayer;
   if (!selection) { const before = layer?.mask; session.addLayerMask(revealing); return before !== session.activeLayer?.mask; }
   if (!layer || layer.mask || !session.canEditMask) return false;
   const width = layer.raster?.width ?? layerPixelWidth(layer), height = layer.raster?.height ?? layerPixelHeight(layer);
-  const base = revealing ? 255 : 0, opposite = 255 - base;
+  // LayerMask.swift uses the inverse polarity; Fernwork follows Photoshop muscle memory here.
+  const base = revealing ? 0 : 255, opposite = 255 - base;
   const data = new Uint8Array(width * height); data.fill(base);
   const map = pixelToDocument(layer.transform, width, height);
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {

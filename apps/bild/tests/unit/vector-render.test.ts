@@ -35,6 +35,17 @@ describe('PRODUCT-PLAN A5 CanvasKit vector engine', () => {
     expect(raster.toPixels()).toEqual(new Uint8Array(8 * 6 * 4));
   });
 
+  it('clips an inside stroke to the path even when Fill is None', () => {
+    const path = { ...rectanglePath(50, 40), points: rectanglePath(50, 40).points.map((point) => ({ ...point,
+      anchor: { x: point.anchor.x + 15, y: point.anchor.y + 15 }, in: { x: point.in.x + 15, y: point.in.y + 15 },
+      out: { x: point.out.x + 15, y: point.out.y + 15 } })) };
+    const raster = renderVector(engine, [path], { schemaVersion: 1, fill: null,
+      stroke: { color: { red: 1, green: 0, blue: 0 }, width: 6, alignment: 'inside' } }, 80, 70);
+    expect(raster.pixel(17, 35)).toEqual([255, 0, 0, 255]);
+    expect(raster.pixel(12, 35)[3]).toBe(0);
+    expect(raster.pixel(40, 35)[3]).toBe(0);
+  });
+
   it('paints a path onto RGBA16 without reducing the destination precision', () => {
     const source = new Uint16Array(8 * 8 * 4);
     source.fill(12345); for (let i = 3; i < source.length; i += 4) source[i] = 65535;

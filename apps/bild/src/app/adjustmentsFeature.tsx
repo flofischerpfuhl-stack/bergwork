@@ -709,6 +709,7 @@ function FilterControls({ controller, filter, settings: s, onChange }: {
       <>
         <SliderRow label={t('Luminance')} value={s.luminance} min={0} max={100} suffix="%" testId="denoiseLuminance" onChange={(luminance) => set({ luminance })} />
         <SliderRow label={t('Color Noise')} value={s.colour} min={0} max={100} suffix="%" testId="denoiseColour" onChange={(colour) => set({ colour })} />
+        <SliderRow label={t('Preserve Details')} value={s.detail} min={0} max={100} suffix="%" testId="denoiseDetail" onChange={(detail) => set({ detail })} />
       </>
     );
   }

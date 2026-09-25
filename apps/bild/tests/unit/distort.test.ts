@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyDistort } from '../../src/core/canvasOps';
+import { compositeRegion } from '../../src/core/composite';
 import { distortLayer, homography, isUsableDistort, maskBackground, warpMask, warpRaster, warpRasterTrimmed,
   type DistortCorners } from '../../src/core/distort';
 import { makeTransform } from '../../src/core/geometry';
@@ -89,5 +90,21 @@ describe('DistortWarp (Distort.swift)', () => {
     expect(session.activeLayer!.transform.size).toEqual({ width: 50, height: 20 });
     expect(session.undo()).toBe(true);
     expect(session.activeLayer!.raster).toBe(raster);
+  });
+
+  it('CPU compositing reads a live WarpQuad instead of the affine layer rectangle', () => {
+    const layer = newLayer({ id: 'smart', name: 'Smart Object', kind: 'embedded',
+      content: { mode: 'embedded', mediaType: 'image', sourceName: 'smart.png', width: 4, height: 4 },
+      raster: solid(4, 4, [20, 90, 220, 255]),
+      transform: makeTransform({ x: 0, y: 0 }, { width: 8, height: 8 }, { sampling: 'Nearest' }),
+      warp: { kind: 'quad', schemaVersion: 1,
+        corners: [{ x: 1, y: 1 }, { x: 7, y: 0 }, { x: 5, y: 7 }, { x: 1, y: 6 }] } });
+    const document: CanvasDocument = { id: 'warp', width: 8, height: 8, resolution: 72,
+      layers: [layer], selection: null };
+    const pixels = compositeRegion(document, { x: 0, y: 0, width: 8, height: 8 }).rgba;
+    const alpha = (x: number, y: number) => pixels[(y * 8 + x) * 4 + 3];
+    expect(alpha(3, 3)).toBe(255);
+    expect(alpha(7, 7)).toBe(0);
+    expect(alpha(0, 0)).toBe(0);
   });
 });

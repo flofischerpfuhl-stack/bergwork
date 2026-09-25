@@ -89,7 +89,8 @@ function browserFonts(): FontHost {
       return fonts.map((font, index) => {
         const id = `${font.postscriptName}\u0000${index}`;
         cache.set(id, font);
-        return { id, family: font.family, style: font.fullName.slice(font.family.length).trim() || 'Regular', postscriptName: font.postscriptName };
+        return { id, family: font.family, fullName: font.fullName,
+          style: font.fullName.slice(font.family.length).trim() || 'Regular', postscriptName: font.postscriptName };
       });
     },
     async loadSystemFont(id: string): Promise<Uint8Array> {

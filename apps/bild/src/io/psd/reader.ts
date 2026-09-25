@@ -758,16 +758,26 @@ function psdTextBox(data: LayerTextData, width: number, height: number): { width
 }
 
 function psdTextTransform(data: LayerTextData, fallback: LayerTransform,
-  box: { width: number; height: number } | null): LayerTransform {
+  box: { width: number; height: number } | null, resolution: number): LayerTransform {
   const matrix = data.transform;
   if (!matrix || matrix.length !== 6 || !matrix.every(Number.isFinite)) return fallback;
   const [a, b, c, d, tx, ty] = matrix as [number, number, number, number, number, number];
-  const localWidth = box?.width ?? Math.max(1, fallback.size.width);
-  const localHeight = box?.height ?? Math.max(1, fallback.size.height);
+  const pointSizes = (data.styleRuns?.length ? data.styleRuns.map((run) => run.style) : [data.style ?? {}]);
+  const fontSize = Math.max(1, ...pointSizes.map((style) => style.fontSize ?? DEFAULT_TEXT_STYLE.fontSize)) * resolution / 72;
+  const leading = Math.max(fontSize * 1.2, ...pointSizes.map((style) => style.autoLeading === false && style.leading
+    ? style.leading * resolution / 72 : fontSize * 1.2));
+  const lines = data.text.replace(/\r/g, '\n').split('\n');
+  const localWidth = box?.width ?? Math.max(1, fallback.size.width,
+    Math.max(...lines.map((line) => [...line].length), 1) * fontSize * 0.6);
+  const localHeight = box?.height ?? Math.max(1, fallback.size.height, lines.length * leading);
   const scaleX = Math.hypot(a, b), scaleY = Math.hypot(c, d);
   if (!(scaleX > 0) || !(scaleY > 0)) return fallback;
-  return makeTransform({ x: tx + (data.left ?? 0) * a + (data.top ?? 0) * c,
-    y: ty + (data.left ?? 0) * b + (data.top ?? 0) * d },
+  const left = Number.isFinite(data.left) ? data.left! : 0;
+  // PSD point-text transforms locate the first baseline. Use the shaped line metrics rather than
+  // absent TySh bounds; area text continues to use its explicit box origin.
+  const top = Number.isFinite(data.top) ? data.top! : box ? 0 : -fontSize * 1.069;
+  return makeTransform({ x: tx + left * a + top * c,
+    y: ty + left * b + top * d },
   { width: Math.max(1, localWidth * scaleX), height: Math.max(1, localHeight * scaleY) },
   { rotation: Math.atan2(b, a) * 180 / Math.PI, flipX: a < 0, flipY: d < 0, sampling: 'High quality' });
 }
@@ -820,7 +830,7 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const textData = !isGroup ? source.text : undefined;
     const editableText = textData?.text.replace(/\r/g, '\n') ?? '';
     const textBox = textData ? psdTextBox(textData, width, height) : null;
-    const editableTransform = textData ? psdTextTransform(textData, layerTransform, textBox) : layerTransform;
+    const editableTransform = textData ? psdTextTransform(textData, layerTransform, textBox, state.resolution) : layerTransform;
     const vectorContent = !isGroup && !textData && !!(source.vectorFill || source.vectorStroke)
       && (state.bitsPerChannel !== 8 || (!!source.vectorMask?.paths.length && !state.artboards));
     const fillBounds = source.mask && (source.mask.right ?? 0) > (source.mask.left ?? 0)
