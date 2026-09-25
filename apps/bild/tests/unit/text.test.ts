@@ -22,7 +22,7 @@ const fontFiles = new Map([
 function textLayer(): TextLayer {
   const text = 'office Übergröße\nمرحبا देवनागरी';
   return {
-    kind: 'text', id: 'text-1', name: 'Text', visible: true, locked: false, parentId: null, opacity: 1,
+    kind: 'text', id: 'text-1', name: 'Text', visible: true, parentId: null, opacity: 1,
     fillOpacity: 1, blendMode: 'normal', locks: { transparency: false, pixels: false, position: false, all: false },
     colorLabel: 'none', transform: makeTransform({ x: 40, y: 30 }, { width: 260, height: 100 }), warp: null,
     crop: null, mask: null, vectorMask: null, maskSourceId: null, effects: [], filters: [], raster: null, text,

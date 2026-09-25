@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { applyDistort } from '../../src/core/canvasOps';
 import { compositeRegion } from '../../src/core/composite';
 import { distortLayer, homography, isUsableDistort, maskBackground, warpMask, warpRaster, warpRasterTrimmed,
   type DistortCorners } from '../../src/core/distort';
 import { makeTransform } from '../../src/core/geometry';
 import { newLayer, type CanvasDocument } from '../../src/core/document';
 import { Raster } from '../../src/core/raster';
-import { EditorSession } from '../../src/core/session';
 import { trimmed } from '../../src/core/trim';
 
 function solid(width: number, height: number, color: [number, number, number, number]): Raster {
@@ -72,7 +70,7 @@ describe('DistortWarp (Distort.swift)', () => {
     expect(moved.raster.pixel(45, 18)[0]).toBeGreaterThan(200);
   });
 
-  it('commit helper carries mask rules and applyDistort is one undo step', () => {
+  it('commit helper carries mask rules', () => {
     const raster = solid(20, 20, [255, 0, 0, 255]);
     const maskRaster = Raster.fromPixels(20, 20, 1, new Uint8Array(400).fill(255));
     const layer = newLayer({ id: 'red', name: 'Red', raster,
@@ -82,14 +80,6 @@ describe('DistortWarp (Distort.swift)', () => {
     expect(distorted.mask!.placement).toEqual(layer.transform);
     expect(distorted.mask!.raster).toBe(maskRaster);
 
-    const doc: CanvasDocument = { id: 'doc', width: 100, height: 60, resolution: 72, layers: [layer], selection: null };
-    const session = new EditorSession();
-    session.installProject(doc, 'red', null);
-    expect(applyDistort(session, 'red', layer.transform, shape)).toBe(true);
-    expect(session.history.undoName).toBe('Distort');
-    expect(session.activeLayer!.transform.size).toEqual({ width: 50, height: 20 });
-    expect(session.undo()).toBe(true);
-    expect(session.activeLayer!.raster).toBe(raster);
   });
 
   it('CPU compositing reads a live WarpQuad instead of the affine layer rectangle', () => {

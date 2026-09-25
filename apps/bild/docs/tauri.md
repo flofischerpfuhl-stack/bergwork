@@ -2,11 +2,10 @@
 
 Fernwork Bildeditor uses one engine and two host entries: the ordinary browser entry and
 `src-tauri/frontend/main.ts`. The Tauri entry mounts the same exported editor with
-`createTauriHost(): FileTargetHost`. It provides `chooseImages()`, `chooseProject()`,
-`saveFileAs(blob, suggestedName, kind)`, `saveFileTo(target, blob)`, and the contract fallback
-`saveFile(blob, suggestedName)` through Tauri's dialog and filesystem plugins. Selected paths are
-the only paths passed to the filesystem plugin. No updater, telemetry, background service, or
-runtime network call is included.
+`createTauriHost(): FileTargetHost`. Its versioned `files` capability provides native pickers,
+recent/open-file events, save targets, and streaming writes through Tauri's dialog and filesystem
+plugins; the frozen v1 contract remains available as a fallback. Selected paths are the only paths
+passed to the filesystem plugin. No updater, telemetry, or background service is included.
 
 The adapter also publishes the A0 versioned capability registry: native file
 targets and OS-open events, system-font enumeration/loading, SHA-256 compute,
@@ -27,9 +26,8 @@ after a successful open.
 npm run tauri:dev
 npm run tauri:build
 npm run tauri:build -- --no-bundle
+VITE_FERNWORK_MEASUREMENT=1 npm run tauri:build -- --features measurement --no-bundle
 bash scripts/tauri-webview-matrix.sh /tmp/fernwork-webkitgtk-matrix.json
-bash scripts/tauri-build.sh --features a6-spike --no-bundle
-bash scripts/tauri-a6b.sh /tmp/fernwork-a6b-results
 bash scripts/tauri-offline-probe.sh 300
 ```
 
@@ -41,13 +39,6 @@ Windows checkout otherwise picks WSL's `bash.exe`). `.gitattributes` keeps `*.sh
 binary is `src-tauri/target/release/fernwork-bildeditor`. The scripts source
 `scripts/tauri-env.sh`, so a new login shell is not required after rustup.
 
-`tauri-a6b.sh` is the Linux-only A6 follow-up harness. It records `uptime` before each process,
-waits while the one-minute load average is above 3, runs default and forced-SHM rendering three
-times each (plus an optional `GDK_SCALE=2` resize/DPR visual check), and compares native-window and raw
-WebGL captures. Its full runs also compare the browser JPEG pipeline with a one-response native
-decode for compressible and noisy 46-MP fixtures. Pillow is required only by this measurement
-script, not by the product.
-
 `tauri-offline-probe.sh` launches only the specified release binary and samples the sockets of that
 process tree. It fails on TCP or connected-UDP remote endpoints and terminates only the PID it
 started. Linux `/proc` does not expose unconnected UDP `sendto` destinations; this limitation is
@@ -58,9 +49,9 @@ The release CSP deliberately omits JavaScript `'unsafe-eval'`. The WebGL composi
 and does not weaken the policy or enable string evaluation. Without the adapter, Pixi falls back to
 the software compositor in the hardened Tauri build.
 
-The product does not force WebKitGTK's shared-memory renderer. A6b found one forced-SHM run with a
-99.99 ms native after-paint p95 and 53 dropped refresh intervals, so the presentation gate failed
-despite lower `gl.finish` timings. `WEBKIT_DMABUF_RENDERER_FORCE_SHM` remains entirely user-controlled.
+The product does not force WebKitGTK's shared-memory renderer. Historical measurements found that
+forcing shared-memory presentation could regress frame delivery, so
+`WEBKIT_DMABUF_RENDERER_FORCE_SHM` remains entirely user-controlled.
 
 ## Rootless Linux setup reproduced on this laptop
 
@@ -170,9 +161,9 @@ or launch command by `tauri-env.sh`.
 ## Measurement harness
 
 `tests/webview/matrix.ts` is the one script used by packaged Tauri/WebKitGTK and Playwright
-Chromium. The optional `scripts/tauri-webkitgtk-fallback.py` loads the same Vite page through the
-installed `python3-gi` WebKit2 4.1 typelib if a Tauri build is unavailable. On this machine the
-packaged Tauri lane worked, so the fallback was not used.
+Chromium. It is excluded from normal frontend builds. To include it, set
+`VITE_FERNWORK_MEASUREMENT=1` for the frontend build and enable the Rust `measurement` feature;
+only that feature registers `write_matrix_result`.
 
 The heap probe retains numeric arrays in a module worker and reports both the engine-advertised
 limit (when exposed) and successful retained allocation. It has a 1024 MiB safety ceiling to avoid
@@ -217,11 +208,10 @@ right click, Escape or 60 s cancel.
 
 ## Current scope
 
-The host reads and writes whole files through plugin byte arrays; A6 binary channels, scratch mmap,
-native codec acceleration and A6 high-volume binary IPC are not implemented;
-the named checksum job is the real A0 ComputeHost reference job. Updater support
-is not implemented. The A1 measurement entry writes a JSON result only when explicitly launched with
-`FERNWORK_WEBVIEW_MATRIX=1` and `FERNWORK_MATRIX_RESULT`; ordinary runtime has no such write or
-network activity. Linux bundles are currently `.deb` and `.rpm`; Tauri's downloaded `linuxdeploy`
+The host streams project archives to native save targets. Native codec acceleration is not implemented;
+the named checksum job is the A0 `ComputeHost` reference job. Updater support is not implemented.
+The measurement entry writes JSON only in a build made with both the frontend flag and Rust feature,
+then explicitly launched with `FERNWORK_WEBVIEW_MATRIX=1` and `FERNWORK_MATRIX_RESULT`; ordinary
+runtime does not register that write command. Linux bundles are currently `.deb` and `.rpm`; Tauri's downloaded `linuxdeploy`
 helper exited nonzero while attempting an AppImage on this host, so AppImage is not a configured
 Linux target yet.

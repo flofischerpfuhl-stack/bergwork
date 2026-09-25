@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyCanvasSize, applyCrop, cropSnapTargets } from '../../src/core/canvasOps';
+import { cropSnapTargets } from '../../src/core/canvasOps';
 import { flattenDocument } from '../../src/core/composite';
 import { makeTransform } from '../../src/core/geometry';
 import { Raster } from '../../src/core/raster';
@@ -7,6 +7,15 @@ import { invertPixels, loadMaskSelection } from '../../src/core/selectionCommand
 import { selectionBounds } from '../../src/core/selectionOps';
 import { EditorSession } from '../../src/core/session';
 import { ProjectWorkspace } from '../../src/core/workspace';
+import { documentFromTransfer, documentToTransfer } from '../../src/core/transfer';
+import { runOp } from '../../src/workers/opsRun';
+import type { OpsRequest } from '../../src/workers/opsProtocol';
+
+function workerDocument(document: NonNullable<EditorSession['document']>, request: (value: ReturnType<typeof documentToTransfer>) => OpsRequest) {
+  const response = runOp(request(documentToTransfer(document)), 1);
+  if (!response.ok || !response.document) throw new Error(response.ok ? 'missing worker document' : response.error);
+  return documentFromTransfer(response.document, document);
+}
 
 function solid(width: number, height: number, rgba: readonly [number, number, number, number]): Raster {
   const pixels = new Uint8Array(width * height * 4);
@@ -18,12 +27,14 @@ describe('upstream CropTests and CanvasSizeTests', () => {
   it('sameSizeOffsetCropAndExpansionUseExactBounds', () => {
     const session = new EditorSession(); session.createDocument(100, 50); session.addBlankLayer();
     const id = session.activeLayerId!;
-    expect(applyCrop(session, { x: -20, y: 10, width: 100, height: 50 })).toBe(true);
-    expect(session.layer(id)!.transform.origin).toEqual({ x: 20, y: -10 });
-    expect(applyCrop(session, { x: -10, y: -10, width: 140, height: 80 })).toBe(true);
-    expect(session.document).toMatchObject({ width: 140, height: 80 });
-    expect(session.layer(id)!.transform.origin).toEqual({ x: 30, y: 0 });
-    expect(flattenDocument(session.document!).pixel(0, 0)[3]).toBe(0);
+    const first = workerDocument(session.document!, (document) => ({ op: 'crop', document,
+      rect: { x: -20, y: 10, width: 100, height: 50 }, options: {} }));
+    expect(first.layers.find((layer) => layer.id === id)!.transform.origin).toEqual({ x: 20, y: -10 });
+    const second = workerDocument(first, (document) => ({ op: 'crop', document,
+      rect: { x: -10, y: -10, width: 140, height: 80 }, options: {} }));
+    expect(second).toMatchObject({ width: 140, height: 80 });
+    expect(second.layers.find((layer) => layer.id === id)!.transform.origin).toEqual({ x: 30, y: 0 });
+    expect(flattenDocument(second).pixel(0, 0)[3]).toBe(0);
   });
 
   it('cancellationAndViewportMappingDoNotEditDocument', () => {
@@ -53,16 +64,14 @@ describe('upstream CropTests and CanvasSizeTests', () => {
     expect(new Set(targets.ys)).toEqual(new Set([0, 300, 120, 180]));
   });
 
-  it('coloredExtensionPreservesOldTransparencyAndRoundTripsWithUndo', () => {
+  it('coloredExtensionPreservesOldTransparencyThroughTheWorkerPath', () => {
     const session = new EditorSession(); session.createDocument(4, 4); session.addBlankLayer();
-    const before = session.document;
-    expect(applyCanvasSize(session, 8, 2, 4, { fill: { red: 1, green: 0, blue: 0 } })).toBe(true);
-    const rendered = flattenDocument(session.document!);
+    const resized = workerDocument(session.document!, (document) => ({ op: 'canvasSize', document,
+      width: 8, height: 2, anchor: 4, options: { fill: { red: 1, green: 0, blue: 0 } } }));
+    const rendered = flattenDocument(resized);
     expect(rendered.pixel(0, 0)).toEqual([255, 0, 0, 255]);
     expect(rendered.pixel(3, 0)[3]).toBe(0);
     expect(rendered.pixel(7, 1)).toEqual([255, 0, 0, 255]);
-    session.undo(); expect(session.document).toBe(before);
-    session.redo(); expect(session.document).toMatchObject({ width: 8, height: 2 });
   });
 });
 

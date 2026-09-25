@@ -34,10 +34,9 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
   const document = session.document;
   const canStart = controller.workspace.canSwitch;
   const layer = session.activeLayer;
-  const pending = t('Not yet available in the browser port');
   const feature = (key: string, label: string, shortcut?: string): MenuItem => {
     const f = features[key];
-    return f ? { label, shortcut, enabled: f.enabled(), run: f.run, checked: f.checked?.() } : { label, shortcut, enabled: false, note: pending };
+    return f ? { label, shortcut, enabled: f.enabled(), run: f.run, checked: f.checked?.() } : { label, shortcut, enabled: false };
   };
   const mergePlan = session.mergePlan();
   return [
@@ -163,7 +162,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         controller.layerStyles
           ? { label: t('Layer Style'), enabled: !!layer && controller.layerStyles.styleable(layer.id), testId: 'menu-layer-style',
             submenu: layer ? controller.layerStyles.menu(layer.id) : [] }
-          : { label: t('Layer Style'), enabled: false, note: pending },
+          : { label: t('Layer Style'), enabled: false },
         { label: t('Layer Mask'), enabled: !!layer && session.canEditMask && !layer.mask, testId: 'menu-layer-mask', submenu: [
           { label: t('Reveal All'), enabled: !session.selection, run: () => controller.addMask(true) },
           { label: t('Hide All'), enabled: !session.selection, run: () => controller.addMask(false) },

@@ -11,6 +11,7 @@
  * https://helpx.adobe.com/photoshop/desktop/repair-retouch/adjust-light-tone/blending-mode-descriptions.html
  */
 import type { BlendMode } from './document';
+import { linearToSrgb, srgbToLinear } from './pixel/color';
 
 export type RGB = readonly [number, number, number];
 
@@ -19,15 +20,6 @@ export const SPECIAL_FILL_BLEND_MODES: ReadonlySet<BlendMode> = new Set([
 ]);
 
 export function clamp01(value: number): number { return Math.min(1, Math.max(0, value)); }
-
-export function srgbToLinear(value: number): number {
-  return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-}
-
-export function linearToSrgb(value: number): number {
-  const v = clamp01(value);
-  return v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055;
-}
 
 function lum3(r: number, g: number, b: number): number { return 0.3 * r + 0.59 * g + 0.11 * b; }
 function sat3(r: number, g: number, b: number): number { return Math.max(r, g, b) - Math.min(r, g, b); }
@@ -166,9 +158,9 @@ export function blendRgbInto(mode: BlendMode, br: number, bg: number, bb: number
     case 'luminosity': setLumInto(br, bg, bb, lum3(sr, sg, sb), out); return;
     default: {
       if (linearDodgeBurn && (mode === 'colorDodge' || mode === 'colorBurn')) {
-        out[0] = linearToSrgb(channel(mode, srgbToLinear(br), srgbToLinear(sr)));
-        out[1] = linearToSrgb(channel(mode, srgbToLinear(bg), srgbToLinear(sg)));
-        out[2] = linearToSrgb(channel(mode, srgbToLinear(bb), srgbToLinear(sb)));
+        out[0] = linearToSrgb(clamp01(channel(mode, srgbToLinear(br), srgbToLinear(sr))));
+        out[1] = linearToSrgb(clamp01(channel(mode, srgbToLinear(bg), srgbToLinear(sg))));
+        out[2] = linearToSrgb(clamp01(channel(mode, srgbToLinear(bb), srgbToLinear(sb))));
         return;
       }
       out[0] = channel(mode, br, sr); out[1] = channel(mode, bg, sg); out[2] = channel(mode, bb, sb);

@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import type { Layer } from '../../src/core/document';
 
 test('A6b dirty brush frames and committed bytes equal full recomposition and CPU replay', async ({ page }) => {
-  await page.goto('/tests/webview/a6b-test.html');
+  await page.goto('/tests/e2e/a6b-test.html');
   const result = await page.evaluate(async () => {
     const load = <T,>(path: string): Promise<T> => import(/* @vite-ignore */ path) as Promise<T>;
     const [{ GpuCompositor }, brush, { EditorSession }, { Raster }, documentModule, geometry] = await Promise.all([

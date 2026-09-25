@@ -117,8 +117,6 @@ export interface HostCapabilityMap {
 export interface CapabilityHost extends HostAdapter {
   readonly capabilities?: HostCapabilityMap;
   readonly defaultProfile?: 'pro' | 'lite';
-  /** @deprecated URL override retained for embedders; ModelHost remains responsible for fetching and caching. */
-  readonly subjectModelUrls?: Readonly<{ fast?: string; best?: string }>;
 }
 
 export type CapabilityName = keyof HostCapabilityMap;
@@ -152,7 +150,6 @@ export function capabilitiesOf(host: HostAdapter): HostCapabilityMap {
   const legacy = host as HostAdapter & {
     chooseSaveTarget?: FileSystemHost['chooseSaveTarget']; saveFileTo?: FileSystemHost['writeFile'];
     decodeImage?: CodecHost['decodeImage']; heicDecoder?: CodecHost['heicDecoder'];
-    subjectModelUrls?: CapabilityHost['subjectModelUrls'];
   };
   const declaredFiles = declared.files && (!capabilityOwners.has(declared.files) || capabilityOwners.get(declared.files) === host)
     ? declared.files : undefined;
@@ -165,13 +162,5 @@ export function capabilitiesOf(host: HostAdapter): HostCapabilityMap {
   const codecs = declared.codecs ?? (legacy.decodeImage || legacy.heicDecoder ? {
     version: 1 as const, decodeImage: legacy.decodeImage?.bind(host), heicDecoder: legacy.heicDecoder,
   } : undefined);
-  const models = declared.models ? {
-    version: declared.models.version,
-    resolveModel(request: ModelRequest, progress?: Parameters<ModelHost['resolveModel']>[1], signal?: AbortSignal) {
-      const modelUrls = legacy.subjectModelUrls;
-      const override = modelUrls?.[request.id === 'u2netp' ? 'fast' : 'best'];
-      return declared.models!.resolveModel(override ? { ...request, url: override } : request, progress, signal);
-    },
-  } satisfies ModelHost : declared.models;
-  return { ...declared, files, codecs, models };
+  return { ...declared, files, codecs };
 }

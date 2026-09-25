@@ -14,7 +14,6 @@ export function ToolRail({ controller }: { controller: EditorController }) {
   useWorkspace(controller);
   const session = useSession(controller.session);
   const t = controller.t;
-  const pending = t('Not yet available in the browser port');
   const color = (c: { red: number; green: number; blue: number }) => `rgb(${Math.round(c.red * 255)},${Math.round(c.green * 255)},${Math.round(c.blue * 255)})`;
   const fg = session.paletteColor(false), bg = session.paletteColor(true);
   return (
@@ -24,7 +23,7 @@ export function ToolRail({ controller }: { controller: EditorController }) {
         const label = controller.t(TOOL_LABELS[tool]);
         return (
           <button key={tool} type="button" className={`${styles.tool} ${session.tool === tool ? styles.toolOn : ''}`}
-            aria-pressed={session.tool === tool} aria-label={label} title={available ? label : `${label} — ${pending}`}
+            aria-pressed={session.tool === tool} aria-label={label} title={label}
             disabled={!available} data-testid={`tool-${tool}`} onClick={() => session.selectTool(tool)}>
             <Icon name={toolIcon(controller, tool)} size={19} />
           </button>

@@ -10,6 +10,7 @@
     "tauri:build": "node scripts/tauri.mjs build",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
+    "notices": "node scripts/notices.mjs",
     "test:unit": "vitest run tests/unit",
     "psd:fidelity": "vitest run --config tests/psd/vitest.config.ts",
     "test:e2e": "playwright test",

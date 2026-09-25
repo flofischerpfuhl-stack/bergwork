@@ -3,8 +3,7 @@
 import * as ort from 'onnxruntime-web/webgpu';
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.wasm?url';
 import ortModuleUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.mjs?url';
-import { downloadSubjectModel, ModelDownloadError } from '../core/subject/modelCache';
-import { SUBJECT_MODELS, subjectModelUrl } from '../core/subject/models';
+import { SUBJECT_MODELS } from '../core/subject/models';
 import {
   countMaskComponents, postprocessBiRefNet, postprocessU2Net, preprocessBiRefNet, preprocessU2Net,
   refineSubjectMask,
@@ -34,7 +33,6 @@ interface LoadedModel {
 
 const scope = self as unknown as DedicatedWorkerGlobalScope;
 const cancelled = new Set<number>();
-const downloads = new Map<number, AbortController>();
 const cache = new Map<string, CacheEntry>();
 let session: ort.InferenceSession | null = null;
 let sessionKey = '';
@@ -46,42 +44,28 @@ ort.env.wasm.proxy = false;
 ort.env.wasm.wasmPaths = { wasm: ortWasmUrl, mjs: ortModuleUrl };
 
 function post(message: SubjectWorkerResponse, transfer: Transferable[] = []): void { scope.postMessage(message, transfer); }
-function progress(id: number, stage: 'downloading-model' | 'loading-model' | 'inferring' | 'refining', value: number,
-  bytes?: { downloadedBytes: number; totalBytes: number | null }): void {
-  post({ id, type: 'progress', stage, progress: value, ...bytes });
+function progress(id: number, stage: 'loading-model' | 'inferring' | 'refining', value: number): void {
+  post({ id, type: 'progress', stage, progress: value });
 }
 
 async function loadModel(request: Extract<SubjectWorkerRequest, { op: 'infer' }>, forceWasm = false): Promise<LoadedModel> {
   const spec = SUBJECT_MODELS[request.model];
-  const url = subjectModelUrl(request.model, request.modelUrls);
-  const key = `${request.model}:${url}`;
+  const key = `${request.model}:${spec.sha256}`;
   if (session && sessionKey === key) return { session, downloadMs: 0, modelLoadMs: 0, cacheHit: true };
-
-  const controller = new AbortController();
-  downloads.set(request.id, controller);
-  progress(request.id, 'downloading-model', 0, { downloadedBytes: 0, totalBytes: spec.byteLength });
-  let downloaded;
-  try {
-    downloaded = await downloadSubjectModel(spec, url, ({ downloadedBytes, totalBytes }) => {
-      const fraction = totalBytes && totalBytes > 0 ? Math.min(1, downloadedBytes / totalBytes) : 0;
-      progress(request.id, 'downloading-model', fraction, { downloadedBytes, totalBytes });
-    }, controller.signal);
-  } finally { downloads.delete(request.id); }
-  if (cancelled.has(request.id)) throw abortError();
 
   progress(request.id, 'loading-model', 0);
   const started = performance.now();
   session?.release(); session = null;
   if (!forceWasm && typeof navigator !== 'undefined' && 'gpu' in navigator) {
     try {
-      session = await ort.InferenceSession.create(downloaded.bytes, {
+      session = await ort.InferenceSession.create(request.modelBytes, {
         executionProviders: ['webgpu'], graphOptimizationLevel: 'all',
       });
       backend = 'webgpu';
     } catch { session = null; }
   }
   if (!session) {
-    session = await ort.InferenceSession.create(downloaded.bytes, {
+    session = await ort.InferenceSession.create(request.modelBytes, {
       executionProviders: ['wasm'], graphOptimizationLevel: 'all',
     });
     backend = 'wasm';
@@ -89,7 +73,7 @@ async function loadModel(request: Extract<SubjectWorkerRequest, { op: 'infer' }>
   const modelLoadMs = performance.now() - started;
   sessionKey = key;
   progress(request.id, 'loading-model', 1);
-  return { session, downloadMs: downloaded.downloadMs, modelLoadMs, cacheHit: downloaded.cacheHit };
+  return { session, downloadMs: request.modelResolveMs, modelLoadMs, cacheHit: request.modelCacheHit };
 }
 
 async function infer(request: Extract<SubjectWorkerRequest, { op: 'infer' }>): Promise<void> {
@@ -167,7 +151,7 @@ async function finish(id: number, entry: CacheEntry, settings: BackgroundSetting
 scope.onmessage = (event: MessageEvent<SubjectWorkerRequest>) => {
   const request = event.data;
   if (request.op === 'cancel') {
-    cancelled.add(request.id); downloads.get(request.id)?.abort();
+    cancelled.add(request.id);
     return;
   }
   cancelled.delete(request.id);
@@ -180,10 +164,8 @@ scope.onmessage = (event: MessageEvent<SubjectWorkerRequest>) => {
     return finish(request.id, entry, request.settings, request.refinementLimit, inputSize);
   }).catch((error: unknown) => {
     if (cancelled.has(request.id) || isAbort(error)) return;
-    const download = error instanceof ModelDownloadError ? error : null;
-    post({ id: request.id, type: 'error', error: error instanceof Error ? error.message : String(error),
-      downloadedBytes: download?.downloadedBytes, totalBytes: download?.totalBytes, resumable: download?.resumable });
-  }).finally(() => { downloads.delete(request.id); cancelled.delete(request.id); });
+    post({ id: request.id, type: 'error', error: error instanceof Error ? error.message : String(error) });
+  }).finally(() => { cancelled.delete(request.id); });
 };
 
 function abortError(): DOMException { return new DOMException('Background removal was cancelled.', 'AbortError'); }

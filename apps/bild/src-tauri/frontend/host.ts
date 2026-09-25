@@ -7,8 +7,8 @@ import { webKitGtkMemoryBudgets } from '../../src/platform/runtimeMemory';
 import type { EditorController } from '../../src/ui/controller';
 
 interface NativeTarget extends SaveTarget { readonly path: string }
-const IMAGE_FILTER = { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff', 'heic', 'heif', 'psd', 'psb'] };
-const CONTENT_FILTER = { name: 'Placeable content', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff', 'heic', 'heif', 'svg', 'pdf', 'fwimg'] };
+const IMAGE_FILTER = { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif', 'tif', 'tiff', 'heic', 'heif', 'psd', 'psb'] };
+const CONTENT_FILTER = { name: 'Placeable content', extensions: ['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif', 'tif', 'tiff', 'heic', 'heif', 'svg', 'pdf', 'fwimg'] };
 const PROJECT_FILTER = { name: 'Fernwork image project or PSD', extensions: ['fwimg', 'zip', 'psd', 'psb'] };
 const SAVE_FILTERS: Record<'png' | 'jpeg' | 'webp' | 'avif' | 'tiff' | 'zip', { name: string; extensions: string[] }> = {
   png: { name: 'PNG image', extensions: ['png'] }, jpeg: { name: 'JPEG image', extensions: ['jpg', 'jpeg'] },

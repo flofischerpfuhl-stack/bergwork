@@ -137,7 +137,7 @@ export function ContextBar({ controller }: { controller: EditorController }) {
   else if (session.tool === 'move') content = <TransformInspector controller={controller} session={session} />;
   else if (session.tool === 'hand' || session.tool === 'zoom') content = <NavigationHeader controller={controller} session={session} />;
   else if (session.tool === 'idle') content = <span className={styles.headerTitle}>{t('Select a tool')}</span>;
-  else content = <span className={styles.headerTitle}>{t('Not yet available in the browser port')}</span>;
+  else content = <span className={styles.headerTitle}>{t('Tool options')}</span>;
   return <div className={styles.header} role="toolbar" aria-label={controller.t('Tool options')} data-testid="context-bar">{content}</div>;
 }
 

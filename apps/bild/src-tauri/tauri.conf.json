@@ -51,7 +51,7 @@
         "mimeType": "image/vnd.adobe.photoshop"
       },
       {
-        "ext": ["png", "jpg", "jpeg", "webp", "tif", "tiff", "heic", "heif"],
+        "ext": ["png", "jpg", "jpeg", "webp", "avif", "gif", "tif", "tiff", "heic", "heif"],
         "name": "Image",
         "description": "Image file",
         "role": "Editor",

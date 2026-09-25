@@ -43,14 +43,14 @@ function testLayer(id: string, raster: Raster | null, defaults: LegacyTestFields
 
 function rgbaLayer(id = BASE, extra: LegacyTestFields = {}): Layer {
   return testLayer(id, Raster.fromPixels(2, 2, 4, pixels()), {
-    name: 'Paint & sky 🌤', visible: false, locked: false, parentId: null,
+    name: 'Paint & sky 🌤', visible: false, parentId: null,
     opacity: 0.625, blendMode: 'multiply', transform, mask: null, maskSourceId: null,
   }, extra);
 }
 
 function blankLayer(id = CLIPPED, extra: LegacyTestFields = {}): Layer {
   return testLayer(id, null, {
-    name: 'Blank', visible: true, locked: false, parentId: null,
+    name: 'Blank', visible: true, parentId: null,
     opacity: 1, blendMode: 'normal', transform: makeTransform({ x: 0, y: 0 }, { width: 64, height: 32 }),
     mask: null, maskSourceId: null,
   }, extra);

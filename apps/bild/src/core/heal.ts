@@ -10,6 +10,7 @@ import { beginStroke, type Stroke, type StrokeResult, type StrokeUpdate } from '
 import type { BrushSettings } from './brush/settings';
 import { KernelClient } from '../workers/kernelClient';
 import type { SpotHealMode } from '../wasm/kernels';
+import { premultiplyRgba8InPlace, unpremultiplyRgba8InPlace } from './pixel/color';
 
 export type SpotHealingMode = 'contentAware' | 'createTexture' | 'proximityMatch';
 export const SPOT_HEALING_MODES: readonly SpotHealingMode[] = ['contentAware', 'createTexture', 'proximityMatch'];
@@ -162,7 +163,7 @@ export class SpotHealingStroke {
     const rr = Math.min(width, Math.ceil(coverageX + edges.right + reach));
     const rb = Math.min(height, Math.ceil(coverageY + edges.bottom + reach));
     const rw = rr - rx, rh = rb - ry;
-    const region = premultiply(output.readRegion(rx, ry, rw, rh));
+    const region = premultiplyRgba8InPlace(output.readRegion(rx, ry, rw, rh));
     const regionCoverage = new Uint8Array(rw * rh);
     for (let y = 0; y < rh; y++) {
       const sy = ry + y - coverageY;
@@ -175,7 +176,7 @@ export class SpotHealingStroke {
     const healed = await this.kernels.spotHeal(region, regionCoverage, rw, rh, rw * 4,
       Math.min(1, Math.max(0, this.settings.opacity)), modeNumber(this.settings.mode),
       this.settings.seed ?? Math.floor(Math.random() * 0x1_0000_0000));
-    const straight = unpremultiply(healed);
+    const straight = unpremultiplyRgba8InPlace(healed);
     if (output.format === 'rgba16') {
       const native = output.readRegionNative(rx, ry, rw, rh) as Uint16Array;
       // HealPixels.c mutates only nonzero coverage. Do the same on write-back so the RGBA8
@@ -361,26 +362,6 @@ function healingResult(raster: Raster, transform: LayerTransform, x: number, y: 
   const placed = { ...transform, size, origin: { x: middle.x - size.width / 2, y: middle.y - size.height / 2 } };
   return { raster, transform: placed, bounds: { x, y, width: raster.width, height: raster.height },
     sourceRect: { x: -x, y: -y, width: sourceWidth, height: sourceHeight } };
-}
-
-function premultiply(pixels: Uint8Array): Uint8Array {
-  for (let i = 0; i < pixels.length; i += 4) {
-    const a = pixels[i + 3]!;
-    pixels[i] = Math.round(pixels[i]! * a / 255); pixels[i + 1] = Math.round(pixels[i + 1]! * a / 255);
-    pixels[i + 2] = Math.round(pixels[i + 2]! * a / 255);
-  }
-  return pixels;
-}
-
-function unpremultiply(pixels: Uint8Array): Uint8Array {
-  for (let i = 0; i < pixels.length; i += 4) {
-    const a = pixels[i + 3]!;
-    if (!a) { pixels[i] = pixels[i + 1] = pixels[i + 2] = 0; continue; }
-    pixels[i] = Math.min(255, Math.round(pixels[i]! * 255 / a));
-    pixels[i + 1] = Math.min(255, Math.round(pixels[i + 1]! * 255 / a));
-    pixels[i + 2] = Math.min(255, Math.round(pixels[i + 2]! * 255 / a));
-  }
-  return pixels;
 }
 
 function sameTransform(a: LayerTransform, b: LayerTransform): boolean {

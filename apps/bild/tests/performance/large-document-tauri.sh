@@ -15,7 +15,7 @@ if (( free_bytes < 10 * 1024 * 1024 * 1024 )); then
   exit 1
 fi
 if [[ ! -x "$binary" ]]; then
-  echo "Missing release binary: $binary" >&2
+  echo "Missing measurement release binary: $binary (build with VITE_FERNWORK_MEASUREMENT=1 npm run tauri:build -- --features measurement --no-bundle)" >&2
   exit 1
 fi
 

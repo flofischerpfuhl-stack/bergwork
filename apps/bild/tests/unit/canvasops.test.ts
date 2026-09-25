@@ -1,15 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applyCanvasSize, applyCrop, applyCropRatio, applyCropSnap, canvasOffset, canvasSizeDraftValid,
+  applyCropRatio, applyCropSnap, canvasOffset, canvasSizeDraftValid,
   createCropRect, cropDocument, displayedCanvasDimension, displayedImageDimension, imageSizeDraftValid,
   makeCanvasSizeDraft, resizeCanvas, resizeImage, setCanvasDimension, setImageDimension, setImageResample,
-  setImageResolution, snapCropRect, tryResizeCanvas, updateCropDrag,
+  setImageResolution, snapCropRect, updateCropDrag,
   type ImageSizeDraft,
 } from '../../src/core/canvasOps';
 import { makeTransform, type Rect } from '../../src/core/geometry';
 import { newLayer, type CanvasDocument } from '../../src/core/document';
 import { Raster } from '../../src/core/raster';
-import { EditorSession } from '../../src/core/session';
 
 function rgba(width: number, height: number, pixel: (x: number, y: number) => [number, number, number, number]): Raster {
   const data = new Uint8Array(width * height * 4);
@@ -101,7 +100,7 @@ describe('CanvasResizer.swift', () => {
     expect(extension.pixel(0, 0)).toEqual([255, 0, 0, 255]);
     expect(extension.pixel(3, 0)).toEqual([0, 0, 0, 0]);
     expect(extension.pixel(7, 1)).toEqual([255, 0, 0, 255]);
-    expect(tryResizeCanvas(doc, 0, 2).ok).toBe(false);
+    expect(() => resizeCanvas(doc, 0, 2)).toThrow(/100-megapixel/);
   });
 
   it('cropTranslatesWithoutResamplingAndUndoRestoresBounds', () => {
@@ -112,14 +111,6 @@ describe('CanvasResizer.swift', () => {
     expect(cropped.layers[0]!.transform.origin).toEqual({ x: -8, y: -4 });
     expect(cropped.layers[0]!.raster).toBe(source);
 
-    const session = new EditorSession();
-    session.installProject(doc, 'layer', null);
-    expect(applyCrop(session, { x: 8, y: 4, width: 32, height: 16 })).toBe(true);
-    expect(session.history.undoName).toBe('Crop');
-    expect(session.undo()).toBe(true);
-    expect(session.document).toBe(doc);
-    expect(applyCanvasSize(session, 70, 40, 0)).toBe(true);
-    expect(session.history.undoName).toBe('Canvas Size');
   });
 });
 

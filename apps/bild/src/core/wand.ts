@@ -7,6 +7,7 @@ import { applySelection, deselect } from './selectionCommands';
 import { coverageSelection } from './selectionOps';
 import type { EditorSession } from './session';
 import { KernelClient } from '../workers/kernelClient';
+import { premultiplyRgba8InPlace } from './pixel/color';
 
 export type WandSampleSize = 'point' | 'threeByThree' | 'fiveByFive';
 
@@ -92,7 +93,7 @@ async function wandSample(session: EditorSession, allLayers: boolean): Promise<U
   if (allLayers) {
     const raster = await session.services?.flatten(document);
     if (!raster || raster.channels !== 4 || raster.width !== document.width || raster.height !== document.height) return null;
-    return premultiply(raster.toPixels());
+    return premultipliedCopy(raster.toPixels());
   }
   const layer = session.activeLayer;
   if (!layer || layer.kind === 'group' || !layer.raster || layer.raster.channels !== 4) {
@@ -105,7 +106,7 @@ function drawLayerPremultiplied(source: Raster, transform: ReturnType<EditorSess
   width: number, height: number): Uint8Array {
   const map = pixelToDocument(transform, source.width, source.height);
   if (map.a === 1 && map.b === 0 && map.c === 0 && map.d === 1 && map.tx === 0 && map.ty === 0
-    && source.width === width && source.height === height) return premultiply(source.toPixels());
+    && source.width === width && source.height === height) return premultipliedCopy(source.toPixels());
   const inverse = invert(map), output = new Uint8Array(width * height * 4);
   const smooth = transform.sampling !== 'Nearest';
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
@@ -143,13 +144,6 @@ function sampleBilinearPremultiplied(source: Raster, x: number, y: number, out: 
   out[offset] = Math.round(r); out[offset + 1] = Math.round(g); out[offset + 2] = Math.round(b); out[offset + 3] = Math.round(a);
 }
 
-function premultiply(pixels: Uint8Array): Uint8Array {
-  const output = pixels.slice();
-  for (let i = 0; i < output.length; i += 4) {
-    const alpha = output[i + 3]!;
-    output[i] = Math.round(output[i]! * alpha / 255);
-    output[i + 1] = Math.round(output[i + 1]! * alpha / 255);
-    output[i + 2] = Math.round(output[i + 2]! * alpha / 255);
-  }
-  return output;
+function premultipliedCopy(pixels: Uint8Array): Uint8Array {
+  return premultiplyRgba8InPlace(pixels.slice());
 }

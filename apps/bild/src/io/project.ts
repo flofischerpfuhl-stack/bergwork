@@ -132,12 +132,6 @@ export function legacyAdjustmentProjection(value: LayerAdjustment): Record<strin
 export interface EncodedAsset { bytes: Uint8Array; mime: string; sha256: string }
 const encodedCache = new WeakMap<Raster, EncodedAsset>();
 
-/** Records bytes encoded elsewhere (the archive worker) so later manifests need not re-encode. */
-export function rememberEncodedAsset(raster: Raster, asset: EncodedAsset): void {
-  if (!encodedCache.has(raster)) encodedCache.set(raster, asset);
-}
-export function hasEncodedAsset(raster: Raster): boolean { return !!raster.source || encodedCache.has(raster); }
-
 /** The raster's bytes as stored: its original file when unchanged, else a deterministic PNG. */
 export function encodedAsset(raster: Raster): EncodedAsset {
   const cached = encodedCache.get(raster);

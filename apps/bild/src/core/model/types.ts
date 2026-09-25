@@ -197,8 +197,6 @@ export interface LayerCommon {
   readonly id: string;
   readonly name: string;
   readonly visible: boolean;
-  /** Derived compatibility projection of `locks.all`; never read as authoritative state. */
-  readonly locked: boolean;
   readonly parentId: string | null;
   readonly opacity: number;
   readonly fillOpacity: number;

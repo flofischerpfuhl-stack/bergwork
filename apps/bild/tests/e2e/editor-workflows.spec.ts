@@ -134,6 +134,11 @@ test.describe('desktop workflows', () => {
     await expect(page.getByTestId('canvasDimensions')).toHaveText('500 × 400 px');
     const resized = await manifest(page);
     expect([resized.width, resized.height]).toEqual([500, 400]);
+    const undo = process.platform === 'darwin' ? 'Meta+z' : 'Control+z';
+    await page.getByTestId('compositor-editor').press(undo);
+    await expect(page.getByTestId('canvasDimensions')).toHaveText(`${cropped.width} × ${cropped.height} px`);
+    await page.getByTestId('compositor-editor').press(undo);
+    await expect(page.getByTestId('canvasDimensions')).toHaveText('300 × 200 px');
   });
 
   test('saving downloads an archive that reopens identically', async ({ page }) => {

@@ -682,7 +682,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
           disabled={!session.canEditMask || !!session.activeLayer?.mask} data-testid="addMask"
           onClick={(event) => controller.addMask(!event.altKey)}><Icon name="mask" size={17} /></button>
         <button type="button" className={styles.footerButton} aria-label={t('New adjustment layer')}
-          title={adjustmentsAvailable ? t('New adjustment layer') : `${t('New adjustment layer')} — ${t('Not yet available in the browser port')}`}
+          title={t('New adjustment layer')}
           disabled={!session.canEditLayers || !adjustmentsAvailable}
           onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setAdjustMenu({ x: r.left, y: r.top - 8 - (controller.adjustmentLayerItems?.(false).length ?? 6) * 26 }); }}>
           <Icon name="adjustment" size={17} />

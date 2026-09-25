@@ -1,11 +1,11 @@
 import type { BackgroundSettings } from '../core/subject/maskProcessing';
-import type { SubjectModel, SubjectModelUrls } from '../core/subject/models';
+import type { SubjectModel } from '../core/subject/models';
 
 export type SubjectStage = 'downloading-model' | 'loading-model' | 'inferring' | 'refining';
 
 export type SubjectWorkerRequest =
   | { readonly op: 'infer'; readonly id: number; readonly cacheKey: string; readonly model: SubjectModel;
-      readonly modelUrls: Partial<SubjectModelUrls>;
+      readonly modelBytes: Uint8Array; readonly modelCacheHit: boolean; readonly modelResolveMs: number;
       readonly width: number; readonly height: number; readonly rgba: Uint8Array;
       readonly settings: BackgroundSettings; readonly refinementLimit: number }
   | { readonly op: 'refine'; readonly id: number; readonly cacheKey: string;
@@ -29,5 +29,4 @@ export type SubjectWorkerResponse =
       readonly downloadedBytes?: number; readonly totalBytes?: number | null }
   | { readonly id: number; readonly type: 'result'; readonly mask: Uint8Array; readonly timing: SubjectTiming;
       readonly componentCount: number }
-  | { readonly id: number; readonly type: 'error'; readonly error: string; readonly downloadedBytes?: number;
-      readonly totalBytes?: number | null; readonly resumable?: boolean };
+  | { readonly id: number; readonly type: 'error'; readonly error: string };

@@ -21,8 +21,10 @@ test('real U²-Netp separates the flower from its background in Chromium', async
     const load = (path: string): Promise<unknown> => import(/* @vite-ignore */ path);
     const module = await load('/src/workers/subjectClient.ts') as typeof import('../../src/workers/subjectClient');
     const client = new module.SubjectInferenceClient();
+    const modelBytes = new Uint8Array(await (await fetch('/models/u2netp.onnx')).arrayBuffer());
     const output = await client.infer('e2e-flower', rgba, canvas.width, canvas.height,
-      { quality: 'basic', refineEdges: 12, matteContrast: 25, shiftEdge: 0 }, 1400);
+      { quality: 'basic', refineEdges: 12, matteContrast: 25, shiftEdge: 0 }, 1400, 'fast',
+      { bytes: modelBytes, cacheHit: false, resolveMs: 0 });
     const mask = output.mask, width = canvas.width, height = canvas.height;
     const mean = (left: number, top: number, right: number, bottom: number): number => {
       let sum = 0, count = 0;
@@ -84,8 +86,13 @@ test('the Remove Background panel switches to the best-quality model and reports
   await page.getByTestId('heightInput').fill('200');
   await page.getByTestId('createCanvas').click();
   await importThroughMenu(page, [{ name: 'square.png', mimeType: 'image/png', buffer: solidPng(120, 120, [200, 60, 40, 255]) }]);
-  // A host can self-host the large model; here it points at a missing file, so no real download happens.
-  await page.evaluate(() => { (window as any).__editorForTests.host.subjectModelUrls = { best: '/models/missing-best.onnx' }; });
+  // Make only the best model unavailable while leaving the already-running fast request untouched.
+  await page.evaluate(() => {
+    const models = (window as any).__editorForTests.host.capabilities.models;
+    const resolveModel = models.resolveModel.bind(models);
+    models.resolveModel = (request: { id: string }, ...args: unknown[]) => request.id === 'birefnet-lite'
+      ? Promise.reject(new Error('Test model unavailable.')) : resolveModel(request, ...args);
+  });
   await page.getByTestId('menu-Filter').click();
   await page.getByRole('menuitem', { name: 'Remove Background…' }).click();
   const panel = page.getByTestId('remove-background-panel');

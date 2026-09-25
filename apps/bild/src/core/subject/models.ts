@@ -1,10 +1,5 @@
 export type SubjectModel = 'fast' | 'best';
 
-export interface SubjectModelUrls {
-  readonly fast: string;
-  readonly best: string;
-}
-
 export interface SubjectModelSpec {
   readonly kind: SubjectModel;
   readonly inputSize: number;
@@ -27,12 +22,3 @@ export const SUBJECT_MODELS: Readonly<Record<SubjectModel, SubjectModelSpec>> = 
       + 'dc06453148f01ef4131f17e9b791345e32e8ee78/birefnet-lite-1024.onnx?download=true',
   },
 };
-
-export const DEFAULT_SUBJECT_MODEL_URLS: SubjectModelUrls = {
-  fast: SUBJECT_MODELS.fast.defaultUrl,
-  best: SUBJECT_MODELS.best.defaultUrl,
-};
-
-export function subjectModelUrl(model: SubjectModel, overrides: Partial<SubjectModelUrls> = {}): string {
-  return overrides[model] ?? SUBJECT_MODELS[model].defaultUrl;
-}

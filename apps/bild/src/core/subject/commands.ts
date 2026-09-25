@@ -5,10 +5,17 @@ import type { EditorSession } from '../session';
 import type { DocumentSelection } from '../selection';
 import { DEFAULT_BACKGROUND_SETTINGS, multiplyMasks, normalizedBackgroundSettings,
   countMaskComponents, type BackgroundSettings } from './maskProcessing';
-import { SubjectInferenceError, subjectInference, type SubjectInferenceClient, type SubjectInferenceResult,
-  type SubjectProgress } from '../../workers/subjectClient';
+import type { SubjectInferenceResult, SubjectProgress } from '../../workers/subjectClient';
 import type { SubjectStage, SubjectTiming } from '../../workers/subjectProtocol';
-import type { SubjectModel, SubjectModelUrls } from './models';
+import type { SubjectModel } from './models';
+
+export interface SubjectInference {
+  infer(cacheKey: string, rgba: Uint8Array, width: number, height: number, settings: BackgroundSettings,
+    refinementLimit: number, model: SubjectModel, progress?: (value: SubjectProgress) => void,
+    signal?: AbortSignal): Promise<SubjectInferenceResult>;
+  refine(cacheKey: string, settings: BackgroundSettings, refinementLimit: number,
+    progress?: (value: SubjectProgress) => void, signal?: AbortSignal): Promise<SubjectInferenceResult>;
+}
 
 export type SubjectRemovalPhase = 'idle' | SubjectStage | 'ready' | 'applying' | 'error';
 export interface SubjectRemovalState {
@@ -22,17 +29,13 @@ export interface SubjectRemovalState {
   componentCount: number | null;
   downloadedBytes: number;
   totalBytes: number | null;
-  downloadResumable: boolean;
 }
 
 export interface RemoveBackgroundOptions {
   readonly action?: 'begin' | 'preview' | 'apply' | 'cancel';
   readonly settings?: Partial<BackgroundSettings>;
   readonly model?: SubjectModel;
-  readonly modelUrls?: Partial<SubjectModelUrls>;
-  /** @deprecated Use `modelUrls.fast`; retained for the existing host integration. */
-  readonly modelUrl?: string;
-  readonly inference?: Pick<SubjectInferenceClient, 'infer' | 'refine'>;
+  readonly inference?: SubjectInference;
   readonly onStateChange?: (state: Readonly<SubjectRemovalState>) => void;
 }
 
@@ -44,8 +47,7 @@ interface Edit {
   readonly transform: Layer['transform'];
   readonly existingMask: LayerMask | null;
   readonly model: SubjectModel;
-  readonly modelUrls: Partial<SubjectModelUrls>;
-  readonly inference: Pick<SubjectInferenceClient, 'infer' | 'refine'>;
+  readonly inference: SubjectInference;
   abort: AbortController;
   generation: number;
   preview: Raster | null;
@@ -60,7 +62,7 @@ function contextFor(session: EditorSession): Context {
   if (!context) {
     context = { state: { phase: 'idle', progress: 0, error: null, settings: DEFAULT_BACKGROUND_SETTINGS,
       timing: null, layerId: null, model: 'fast', componentCount: null, downloadedBytes: 0, totalBytes: null,
-      downloadResumable: false }, edit: null };
+    }, edit: null };
     contexts.set(session, context);
   }
   return context;
@@ -95,16 +97,14 @@ export async function removeBackground(session: EditorSession, options: RemoveBa
     const layer = session.activeLayer!;
     const source = layer.raster!;
     const model = options.model ?? 'fast';
-    const modelUrls = { ...options.modelUrls };
-    if (options.modelUrl && model === 'fast' && modelUrls.fast === undefined) modelUrls.fast = options.modelUrl;
     context.edit = { layerId: layer.id, source, cacheKey: `${source.id}:${source.serial}`, selection: session.selection,
-      transform: layer.transform, existingMask: layer.mask, model, modelUrls,
-      inference: options.inference ?? subjectInference, abort: new AbortController(), generation: 1, preview: null,
+      transform: layer.transform, existingMask: layer.mask, model,
+      inference: options.inference ?? missingInference, abort: new AbortController(), generation: 1, preview: null,
       componentCount: null };
     session.isProjectBusy = true;
     publish(session, context, { settings: normalizedBackgroundSettings(options.settings), phase: 'loading-model',
       progress: 0, error: null, timing: null, layerId: layer.id, model, componentCount: null,
-      downloadedBytes: 0, totalBytes: null, downloadResumable: false });
+      downloadedBytes: 0, totalBytes: null });
     return runPreview(session, context, true);
   }
   const edit = context.edit;
@@ -129,7 +129,7 @@ async function runPreview(session: EditorSession, context: Context, infer: boole
     };
     const result = infer
       ? await edit.inference.infer(edit.cacheKey, edit.source.toPixels(), edit.source.width, edit.source.height,
-        context.state.settings, 1400, edit.model, edit.modelUrls, report, edit.abort.signal)
+        context.state.settings, 1400, edit.model, report, edit.abort.signal)
       : await edit.inference.refine(edit.cacheKey, context.state.settings, 1400, report, edit.abort.signal);
     if (context.edit !== edit || edit.generation !== generation) return context.state;
     if (!sourceStillMatches(session, edit)) throw new Error('The source layer changed; run Remove Background again.');
@@ -239,7 +239,7 @@ function cancel(session: EditorSession, context: Context): void {
   if (edit) { edit.abort.abort(); session.maskOverrides.delete(edit.layerId); }
   context.edit = null; session.isProjectBusy = false;
   Object.assign(context.state, { phase: 'idle', progress: 0, error: null, timing: null, layerId: null,
-    componentCount: null, downloadedBytes: 0, totalBytes: null, downloadResumable: false });
+    componentCount: null, downloadedBytes: 0, totalBytes: null });
   if (changed) { context.notify?.(context.state); session.notify('document'); }
 }
 
@@ -247,11 +247,8 @@ function fail(session: EditorSession, context: Context, error: unknown): void {
   const edit = context.edit;
   if (edit) session.maskOverrides.delete(edit.layerId);
   context.edit = null; session.isProjectBusy = false;
-  const inference = error instanceof SubjectInferenceError ? error : null;
   publish(session, context, { phase: 'error', progress: 0, error: error instanceof Error ? error.message : String(error),
-    downloadedBytes: inference?.downloadedBytes ?? context.state.downloadedBytes,
-    totalBytes: inference?.totalBytes === undefined ? context.state.totalBytes : inference.totalBytes,
-    downloadResumable: inference?.resumable ?? false }, true);
+    downloadedBytes: context.state.downloadedBytes, totalBytes: context.state.totalBytes }, true);
 }
 
 function isAbort(error: unknown): boolean {
@@ -263,3 +260,8 @@ export function subjectCommands(session: EditorSession): {
 } {
   return { removeBackground: { enabled: () => canBegin(session), run: () => { void removeBackground(session); } } };
 }
+
+const missingInference: SubjectInference = {
+  async infer() { throw new Error('This host does not provide local AI models.'); },
+  async refine() { throw new Error('This host does not provide local AI models.'); },
+};

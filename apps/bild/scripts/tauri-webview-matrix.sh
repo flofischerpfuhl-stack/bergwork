@@ -8,7 +8,7 @@ source scripts/tauri-env.sh
 binary="src-tauri/target/release/fernwork-bildeditor"
 result="${1:-/tmp/fernwork-webkitgtk-matrix.json}"
 if [[ ! -x "$binary" ]]; then
-  echo "Build the binary first with npm run tauri:build -- --no-bundle" >&2
+  echo "Build the measurement binary first with VITE_FERNWORK_MEASUREMENT=1 npm run tauri:build -- --features measurement --no-bundle" >&2
   exit 1
 fi
 

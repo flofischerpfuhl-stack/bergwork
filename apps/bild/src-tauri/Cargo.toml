@@ -12,7 +12,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]
 default = []
-a6-spike = ["tauri/unstable", "dep:gdk", "dep:gtk", "dep:webkit2gtk", "dep:wgpu", "dep:zune-jpeg"]
+measurement = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -26,13 +26,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-single-instance = "2"
-wgpu = { version = "30", default-features = false, features = ["std", "vulkan", "wgsl"], optional = true }
-zune-jpeg = { version = "0.5.15", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gdk = { version = "0.18", optional = true }
-gtk = { version = "0.18", optional = true }
-webkit2gtk = { version = "2", optional = true }
 # Screen eyedropper (ScreenColorHost): libX11 is opened at run time, so Wayland-only systems still start.
 x11-dl = "2.21"
 

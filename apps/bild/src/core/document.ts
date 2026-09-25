@@ -208,7 +208,7 @@ export function newLayer(fields: NewLayerFields): import('./model').ModelLayer {
   const locks = fields.locks ?? { transparency: false, pixels: false, position: false, all: fields.locked ?? false };
   const base = {
     id: fields.id, name: fields.name, transform: fields.transform,
-    visible: fields.visible ?? true, locked: locks.all, parentId: fields.parentId ?? null,
+    visible: fields.visible ?? true, parentId: fields.parentId ?? null,
     opacity: fields.opacity ?? 1, fillOpacity: fields.fillOpacity ?? 1,
     blendMode: 'normal' as const, locks,
     colorLabel: 'none' as const, warp: null, crop: null, mask: null, vectorMask: null,

@@ -188,7 +188,7 @@ export async function selectSubject(controller: EditorController, session: Edito
   session.notify('ui');
   try {
     const result = await modelInference(controller).infer(`${layer.id}:${raster.serial}`, raster.toPixels(), raster.width, raster.height,
-      DEFAULT_BACKGROUND_SETTINGS, 1400, 'fast', {}, (p) => { if (state.abort === abort) { state.busy = { stage: 'subject', progress: p.progress }; session.notify('ui'); } },
+      DEFAULT_BACKGROUND_SETTINGS, 1400, 'fast', (p) => { if (state.abort === abort) { state.busy = { stage: 'subject', progress: p.progress }; session.notify('ui'); } },
       abort.signal);
     if (state.abort !== abort || session.layer(layer.id)?.raster !== raster) return;
     selectSubjectMask(session, result.mask, raster.width, raster.height, mode);

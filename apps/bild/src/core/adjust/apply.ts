@@ -6,6 +6,7 @@ import { colourLuminance, colourPanelColor } from './colour';
 import { lookupCube, parseCubeLut, type CubeLut } from './cube';
 import { adjustHueColor, hueResponse } from './hue';
 import { curvesTables, levelsTables } from './levels';
+import { linearToSrgb, srgbToLinear } from '../pixel/color';
 
 export type AdjustmentApplier = (adjustment: LayerAdjustment, rgba: Float32Array,
   width: number, height: number, originX: number, originY: number, resources?: readonly DocumentResource[]) => Float32Array;
@@ -15,11 +16,9 @@ function tableLookup(table: Float32Array, channel: number, value: number): numbe
   const x = clamp01(value) * 255, lo = Math.floor(x), hi = Math.min(255, lo + 1), t = x - lo, offset = channel * 256;
   return table[offset + lo]! + (table[offset + hi]! - table[offset + lo]!) * t;
 }
-export function linearFromSrgb(v: number): number { return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }
-export function srgbFromLinear(v: number): number { return v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055; }
 export function exposureValue(value: number, settings: ExposureSettings): number {
-  const linear = Math.max(0, linearFromSrgb(clamp01(value)) * 2 ** settings.exposure + settings.offset) ** (1 / settings.gamma);
-  return clamp01(srgbFromLinear(linear));
+  const linear = Math.max(0, srgbToLinear(clamp01(value)) * 2 ** settings.exposure + settings.offset) ** (1 / settings.gamma);
+  return clamp01(linearToSrgb(linear));
 }
 function exposureTables(settings: ExposureSettings): Float32Array {
   const table = new Float32Array(768);

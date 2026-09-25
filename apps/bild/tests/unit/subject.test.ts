@@ -10,7 +10,7 @@ import {
 import {
   removeBackground, subjectCommands, subjectRemovalState, type RemoveBackgroundOptions,
 } from '../../src/core/subject/commands';
-import { SubjectInferenceError, type SubjectInferenceResult } from '../../src/workers/subjectClient';
+import type { SubjectInferenceResult } from '../../src/workers/subjectClient';
 
 function rgba(width: number, height: number, color: readonly [number, number, number, number]): Raster {
   const pixels = new Uint8Array(width * height * 4);
@@ -131,7 +131,7 @@ describe('Remove Background state machine (Filters.swift commitBackgroundMask)',
     expect(session.history.undoName).toBe('Remove Background');
   });
 
-  it('selects the best model and forwards host model URL overrides and download bytes', async () => {
+  it('selects the best model and forwards download progress', async () => {
     const session = new EditorSession();
     session.createNewProject(2, 1);
     session.insertRaster(rgba(2, 1, [20, 40, 60, 255]), 'image');
@@ -139,16 +139,13 @@ describe('Remove Background state machine (Filters.swift commitBackgroundMask)',
     const inference: NonNullable<RemoveBackgroundOptions['inference']> = {
       infer: async (...args) => {
         chosen = args;
-        args[8]?.({ stage: 'downloading-model', progress: 0.5, downloadedBytes: 50, totalBytes: 100 });
+        args[7]?.({ stage: 'downloading-model', progress: 0.5, downloadedBytes: 50, totalBytes: 100 });
         return { mask: Uint8Array.from([255, 0]), timing, componentCount: 1 };
       },
       refine: async () => ({ mask: Uint8Array.from([255, 0]), timing, componentCount: 1 }),
     };
-    const state = await removeBackground(session, {
-      model: 'best', modelUrls: { best: 'https://models.example/birefnet.onnx' }, inference,
-    });
+    const state = await removeBackground(session, { model: 'best', inference });
     expect(chosen[6]).toBe('best');
-    expect(chosen[7]).toEqual({ best: 'https://models.example/birefnet.onnx' });
     expect(state).toMatchObject({ model: 'best', downloadedBytes: 50, totalBytes: 100, componentCount: 1 });
   });
 
@@ -191,18 +188,18 @@ describe('Remove Background state machine (Filters.swift commitBackgroundMask)',
     expect(session.layer(id)!.mask).toBeNull();
   });
 
-  it('reports resumable model-download failures with the saved byte offset', async () => {
+  it('keeps reported model-download bytes when inference fails', async () => {
     const session = new EditorSession();
     session.createNewProject(1, 1);
     session.insertRaster(rgba(1, 1, [0, 0, 0, 255]), 'image');
     const inference: NonNullable<RemoveBackgroundOptions['inference']> = {
-      infer: async () => { throw new SubjectInferenceError('Retry to resume the download.', {
-        downloadedBytes: 4096, totalBytes: 8192, resumable: true,
-      }); },
+      infer: async (...args) => {
+        args[7]?.({ stage: 'downloading-model', progress: 0.5, downloadedBytes: 4096, totalBytes: 8192 });
+        throw new Error('The model download failed.');
+      },
       refine: async () => { throw new Error('unused'); },
     };
     const state = await removeBackground(session, { model: 'best', inference });
-    expect(state).toMatchObject({ phase: 'error', downloadedBytes: 4096, totalBytes: 8192,
-      downloadResumable: true });
+    expect(state).toMatchObject({ phase: 'error', downloadedBytes: 4096, totalBytes: 8192 });
   });
 });

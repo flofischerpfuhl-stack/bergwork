@@ -944,7 +944,7 @@ export class EditorSession {
       for (const target of changes) this.updateLayer(target.id, (layer) => {
         const locks = { ...layer.locks };
         for (const [key, value] of entries) locks[key] = value;
-        return { ...layer, locks, locked: locks.all };
+        return { ...layer, locks };
       });
     });
   }

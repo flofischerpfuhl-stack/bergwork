@@ -8,8 +8,6 @@ import { boundingBox, concat, corners, dragUpdated, invert, isValidTransform, ma
 import { uuid } from './ids';
 import { Raster, TILE } from './raster';
 import { resampleAffine, resampleRaster } from './resampling';
-import type { EditorSession } from './session';
-import { distortLayer, isUsableDistort } from './distort';
 
 export const PROJECT_TOO_LARGE = 'This project exceeds the supported canvas, layer, file-size, or 100-megapixel image limit.';
 export const PROJECT_INVALID = 'This is not a valid Compositor project, or its metadata is damaged.';
@@ -20,17 +18,6 @@ export class CanvasOperationError extends Error {
   constructor(readonly code: CanvasOperationErrorCode) {
     super(code === 'tooLarge' ? PROJECT_TOO_LARGE : PROJECT_INVALID);
     this.name = 'CanvasOperationError';
-  }
-}
-
-export type CanvasOperationResult<T> = { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: CanvasOperationError };
-
-function resultOf<T>(operation: () => T): CanvasOperationResult<T> {
-  try { return { ok: true, value: operation() }; }
-  catch (error) {
-    if (error instanceof CanvasOperationError) return { ok: false, error };
-    throw error;
   }
 }
 
@@ -116,14 +103,6 @@ export function cropDocument(doc: CanvasDocument, rect: Rect, options: CropOptio
   if (!validCropRect(rect)) throw new CanvasOperationError('tooLarge');
   return resizeCanvas(doc, Math.trunc(rect.width), Math.trunc(rect.height), 4,
     { fill: options.fill, contentOffset: { x: -rect.x, y: -rect.y } });
-}
-
-export function tryResizeCanvas(doc: CanvasDocument, width: number, height: number, anchor = 4,
-  options: CanvasResizeOptions = {}): CanvasOperationResult<CanvasDocument> {
-  return resultOf(() => resizeCanvas(doc, width, height, anchor, options));
-}
-export function tryCropDocument(doc: CanvasDocument, rect: Rect, options: CropOptions = {}): CanvasOperationResult<CanvasDocument> {
-  return resultOf(() => cropDocument(doc, rect, options));
 }
 
 // MARK: Crop geometry (Crop.swift)
@@ -355,11 +334,6 @@ export function resizeImage(doc: CanvasDocument, width: number, height: number, 
   return { ...doc, width, height, resolution, layers, selection: null };
 }
 
-export function tryResizeImage(doc: CanvasDocument, width: number, height: number, resolution: number,
-  resample: ImageResample = 'High quality'): CanvasOperationResult<CanvasDocument> {
-  return resultOf(() => resizeImage(doc, width, height, resolution, resample));
-}
-
 export interface ImageSizeDraft {
   readonly width: number; readonly height: number; readonly resolution: number; readonly locked: boolean;
   readonly resample: boolean; readonly unit: CanvasUnit;
@@ -405,45 +379,4 @@ export function imageSizeDraftValid(draft: ImageSizeDraft): boolean {
     && roundHalfAway(draft.width) >= 1 && roundHalfAway(draft.width) <= MAX_SIDE
     && roundHalfAway(draft.height) >= 1 && roundHalfAway(draft.height) <= MAX_SIDE
     && (!draft.resample || roundHalfAway(draft.width) * roundHalfAway(draft.height) <= MAX_PIXELS);
-}
-
-// MARK: Session command wrappers
-
-function applyDocument(session: EditorSession, name: string, make: (doc: CanvasDocument) => CanvasDocument): boolean {
-  const document = session.document;
-  if (!document || !session.canStartProjectOperation) return false;
-  try {
-    const next = make(document);
-    session.beginEdit(name);
-    session.replaceDocument(next);
-    session.endEdit();
-    session.errorMessage = null;
-    return true;
-  } catch (error) {
-    session.errorMessage = error instanceof Error ? error.message : String(error);
-    return false;
-  }
-}
-
-export function applyCrop(session: EditorSession, rect: Rect, options: CropOptions = {}): boolean {
-  return applyDocument(session, 'Crop', (doc) => cropDocument(doc, rect, options));
-}
-export function applyCanvasSize(session: EditorSession, width: number, height: number, anchor = 4,
-  options: CanvasResizeOptions = {}): boolean {
-  return applyDocument(session, 'Canvas Size', (doc) => resizeCanvas(doc, width, height, anchor, { extensionName: session.label('Canvas Extension'), ...options }));
-}
-export function applyImageSize(session: EditorSession, width: number, height: number, resolution: number,
-  resample: ImageResample = 'High quality'): boolean {
-  return applyDocument(session, 'Image Size', (doc) => resizeImage(doc, width, height, resolution, resample));
-}
-export function applyDistort(session: EditorSession, layerId: string, transform: Layer['transform'],
-  shape: readonly Point[]): boolean {
-  if (!isUsableDistort(shape)) { session.errorMessage = PROJECT_INVALID; return false; }
-  return applyDocument(session, 'Distort', (doc) => {
-    const index = doc.layers.findIndex((layer) => layer.id === layerId);
-    if (index < 0) throw new CanvasOperationError('invalid');
-    const layers = doc.layers.slice();
-    layers[index] = distortLayer(layers[index]!, transform, shape);
-    return { ...doc, layers };
-  });
 }

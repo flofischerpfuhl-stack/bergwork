@@ -48,6 +48,8 @@ test('BiRefNet_lite compares fast/best masks and records reference edge crops', 
     const heapBefore = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? null;
 
     for (const model of ['fast', 'best'] as const) {
+      const modelPath = model === 'fast' ? '/models/u2netp.onnx' : '/models/birefnet-lite-1024.onnx';
+      const modelBytes = new Uint8Array(await (await fetch(modelPath)).arrayBuffer());
       for (let index = 0; index < images.length; index++) {
         const encoded = images[index]!;
         const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
@@ -59,7 +61,7 @@ test('BiRefNet_lite compares fast/best masks and records reference edge crops', 
         context.drawImage(bitmap, 0, 0); bitmap.close();
         const rgba = new Uint8Array(context.getImageData(0, 0, width, height).data);
         const output = await client.infer(`${model}:${index}`, rgba, width, height, settings, 1400, model,
-          { fast: '/models/u2netp.onnx', best: '/models/birefnet-lite-1024.onnx' });
+          { bytes: modelBytes.slice(), cacheHit: index > 0, resolveMs: 0 });
         masks[model].push(output.mask); timings[model].push(output.timing); counts[model].push(output.componentCount);
       }
     }

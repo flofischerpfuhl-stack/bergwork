@@ -7,6 +7,7 @@ import { selectionIsEmpty, type DocumentSelection } from './selection';
 import { selectionBounds } from './selectionOps';
 import { selectionSampleAt } from './selectionCommands';
 import type { EditorSession } from './session';
+import { premultiplyRgba8InPlace, unpremultiplyRgba8InPlace } from './pixel/color';
 import { KernelCancelledError, KernelClient, type KernelJob } from '../workers/kernelClient';
 
 export type ContentFillPhase = 'preparing' | 'ready' | 'applying' | 'error' | 'cancelled' | 'applied';
@@ -108,14 +109,14 @@ export function previewContentAwareFill(session: EditorSession): Promise<Raster 
   const generation = ++state.generation;
   state.phase = 'preparing'; state.error = null;
   const width = state.grownRaster.width, height = state.grownRaster.height;
-  const source = premultiply(state.grownRaster.toPixels());
+  const source = premultiplyRgba8InPlace(state.grownRaster.toPixels());
   const job = state.kernels.contentFill(source, width * 4, state.coverage, width, width, height);
   state.job = job;
   const pending = job.then((filled) => {
     if (!isCurrent(session, state, generation)) { discardStale(session, state, generation); return null; }
     const pixels = state.grownRaster.format === 'rgba16'
       ? blendSelection16(state.grownRaster.toPixels16(), filled, state.coverage)
-      : unpremultiply(blendSelection(source, filled, state.coverage));
+      : unpremultiplyRgba8InPlace(blendSelection(source, filled, state.coverage));
     const raster = Raster.fromPixels(width, height, 4, pixels, { format: state.grownRaster.format });
     state.previewRaster = raster; state.phase = 'ready'; state.error = null; state.job = null; state.pending = null;
     session.rasterOverrides.set(state.layerId, raster);
@@ -294,26 +295,6 @@ function blendSelection16(original: Uint16Array, filled: Uint8Array, coverage: U
     }
   }
   return output;
-}
-
-function premultiply(pixels: Uint8Array): Uint8Array {
-  for (let i = 0; i < pixels.length; i += 4) {
-    const a = pixels[i + 3]!;
-    pixels[i] = Math.round(pixels[i]! * a / 255); pixels[i + 1] = Math.round(pixels[i + 1]! * a / 255);
-    pixels[i + 2] = Math.round(pixels[i + 2]! * a / 255);
-  }
-  return pixels;
-}
-
-function unpremultiply(pixels: Uint8Array): Uint8Array {
-  for (let i = 0; i < pixels.length; i += 4) {
-    const a = pixels[i + 3]!;
-    if (!a) { pixels[i] = pixels[i + 1] = pixels[i + 2] = 0; continue; }
-    pixels[i] = Math.min(255, Math.round(pixels[i]! * 255 / a));
-    pixels[i + 1] = Math.min(255, Math.round(pixels[i + 1]! * 255 / a));
-    pixels[i + 2] = Math.min(255, Math.round(pixels[i + 2]! * 255 / a));
-  }
-  return pixels;
 }
 
 /** Filters.commitFilter: carry an attached mask and use its majority edge tone beyond the old grid. */

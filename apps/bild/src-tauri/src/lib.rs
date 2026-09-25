@@ -14,11 +14,9 @@ use tauri::{
 
 mod host;
 mod screen_color;
-
-#[cfg(feature = "a6-spike")]
-mod a6_spike;
 mod scratch;
 
+#[cfg(feature = "measurement")]
 #[tauri::command]
 fn write_matrix_result(result: String) -> Result<(), String> {
     let path = env::var_os("FERNWORK_MATRIX_RESULT")
@@ -129,22 +127,13 @@ const WEBVIEW2_ARGS: &str = concat!(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[cfg(feature = "a6-spike")]
-    if env::var_os("FERNWORK_A6_WGPU").is_some() {
-        a6_spike::run_wgpu();
-        return;
-    }
-
     // Release-build smoke mode logs native discovery before WebKit starts, so it also diagnoses a failed webview.
     if env::var_os("FERNWORK_HOST_SMOKE").is_some() {
         let _ = host::list_system_fonts();
         let _ = host::display_icc_profile();
     }
 
-    let builder = tauri::Builder::default();
-    #[cfg(feature = "a6-spike")]
-    let builder = builder.manage(a6_spike::FrameClockProbe::default());
-    builder
+    tauri::Builder::default()
         .manage(host::StartupFiles(Mutex::new(host::file_references(
             env::args().skip(1),
             &env::current_dir().unwrap_or_default(),
@@ -159,6 +148,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
+            #[cfg(feature = "measurement")]
             write_matrix_result,
             a4d_write_progress,
             host::list_system_fonts,
@@ -181,24 +171,6 @@ pub fn run() {
             scratch::scratch_remove,
             scratch::scratch_list,
             scratch::scratch_flush,
-            #[cfg(feature = "a6-spike")]
-            a6_spike::a6_write_result,
-            #[cfg(feature = "a6-spike")]
-            a6_spike::a6_store_jpeg,
-            #[cfg(feature = "a6-spike")]
-            a6_spike::a6_store_capture,
-            #[cfg(feature = "a6-spike")]
-            a6_spike::a6_decode_jpeg,
-            #[cfg(feature = "a6-spike")]
-            a6_spike::a6_decode_jpeg_batch,
-            #[cfg(feature = "a6-spike")]
-            a6_spike::a6_runtime_settings,
-            #[cfg(feature = "a6-spike")]
-            a6_spike::a6_frame_clock_reset,
-            #[cfg(feature = "a6-spike")]
-            a6_spike::a6_frame_clock_take,
-            #[cfg(feature = "a6-spike")]
-            a6_spike::a6_capture_window,
         ])
         .setup(|app| {
             {
@@ -206,15 +178,11 @@ pub fn run() {
                 let files = startup.0.lock().expect("startup file lock poisoned");
                 host::allow_opened_files(app.handle(), &files);
             }
-            let measuring_a6 =
-                cfg!(feature = "a6-spike") && env::var_os("FERNWORK_A6_SPIKE").is_some();
             let scratch_path = app.path().app_cache_dir()?.join("scratch");
             app.manage(scratch::ScratchManager::open(scratch_path).map_err(std::io::Error::other)?);
-            let measuring = env::var_os("FERNWORK_WEBVIEW_MATRIX").is_some();
-            let measuring_a4c = env::var_os("FERNWORK_A4C_ACCEPTANCE").is_some();
-            let url = if measuring_a6 {
-                WebviewUrl::App("index.html?a6-spike=1".into())
-            } else if measuring {
+            let measuring = cfg!(feature = "measurement") && env::var_os("FERNWORK_WEBVIEW_MATRIX").is_some();
+            let measuring_a4c = cfg!(feature = "measurement") && env::var_os("FERNWORK_A4C_ACCEPTANCE").is_some();
+            let url = if measuring {
                 WebviewUrl::App("index.html?webview-matrix=1".into())
             } else if measuring_a4c {
                 WebviewUrl::App("index.html?a4c-acceptance=1".into())
@@ -222,9 +190,7 @@ pub fn run() {
                 WebviewUrl::App("index.html".into())
             };
             let mut window = WebviewWindowBuilder::new(app, "main", url)
-                .title(if measuring_a6 {
-                    "Fernwork A6 Spike"
-                } else if measuring_a4c {
+                .title(if measuring_a4c {
                     "Fernwork A4c Acceptance"
                 } else if measuring {
                     "Fernwork WebView Matrix"
@@ -238,14 +204,10 @@ pub fn run() {
                 .additional_browser_args(WEBVIEW2_ARGS);
             // One menu, one way (PRODUCT-PLAN P4): the editor draws its own menu bar inside the window. Only macOS gets
             // the native menu, because there it is the global menu bar at the top of the screen.
-            if !measuring && !measuring_a6 && !measuring_a4c && cfg!(target_os = "macos") {
+            if !measuring && !measuring_a4c && cfg!(target_os = "macos") {
                 window = window.menu(editor_menu(app.handle())?);
             }
             let _window = window.build()?;
-            #[cfg(all(feature = "a6-spike", target_os = "linux"))]
-            if measuring_a6 {
-                a6_spike::configure_webkit(&_window)?;
-            }
             Ok(())
         })
         .on_menu_event(|app, event| match event.id().as_ref() {

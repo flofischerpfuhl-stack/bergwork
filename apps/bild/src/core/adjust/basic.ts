@@ -1,5 +1,5 @@
 import type { BasicSettings } from '../model/types';
-import { linearFromSrgb, srgbFromLinear } from './apply';
+import { linearToSrgb, srgbToLinear } from '../pixel/color';
 
 const clamp = (v: number): number => Math.min(1, Math.max(0, v));
 const luminance = (r: number, g: number, b: number): number => 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -13,14 +13,14 @@ export function basicColor(red: number, green: number, blue: number, s: BasicSet
   if (s.exposure === 0 && s.contrast === 0 && s.highlights === 0 && s.shadows === 0 && s.whites === 0
     && s.blacks === 0 && s.texture === 0 && s.clarity === 0 && s.dehaze === 0 && s.vibrance === 0
     && s.saturation === 0 && s.temperature === 0 && s.tint === 0) return [red, green, blue];
-  let r = linearFromSrgb(clamp(red)) * 2 ** s.exposure;
-  let g = linearFromSrgb(clamp(green)) * 2 ** s.exposure;
-  let b = linearFromSrgb(clamp(blue)) * 2 ** s.exposure;
+  let r = srgbToLinear(clamp(red)) * 2 ** s.exposure;
+  let g = srgbToLinear(clamp(green)) * 2 ** s.exposure;
+  let b = srgbToLinear(clamp(blue)) * 2 ** s.exposure;
   const temperature = s.temperature / 100, tint = s.tint / 100;
   r *= 2 ** (temperature * 0.22 + tint * 0.06);
   g *= 2 ** (-tint * 0.12);
   b *= 2 ** (-temperature * 0.22 + tint * 0.06);
-  r = clamp(srgbFromLinear(Math.max(0, r))); g = clamp(srgbFromLinear(Math.max(0, g))); b = clamp(srgbFromLinear(Math.max(0, b)));
+  r = clamp(linearToSrgb(Math.max(0, r))); g = clamp(linearToSrgb(Math.max(0, g))); b = clamp(linearToSrgb(Math.max(0, b)));
   let l = luminance(r, g, b);
   const shadows = (1 - l) * (1 - l), highlights = l * l;
   let delta = s.shadows / 100 * shadows * (0.55 - l) * 0.8

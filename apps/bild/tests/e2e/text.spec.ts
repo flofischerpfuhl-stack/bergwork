@@ -25,7 +25,7 @@ test('A5 rich text model is deterministic, lazy, editable, and within the 500-ch
     const base = { schemaVersion: 1 as const, fontFamily: 'Noto Sans', fontStyle: 'normal' as const, fontWeight: 400,
       fontSize: 24, color: { red: 0.05, green: 0.1, blue: 0.2, alpha: 1 }, tracking: 0,
       kerning: 'metric' as const, leading: null, baselineShift: 0, features: { liga: true, tnum: true }, axes: {} };
-    const layer = { kind: 'text' as const, id: 'reference', name: 'Reference', visible: true, locked: false,
+    const layer = { kind: 'text' as const, id: 'reference', name: 'Reference', visible: true,
       parentId: null, opacity: 1, fillOpacity: 1, blendMode: 'normal' as const,
       locks: { transparency: false, pixels: false, position: false, all: false }, colorLabel: 'none' as const,
       transform: geometry.makeTransform({ x: 20, y: 30 }, { width: 620, height: 180 }), warp: null, crop: null,

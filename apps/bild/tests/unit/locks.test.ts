@@ -100,10 +100,10 @@ describe('layer locks (PRODUCT-PLAN 6.1)', () => {
     expect(migrated.document.layers[0]!.locks).toEqual({ ...unlocked, all: true });
 
     const changed = { ...migrated.document, layers: [{ ...migrated.document.layers[0]!, fillOpacity: 0.42,
-      colorLabel: 'orange' as const, locks: { transparency: true, pixels: false, position: true, all: false }, locked: false }] };
+      colorLabel: 'orange' as const, locks: { transparency: true, pixels: false, position: true, all: false } }] };
     const v2 = writeArchive(changed, 'Locks', 'legacy');
     const reloaded = await readArchive(v2.blob, async () => { throw new Error('No asset expected'); });
     expect(reloaded.document.layers[0]).toMatchObject({ fillOpacity: 0.42, colorLabel: 'orange',
-      locks: { transparency: true, pixels: false, position: true, all: false }, locked: false });
+      locks: { transparency: true, pixels: false, position: true, all: false } });
   });
 });

@@ -1,5 +1,5 @@
 import type { BackgroundSettings } from '../core/subject/maskProcessing';
-import type { SubjectModel, SubjectModelUrls } from '../core/subject/models';
+import type { SubjectModel } from '../core/subject/models';
 import type { SubjectStage, SubjectTiming, SubjectWorkerRequest, SubjectWorkerResponse } from './subjectProtocol';
 
 export interface SubjectInferenceResult {
@@ -15,13 +15,7 @@ export interface SubjectProgress {
 }
 
 export class SubjectInferenceError extends Error {
-  readonly downloadedBytes?: number;
-  readonly totalBytes?: number | null;
-  readonly resumable?: boolean;
-  constructor(message: string, details: Pick<SubjectWorkerResponse & { type: 'error' },
-    'downloadedBytes' | 'totalBytes' | 'resumable'> = {}) {
-    super(message); this.name = 'SubjectInferenceError'; Object.assign(this, details);
-  }
+  constructor(message: string) { super(message); this.name = 'SubjectInferenceError'; }
 }
 
 interface Pending {
@@ -38,13 +32,15 @@ export class SubjectInferenceClient {
   private readonly pending = new Map<number, Pending>();
 
   infer(cacheKey: string, rgba: Uint8Array, width: number, height: number, settings: BackgroundSettings,
-    refinementLimit: number, model: SubjectModel = 'fast', modelUrls: Partial<SubjectModelUrls> = {},
+    refinementLimit: number, model: SubjectModel,
+    resolvedModel: { readonly bytes: Uint8Array; readonly cacheHit: boolean; readonly resolveMs: number },
     progress?: (value: SubjectProgress) => void, signal?: AbortSignal): Promise<SubjectInferenceResult> {
     // Ownership moves to the worker. Callers use a fresh Raster.toPixels() copy, avoiding a second
     // contiguous allocation for a 100 Mpx layer.
-    const request: SubjectWorkerRequest = { op: 'infer', id: nextId++, cacheKey, model, modelUrls, width, height,
-      rgba, settings, refinementLimit };
-    return this.send(request, progress, signal, [request.rgba.buffer]);
+    const request: SubjectWorkerRequest = { op: 'infer', id: nextId++, cacheKey, model,
+      modelBytes: resolvedModel.bytes, modelCacheHit: resolvedModel.cacheHit, modelResolveMs: resolvedModel.resolveMs,
+      width, height, rgba, settings, refinementLimit };
+    return this.send(request, progress, signal, [request.rgba.buffer, request.modelBytes.buffer]);
   }
 
   refine(cacheKey: string, settings: BackgroundSettings, refinementLimit: number,
@@ -104,7 +100,7 @@ export class SubjectInferenceClient {
       return;
     }
     this.pending.delete(message.id);
-    if (message.type === 'error') pending.reject(new SubjectInferenceError(message.error, message));
+    if (message.type === 'error') pending.reject(new SubjectInferenceError(message.error));
     else pending.resolve({ mask: message.mask, timing: message.timing, componentCount: message.componentCount });
   }
 }

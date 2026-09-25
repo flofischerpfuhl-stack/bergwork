@@ -1,46 +1,36 @@
-# HEIC decoding in a Tauri host
+# HEIC decoding in the Tauri host
 
-The web editor accepts optional methods on its existing `HostAdapter`; `contracts.ts` does not change. A Tauri shell can expose the native decoder and leave `heicDecoder` unset so the LGPL WebAssembly module is never loaded:
+Fernwork's importer asks the versioned `CodecHost` capability in `src/platform/hosts/types.ts` after native browser
+decoding is unavailable. The current Tauri adapter advertises `codecs: { version: 1 }` but does not yet implement a
+native HEIC decoder. It therefore behaves like the browser fallback and does not claim OS-codec support.
+
+A future native integration belongs on `host.capabilities.codecs.decodeImage`, without changing frozen
+`contracts.ts`:
 
 ```ts
-import { invoke } from '@tauri-apps/api/core';
-import type { FileTargetHost } from '../src/platform/browserHost';
-import type { HostDecodedImage } from '../src/platform/imageDecoder';
-
-export const host: FileTargetHost = {
-  // chooseImages, chooseProject, saveFile and reportError omitted here
-  async decodeImage(bytes, mime): Promise<HostDecodedImage | null> {
-    const result = await invoke<{ width: number; height: number; rgba: number[]; orientation: number } | null>(
-      'decode_image', { bytes: Array.from(bytes), mime },
-    );
-    return result && { ...result, rgba: Uint8Array.from(result.rgba), orientation: result.orientation as 1|2|3|4|5|6|7|8 };
+const codecs: CodecHost = {
+  version: 1,
+  async decodeImage(bytes, mime) {
+    const result = await invoke<NativeDecodedImage | null>('decode_image', { bytes: Array.from(bytes), mime });
+    return result && { ...result, rgba: Uint8Array.from(result.rgba) };
   },
 };
 ```
 
-For large images, use a Tauri raw-byte/channel or custom IPC response instead of JSON arrays. The command result is un-oriented, straight-alpha sRGB RGBA8 plus EXIF orientation; the TypeScript importer applies orientation exactly once.
+The command must return un-oriented, straight-alpha sRGB RGBA8 and an EXIF orientation from 1 through 8. The
+TypeScript importer applies orientation exactly once. Large-image production code should use Tauri's raw-byte or
+channel transport rather than JSON number arrays.
 
-```rust
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DecodedImage {
-    width: u32,
-    height: u32,
-    rgba: Vec<u8>,
-    orientation: u8,
-}
+On macOS, ImageIO/CoreGraphics can create a `CGImageSource`, read `kCGImagePropertyOrientation`, and draw into an
+sRGB 8-bit RGBA bitmap. On Windows, WIC can decode the first frame, convert it to
+`GUID_WICPixelFormat32bppRGBA`, and read EXIF tag 274. Availability on both platforms depends on installed OS
+codecs and must be reported as `null` when unsupported.
 
-#[tauri::command]
-fn decode_image(bytes: Vec<u8>, mime: String) -> Result<Option<DecodedImage>, String> {
-    if mime != "image/heic" && mime != "image/heif" { return Ok(None); }
-    platform::decode_rgba8(&bytes).map(Some)
-}
-```
+Linux generally requires libheif plus a HEVC decoder. The separately replaceable web component combines libheif
+and libde265 under LGPL-3.0-or-later and is deliberately opt-in: a host must set
+`codecs.heicDecoder = 'lgpl-wasm'`. Its sources, relinking path, complete licence texts, and checksums are recorded
+in `THIRD_PARTY_NOTICES.md` and `src/wasm/heif/`. HEVC can also carry patent obligations that are separate from the
+software licence; distributors must assess those obligations.
 
-On macOS, implement `platform::decode_rgba8` with ImageIO/CoreGraphics bindings: create a `CGImageSource` from `CFData`, read `kCGImagePropertyOrientation` (default 1), call `CGImageSourceCreateImageAtIndex(source, 0, ...)`, and draw the `CGImage` into an sRGB `CGBitmapContext` configured for 8-bit RGBA. Do not ask ImageIO to orient the bitmap because the returned orientation is applied by the importer.
-
-On Windows, use the `windows` crate and WIC: create `IWICImagingFactory`, an `IWICStream` over the input, then `CreateDecoderFromStream` and `GetFrame(0)`. Convert through `IWICFormatConverter` to `GUID_WICPixelFormat32bppRGBA`, call `CopyPixels`, and query EXIF tag 274 with `IWICMetadataQueryReader` (commonly `/app1/ifd/{ushort=274}`), defaulting to 1. WIC codecs installed by the OS determine HEIC availability.
-
-Linux generally needs libheif or another HEVC-capable codec. libheif and libde265 are LGPL-3.0, so a Linux host using them must meet the same relinking/source obligations as the optional WASM decoder. HEVC may also be patent-encumbered in the countries where the application is distributed.
-
-To opt into the separately shipped browser decoder instead, omit `decodeImage` or return `null` and set `heicDecoder: 'lgpl-wasm'` on the host. Native browser decoding remains first in the pipeline in either configuration.
+Native browser decoding remains first in the import pipeline. A host decoder comes next, and the LGPL WASM path is
+considered only when the host explicitly enables it.

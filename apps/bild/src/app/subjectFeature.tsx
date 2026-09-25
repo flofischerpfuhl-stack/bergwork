@@ -9,44 +9,37 @@ import styles from '../ui/editor.module.css';
 import type { EditorController } from '../ui/controller';
 import { useSession } from '../ui/hooks';
 import type { EditorSession } from '../core/session';
-import { removeBackground, subjectCommands, subjectRemovalState, type SubjectRemovalPhase } from '../core/subject/commands';
+import { removeBackground, subjectCommands, subjectRemovalState, type SubjectInference, type SubjectRemovalPhase } from '../core/subject/commands';
 import type { BackgroundSettings } from '../core/subject/maskProcessing';
-import { SUBJECT_MODELS, type SubjectModel, type SubjectModelUrls } from '../core/subject/models';
+import { SUBJECT_MODELS, type SubjectModel } from '../core/subject/models';
 import type { RemoveBackgroundOptions } from '../core/subject/commands';
-import { subjectInference, type SubjectInferenceClient } from '../workers/subjectClient';
+import { subjectInference } from '../workers/subjectClient';
 import { Check, FloatingPanel, Segmented, SliderRow } from './adjustmentsFeature';
 
-const resolvedUrls = new WeakMap<object, Partial<Record<SubjectModel, string>>>();
-
-/** A0/E6: model bytes are resolved and cached by ModelHost; workers only see its local blob URL. */
-export function modelInference(controller: EditorController): Pick<SubjectInferenceClient, 'infer' | 'refine'> {
+/** A0/E6: ModelHost is the sole persistent cache; verified bytes transfer directly to the inference worker. */
+export function modelInference(controller: EditorController): SubjectInference {
   const host = controller.capabilities.models;
   return {
-    async infer(cacheKey, rgba, width, height, settings, refinementLimit, model, _modelUrls, progress, signal) {
+    async infer(cacheKey, rgba, width, height, settings, refinementLimit, model, progress, signal) {
       if (!host) throw new Error('This host does not provide local AI models.');
       const selected = model ?? 'fast';
-      let urls = resolvedUrls.get(host);
-      let url = urls?.[selected];
-      if (!url) {
-        const spec = SUBJECT_MODELS[selected];
-        const source = selected === 'fast' ? `${import.meta.env.BASE_URL}models/u2netp.onnx` : spec.defaultUrl;
-        progress?.({ stage: 'downloading-model', progress: 0, downloadedBytes: 0, totalBytes: spec.byteLength });
-        const result = await host.resolveModel({ id: selected === 'fast' ? 'u2netp' : 'birefnet-lite', sha256: spec.sha256,
-          url: source, userInitiated: true }, (loaded, total) => progress?.({ stage: 'downloading-model',
-            progress: total ? Math.min(1, loaded / total) : 0, downloadedBytes: loaded, totalBytes: total }), signal);
-        if (!result) throw new Error('The model is not cached and this host did not allow downloading it.');
-        url = URL.createObjectURL(new Blob([result.bytes as BlobPart], { type: 'application/octet-stream' }));
-        urls ??= {}; urls[selected] = url; resolvedUrls.set(host, urls);
-      }
+      const spec = SUBJECT_MODELS[selected];
+      const source = selected === 'fast' ? `${import.meta.env.BASE_URL}models/u2netp.onnx` : spec.defaultUrl;
+      progress?.({ stage: 'downloading-model', progress: 0, downloadedBytes: 0, totalBytes: spec.byteLength });
+      const started = performance.now();
+      const result = await host.resolveModel({ id: selected === 'fast' ? 'u2netp' : 'birefnet-lite', sha256: spec.sha256,
+        url: source, userInitiated: true }, (loaded, total) => progress?.({ stage: 'downloading-model',
+          progress: total ? Math.min(1, loaded / total) : 0, downloadedBytes: loaded, totalBytes: total }), signal);
+      if (!result) throw new Error('The model is not cached and this host did not allow downloading it.');
       return subjectInference.infer(cacheKey, rgba, width, height, settings, refinementLimit, selected,
-        { [selected]: url } as Partial<SubjectModelUrls>, progress, signal);
+        { bytes: result.bytes, cacheHit: result.cacheHit, resolveMs: performance.now() - started }, progress, signal);
     },
     refine: subjectInference.refine.bind(subjectInference),
   };
 }
 
 function beginRemoval(controller: EditorController, model: SubjectModel,
-  options: Omit<RemoveBackgroundOptions, 'model' | 'modelUrls' | 'inference'> = {}): Promise<Readonly<ReturnType<typeof subjectRemovalState>>> {
+  options: Omit<RemoveBackgroundOptions, 'model' | 'inference'> = {}): Promise<Readonly<ReturnType<typeof subjectRemovalState>>> {
   return removeBackground(controller.session, { ...options, model, inference: modelInference(controller) });
 }
 
@@ -102,12 +95,6 @@ function RemoveBackgroundPanel({ controller }: { controller: EditorController })
           </>
         ) : null}
         {state.error ? <p className={styles.panelError}>{state.error}</p> : null}
-        {state.error && state.downloadResumable ? (
-          <button type="button" className={styles.pill} data-testid="remove-background-retry"
-            onClick={() => void beginRemoval(controller, state.model, { action: 'begin', settings })}>
-            {t('Resume download')}
-          </button>
-        ) : null}
         {session.selection ? <p className={styles.panelNote}>{t('Limited to the selection')}</p> : null}
       </fieldset>
       <div className={styles.dialogButtons}>
