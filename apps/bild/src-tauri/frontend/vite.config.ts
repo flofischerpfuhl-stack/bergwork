@@ -6,6 +6,8 @@ export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
   plugins: [react()],
   base: './',
+  // The shared public/ folder (bundled OFL fonts, U²-Netp model, …): root is src-tauri/frontend, so Vite would look there.
+  publicDir: fileURLToPath(new URL('../../public', import.meta.url)),
   server: {
     host: '127.0.0.1',
     port: 1420,
