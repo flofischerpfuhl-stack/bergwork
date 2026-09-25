@@ -52,7 +52,7 @@ const de: Record<string, string> = {
   'Preferences…': 'Einstellungen …', 'Preferences': 'Einstellungen', 'Done': 'Fertig',
   'Develop camera RAW': 'Kamera-RAW entwickeln', 'Apply these settings to the selected RAW files.': 'Diese Einstellungen auf die ausgewählten RAW-Dateien anwenden.',
   'White balance': 'Weißabgleich', 'As shot': 'Wie Aufnahme',
-  'Temperature': 'Temperatur', 'Tint': 'Farbton', 'Recover highlights': 'Lichter wiederherstellen', 'Import': 'Importieren',
+  'Temperature': 'Temperatur', 'Tint': 'Tönung', 'Recover highlights': 'Lichter wiederherstellen', 'Import': 'Importieren',
   'The result is imported as a 16-bit pixel layer. RAW settings cannot be edited after import.': 'Das Ergebnis wird als 16-Bit-Pixelebene importiert. RAW-Einstellungen können nach dem Import nicht bearbeitet werden.',
   'Use system LibRaw (LGPL)': 'System-LibRaw verwenden (LGPL)',
   'Off by default. Fernwork does not bundle LibRaw; when enabled, the app loads a compatible library installed by your operating system.': 'Standardmäßig aus. Fernwork liefert LibRaw nicht mit; wenn aktiviert, lädt die App eine kompatible Bibliothek des Betriebssystems.',
