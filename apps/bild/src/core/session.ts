@@ -29,6 +29,7 @@ import { translated } from './canvasOps';
 import { selectionBounds } from './selectionOps';
 import { Raster } from './raster';
 import { CanvasViewport } from './viewport';
+import type { CmykLut, CmykProfile, ProofOptions } from './color/cmyk';
 import { defaultAdjustment } from './adjustments';
 import { cancelShape, redrawShapeLayer } from './shape';
 import { vectorLayerWithTransform } from './vector/transform';
@@ -157,6 +158,12 @@ export class EditorSession {
   perspectiveConstrained = false;
   showsTransformControls = true;
   showsPixelGrid = true;
+  /** Display-only CMYK proof state. It is deliberately not serialized into the RGB document. */
+  proofProfile: CmykProfile | null = null;
+  proofOptions: ProofOptions = { intent: 'perceptual', blackPointCompensation: true, simulatePaperWhite: false };
+  proofLut: CmykLut | null = null;
+  proofColors = false;
+  gamutWarning = false;
   blendPreview: { layerId: string; mode: BlendMode } | null = null;
   opacityEditLayerId: string | null = null;
   fillOpacityEditLayerIds: readonly string[] | null = null;

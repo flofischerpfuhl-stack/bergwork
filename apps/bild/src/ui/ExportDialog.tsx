@@ -20,6 +20,7 @@ import {
   type ExportFormat, type ExportPlanItem, type ExportRequest, type ExportSize, type ExportTarget,
 } from '../io/exportPlan';
 import type { ExportSizeEstimate } from '../io/exportPipeline';
+import { profileHasFeature } from '../app/profiles';
 
 type SizeRow = { readonly id: number; readonly mode: 'scale'; readonly scale: number } | { readonly id: number; readonly mode: 'width' | 'height'; readonly value: string };
 
@@ -28,6 +29,7 @@ export interface ExportSettings {
   readonly artboards: readonly string[];
   readonly layers: boolean;
   readonly format: ExportFormat;
+  readonly colorModel: 'rgb' | 'cmyk';
   readonly quality: { readonly jpeg: number; readonly webp: number; readonly avif: number };
   readonly lossless: boolean;
   readonly bitDepth: 8 | 16;
@@ -52,7 +54,7 @@ let nextRowId = 1;
 function defaultSettings(session: EditorSession): ExportSettings {
   const artboards = (session.document?.artboards ?? []).map((artboard) => artboard.id);
   return {
-    document: artboards.length === 0, artboards, layers: false, format: 'png',
+    document: artboards.length === 0, artboards, layers: false, format: 'png', colorModel: 'rgb',
     quality: { jpeg: 0.85, webp: 0.85, avif: 0.75 }, lossless: false, bitDepth: 8, transparent: true, matte: '#ffffff',
     sizes: [{ id: nextRowId++, mode: 'scale', scale: 1 }], colorProfile: true, resolution: true, info: 'none', copyright: '', artist: '',
   };
@@ -100,15 +102,20 @@ export function exportRequestFor(controller: EditorController, session: EditorSe
   const sizes = settings.sizes.map(sizeOf);
   if (sizes.some((size) => size === null)) return null;
   const format = settings.format;
+  const cmyk = settings.colorModel === 'cmyk' && (format === 'jpeg' || format === 'tiff');
+  if (cmyk && !session.proofProfile) return null;
   const lossless = format === 'webp' && settings.lossless;
   const quality = format === 'jpeg' || format === 'avif' || (format === 'webp' && !lossless) ? settings.quality[format] : undefined;
   return controller.exportRequest(format, {
     targets, sizes: sizes as ExportSize[], quality, lossless: format === 'webp' ? lossless : undefined,
     bitDepth: formatSupports16Bit(format) ? settings.bitDepth : 8,
-    transparent: formatHasAlpha(format) ? settings.transparent : false,
+    transparent: cmyk ? false : formatHasAlpha(format) ? settings.transparent : false,
+    tiffCompression: cmyk && format === 'tiff' ? 'lzw' : undefined,
+    cmyk: cmyk ? { profile: session.proofProfile!, intent: session.proofOptions.intent,
+      blackPointCompensation: session.proofOptions.blackPointCompensation } : undefined,
     matte: rgb(settings.matte),
     metadata: {
-      colorProfile: settings.colorProfile ? 'embed' : 'strip', resolution: settings.resolution,
+      colorProfile: cmyk || settings.colorProfile ? 'embed' : 'strip', resolution: settings.resolution,
       info: settings.info === 'none' ? null : { copyright: settings.copyright.trim() || undefined, artist: settings.artist.trim() || undefined },
     },
   }, session);
@@ -145,6 +152,7 @@ function previewRequest(request: ExportRequest, item: ExportPlanItem): ExportReq
     targets: [item.target], format, sizes: [{ scale }],
     quality: lossy ? request.quality : undefined, speed: request.speed, bitDepth: 8,
     transparent: request.transparent, matte: request.matte, baseName: request.baseName,
+    cmyk: lossy ? request.cmyk : undefined,
     metadata: { colorProfile: 'embed', resolution: false, info: null },
   };
 }
@@ -160,6 +168,7 @@ export function ExportDialog({ controller, close }: { controller: EditorControll
     return next;
   });
   const [busy, setBusy] = useState(false);
+  const [profileRevision, setProfileRevision] = useState(0);
   const [preview, setPreview] = useState<{ url: string; key: string } | null>(null);
   const [previewFailed, setPreviewFailed] = useState(false);
   const [estimates, setEstimates] = useState<{ key: string; list: readonly ExportSizeEstimate[] } | null>(null);
@@ -169,7 +178,7 @@ export function ExportDialog({ controller, close }: { controller: EditorControll
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => { root.current?.focus({ preventScroll: true }); }, []);
 
-  const request = useMemo(() => exportRequestFor(controller, session, settings), [controller, session, settings]);
+  const request = useMemo(() => exportRequestFor(controller, session, settings), [controller, session, settings, profileRevision]);
   const planned = useMemo((): { plan: ExportPlanItem[]; error: string | null } => {
     if (!request) return { plan: [], error: t('Enter whole numbers from 1 to 30,000 pixels.') };
     try { return { plan: controller.planExport(request, session), error: null }; } catch (error) { return { plan: [], error: exportErrorText(error, t) }; }
@@ -205,17 +214,26 @@ export function ExportDialog({ controller, close }: { controller: EditorControll
   }, [key, busy]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { if (previewUrl.current) URL.revokeObjectURL(previewUrl.current); }, []);
 
+  const format = settings.format;
+  const cmykAvailable = profileHasFeature(controller.profile, 'cmyk-export', controller.capabilities);
+  const cmyk = settings.colorModel === 'cmyk' && (format === 'jpeg' || format === 'tiff');
+  useEffect(() => {
+    if (!cmyk || session.proofProfile) return;
+    let active = true;
+    void controller.ensureProofSetup(session).then(() => { if (active) setProfileRevision((value) => value + 1); });
+    return () => { active = false; };
+  }, [cmyk, controller, session]);
+
   if (!document) return null;
   const t2 = (text: string, values: Record<string, string | number>) => Object.entries(values).reduce((s, [k, v]) => s.replace(`{${k}}`, String(v)), t(text));
   const px = (width: number, height: number) => `${width.toLocaleString(locale)} × ${height.toLocaleString(locale)}`;
   const current = estimates?.key === key ? estimates.list : null;
   const byName = new Map(current?.map((estimate) => [estimate.item.name, estimate]) ?? []);
   const total = current?.reduce((sum, estimate) => sum + estimate.bytes, 0) ?? null;
-  const format = settings.format;
   const artboards = document.artboards ?? [];
   const selectedLayers = session.selectedLayerIds.size;
   const lossy = format === 'jpeg' || format === 'avif' || (format === 'webp' && !settings.lossless);
-  const flattened = !formatHasAlpha(format) || !settings.transparent;
+  const flattened = cmyk || !formatHasAlpha(format) || !settings.transparent;
   const warnings: string[] = [];
   if (format === 'avif' && settings.info !== 'none') warnings.push(t('AVIF export does not write EXIF creator fields.'));
   const view = controller.canvasView;
@@ -307,6 +325,24 @@ export function ExportDialog({ controller, close }: { controller: EditorControll
                   className={`${styles.segment} ${format === f ? styles.segmentOn : ''}`} onClick={() => setSettings({ format: f })}>{FORMAT_LABELS[f]}</button>
               ))}
             </div>
+            {cmykAvailable && (format === 'jpeg' || format === 'tiff') ? (
+              <div className={styles.exportRow}>
+                <span className={styles.exportLabel}>{t('Color')}</span>
+                <div className={styles.segmented} role="radiogroup" aria-label={t('Color')}>
+                  {(['rgb', 'cmyk'] as const).map((model) => (
+                    <button key={model} type="button" role="radio" aria-checked={settings.colorModel === model}
+                      data-testid={`export-color-${model}`} className={`${styles.segment} ${settings.colorModel === model ? styles.segmentOn : ''}`}
+                      onClick={() => setSettings({ colorModel: model })}>{model.toUpperCase()}</button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {cmyk ? (
+              <div className={styles.dialogMessage} data-testid="export-cmyk-settings">
+                {session.proofProfile?.name ?? t('Preparing profile…')} · {t(session.proofOptions.intent === 'perceptual' ? 'Perceptual' : 'Relative Colorimetric')}
+                {session.proofOptions.blackPointCompensation ? ` · ${t('Black Point Compensation')}` : ''}
+              </div>
+            ) : null}
             {format === 'webp' ? (
               <label className={styles.check}>
                 <input type="checkbox" checked={settings.lossless} data-testid="export-lossless" onChange={(e) => setSettings({ lossless: e.target.checked })} />
@@ -336,7 +372,7 @@ export function ExportDialog({ controller, close }: { controller: EditorControll
                 </div>
               </div>
             ) : null}
-            {formatHasAlpha(format) ? (
+            {formatHasAlpha(format) && !cmyk ? (
               <label className={styles.check}>
                 <input type="checkbox" checked={settings.transparent} data-testid="export-transparency" onChange={(e) => setSettings({ transparent: e.target.checked })} />
                 {t('Transparency')}
@@ -417,8 +453,8 @@ export function ExportDialog({ controller, close }: { controller: EditorControll
               </>
             ) : null}
             <label className={styles.check}>
-              <input type="checkbox" checked={settings.colorProfile} data-testid="export-icc" onChange={(e) => setSettings({ colorProfile: e.target.checked })} />
-              {t('Embed color profile')} (sRGB)
+              <input type="checkbox" checked={cmyk || settings.colorProfile} disabled={cmyk} data-testid="export-icc" onChange={(e) => setSettings({ colorProfile: e.target.checked })} />
+              {t('Embed color profile')} ({cmyk ? session.proofProfile?.name ?? 'CMYK' : 'sRGB'})
             </label>
             <label className={styles.check}>
               <input type="checkbox" checked={settings.resolution} data-testid="export-resolution" onChange={(e) => setSettings({ resolution: e.target.checked })} />

@@ -217,7 +217,8 @@ export class CanvasView implements CanvasHost {
           };
           composite = gpu.composite(document, view, this.hooks(session));
         }
-        gpu.present(composite, width, height, device, dpr, session.showsPixelGrid && viewport.zoom >= 8, dpr * ppp, { x: x0, y: y0 });
+        const proof = session.proofColors && session.proofLut ? { lut: session.proofLut, gamutWarning: session.gamutWarning } : undefined;
+        gpu.present(composite, width, height, device, dpr, session.showsPixelGrid && viewport.zoom >= 8, dpr * ppp, { x: x0, y: y0 }, proof);
         if (composite) gpu.releaseTarget(composite);
       }
     }

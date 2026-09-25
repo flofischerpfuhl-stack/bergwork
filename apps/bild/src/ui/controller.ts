@@ -35,7 +35,8 @@ import { readPsdDocumentManaged, type PsdReadResult } from '../io/psd';
 import { uuid } from '../core/ids';
 import type { GpuCompositor } from '../render/gpuCompositor';
 import { capabilitiesOf, type FileSaveTarget, type HostCapabilityMap, type HostFileReference } from '../platform/hosts';
-import { profileFor, type EditorProfile } from '../app/profiles';
+import { profileFor, profileHasFeature, type EditorProfile } from '../app/profiles';
+import { buildCmykLut, bundledCmykProfile, type CmykProfile, type ProofOptions } from '../core/color/cmyk';
 import type { FileTargetHost } from '../platform/browserHost';
 import { LITE_TILE_BUDGET, PRO_TILE_BUDGET, type ScratchHostCapability } from '../platform/scratchHost';
 import { RasterResidency, TileCache } from '../core/storage';
@@ -442,6 +443,33 @@ export class EditorController {
   // MARK: Dialogs
 
   showDialog(dialog: Dialog | null): void { this.ui.setState({ dialog, openMenu: null }); }
+
+  /** Builds and installs the selected output-device LUT without changing document pixels. */
+  async setProofSetup(profile: CmykProfile, options: ProofOptions, session: EditorSession = this.session): Promise<void> {
+    if (!profileHasFeature(this.profile, 'softproof', this.capabilities)) throw new Error('CMYK soft-proof is a Pro feature.');
+    const lut = await buildCmykLut(profile, options);
+    session.proofProfile = profile; session.proofOptions = options; session.proofLut = lut;
+    session.notify('view');
+  }
+
+  async ensureProofSetup(session: EditorSession = this.session): Promise<void> {
+    if (session.proofProfile && session.proofLut) return;
+    await this.setProofSetup(await bundledCmykProfile('fogra39-approx'), session.proofOptions, session);
+  }
+
+  async toggleProofColors(session: EditorSession = this.session): Promise<void> {
+    if (!session.document || !profileHasFeature(this.profile, 'softproof', this.capabilities)) return;
+    if (!session.proofColors) await this.ensureProofSetup(session);
+    session.proofColors = !session.proofColors;
+    if (!session.proofColors) session.gamutWarning = false;
+    session.notify('view');
+  }
+
+  async toggleGamutWarning(session: EditorSession = this.session): Promise<void> {
+    if (!session.document || !profileHasFeature(this.profile, 'softproof', this.capabilities)) return;
+    await this.ensureProofSetup(session);
+    session.proofColors = true; session.gamutWarning = !session.gamutWarning; session.notify('view');
+  }
   alert(title: string, message: string): void { this.showDialog({ kind: 'alert', title, message }); }
 
   /** Origin and licences (the MIT notice of the code base this editor grew from belongs here, not in menus or formats). */
@@ -1023,6 +1051,9 @@ export class EditorController {
 
   /** Request defaults shared by every entry point (the Export As dialog, `EditorHandle.exportImage`): the project name and the JPEG defaults. */
   exportRequest(format: ExportFormat, overrides: Partial<ExportRequest> = {}, session: EditorSession = this.session): ExportRequest {
+    if (overrides.cmyk && !profileHasFeature(this.profile, 'cmyk-export', this.capabilities)) {
+      throw new Error('CMYK export is available in the Pro profile only.');
+    }
     const jpeg = format === 'jpeg' ? { quality: this.jpegOptions.quality,
       matte: { red: this.jpegOptions.red, green: this.jpegOptions.green, blue: this.jpegOptions.blue } } : {};
     return { targets: [{ kind: 'document' }], format, baseName: session.projectName ?? this.workspace.current.title, ...jpeg, ...overrides };
@@ -1030,11 +1061,17 @@ export class EditorController {
 
   /** File names and pixel sizes a request produces (synchronous; for the export dialog). */
   planExport(request: ExportRequest, session: EditorSession = this.session): ExportPlanItem[] {
+    if (request.cmyk && !profileHasFeature(this.profile, 'cmyk-export', this.capabilities)) {
+      throw new Error('CMYK export is available in the Pro profile only.');
+    }
     return planExport(session.document, request);
   }
 
   /** Renders and encodes a request without saving (dialog previews, `EditorHandle.exportImage`). */
   async exportFiles(request: ExportRequest, options: ExportRunOptions = {}, session: EditorSession = this.session): Promise<ExportFile[]> {
+    if (request.cmyk && !profileHasFeature(this.profile, 'cmyk-export', this.capabilities)) {
+      throw new Error('CMYK export is available in the Pro profile only.');
+    }
     await this.whenFullyResolved();
     session.commitTransform();
     planExport(session.document, request); // fail fast before waiting for the canvas
@@ -1065,6 +1102,7 @@ export class EditorController {
   async exportWith(request: ExportRequest, options: ExportRunOptions = {}): Promise<boolean> {
     const session = this.session;
     if (!session.document) return false;
+    if (request.cmyk && !profileHasFeature(this.profile, 'cmyk-export', this.capabilities)) return false;
     try {
       session.commitTransform();
       const plan = planExport(session.document, request);

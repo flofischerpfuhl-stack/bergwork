@@ -6,6 +6,7 @@
 
 import { ADJUSTMENT_KINDS } from '../core/document';
 import type { EditorController } from './controller';
+import { profileHasFeature } from '../app/profiles';
 
 export interface MenuItem {
   label: string;
@@ -222,6 +223,14 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         { label: t('Zoom Out'), shortcut: 'mod+-', enabled: !!document, run: () => session.zoomTo(session.viewport.zoom / 1.25) },
         'separator',
         { label: t('Pixel Grid (800% and above)'), enabled: true, checked: session.showsPixelGrid, run: () => { session.showsPixelGrid = !session.showsPixelGrid; session.notify('view'); } },
+        ...(profileHasFeature(controller.profile, 'softproof', controller.capabilities) ? [
+          'separator' as const,
+          { label: t('Proof Setup…'), enabled: !!document, run: () => controller.showDialog({ kind: 'proofSetup' }), testId: 'menu-proof-setup' },
+          { label: t('Proof Colors'), shortcut: 'mod+y', enabled: !!document, checked: session.proofColors,
+            run: () => { void controller.toggleProofColors(); }, testId: 'menu-proof-colors' },
+          { label: t('Gamut Warning'), shortcut: 'mod+shift+y', enabled: !!document, checked: session.gamutWarning,
+            run: () => { void controller.toggleGamutWarning(); }, testId: 'menu-gamut-warning' },
+        ] satisfies MenuEntry[] : []),
         feature('toggleRulers', t('Rulers'), 'mod+r'),
         feature('toggleGuides', t('Show Guides'), 'mod+;'),
         feature('snapToGuides', t('Snap to Guides')),

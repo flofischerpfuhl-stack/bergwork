@@ -5,6 +5,7 @@ import { createStore } from 'zustand/vanilla';
 export type Dialog =
   /** File > Export As… (the one export dialog). */
   | { kind: 'export' }
+  | { kind: 'proofSetup' }
   | { kind: 'alert'; title: string; message: string }
   | { kind: 'confirm'; title: string; message: string; buttons: { label: string; value: string; role?: 'cancel' | 'default' | 'destructive' }[]; resolve: (value: string) => void }
   | { kind: 'rename'; layerId: string }
