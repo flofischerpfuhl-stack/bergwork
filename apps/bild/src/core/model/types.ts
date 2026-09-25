@@ -346,7 +346,8 @@ export interface Artboard {
 
 export interface DocumentResource {
   readonly id: string;
-  readonly role: 'pattern' | 'embedded' | 'font' | 'lut';
+  /** `brushes`: the document's brush presets (core/brush/presets.ts JSON). */
+  readonly role: 'pattern' | 'embedded' | 'font' | 'lut' | 'brushes';
   readonly mime: string;
   readonly bytes: Uint8Array;
 }

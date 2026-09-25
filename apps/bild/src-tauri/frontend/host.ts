@@ -143,7 +143,8 @@ function nativeFiles(acceptanceProjectPath?: string): FileSystemHost {
     version: 1,
     async chooseFiles(kind) {
       const selected = await window.__TAURI__.dialog.open({ multiple: kind === 'images', directory: false,
-        filters: kind === 'project' ? [PROJECT_FILTER] : kind === 'content' ? [CONTENT_FILTER] : [IMAGE_FILTER] });
+        filters: kind === 'project' ? [PROJECT_FILTER] : kind === 'content' ? [CONTENT_FILTER]
+          : kind === 'brushes' ? [{ name: 'Photoshop Brushes', extensions: ['abr', 'ABR'] }] : [IMAGE_FILTER] });
       const paths = typeof selected === 'string' ? [selected] : selected ?? [];
       return paths.map((id) => ({ id, name: baseName(id) }));
     },

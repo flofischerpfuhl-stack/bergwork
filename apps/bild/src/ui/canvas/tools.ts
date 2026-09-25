@@ -29,6 +29,8 @@ export interface ToolContext {
   readonly pointerType: string;
   /** Pen pressure 0…1, or null for mouse and touch. */
   readonly pressure: number | null;
+  /** Pen tilt 0 (flat)…1 (upright), or null/absent for mouse and touch (brush dynamics). */
+  readonly tilt?: number | null;
   /** Touch alternative for Cmd-drag distortion (context-bar toggle). */
   readonly distortArmed: boolean;
   redraw(): void;

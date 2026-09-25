@@ -3,6 +3,8 @@ import type { Layer } from '../document';
 import type { Raster } from '../raster';
 import type { PixelArray, RasterFormat } from '../pixel/format';
 import { beginSettledStroke, warmBrushDensity, type SettledStroke, type StrokeResult } from './stroke';
+import type { BrushSettings } from './settings';
+import type { BrushTipImage } from './tip';
 import type {
   BrushTileTransfer, BrushWorkerRequest, BrushWorkerResponse,
 } from './workerProtocol';
@@ -14,6 +16,23 @@ let patchable = false;
 let sourceTiles: (PixelArray | null)[] | null = null;
 let sourceFormat: RasterFormat = 'rgba8';
 let timing = { init: 0, settled: 0, finish: 0 };
+/** Sampled tips by id; the client sends a tip's pixels only the first time (workerClient.settingsFor). */
+const tips = new Map<string, BrushTipImage>();
+
+function withTip(settings: BrushSettings): BrushSettings {
+  const tip = settings.tip;
+  if (tip?.kind !== 'sampled') return settings;
+  if (tip.image.data.length) {
+    tips.delete(tip.image.id);
+    tips.set(tip.image.id, tip.image);
+    // Eviction happens before the client forgets (it clears its record after 4), so a held id is always here.
+    if (tips.size > 8) tips.delete(tips.keys().next().value!);
+    return settings;
+  }
+  const image = tips.get(tip.image.id);
+  if (!image) throw new Error('Brush worker lost the brush tip');
+  return { ...settings, tip: { ...tip, image } };
+}
 
 // The common fully soft brush table is ready before the first pointer sample reaches this worker.
 warmBrushDensity(0);
@@ -72,7 +91,7 @@ scope.addEventListener('message', (event: MessageEvent<BrushWorkerRequest>) => {
       sourceFormat = source?.format ?? (options.target === 'mask' ? 'gray8' : 'rgba8');
       sourceTiles = options.patchable && source ? source.tiles as (PixelArray | null)[] : null;
       stroke = beginSettledStroke({ layer: layerFromTransfer(options.layer), canvas: options.canvas,
-        settings: options.settings, target: options.target, pixelLimit: options.pixelLimit, tilePartition: options.partition });
+        settings: withTip(options.settings), target: options.target, pixelLimit: options.pixelLimit, tilePartition: options.partition });
       previous = stroke.currentRaster();
       patchable = options.patchable;
       timing = { init: performance.now() - started, settled: 0, finish: 0 };

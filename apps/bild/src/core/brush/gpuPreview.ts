@@ -10,10 +10,13 @@ import {
 } from './stroke';
 import { validateBrushSettings, type BrushSettings } from './settings';
 import { BrushRasterWorker } from './workerClient';
+import { DabPlacer, brushReach, usesDabs, type BrushDab } from './tip';
+import { averageTilt, penValue } from './dabs';
 
 interface RecordedUpdate {
   readonly points: readonly Point[];
   readonly pressure?: number | readonly number[];
+  readonly tilt?: number | readonly number[];
 }
 
 /** Geometry consumed by GpuCompositor while the exact CPU stroke remains deferred. */
@@ -32,6 +35,11 @@ export interface GpuBrushPreview {
   readonly settled: readonly BrushSegment[];
   readonly tail: readonly BrushSegment[];
   readonly revision: number;
+  /** Dab brushes (tip.ts): settled dabs in placement order and the replaceable tail's dabs. */
+  readonly dabs?: readonly BrushDab[];
+  readonly tailDabs?: readonly BrushDab[];
+  /** Document-space reach of one path point (brushReach). */
+  readonly reach?: number;
 }
 
 interface TargetGeometry {
@@ -52,6 +60,9 @@ export class RecordedBrushStroke implements Stroke {
   private readonly updates: RecordedUpdate[] = [];
   private readonly samples: Point[] = [];
   private readonly pressures: number[] = [];
+  private readonly tilts: (number | undefined)[] = [];
+  private readonly placer: DabPlacer | null;
+  private readonly reach: number;
   private cpu: Stroke | null = null;
   private readonly background: BrushRasterWorker | null;
   private replayed = 0;
@@ -62,18 +73,23 @@ export class RecordedBrushStroke implements Stroke {
     validateBrushSettings(options.settings);
     const target = targetGeometry(options);
     const settled: BrushSegment[] = [], tail: BrushSegment[] = [];
+    this.placer = usesDabs(options.settings) ? new DabPlacer(options.settings) : null;
+    this.reach = brushReach(options.settings);
     this.gpuPreview = {
       layerId: options.layer.id, layer: options.layer, target: options.target === 'mask' ? 'mask' : 'pixels', settings: options.settings,
       canvas: options.canvas, width: target.width, height: target.height, mapping: target.mapping,
       transform: target.transform, sourceRect: target.sourceRect, source: target.source,
       settled, tail, revision: 0,
+      ...(this.placer ? { dabs: [] as BrushDab[], tailDabs: [] as BrushDab[], reach: this.reach } : {}),
     };
     this.background = BrushRasterWorker.create(options, target);
   }
 
-  addPoints(points: readonly Point[], options: { readonly pressure?: number | readonly number[] } = {}): StrokeUpdate {
+  addPoints(points: readonly Point[], options: { readonly pressure?: number | readonly number[]; readonly tilt?: number | readonly number[] } = {}): StrokeUpdate {
     this.assertActive();
-    this.updates.push({ points: points.map((p) => ({ ...p })), pressure: clonePressure(options.pressure) });
+    const tiltOption = this.placer ? options.tilt : undefined;
+    this.updates.push({ points: points.map((p) => ({ ...p })), pressure: clonePressure(options.pressure),
+      ...(tiltOption === undefined ? {} : { tilt: clonePressure(tiltOption) }) });
     const dirty: Rect[] = [];
     const settledForWorker: BrushSegment[] = [];
     let changed = false;
@@ -84,26 +100,32 @@ export class RecordedBrushStroke implements Stroke {
       const option = options.pressure;
       const raw = typeof option === 'number' ? option : option?.[i] ?? 1;
       const pressure = Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 1;
+      const tilt = penValue(tiltOption, i);
       this.samples.push({ ...point });
       this.pressures.push(pressure);
-      if (this.samples.length > 4) { this.samples.shift(); this.pressures.shift(); }
+      this.tilts.push(tilt);
+      if (this.samples.length > 4) { this.samples.shift(); this.pressures.shift(); this.tilts.shift(); }
       const n = this.samples.length;
       const newlySettled = n === 1
-        ? [brushSegment(point, point, pressure)]
+        ? [brushSegment(point, point, pressure, tilt)]
         : n >= 3
           ? continuousBrushCurve(this.samples[n - 3]!, this.samples[n - 2]!, this.samples[Math.max(0, n - 4)]!, point,
-            this.pressures[n - 3]!, this.pressures[n - 2]!, this.curveTolerance())
+            this.pressures[n - 3]!, this.pressures[n - 2]!, this.curveTolerance(), this.tilts[n - 3], this.tilts[n - 2])
           : [];
       const nextTail = n >= 2
-        ? [brushSegment(this.samples[n - 2]!, point, (this.pressures[n - 2]! + pressure) / 2)] : [];
+        ? [brushSegment(this.samples[n - 2]!, point, (this.pressures[n - 2]! + pressure) / 2, averageTilt(this.tilts[n - 2], tilt))] : [];
       const mutable = this.gpuPreview as Mutable<GpuBrushPreview>;
       const previousTail = [...mutable.tail];
       (mutable.settled as BrushSegment[]).push(...newlySettled);
       settledForWorker.push(...newlySettled);
       (mutable.tail as BrushSegment[]).splice(0, mutable.tail.length, ...nextTail);
+      if (this.placer) {
+        this.placer.place(newlySettled, mutable.dabs as BrushDab[]);
+        mutable.tailDabs = this.placer.peek(nextTail);
+      }
       mutable.revision++;
       changed = true;
-      dirty.push(...documentDirty([...previousTail, ...newlySettled, ...nextTail], this.options.settings.diameter,
+      dirty.push(...documentDirty([...previousTail, ...newlySettled, ...nextTail], this.reach,
         this.options.canvas));
     }
     this.background?.addSettled(settledForWorker);
@@ -140,10 +162,15 @@ export class RecordedBrushStroke implements Stroke {
     const n = this.samples.length;
     this.finalSegments = n >= 2
       ? continuousBrushCurve(this.samples[n - 2]!, this.samples[n - 1]!, this.samples[Math.max(0, n - 3)]!,
-        this.samples[n - 1]!, this.pressures[n - 2]!, this.pressures[n - 1]!, this.curveTolerance()) : [];
+        this.samples[n - 1]!, this.pressures[n - 2]!, this.pressures[n - 1]!, this.curveTolerance(),
+        this.tilts[n - 2], this.tilts[n - 1]) : [];
     const mutable = this.gpuPreview as Mutable<GpuBrushPreview>;
     (mutable.settled as BrushSegment[]).push(...this.finalSegments);
     (mutable.tail as BrushSegment[]).splice(0);
+    if (this.placer) {
+      this.placer.place(this.finalSegments, mutable.dabs as BrushDab[]);
+      mutable.tailDabs = [];
+    }
     mutable.revision++;
     return this.finalSegments;
   }
@@ -162,7 +189,8 @@ export class RecordedBrushStroke implements Stroke {
     if (!this.cpu) this.cpu = beginStroke(this.options);
     while (this.replayed < this.updates.length) {
       const update = this.updates[this.replayed++]!;
-      this.cpu.addPoints(update.points, update.pressure === undefined ? undefined : { pressure: update.pressure });
+      this.cpu.addPoints(update.points, update.pressure === undefined && update.tilt === undefined ? undefined
+        : { ...(update.pressure === undefined ? {} : { pressure: update.pressure }), ...(update.tilt === undefined ? {} : { tilt: update.tilt }) });
     }
   }
 
@@ -179,9 +207,9 @@ function clonePressure(value: number | readonly number[] | undefined): number | 
 
 function samePoint(a: Point | undefined, b: Point): boolean { return !!a && a.x === b.x && a.y === b.y; }
 
-function documentDirty(segments: readonly BrushSegment[], diameter: number,
+function documentDirty(segments: readonly BrushSegment[], reach: number,
   canvas: { readonly width: number; readonly height: number }): Rect[] {
-  const reach = diameter / 2 + 2, result: Rect[] = [];
+  const result: Rect[] = [];
   for (const segment of segments) {
     const x = Math.max(0, Math.min(segment.x0, segment.x1) - reach);
     const y = Math.max(0, Math.min(segment.y0, segment.y1) - reach);
