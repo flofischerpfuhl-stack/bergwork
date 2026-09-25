@@ -100,6 +100,23 @@ describe('layer effects (PRODUCT-PLAN 6.7)', () => {
       new Uint8Array([0, 255, 0, 255, 0, 0, 0, 0, 0, 255, 0, 255]));
   });
 
+  it('FIX-PERF: regenerates no effects and reuses the expanded document across 60 unchanged frames', () => {
+    const layer = newLayer({ id: 'stable-style', name: 'Stable', raster: Raster.fromPixels(2, 1, 4,
+      [255, 0, 0, 255, 0, 0, 0, 0]), transform: makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 }), effects: [
+      { kind: 'stroke', schemaVersion: 1, enabled: true, width: 1, position: 'outside', color: green },
+    ] });
+    const document: CanvasDocument = { id: 'stable-effects', width: 2, height: 1, resolution: 72,
+      selection: null, layers: [layer] };
+    const hooks = { transform: (value: typeof layer) => value.transform,
+      maskPlacement: (value: typeof layer) => value.mask?.placement ?? null,
+      raster: (value: typeof layer) => value.raster, maskRaster: (value: typeof layer) => value.mask?.raster };
+    const diagnostics = { effectRegenerations: 0 };
+    const first = documentWithLayerEffects(document, hooks, diagnostics);
+    expect(diagnostics.effectRegenerations).toBe(1);
+    for (let frame = 0; frame < 60; frame++) expect(documentWithLayerEffects(document, hooks, diagnostics)).toBe(first);
+    expect(diagnostics.effectRegenerations).toBe(1);
+  });
+
   it('derives effects from alpha after the layer mask', () => {
     const layer = newLayer({ id: 'masked', name: 'Masked', raster: Raster.fromPixels(2, 1, 4,
       [255, 255, 255, 255, 255, 255, 255, 255]), transform: makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 }),
