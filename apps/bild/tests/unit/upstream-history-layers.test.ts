@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { flattenDocument } from '../../src/core/composite';
-import { isValidStructure, renderLayers, type CanvasDocument } from '../../src/core/document';
+import { isValidStructure, newLayer, renderLayers, type CanvasDocument } from '../../src/core/document';
+import { makeTransform } from '../../src/core/geometry';
 import { DocumentHistory } from '../../src/core/history';
 import { Raster } from '../../src/core/raster';
 import { EditorSession } from '../../src/core/session';
@@ -131,6 +132,24 @@ describe('upstream HistoryTests', () => {
     zeroRetained.end(empty, null);
     expect(zeroRetained.undoCount).toBe(0);
     expect(zeroRetained.retainedBytes(empty)).toBe(0);
+  });
+
+  it('history accounting visits a shared raster once across metadata snapshots', () => {
+    const raster = solid(1024, 1024, [30, 40, 50, 255]);
+    let document: CanvasDocument = { id: 'shared', width: 1024, height: 1024, resolution: 72, selection: null,
+      layers: [newLayer({ id: 'pixels', name: 'Pixels', raster,
+        transform: makeTransform({ x: 0, y: 0 }, { width: 1024, height: 1024 }) })] };
+    const history = new DocumentHistory(100, Number.POSITIVE_INFINITY);
+    for (let index = 0; index < 80; index++) {
+      history.begin('Rename', document, 'pixels');
+      document = { ...document, layers: [{ ...document.layers[0]!, name: `Pixels ${index}` }] };
+      history.end(document, 'pixels');
+    }
+    const before = history.performanceCounters;
+    expect(history.retainedBytes(document)).toBe(0);
+    const after = history.performanceCounters;
+    expect(after.scannedTiles - before.scannedTiles).toBe(raster.cols * raster.rows);
+    expect(after.scannedDocuments - before.scannedDocuments).toBe(81);
   });
 });
 

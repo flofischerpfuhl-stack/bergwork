@@ -11,6 +11,7 @@ import type { CanvasDocument } from '../../core/document';
 import { rectUnion, type Affine, type Point } from '../../core/geometry';
 import type { EditorSession, Tool } from '../../core/session';
 import { currentBrushPreview, currentGpuBrushPreview } from '../../core/brush';
+import { documentWithPixelAdjustmentPreview } from '../../core/adjust/editing';
 import { GpuCompositor, type CompositeHooks, type ViewSpec } from '../../render/gpuCompositor';
 import { SoftwareCompositor } from '../../render/softwareCompositor';
 import type { CanvasHost, EditorController, SecondaryDrag } from '../controller';
@@ -215,7 +216,7 @@ export class CanvasView implements CanvasHost {
             width: x1 - x0, height: y1 - y0, scale: dpr * ppp, snap: viewport.zoom >= 2,
             viewToDoc: { a: 1 / (dpr * ppp), b: 0, c: 0, d: 1 / (dpr * ppp), tx: (x0 / dpr - docRect.x) / ppp, ty: (y0 / dpr - docRect.y) / ppp },
           };
-          composite = gpu.composite(document, view, this.hooks(session));
+          composite = gpu.composite(documentWithPixelAdjustmentPreview(session, document), view, this.hooks(session));
         }
         const proof = session.proofColors && session.proofLut ? { lut: session.proofLut, gamutWarning: session.gamutWarning } : undefined;
         gpu.present(composite, width, height, device, dpr, session.showsPixelGrid && viewport.zoom >= 8, dpr * ppp, { x: x0, y: y0 }, proof);
