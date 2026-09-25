@@ -83,10 +83,14 @@ export function TopBar({ controller, compact }: { controller: EditorController; 
   const openMenu = useUi(controller, (s) => s.openMenu);
   const t = controller.t;
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
+  // Feature modules warm up after start-up; opening a menu loads the rest at once and redraws it with their entries.
+  const [, setFeaturesLoaded] = useState(0);
+  const loadMenuFeatures = () => { void controller.loadAllFeatures?.().then(() => setFeaturesLoaded((value) => value + 1)); };
   const menus: Menu[] = buildMenus(controller, controller.features);
   const workspace = controller.workspace;
   const document = session.document;
   const open = (title: string, element: HTMLElement) => {
+    loadMenuFeatures();
     const rect = element.getBoundingClientRect();
     setAnchor({ x: rect.left, y: rect.bottom + 4 });
     controller.ui.setState({ openMenu: openMenu === title ? null : title });

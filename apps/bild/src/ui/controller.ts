@@ -126,6 +126,8 @@ export class EditorController {
   availableTools = new Set<Tool>(['move', 'hand', 'zoom', 'idle']);
   /** Startup registry hook: fetches a lazy tool module before selecting it. */
   loadFeatureForTool: ((tool: Tool) => Promise<void>) | null = null;
+  /** Loads every remaining lazy feature module now (menus list their commands and submenus only once loaded). */
+  loadAllFeatures: (() => Promise<void>) | null = null;
   contextBars: Partial<Record<Tool, (session: EditorSession) => ReactNode>> = {};
   statusHints: Partial<Record<Tool, (session: EditorSession) => string>> = {};
   toolIcon: ((tool: Tool) => IconName | null) | null = null;
@@ -182,7 +184,11 @@ export class EditorController {
     this.session.selectTool(tool);
   }
   async activateTool(tool: Tool, key = '', shift = false): Promise<void> {
-    try { await this.loadFeatureForTool?.(tool); } catch { return; }
+    try {
+      await this.loadFeatureForTool?.(tool);
+      // Key handlers (Shift-V, E, Shift-U…) are registered by feature modules that may still be warming up.
+      if (key && !this.toolKeyHandlers[key]) await this.loadAllFeatures?.();
+    } catch { return; }
     this.selectToolByKey(tool, key, shift);
   }
   toolKeyHandlers: Record<string, (shift: boolean) => void> = {};

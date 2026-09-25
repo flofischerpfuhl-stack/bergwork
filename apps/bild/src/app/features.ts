@@ -135,11 +135,14 @@ export function installFeatures(controller: EditorController, profile: EditorPro
   // Loading every split chunk in one early idle callback delayed first interaction by hundreds of
   // milliseconds, especially in WebKitGTK. Give the first frame and input a quiet window, then warm
   // one feature per idle period; direct tool/menu use still calls load() immediately above.
+  controller.loadAllFeatures = () => Promise.all(lazyFeatures.map((feature) => load(feature).catch(() => undefined))).then(() => undefined);
   let warmIndex = 0;
   const warmNext = (): void => {
     const feature = lazyFeatures[warmIndex++];
     if (!feature) return;
     idle(() => { void load(feature).catch(() => undefined).finally(() => setTimeout(warmNext, 50)); });
   };
-  setTimeout(warmNext, 2_500);
+  // Start right after the first frame: shortcuts and menus of a feature only exist once it is loaded, and users (and
+  // tests) act within the first seconds. Menus and tool keys also load everything on demand (loadAllFeatures).
+  requestAnimationFrame(() => setTimeout(warmNext, 0));
 }
