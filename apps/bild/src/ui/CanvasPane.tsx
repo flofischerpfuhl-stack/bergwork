@@ -1,18 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import styles from './editor.module.css';
 import type { EditorController } from './controller';
-import { useSession, useWorkspace } from './hooks';
+import { useSessionSelector, useWorkspaceSelector } from './hooks';
 import { CanvasView } from './canvas/CanvasView';
 import { NewCanvasSheet } from './Dialogs';
 import { Icon } from './icons';
 import type { LayerLockBlocker } from '../core/locks';
 import { isProjectFile } from './projectFiles';
+import { markUiRender } from './performance';
 
 /** Hosts the canvas view; shows the New Canvas welcome when the tab has no document; accepts file drops. */
 export function CanvasPane({ controller }: { controller: EditorController }) {
+  markUiRender('CanvasPane');
   const host = useRef<HTMLDivElement>(null);
-  useWorkspace(controller);
-  const session = useSession(controller.session);
+  useWorkspaceSelector(controller, (workspace) => workspace.selectedId);
+  const session = controller.session;
+  useSessionSelector(session, (current) => !!current.document);
   const [dropping, setDropping] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   useEffect(() => {
@@ -75,7 +78,9 @@ const LOCK_MESSAGES: Record<LayerLockBlocker['code'], string> = {
  * is locked"). Not modal: it fades after a few seconds, so a refused brush stroke does not need a click to dismiss.
  */
 function LockNotice({ controller }: { controller: EditorController }) {
-  const session = useSession(controller.session);
+  markUiRender('LockNotice');
+  const session = controller.session;
+  useSessionSelector(session, (current) => current.lastEditBlocker);
   const t = controller.t;
   const blocker = session.lastEditBlocker;
   const [shown, setShown] = useState<LayerLockBlocker | null>(null);

@@ -1,16 +1,18 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import styles from './editor.module.css';
 import type { EditorController } from './controller';
-import { useSession, useUi, useWorkspace } from './hooks';
+import { useUi, useWorkspaceSelector } from './hooks';
 import { Icon } from './icons';
 import { buildMenus, shortcutLabel, type Menu, type MenuEntry, type MenuItem } from './menus';
 import { isProjectFile } from './projectFiles';
+import { markUiRender } from './performance';
 
 export function MenuPopup({ items, anchor, onClose, controller, flipRight }: {
   items: MenuEntry[]; anchor: { x: number; y: number }; onClose: () => void; controller: EditorController;
   /** For a submenu: where its right edge goes when it does not fit to the right (the parent menu's left edge). */
   flipRight?: number;
 }) {
+  markUiRender('MenuPopup');
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState(anchor);
   const [submenu, setSubmenu] = useState<{ items: MenuEntry[]; anchor: { x: number; y: number }; flipRight: number } | null>(null);
@@ -72,8 +74,12 @@ export function MenuPopup({ items, anchor, onClose, controller, flipRight }: {
 }
 
 export function TopBar({ controller, compact }: { controller: EditorController; compact: boolean }) {
-  useWorkspace(controller);
-  const session = useSession(controller.session, true);
+  markUiRender('TopBar');
+  useWorkspaceSelector(controller, (workspace) => JSON.stringify([
+    workspace.selectedId, workspace.canSwitch,
+    workspace.tabs.map((tab) => [tab.id, tab.title, tab.session.isModified, !!tab.session.document]),
+  ]));
+  const session = controller.session;
   const openMenu = useUi(controller, (s) => s.openMenu);
   const t = controller.t;
   const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);

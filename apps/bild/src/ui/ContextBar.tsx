@@ -3,14 +3,15 @@
  * header for Hand/Zoom, and tool-specific bars registered by other modules.
  */
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { isValidElement, useEffect, useState, type ReactNode } from 'react';
 import styles from './editor.module.css';
 import type { EditorController } from './controller';
-import { useSession, useWorkspace } from './hooks';
+import { useSessionSelector, useWorkspaceSelector } from './hooks';
 import { Icon } from './icons';
 import { LAYER_SAMPLINGS, scalePercent, scaledToPercent, type LayerTransform } from '../core/geometry';
 import { makeTransform } from '../core/geometry';
 import type { EditorSession } from '../core/session';
+import { markUiRender } from './performance';
 
 /** No trailing zeros on a whole number, two decimals otherwise (TransformValueField.formatted). */
 export function formatted(value: number): string {
@@ -52,6 +53,7 @@ export function NumberField({ label, value, onChange, suffix, width, disabled, t
 }
 
 function TransformInspector({ controller, session }: { controller: EditorController; session: EditorSession }) {
+  markUiRender('TransformInspector');
   const t = controller.t;
   const layer = session.activeLayer;
   const value: LayerTransform = session.transformEdit?.draft ?? (layer ? session.editedTransform(layer) : makeTransform({ x: 0, y: 0 }, { width: 1, height: 1 }));
@@ -114,8 +116,9 @@ function TransformInspector({ controller, session }: { controller: EditorControl
 }
 
 function NavigationHeader({ controller, session }: { controller: EditorController; session: EditorSession }) {
+  markUiRender('NavigationHeader');
   const t = controller.t;
-  useSession(session, true);
+  useSessionSelector(session, (current) => `${current.tool}|${current.document ? 1 : 0}|${current.viewport.zoom}`, Object.is, true);
   return (
     <>
       <span className={styles.headerTitle}>{session.tool === 'hand' ? t('Pan') : t('Zoom')}</span>
@@ -128,8 +131,27 @@ function NavigationHeader({ controller, session }: { controller: EditorControlle
 }
 
 export function ContextBar({ controller }: { controller: EditorController }) {
-  useWorkspace(controller);
-  const session = useSession(controller.session);
+  markUiRender('ContextBar');
+  useWorkspaceSelector(controller, (workspace) => workspace.selectedId);
+  const session = controller.session;
+  useSessionSelector(session, (current) => {
+    if (current.tool === 'shape' || current.tool === 'pen' || current.tool === 'directSelect') {
+      const node = controller.contextBars[current.tool]?.(current);
+      const type = isValidElement(node) ? node.type : null;
+      return `${current.tool}|${typeof type === 'string' ? type : type ? (type as { name?: string }).name ?? 'component' : ''}`;
+    }
+    if (current.tool === 'text') return current.tool;
+    if (current.tool !== 'move') return current.tool;
+    const layer = current.activeLayer;
+    const transform = current.transformEdit?.draft ?? (layer ? current.editedTransform(layer) : null);
+    const size = current.transformPixelSize ?? layer?.transform.size ?? null;
+    return JSON.stringify([
+      current.tool, current.activeLayerId, current.isMaskSelected, current.transformTargetsMask,
+      current.perspectiveConstrained, current.canTransform, current.transformAutoSelect,
+      current.showsTransformControls, current.locksTransformRatio, current.transformEdit?.corners ?? null,
+      transform, size,
+    ]);
+  });
   const t = controller.t;
   let content: ReactNode;
   const registered = controller.contextBars[session.tool];
@@ -152,8 +174,14 @@ export function statusHint(session: EditorSession, t: (s: string) => string): st
 }
 
 export function StatusBar({ controller }: { controller: EditorController }) {
-  useWorkspace(controller);
-  const session = useSession(controller.session, true);
+  markUiRender('StatusBar');
+  useWorkspaceSelector(controller, (workspace) => workspace.selectedId);
+  const session = controller.session;
+  useSessionSelector(session, (current) => JSON.stringify([
+    current.tool, current.document?.width ?? 0, current.document?.height ?? 0,
+    current.viewport.zoom, current.isImporting, current.isProjectBusy,
+    controller.statusHints[current.tool]?.(current) ?? statusHint(current, controller.t),
+  ]), Object.is, true);
   const t = controller.t;
   const document = session.document;
   const zoom = session.viewport.zoom * 100;

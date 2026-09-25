@@ -4,15 +4,15 @@
  * with folders, masks, clipping indentation, and the footer buttons.
  */
 
-import { Fragment, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import styles from './editor.module.css';
 import { HistoryPanel } from './HistoryPanel';
 import type { EditorController } from './controller';
-import { useSession, useUi, useWorkspace } from './hooks';
+import { useSessionSelector, useUi, useWorkspaceSelector } from './hooks';
 import { Icon, type IconName } from './icons';
 import { CanvasThumbnail, fittedSize } from './Thumbnail';
 import { MenuPopup } from './TopBar';
-import { ADJUSTMENT_KINDS, BLEND_MODES, blendLabel, descendantIds, hierarchyEntries, maskTransform, type AdjustmentKind, type HierarchyEntry, type Layer } from '../core/document';
+import { ADJUSTMENT_KINDS, BLEND_MODES, blendLabel, descendantIds, hierarchyEntries, maskTransform, type AdjustmentKind, type CanvasDocument, type HierarchyEntry, type Layer } from '../core/document';
 import type { ColorLabel, LayerLocks } from '../core/model/types';
 import { filterLayers, type LayerSearchQuery } from '../core/layerSearch';
 
@@ -22,6 +22,7 @@ import type { MenuEntry } from './menus';
 import type { Artboard } from '../core/document';
 import { duplicateArtboard, renameArtboard } from '../core/artboardCommands';
 import { confirmDeleteArtboard, groupRowsByArtboard, isArtboardCollapsed, requestArtboardRename, selectArtboard, takeArtboardRename, selectedArtboard, toggleArtboardCollapsed, type PanelRow } from './artboardState';
+import { markUiRender } from './performance';
 
 const ADJUSTMENT_ICONS: Record<AdjustmentKind, IconName> = {
   'Hue/Saturation': 'adjustment', 'Levels': 'levels', 'Curves': 'curves', 'Exposure': 'exposure', 'Gradient Map': 'gradientMap', 'Grain': 'grain',
@@ -86,6 +87,17 @@ function PercentControl({ controller, label, testId, value, enabled, begin, fini
 }
 
 function Appearance({ controller, session }: { controller: EditorController; session: EditorSession }) {
+  markUiRender('Appearance');
+  useSessionSelector(session, (current) => {
+    const active = current.activeLayer;
+    const locks = active ? current.lockState(active.id) : null;
+    return JSON.stringify([
+      current.activeLayerId, [...current.selectedLayerIds].sort(), current.isMaskSelected,
+      current.canEditLayers, current.canEditAppearance, current.canEditMask,
+      active?.opacity, active?.fillOpacity, active ? current.displayedBlendMode(active) : null, active?.blendMode,
+      active?.locks ?? null, locks,
+    ]);
+  });
   const t = controller.t;
   const layer = session.activeLayer;
   const enabled = session.canEditAppearance;
@@ -165,6 +177,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
   /** Whether the layer's effects are listed below it (the fx disclosure). */
   effectsOpen?: boolean; onToggleEffects?: (id: string) => void;
 }) {
+  markUiRender('LayerRow');
   const t = controller.t;
   const layer = entry.layer;
   const document = session.document!;
@@ -344,6 +357,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
 
 /** The layer's effects under its row, each with an eye (Photoshop's expanded fx list); double-click opens Layer Style on it. */
 function EffectRows({ controller, session, entry }: { controller: EditorController; session: EditorSession; entry: HierarchyEntry }) {
+  markUiRender('EffectRows');
   const t = controller.t;
   const layer = entry.layer;
   const commands = controller.layerStyles;
@@ -380,6 +394,7 @@ function EffectRows({ controller, session, entry }: { controller: EditorControll
 function ArtboardRow({ controller, session, artboard, count, onContext }: {
   controller: EditorController; session: EditorSession; artboard: Artboard; count: number; onContext: (id: string, x: number, y: number) => void;
 }) {
+  markUiRender('ArtboardRow');
   const t = controller.t;
   const [renaming, setRenaming] = useState(false);
   // A rename asked for from the menu (checked after every render of the row).
@@ -433,9 +448,92 @@ function artboardMenuItems(controller: EditorController, session: EditorSession,
 
 function document_elementFromPoint(x: number, y: number): Element | null { return globalThis.document.elementFromPoint(x, y); }
 
+const APPEARANCE_ONLY_LAYER_KEYS = new Set(['opacity', 'fillOpacity', 'blendMode']);
+
+interface LayersSnapshot {
+  width: number;
+  height: number;
+  layers: readonly Layer[];
+  artboards: CanvasDocument['artboards'];
+  state: string;
+}
+
+function samePanelLayer(left: Layer, right: Layer): boolean {
+  if (left === right) return true;
+  const a = left as unknown as Record<string, unknown>, b = right as unknown as Record<string, unknown>;
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const key of keys) {
+    if (!APPEARANCE_ONLY_LAYER_KEYS.has(key) && a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+function sameLayersSnapshot(left: LayersSnapshot, right: LayersSnapshot): boolean {
+  if (left.width !== right.width || left.height !== right.height || left.artboards !== right.artboards || left.state !== right.state
+    || left.layers.length !== right.layers.length) return false;
+  return left.layers.every((layer, index) => samePanelLayer(layer, right.layers[index]!));
+}
+
+function layersSnapshot(controller: EditorController, session: EditorSession): LayersSnapshot {
+  const document = session.document;
+  const extensionThumbs = document?.layers.map((layer) => controller.layerThumbs.some((thumb) => thumb(session, layer) !== null)) ?? [];
+  const artboardState = document?.artboards?.map((artboard) => [
+    artboard.id, isArtboardCollapsed(session, artboard.id), selectedArtboard(session)?.id === artboard.id,
+  ]) ?? [];
+  return {
+    width: document?.width ?? 0,
+    height: document?.height ?? 0,
+    layers: document?.layers ?? [],
+    artboards: document?.artboards,
+    state: JSON.stringify([
+      session.activeLayerId, [...session.selectedLayerIds].sort(), session.isMaskSelected,
+      [...session.collapsedGroupIds].sort(), session.canEditLayers, session.canEditMask,
+      session.canEditAppearance, controller.renamingLayerId, artboardState, extensionThumbs,
+      controller.sidePanels.length, controller.layerThumbs.length, controller.layerSubRows.length,
+      !!controller.features.adjustmentLayers,
+    ]),
+  };
+}
+
+/** Panel tab state is isolated so switching tabs does not reconcile the layer tree. */
+function PanelChrome({ controller, layerCount, layers }: {
+  controller: EditorController; layerCount: number; layers: RefObject<HTMLDivElement | null>;
+}) {
+  markUiRender('PanelChrome');
+  const t = controller.t;
+  const side = useUi(controller, (state) => state.sidePanel);
+  const sidePanel = controller.sidePanels.find((panel) => panel.id === side);
+  useLayoutEffect(() => { if (layers.current) layers.current.style.display = side === 'layers' ? 'contents' : 'none'; }, [layers, side]);
+  return (<>
+    <div className={styles.layersHeader} role="tablist" aria-label={t('Panels')}>
+      <span className={styles.panelTabs}>
+        <button type="button" role="tab" aria-selected={side === 'layers'} data-testid="tab-layers"
+          className={`${styles.panelTab} ${side === 'layers' ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: 'layers' })}>
+          {t('Layers')}
+        </button>
+        <button type="button" role="tab" aria-selected={side === 'history'} data-testid="tab-history"
+          className={`${styles.panelTab} ${side === 'history' ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: 'history' })}>
+          {t('History')}
+        </button>
+        {controller.sidePanels.map((panel) => (
+          <button key={panel.id} type="button" role="tab" aria-selected={side === panel.id} data-testid={`tab-${panel.id}`}
+            className={`${styles.panelTab} ${side === panel.id ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: panel.id })}>
+            {panel.label}
+          </button>
+        ))}
+      </span>
+      <span className={styles.layerCount} data-testid="layerCount">{layerCount}</span>
+    </div>
+    <div style={{ display: side === 'history' ? 'contents' : 'none' }}><HistoryPanel controller={controller} /></div>
+    {sidePanel ? sidePanel.render() : null}
+  </>);
+}
+
 export function LayersPanel({ controller, inSheet = false }: { controller: EditorController; inSheet?: boolean }) {
-  useWorkspace(controller);
-  const session = useSession(controller.session);
+  markUiRender('LayersPanel');
+  useWorkspaceSelector(controller, (workspace) => workspace.selectedId);
+  const session = controller.session;
+  useSessionSelector(session, (current) => layersSnapshot(controller, current), sameLayersSnapshot);
   const t = controller.t;
   const document = session.document;
   const [query, setQuery] = useState<LayerQuery>({});
@@ -459,6 +557,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
   const layerStyles = controller.layerStyles;
   const width = controller.ui.getState().layersWidth;
   const [panelWidth, setPanelWidth] = useState(width);
+  const layersContent = useRef<HTMLDivElement>(null);
 
   const startDrag = (event: ReactPointerEvent, id: string) => {
     if (event.altKey && (event.target as HTMLElement).closest('[data-mask-thumb]')) { startMaskDrag(event, id); return; }
@@ -586,8 +685,6 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
     ];
   };
 
-  const side = useUi(controller, (state) => state.sidePanel);
-  const sidePanel = controller.sidePanels.find((panel) => panel.id === side);
   const deleteLabel = session.isMaskSelected ? t('Delete layer mask') : session.selectedLayerIds.size > 1 ? t('Delete selected layers') : t('Delete selected layer');
   const adjustmentsAvailable = !!controller.features.adjustmentLayers;
   return (
@@ -607,26 +704,8 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
             window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
           }} />
       ) : null}
-      <div className={styles.layersHeader} role="tablist" aria-label={t('Panels')}>
-        <span className={styles.panelTabs}>
-          <button type="button" role="tab" aria-selected={side === 'layers'} data-testid="tab-layers"
-            className={`${styles.panelTab} ${side === 'layers' ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: 'layers' })}>
-            {t('Layers')}
-          </button>
-          <button type="button" role="tab" aria-selected={side === 'history'} data-testid="tab-history"
-            className={`${styles.panelTab} ${side === 'history' ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: 'history' })}>
-            {t('History')}
-          </button>
-          {controller.sidePanels.map((panel) => (
-            <button key={panel.id} type="button" role="tab" aria-selected={side === panel.id} data-testid={`tab-${panel.id}`}
-              className={`${styles.panelTab} ${side === panel.id ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: panel.id })}>
-              {panel.label}
-            </button>
-          ))}
-        </span>
-        <span className={styles.layerCount} data-testid="layerCount">{document?.layers.length ?? 0}</span>
-      </div>
-      {side === 'history' ? <HistoryPanel controller={controller} /> : sidePanel ? sidePanel.render() : (<>
+      <PanelChrome controller={controller} layerCount={document?.layers.length ?? 0} layers={layersContent} />
+      <div ref={layersContent} style={{ display: controller.ui.getState().sidePanel === 'layers' ? 'contents' : 'none' }}>
       <Appearance controller={controller} session={session} />
       {document ? (
         <div className={styles.layerFilter}>
@@ -698,7 +777,7 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
         <button type="button" className={styles.footerButton} aria-label={deleteLabel} title={deleteLabel} data-testid="deleteLayer"
           disabled={!session.canEditLayers || !session.activeLayer} onClick={() => void session.deleteLayerOrMask()}><Icon name="trash" size={17} /></button>
       </div>
-      </>)}
+      </div>
       {filterMenu ? <MenuPopup controller={controller} anchor={filterMenu} items={filterItems(t, query, setQuery)} onClose={() => setFilterMenu(null)} /> : null}
       {menu ? <MenuPopup controller={controller} anchor={menu} items={menuItems(menu.id)} onClose={() => setMenu(null)} /> : null}
       {fxMenu && layerStyles && session.activeLayer ? (

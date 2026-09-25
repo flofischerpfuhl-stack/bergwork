@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import styles from './editor.module.css';
 import type { EditorController } from './controller';
-import { useUi, useWorkspace } from './hooks';
+import { useSessionSelector, useUi, useWorkspaceSelector } from './hooks';
 import { TopBar } from './TopBar';
 import { ToolRail } from './ToolRail';
 import { ContextBar, StatusBar } from './ContextBar';
@@ -12,6 +12,7 @@ import { buildMenus, shortcutMap, shortcutOf } from './menus';
 import { Icon } from './icons';
 import { modifiersOf } from './canvas/CanvasView';
 import type { Tool } from '../core/session';
+import { markUiRender } from './performance';
 
 type Layout = 'desktop' | 'compact' | 'compactLandscape';
 
@@ -33,9 +34,9 @@ function isTextTarget(target: EventTarget | null): boolean {
 }
 
 export function EditorRoot({ controller }: { controller: EditorController }) {
+  markUiRender('EditorRoot');
   const root = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState<Layout>('desktop');
-  useWorkspace(controller);
   const sheet = useUi(controller, (s) => s.sheet);
 
   useEffect(() => {
@@ -214,8 +215,20 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
           </div>
         </>
       ) : null}
-      {controller.panels.map((panel, index) => <Fragment key={index}>{panel()}</Fragment>)}
+      <RegisteredPanels controller={controller} />
       <DialogHost controller={controller} />
     </div>
   );
+}
+
+/** Feature panels subscribe for themselves; only lazy text-panel installation needs its host refreshed. */
+function RegisteredPanels({ controller }: { controller: EditorController }) {
+  markUiRender('RegisteredPanels');
+  useWorkspaceSelector(controller, (workspace) => workspace.selectedId);
+  const session = controller.session;
+  useSessionSelector(session, (current) => {
+    const textUiRelevant = current.tool === 'text' || !!current.document?.layers.some((layer) => layer.kind === 'text');
+    return `${controller.panels.length}|${textUiRelevant ? `text:${current.revision}` : current.tool}`;
+  });
+  return controller.panels.map((panel, index) => <Fragment key={index}>{panel()}</Fragment>);
 }

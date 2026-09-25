@@ -8,6 +8,7 @@ import styles from './editor.module.css';
 import type { EditorController } from './controller';
 import { useUi } from './hooks';
 import { validDimension } from '../core/document';
+import { markUiRender } from './performance';
 
 const importExportDialog = () => import('./ExportDialog');
 const ExportDialog = lazy(() => importExportDialog().then((module) => ({ default: module.ExportDialog })));
@@ -19,6 +20,7 @@ if (typeof window !== 'undefined') {
 }
 
 export function NewCanvasSheet({ controller, welcome = false, onDone }: { controller: EditorController; welcome?: boolean; onDone?: () => void }) {
+  markUiRender('NewCanvasSheet');
   const t = controller.t;
   const [width, setWidth] = useState('1920');
   const [height, setHeight] = useState('1080');
@@ -90,6 +92,7 @@ export function dismissDialog(controller: EditorController): void {
 }
 
 export function DialogHost({ controller }: { controller: EditorController }) {
+  markUiRender('DialogHost');
   const dialog = useUi(controller, (s) => s.dialog);
   if (!dialog) return null;
   let content = null;
