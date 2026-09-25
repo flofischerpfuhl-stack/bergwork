@@ -13,6 +13,7 @@ import type { EditorSession, Tool } from '../../core/session';
 import { currentBrushPreview, currentGpuBrushPreview } from '../../core/brush';
 import { documentWithPixelAdjustmentPreview } from '../../core/adjust/editing';
 import { documentWithPixelMovePreview } from '../../core/selectionCommands';
+import { documentWithPixelFilterPreview, setFilterViewPreviewEnabled } from '../../core/filters/editing';
 import { GpuCompositor, type CompositeHooks, type ViewSpec } from '../../render/gpuCompositor';
 import { SoftwareCompositor } from '../../render/softwareCompositor';
 import type { CanvasHost, EditorController, SecondaryDrag } from '../controller';
@@ -231,6 +232,7 @@ export class CanvasView implements CanvasHost {
     const cpuStart = performance.now();
     this.performanceCounterValue.frames++;
     const session = this.session;
+    setFilterViewPreviewEnabled(session, !this.software && !!this.gpu);
     const document = session.document;
     const rect = this.element.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -270,8 +272,8 @@ export class CanvasView implements CanvasHost {
               tx: (x0 / renderScale - docRect.x) / ppp, ty: (y0 / renderScale - docRect.y) / ppp },
             cache: true,
           };
-          const previewDocument = documentWithPixelMovePreview(session,
-            documentWithPixelAdjustmentPreview(session, document));
+          const previewDocument = documentWithPixelMovePreview(session, documentWithPixelFilterPreview(session,
+            documentWithPixelAdjustmentPreview(session, document)));
           composite = gpu.composite(previewDocument, view, this.hooks(session));
         }
         const proof = session.proofColors && session.proofLut ? { lut: session.proofLut, gamutWarning: session.gamutWarning } : undefined;

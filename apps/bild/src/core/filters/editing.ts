@@ -2,7 +2,7 @@
 import type { LayerTransform } from '../geometry';
 import type { Raster } from '../raster';
 import type { EditorSession } from '../session';
-import type { Layer } from '../document';
+import type { CanvasDocument, Layer } from '../document';
 import { defaultFilterSettings, normalizeFilterSettings, type FilterKind, type FilterSettings } from './settings';
 import { filterPixelJob, type PixelJob } from '../adjust/pixelWorkerClient';
 import { carryMask } from './apply';
@@ -24,7 +24,30 @@ export interface FilterEditState {
 
 const edits = new WeakMap<EditorSession, FilterEditState>();
 const jobs = new WeakMap<EditorSession, PixelJob>();
+const viewPreviewSessions = new WeakSet<EditorSession>();
 export function filterEditState(session: EditorSession): FilterEditState | null { return edits.get(session) ?? null; }
+export function setFilterViewPreviewEnabled(session: EditorSession, enabled: boolean): void {
+  if (enabled) viewPreviewSessions.add(session); else viewPreviewSessions.delete(session);
+}
+
+const VIEW_FILTERS: ReadonlySet<FilterKind> = new Set([
+  'Gaussian Blur', 'Motion Blur', 'Add Noise', 'Lens Correction', 'Unsharp Mask', 'Smart Sharpen', 'High Pass', 'Denoise',
+]);
+
+/** Adds immutable preview metadata consumed only by the view-space GPU compositor. */
+export function documentWithPixelFilterPreview(session: EditorSession,
+  document: CanvasDocument = session.document!): CanvasDocument {
+  const state = edits.get(session);
+  if (!state?.preview || !viewPreviewSessions.has(session) || !VIEW_FILTERS.has(state.kind)) return document;
+  let changed = false;
+  const layers = document.layers.map((layer): typeof layer => {
+    if (layer.id !== state.layerId) return layer;
+    changed = true;
+    return { ...layer, gpuFilterPreview: { kind: state.kind, settings: state.settings,
+      seed: state.seed, selection: document.selection } } as unknown as typeof layer;
+  });
+  return changed ? { ...document, layers } : document;
+}
 
 export function beginFilterEdit(session: EditorSession, kind: FilterKind,
   settings: FilterSettings = defaultFilterSettings()): FilterEditState | null {
@@ -42,6 +65,11 @@ export async function updateFilterEdit(session: EditorSession, settings: FilterS
   state.settings = normalizeFilterSettings(settings); state.preview = preview; state.previewError = null; const request = ++state.request;
   jobs.get(session)?.cancel(); jobs.delete(session);
   if (!preview) { state.preparing = false; session.rasterOverrides.delete(state.layerId); session.notify('document'); return; }
+  if (viewPreviewSessions.has(session) && VIEW_FILTERS.has(state.kind)) {
+    state.preparing = false;
+    session.rasterOverrides.delete(state.layerId);
+    session.notify('document'); session.notify('ui'); return;
+  }
   state.preparing = true;
   try {
     const job = filterPixelJob(state.kind, state.originalRaster, state.originalTransform, state.settings,
