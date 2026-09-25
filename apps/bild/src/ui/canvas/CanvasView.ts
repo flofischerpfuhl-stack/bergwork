@@ -18,6 +18,17 @@ import { defaultTools, HandTool, overlayGeometry, type Modifiers, type ToolConte
 
 export type OverlayPainter = (context: CanvasRenderingContext2D, session: EditorSession, time: number) => void;
 
+export interface CanvasPerformanceCounters {
+  readonly redrawRequests: number;
+  readonly overlayRedrawRequests: number;
+  readonly frames: number;
+  readonly overlayOnlyFrames: number;
+  readonly mainThreadFramesOver50Ms: number;
+  readonly observedLongTasks: number;
+  readonly observedLongTaskMs: number;
+  readonly maximumFrameCpuMs: number;
+}
+
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 /** Tools that change pixels of the active layer (or its mask); a pixel lock refuses them. */
@@ -58,6 +69,11 @@ export class CanvasView implements CanvasHost {
   private autoscroll: { frame: number; event: PointerEvent; point: Point } | null = null;
   private animating = false;
   private destroyed = false;
+  private readonly performanceCounterValue = {
+    redrawRequests: 0, overlayRedrawRequests: 0, frames: 0, overlayOnlyFrames: 0,
+    mainThreadFramesOver50Ms: 0, observedLongTasks: 0, observedLongTaskMs: 0, maximumFrameCpuMs: 0,
+  };
+  private longTaskObserver: PerformanceObserver | null = null;
   failure: string | null = null;
 
   constructor(controller: EditorController) {
@@ -87,6 +103,16 @@ export class CanvasView implements CanvasHost {
     this.element.addEventListener('contextmenu', (event) => event.preventDefault());
     // Safari's own pinch gesture events would zoom the page instead of the canvas.
     this.element.addEventListener('gesturestart', (event) => event.preventDefault());
+    if (typeof PerformanceObserver !== 'undefined'
+      && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+      this.longTaskObserver = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          this.performanceCounterValue.observedLongTasks++;
+          this.performanceCounterValue.observedLongTaskMs += entry.duration;
+        }
+      });
+      this.longTaskObserver.observe({ entryTypes: ['longtask'] });
+    }
     this.watchSession();
   }
 
@@ -122,6 +148,7 @@ export class CanvasView implements CanvasHost {
     this.destroyed = true;
     cancelAnimationFrame(this.frame);
     this.resizeObserver.disconnect();
+    this.longTaskObserver?.disconnect();
     this.unsubscribe?.();
     this.workspaceOff();
     this.gpu?.destroy();
@@ -143,6 +170,9 @@ export class CanvasView implements CanvasHost {
   }
 
   get session(): EditorSession { return this.controller.session; }
+
+  /** Cumulative view diagnostics for performance tests and host-side audits. */
+  get performanceCounters(): CanvasPerformanceCounters { return { ...this.performanceCounterValue }; }
 
   private syncGeometry(): void {
     const rect = this.element.getBoundingClientRect();
@@ -166,6 +196,7 @@ export class CanvasView implements CanvasHost {
   }
 
   redraw(): void {
+    this.performanceCounterValue.redrawRequests++;
     if (this.frame || this.destroyed) return;
     this.frame = requestAnimationFrame((time) => { this.frame = 0; this.draw(time); });
   }
@@ -185,6 +216,8 @@ export class CanvasView implements CanvasHost {
   }
 
   private draw(time: number): void {
+    const cpuStart = performance.now();
+    this.performanceCounterValue.frames++;
     const session = this.session;
     const document = session.document;
     const rect = this.element.getBoundingClientRect();
@@ -214,6 +247,7 @@ export class CanvasView implements CanvasHost {
           const view: ViewSpec = {
             width: x1 - x0, height: y1 - y0, scale: dpr * ppp, snap: viewport.zoom >= 2,
             viewToDoc: { a: 1 / (dpr * ppp), b: 0, c: 0, d: 1 / (dpr * ppp), tx: (x0 / dpr - docRect.x) / ppp, ty: (y0 / dpr - docRect.y) / ppp },
+            cache: true,
           };
           composite = gpu.composite(document, view, this.hooks(session));
         }
@@ -223,6 +257,9 @@ export class CanvasView implements CanvasHost {
       }
     }
     this.drawOverlay(width, height, dpr, time);
+    const cpuMs = performance.now() - cpuStart;
+    this.performanceCounterValue.maximumFrameCpuMs = Math.max(this.performanceCounterValue.maximumFrameCpuMs, cpuMs);
+    if (cpuMs > 50) this.performanceCounterValue.mainThreadFramesOver50Ms++;
   }
 
   private drawOverlay(width: number, height: number, dpr: number, time: number): void {
@@ -251,9 +288,11 @@ export class CanvasView implements CanvasHost {
 
   private overlayFrame = 0;
   private redrawOverlayOnly(): void {
+    this.performanceCounterValue.overlayRedrawRequests++;
     if (this.overlayFrame || this.destroyed) return;
     this.overlayFrame = requestAnimationFrame((time) => {
       this.overlayFrame = 0;
+      this.performanceCounterValue.overlayOnlyFrames++;
       const dpr = window.devicePixelRatio || 1;
       this.drawOverlay(this.overlay.width, this.overlay.height, dpr, time);
     });

@@ -38,14 +38,36 @@ import { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
 
 const residentViews = new WeakMap<Raster, { signature: string; raster: Raster }>();
 const zeroTiles = new Map<string, PixelArray>();
+const occupiedChunkCache = new WeakMap<Raster, Map<number, ReadonlySet<string>>>();
+
+function occupiedChunks(raster: Raster, chunkSize: number): ReadonlySet<string> {
+  let sizes = occupiedChunkCache.get(raster);
+  const cached = sizes?.get(chunkSize);
+  if (cached) return cached;
+  const occupied = new Set<string>();
+  for (let index = 0; index < raster.tiles.length; index++) {
+    if (!raster.tiles[index]) continue;
+    const col = index % raster.cols, row = Math.floor(index / raster.cols);
+    occupied.add(chunkKey(Math.floor(col * TILE / chunkSize), Math.floor(row * TILE / chunkSize)));
+  }
+  if (!sizes) { sizes = new Map(); occupiedChunkCache.set(raster, sizes); }
+  sizes.set(chunkSize, occupied);
+  return occupied;
+}
 
 /** A sparse full-resolution view containing every resolved tile and no swapped tile. */
 function residentView(source: Raster): Raster {
   let signature = '';
-  const tiles: (PixelArray | null)[] = new Array(source.cols * source.rows);
-  for (let index = 0; index < tiles.length; index++) {
+  const length = source.cols * source.rows;
+  for (let index = 0; index < length; index++) {
     const state = source.tileResidency(index);
     signature += state === 'swapped' ? 's' : state === 'resident' ? 'r' : 'z';
+  }
+  const cached = residentViews.get(source);
+  if (cached?.signature === signature) return cached.raster;
+  const tiles: (PixelArray | null)[] = new Array(length);
+  for (let index = 0; index < length; index++) {
+    const state = source.tileResidency(index);
     if (state === 'resident') tiles[index] = source.tiles[index] ?? null;
     else if (state === 'zero') {
       const col = index % source.cols, row = Math.floor(index / source.cols);
@@ -56,8 +78,6 @@ function residentView(source: Raster): Raster {
       tiles[index] = zero;
     } else tiles[index] = null;
   }
-  const cached = residentViews.get(source);
-  if (cached?.signature === signature) return cached.raster;
   const raster = new Raster(source.width, source.height, source.channels, tiles, { format: source.format });
   residentViews.set(source, { signature, raster });
   return raster;
@@ -72,11 +92,19 @@ export interface ViewSpec {
   readonly scale: number;
   /** Show whole document pixels hard-edged (zoom ≥ 200%, EditorCanvas.crispZoom). */
   readonly snap: boolean;
+  /** Retain this interactive viewport result so an unchanged redraw can skip all composition passes. */
+  readonly cache?: boolean;
 }
 
 export interface GpuPerformanceCounters {
   readonly effectRegenerations: number;
   readonly textureUploads: number;
+  readonly targetAllocations: number;
+  readonly drawPasses: number;
+  readonly drawnPixels: number;
+  readonly compositeRequests: number;
+  readonly fullComposites: number;
+  readonly unchangedFrameHits: number;
 }
 
 /** GLSL for one adjustment kind plus how to fill its uniforms. Provided by the adjustment module. */
@@ -119,6 +147,7 @@ interface TextureChunk {
   readonly height: number;
   readonly source: TextureSource;
   readonly bytes: number;
+  lastUsed: number;
 }
 
 interface BrushChunk {
@@ -157,6 +186,18 @@ interface BrushCompositeCache {
   readonly preview: GpuBrushPreview;
   readonly view: ViewSpec;
   readonly target: RenderTexture;
+}
+
+interface CompositeVisualState {
+  readonly documentValues: readonly unknown[];
+  readonly layerValues: readonly unknown[];
+}
+
+interface ViewportCompositeCache {
+  readonly state: CompositeVisualState;
+  readonly view: ViewSpec;
+  readonly target: RenderTexture;
+  readonly skippedAdjustments: number;
 }
 
 // A 64 px margin leaves one neighbour texel at the deepest supported sharp halving (level 6).
@@ -201,6 +242,7 @@ export class GpuCompositor {
   private readonly proofWarnings = new WeakMap<CmykLut, Uint8Array>();
   private brushState: BrushGpuState | null = null;
   private brushCompositeCache: BrushCompositeCache | null = null;
+  private viewportCompositeCache: ViewportCompositeCache | null = null;
   private renderClip: Rect | null = null;
   private readonly brushTargetPool: BrushTargets[] = [];
   /** Sampled brush tip atlases (all mip levels in one R8 texture), most recent last. */
@@ -209,7 +251,10 @@ export class GpuCompositor {
   private lutUploaded = new Map<string, Uint8Array | Float32Array>();
   private activeDocument: CanvasDocument | undefined;
   private readonly filteredHooks = new LiveFilterHookAdapter(DEFAULT_HOOKS);
-  private readonly performanceCounterValue = { effectRegenerations: 0, textureUploads: 0 };
+  private readonly performanceCounterValue = {
+    effectRegenerations: 0, textureUploads: 0, targetAllocations: 0, drawPasses: 0, drawnPixels: 0,
+    compositeRequests: 0, fullComposites: 0, unchangedFrameHits: 0,
+  };
   /** Set per composite: RGBA8 layers get half-float textures (see PRECISION_SENSITIVE_MODES). */
   private preciseTextures = false;
   private textureByteBudget = 384 * 1024 * 1024;
@@ -262,6 +307,7 @@ export class GpuCompositor {
     for (const slot of this.slots.values()) for (const chunk of slot.chunks.values()) chunk.source.destroy();
     this.slots.clear();
     this.destroyBrushCompositeCache();
+    this.destroyViewportCompositeCache();
     for (const rt of this.pool) rt.destroy(true);
     for (const rt of this.inUse) rt.destroy(true);
     for (const lut of this.lutSources.values()) lut.destroy();
@@ -524,6 +570,8 @@ export class GpuCompositor {
     this.mesh.shader = pass.shader;
     this.mesh.position.set(drawRect?.x ?? 0, drawRect?.y ?? 0);
     this.mesh.scale.set(drawRect?.width ?? width, drawRect?.height ?? height);
+    this.performanceCounterValue.drawPasses++;
+    this.performanceCounterValue.drawnPixels += Math.ceil((drawRect?.width ?? width) * (drawRect?.height ?? height));
     this.renderer.render({ container: this.mesh, target: target ?? undefined, clear: false });
   }
 
@@ -558,9 +606,14 @@ export class GpuCompositor {
 
   private acquire(width: number, height: number): RenderTexture {
     const index = this.pool.findIndex((rt) => rt.width === width && rt.height === height);
-    const rt = index >= 0 ? this.pool.splice(index, 1)[0]! : RenderTexture.create({
-      width, height, format: this.floatTargets ? 'rgba16float' : 'rgba8unorm', antialias: false, resolution: 1,
-    });
+    let rt: RenderTexture;
+    if (index >= 0) rt = this.pool.splice(index, 1)[0]!;
+    else {
+      rt = RenderTexture.create({
+        width, height, format: this.floatTargets ? 'rgba16float' : 'rgba8unorm', antialias: false, resolution: 1,
+      });
+      this.performanceCounterValue.targetAllocations++;
+    }
     this.inUse.add(rt);
     return rt;
   }
@@ -627,7 +680,7 @@ export class GpuCompositor {
    * Sparse chunk textures for a raster, uploading only changed tiles and neighbouring aprons.
    * Mirrors TiledLayerRenderer.piece: disjoint interiors sample a surrounding margin so they meet.
    */
-  private texture(slotKey: string, raster: Raster): Slot {
+  private texture(slotKey: string, raster: Raster, visible?: Rect): Slot {
     const gl = this.gl;
     const existing = this.slots.get(slotKey);
     // Once widened a slot stays wide until it is recreated, so previewing modes does not re-upload back and forth.
@@ -636,7 +689,25 @@ export class GpuCompositor {
     const effectPass = slotKey.includes(':effect:');
     const wantsWide = raster.format === 'rgba16'
       || (raster.channels === 4 && (this.preciseTextures || (this.floatTargets && effectPass)));
-    if (existing && existing.raster === raster && (existing.wide || !wantsWide)) { existing.lastUsed = this.frame; return existing; }
+    const occupied = occupiedChunks(raster, this.chunkSize);
+    const desired = new Set<string>();
+    if (!visible) for (const key of occupied) desired.add(key);
+    else {
+      const left = Math.max(0, Math.floor(visible.x / this.chunkSize));
+      const top = Math.max(0, Math.floor(visible.y / this.chunkSize));
+      const right = Math.min(Math.ceil(raster.width / this.chunkSize) - 1,
+        Math.floor((visible.x + visible.width - 1) / this.chunkSize));
+      const bottom = Math.min(Math.ceil(raster.height / this.chunkSize) - 1,
+        Math.floor((visible.y + visible.height - 1) / this.chunkSize));
+      for (let row = top; row <= bottom; row++) for (let col = left; col <= right; col++) {
+        const key = chunkKey(col, row); if (occupied.has(key)) desired.add(key);
+      }
+    }
+    if (existing && existing.raster === raster && (existing.wide || !wantsWide)
+      && [...desired].every((key) => existing.chunks.has(key))) {
+      for (const key of desired) existing.chunks.get(key)!.lastUsed = this.frame;
+      existing.lastUsed = this.frame; return existing;
+    }
     const compatible = existing && existing.raster.width === raster.width && existing.raster.height === raster.height
       && existing.raster.channels === raster.channels && existing.raster.format === raster.format && (existing.wide || !wantsWide);
     let slot: Slot;
@@ -649,12 +720,8 @@ export class GpuCompositor {
     }
     const wide = slot.wide;
     const previous = compatible ? existing!.raster : null;
-    const desired = new Set<string>();
-    for (let row = 0; row < raster.rows; row++) for (let col = 0; col < raster.cols; col++) {
-      if (raster.tiles[row * raster.cols + col]) desired.add(chunkKey(Math.floor(col * TILE / this.chunkSize), Math.floor(row * TILE / this.chunkSize)));
-    }
     for (const [key, chunk] of slot.chunks) {
-      if (!desired.has(key)) { chunk.source.destroy(); slot.chunks.delete(key); }
+      if (!occupied.has(key)) { chunk.source.destroy(); slot.chunks.delete(key); }
     }
 
     const changed: number[] = [];
@@ -676,7 +743,7 @@ export class GpuCompositor {
         autoGenerateMipmaps: false, scaleMode: 'linear', mipmapFilter: 'linear', addressMode: 'clamp-to-edge', maxAnisotropy: 1,
       });
       const chunk: TextureChunk = { col, row, x, y, width, height, source,
-        bytes: mipBytes(textureWidth, textureHeight, raster.channels, wide ? 2 : 1) };
+        bytes: mipBytes(textureWidth, textureHeight, raster.channels, wide ? 2 : 1), lastUsed: this.frame };
       slot.chunks.set(key, chunk);
       this.renderer.texture.bindSource(source, 0);
       this.uploadRasterData(0, 0, textureWidth, textureHeight, raster.channels === 4 ? gl.RGBA : gl.RED,
@@ -684,6 +751,7 @@ export class GpuCompositor {
       gl.generateMipmap(gl.TEXTURE_2D);
       created.add(key);
     }
+    for (const key of desired) slot.chunks.get(key)!.lastUsed = this.frame;
 
     const affected = new Set<string>();
     for (const index of changed) {
@@ -696,7 +764,7 @@ export class GpuCompositor {
       const r1 = Math.floor((bottom + CHUNK_APRON - 1) / this.chunkSize);
       for (let row = r0; row <= r1; row++) for (let col = c0; col <= c1; col++) {
         const key = chunkKey(col, row);
-        if (desired.has(key) && !created.has(key)) affected.add(key);
+        if (slot.chunks.has(key) && !created.has(key)) affected.add(key);
       }
     }
     const format = raster.channels === 4 ? gl.RGBA : gl.RED;
@@ -752,12 +820,15 @@ export class GpuCompositor {
     if (!enforceBudget && this.textureBytes <= this.textureByteBudget) return;
     // The active frame is the minimum viable working set. Evicting one of its slots here only
     // guarantees that the next unchanged frame uploads it again (a9fe5e2 regression).
-    const cold = [...this.slots.entries()].filter((entry) => entry[1].lastUsed < this.frame)
-      .sort((a, b) => a[1].lastUsed - b[1].lastUsed);
-    for (const [key, slot] of cold) {
+    const cold = [...this.slots.entries()].flatMap(([key, slot]) => [...slot.chunks.entries()]
+      .filter(([, chunk]) => chunk.lastUsed < this.frame)
+      .map(([chunkKeyValue, chunk]) => ({ key, slot, chunkKeyValue, chunk })))
+      .sort((a, b) => a.chunk.lastUsed - b.chunk.lastUsed);
+    for (const { key, slot, chunkKeyValue, chunk } of cold) {
       if (this.textureBytes <= this.textureByteBudget) break;
-      for (const chunk of slot.chunks.values()) chunk.source.destroy();
-      this.slots.delete(key);
+      chunk.source.destroy();
+      slot.chunks.delete(chunkKeyValue);
+      if (!slot.chunks.size) this.slots.delete(key);
     }
   }
 
@@ -824,6 +895,13 @@ export class GpuCompositor {
       }
     }
     this.brushCompositeCache = null;
+    this.release(cache.target);
+  }
+
+  private destroyViewportCompositeCache(): void {
+    const cache = this.viewportCompositeCache;
+    if (!cache) return;
+    this.viewportCompositeCache = null;
     this.release(cache.target);
   }
 
@@ -1131,16 +1209,51 @@ export class GpuCompositor {
 
   // MARK: Compositing
 
+  private compositeVisualState(document: CanvasDocument, hooks: CompositeHooks): CompositeVisualState {
+    const documentValues: unknown[] = [document.width, document.height, document.layers, document.resources,
+      document.globalLightAngle, (document as CanvasDocument & { readonly psdOpaqueCanvas?: boolean }).psdOpaqueCanvas];
+    const layerValues: unknown[] = [];
+    const addTransform = (transform: LayerTransform | null) => {
+      if (!transform) { layerValues.push(null); return; }
+      layerValues.push(transform.origin.x, transform.origin.y, transform.size.width, transform.size.height,
+        transform.rotation, transform.flipX, transform.flipY, transform.sampling);
+    };
+    for (const layer of document.layers) {
+      const raster = hooks.raster(layer), mask = hooks.maskRaster(layer);
+      // A4 residency changes storage in place. Include its resolved resident view so hydration can
+      // replace navigation LOD pixels even though the immutable Raster identity did not change.
+      layerValues.push(raster, raster?.reducedCopy, raster?.hasSwappedTiles ? residentView(raster) : raster,
+        mask, mask?.reducedCopy, mask?.hasSwappedTiles ? residentView(mask) : mask, hooks.blendMode(layer));
+      addTransform(hooks.transform(layer));
+      addTransform(hooks.maskPlacement(layer));
+    }
+    const brush = hooks.brush ?? null;
+    layerValues.push(brush, brush?.revision ?? -1);
+    return { documentValues, layerValues };
+  }
+
   /**
    * Composites `document` into a new render texture of the view's size. The caller releases it
    * with `releaseTarget`.
    */
   composite(document: CanvasDocument, view: ViewSpec, hooks: CompositeHooks = DEFAULT_HOOKS): RenderTexture {
     // Live filters change a layer's content; effects are then computed from the filtered alpha (Photoshop order).
+    this.performanceCounterValue.compositeRequests++;
     this.activeDocument = document;
     hooks = this.filteredHooks.use(hooks);
+    const activeBrush = hooks.brush ?? null;
+    const cacheable = view.cache === true && !activeBrush;
+    const visualState = cacheable ? this.compositeVisualState(document, hooks) : null;
+    const viewportCache = this.viewportCompositeCache;
+    if (visualState && viewportCache && sameView(viewportCache.view, view)
+      && sameVisualState(viewportCache.state, visualState)) {
+      this.performanceCounterValue.unchangedFrameHits++;
+      this.skippedAdjustments = viewportCache.skippedAdjustments;
+      return viewportCache.target;
+    }
     document = documentWithLayerEffects(document, hooks, this.performanceCounterValue);
     this.frame++;
+    this.performanceCounterValue.fullComposites++;
     this.skippedAdjustments = 0;
     // Float targets only: an 8-bit accumulation target would lose the precision again.
     // Keep a layer's texture encoding stable when a style is toggled; changing every RGBA8 upload
@@ -1148,7 +1261,6 @@ export class GpuCompositor {
     this.preciseTextures = this.floatTargets
       && document.layers.some((layer) => PRECISION_SENSITIVE_MODES.has(hooks.blendMode(layer)));
     const { width, height } = view;
-    const activeBrush = hooks.brush ?? null;
     let brushState: BrushGpuState | null = null;
     let cache = this.brushCompositeCache;
     if (activeBrush) {
@@ -1300,11 +1412,18 @@ export class GpuCompositor {
     }
     this.renderClip = null;
     if (this.frame % 60 === 0 || this.textureBytes > this.textureByteBudget) this.collectTextures(true);
+    if (visualState) {
+      const previous = this.viewportCompositeCache;
+      this.viewportCompositeCache = {
+        state: visualState, view: cloneView(view), target: acc, skippedAdjustments: this.skippedAdjustments,
+      };
+      if (previous && previous.target !== acc) this.release(previous.target);
+    }
     return acc;
   }
 
   releaseTarget(rt: RenderTexture): void {
-    if (rt !== this.brushCompositeCache?.target) this.release(rt);
+    if (rt !== this.brushCompositeCache?.target && rt !== this.viewportCompositeCache?.target) this.release(rt);
   }
 
   private layerUniforms(raster: Pick<Raster, 'width' | 'height'>, transform: LayerTransform, view: ViewSpec,
@@ -1373,6 +1492,22 @@ export class GpuCompositor {
     return right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
   }
 
+  /** Source-grid bounds that can contribute to this view; chunks outside stay cold until panned into view. */
+  private visibleGridBounds(raster: Pick<Raster, 'width' | 'height'>, transform: LayerTransform, view: ViewSpec): Rect {
+    const docToGrid = invert(pixelToDocument(transform, raster.width, raster.height));
+    const points = [
+      apply(docToGrid, apply(view.viewToDoc, { x: 0, y: 0 })),
+      apply(docToGrid, apply(view.viewToDoc, { x: view.width, y: 0 })),
+      apply(docToGrid, apply(view.viewToDoc, { x: view.width, y: view.height })),
+      apply(docToGrid, apply(view.viewToDoc, { x: 0, y: view.height })),
+    ];
+    const left = Math.max(0, Math.floor(Math.min(...points.map((point) => point.x))) - 2);
+    const top = Math.max(0, Math.floor(Math.min(...points.map((point) => point.y))) - 2);
+    const right = Math.min(raster.width, Math.ceil(Math.max(...points.map((point) => point.x))) + 2);
+    const bottom = Math.min(raster.height, Math.ceil(Math.max(...points.map((point) => point.y))) + 2);
+    return { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+  }
+
   /** One layer pass onto `backdrop` → a new target. */
   private drawLayer(backdrop: RenderTexture, layer: Layer, view: ViewSpec, hooks: CompositeHooks, clip: RenderTexture | null,
     mode: BlendMode, replace = false): RenderTexture {
@@ -1401,9 +1536,12 @@ export class GpuCompositor {
     else {
       const transform = hooks.transform(layer);
       const drawnRaster = this.residentLod(raster, transform, view);
-      const slot = this.texture(`px:${layer.id}${drawnRaster === raster ? '' : ':lod'}`, drawnRaster);
+      const visible = layer.warp ? undefined : this.visibleGridBounds(drawnRaster, transform, view);
+      const slot = this.texture(`px:${layer.id}${drawnRaster === raster ? '' : ':lod'}`, drawnRaster, visible);
       const u = this.layerUniforms(drawnRaster, transform, view, layer.warp);
-      const restricted = slot.chunks.size > 1;
+      const only = slot.chunks.size === 1 ? slot.chunks.values().next().value as TextureChunk : null;
+      const restricted = !only || only.x !== 0 || only.y !== 0
+        || only.width !== drawnRaster.width || only.height !== drawnRaster.height;
       if (!slot.chunks.size || restricted) this.copy(backdrop, out, view);
       const gridToDoc = pixelToDocument(transform, drawnRaster.width, drawnRaster.height);
       for (const chunk of slot.chunks.values()) {
@@ -1436,7 +1574,8 @@ export class GpuCompositor {
         // Product-plan A4: retain the navigation result only under unresolved tiles; every
         // resolved chunk is recomposited against the original backdrop at full resolution.
         const sharp = residentView(raster);
-        const sharpSlot = this.texture(`px:${layer.id}:resident`, sharp);
+        const sharpVisible = layer.warp ? undefined : this.visibleGridBounds(sharp, transform, view);
+        const sharpSlot = this.texture(`px:${layer.id}:resident`, sharp, sharpVisible);
         const sharpOut = this.acquire(view.width, view.height);
         this.copy(out, sharpOut, view);
         const sharpUniforms = this.layerUniforms(sharp, transform, view, layer.warp);
@@ -1563,7 +1702,7 @@ export class GpuCompositor {
     const original = raster;
     raster = this.residentLod(raster, placement, view);
     if (raster !== original) slotKey += ':lod';
-    const slot = this.texture(slotKey, raster);
+    const slot = this.texture(slotKey, raster, this.visibleGridBounds(raster, placement, view));
     const docToGrid = invert(pixelToDocument(placement, raster.width, raster.height));
     const gx = placement.size.width / raster.width * (view.snap ? 1 : view.scale);
     const gy = placement.size.height / raster.height * (view.snap ? 1 : view.scale);
@@ -1593,7 +1732,7 @@ export class GpuCompositor {
     }
     if (raster !== original) {
       const sharp = residentView(original);
-      const sharpSlot = this.texture(`${slotKey}:resident`, sharp);
+      const sharpSlot = this.texture(`${slotKey}:resident`, sharp, this.visibleGridBounds(sharp, placement, view));
       const sharpDocToGrid = invert(pixelToDocument(placement, sharp.width, sharp.height));
       const sharpGx = placement.size.width / sharp.width * (view.snap ? 1 : view.scale);
       const sharpGy = placement.size.height / sharp.height * (view.snap ? 1 : view.scale);
@@ -1964,6 +2103,16 @@ function sameView(a: ViewSpec, b: ViewSpec): boolean {
     && a.viewToDoc.a === b.viewToDoc.a && a.viewToDoc.b === b.viewToDoc.b
     && a.viewToDoc.c === b.viewToDoc.c && a.viewToDoc.d === b.viewToDoc.d
     && a.viewToDoc.tx === b.viewToDoc.tx && a.viewToDoc.ty === b.viewToDoc.ty;
+}
+
+function sameVisualState(a: CompositeVisualState, b: CompositeVisualState): boolean {
+  return sameValues(a.documentValues, b.documentValues) && sameValues(a.layerValues, b.layerValues);
+}
+
+function sameValues(a: readonly unknown[], b: readonly unknown[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let index = 0; index < a.length; index++) if (!Object.is(a[index], b[index])) return false;
+  return true;
 }
 
 function cloneView(view: ViewSpec): ViewSpec {
