@@ -51,6 +51,29 @@ test('PSD isolated knockout groups match on the GPU and CPU compositors', async 
   result.gpu.forEach((value, index) => expect(Math.abs(value - result.cpu[index]!), `channel ${index}`).toBeLessThanOrEqual(1));
 });
 
+test('PSD opaque-canvas declarations match on GPU and CPU for an empty layer stack', async ({ page }) => {
+  await page.goto('/?harness=gpu');
+  const result = await page.evaluate(async () => {
+    const load = (module: string): Promise<any> => import(/* @vite-ignore */ module);
+    const { GpuCompositor } = await load('/src/render/gpuCompositor.ts');
+    const { compositeRegion } = await load('/src/core/composite.ts');
+    const render = async (opaque: boolean) => {
+      const document = { id: `psd-empty-${opaque}`, width: 1, height: 1, resolution: 72,
+        layers: [], selection: null, psdOpaqueCanvas: opaque };
+      const cpu = compositeRegion(document, { x: 0, y: 0, width: 1, height: 1 }).rgba;
+      const canvas = globalThis.document.createElement('canvas'); globalThis.document.body.append(canvas);
+      const gpu = await GpuCompositor.create(canvas, 1, 1), pixels = gpu.readRegion(document, 0, 0, 1, 1);
+      gpu.destroy(); canvas.remove(); return { cpu: Array.from(cpu), gpu: Array.from(pixels) };
+    };
+    return { opaque: await render(true), transparent: await render(false) };
+  }) as Record<'opaque' | 'transparent', { cpu: number[]; gpu: number[] }>;
+  expect(result.opaque.cpu).toEqual([255, 255, 255, 255]);
+  expect(result.transparent.cpu).toEqual([0, 0, 0, 0]);
+  for (const pair of [result.opaque, result.transparent]) {
+    pair.gpu.forEach((value, index) => expect(Math.abs(value - pair.cpu[index]!), `channel ${index}`).toBeLessThanOrEqual(1));
+  }
+});
+
 test('PSD Smart Object perspective quads match in GPU and CPU rendering', async ({ page }) => {
   await page.goto('/?harness=gpu');
   const result = await page.evaluate(async () => {
