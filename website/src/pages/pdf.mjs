@@ -1,8 +1,8 @@
 import config from '../../site.config.mjs';
-import { status } from '../lib/html.mjs';
+import { productMark, status } from '../lib/html.mjs';
 import { renderMedia } from '../lib/media.mjs';
 
-export function render({ media }) {
+export function render({ assets, media }) {
   return {
     current: 'pdf',
     path: '/pdf/',
@@ -10,6 +10,7 @@ export function render({ media }) {
     description: 'Tested PDF editing features in Fernwork today, known limitations, and the planned berg:work PDF desktop app.',
     body: `<header class="page-band">
       <div>
+        ${productMark(assets.markPdf, 'large')}
         <p class="kicker">${config.products.pdf}</p>
         <h1>${config.products.pdf}</h1>
         <p>Edit PDF content and pages. The editor works in Fernwork's browser build. The separate desktop application has not been started.</p>

@@ -1,7 +1,7 @@
 import config from '../../site.config.mjs';
-import { status } from '../lib/html.mjs';
+import { productMark, status } from '../lib/html.mjs';
 
-export function render() {
+export function render({ assets }) {
   return {
     current: 'home',
     path: '/',
@@ -27,6 +27,7 @@ export function render() {
       <div class="product-grid">
         <article class="product-card">
           ${status('Browser features work', 'works')}
+          ${productMark(assets.markPdf)}
           <p class="product-name">${config.products.pdf}</p>
           <h3>Edit the contents and structure of PDF files.</h3>
           <p>Change text, organise pages, redact content, sign documents and recognise text in scans. A separate desktop shell is planned.</p>
@@ -34,6 +35,7 @@ export function render() {
         </article>
         <article class="product-card product-card--ink">
           ${status('Internal desktop build', 'progress')}
+          ${productMark(assets.markImage)}
           <p class="product-name">${config.products.image}</p>
           <h3>Compose, retouch and export layered images.</h3>
           <p>Layers, masks, adjustment layers, text, vector tools, local subject selection and a single export flow work in the current internal build.</p>

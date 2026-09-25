@@ -471,6 +471,28 @@ html[data-hero='mine-winter'] .hero {
   box-shadow: 8px 8px 0 var(--red);
 }
 
+.product-mark {
+  display: grid;
+  width: 4.25rem;
+  height: 4.25rem;
+  margin: 0 0 1.25rem;
+  place-items: center;
+  background: var(--ink);
+  border: 3px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--red);
+}
+
+.product-mark img {
+  width: 82%;
+  height: 82%;
+}
+
+.product-mark--large {
+  width: clamp(5rem, 9vw, 7rem);
+  height: clamp(5rem, 9vw, 7rem);
+  margin-bottom: 1.75rem;
+}
+
 .product-name {
   margin: 0;
   font-size: clamp(1.35rem, 2.8vw, 2.2rem);

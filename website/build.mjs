@@ -64,6 +64,8 @@ async function build() {
   const icon512 = await fingerprintAsset(path.join(sourceAssets, 'icons', 'icon-512.png'), 'icons/icon-512.png');
   const iconMaskable = await fingerprintAsset(path.join(sourceAssets, 'icons', 'icon-maskable-512.png'), 'icons/icon-maskable-512.png');
   const og = await fingerprintAsset(path.join(sourceAssets, 'img', 'og-bergwork.png'), 'img/og-bergwork.png');
+  const markPdf = await fingerprintAsset(path.join(sourceAssets, 'logos', 'bergwork-pdf.svg'), 'logos/bergwork-pdf.svg');
+  const markImage = await fingerprintAsset(path.join(sourceAssets, 'logos', 'bergwork-image.svg'), 'logos/bergwork-image.svg');
 
   const heroNames = ['dusk', 'day', 'inside', 'winter'];
   const hero = {};
@@ -102,7 +104,7 @@ async function build() {
   const media = await prepareMedia(mediaData, path.join(root, 'src', 'media'), fingerprintAsset, warnings);
 
   const assets = {
-    css, siteJs, heroJs, font, logo, favicon, appleTouch, icon192, icon512, iconMaskable, og,
+    css, siteJs, heroJs, font, logo, favicon, appleTouch, icon192, icon512, iconMaskable, og, markPdf, markImage,
     heroDusk: hero['dusk@2880-webp'],
   };
   const pageContext = { assets, media, releases, config };

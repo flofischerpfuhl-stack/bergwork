@@ -1,8 +1,8 @@
 import config from '../../site.config.mjs';
-import { status } from '../lib/html.mjs';
+import { productMark, status } from '../lib/html.mjs';
 import { renderMedia } from '../lib/media.mjs';
 
-export function render({ media }) {
+export function render({ assets, media }) {
   return {
     current: 'image',
     path: '/image/',
@@ -10,6 +10,7 @@ export function render({ media }) {
     description: 'What works in the current internal berg:work Image build, the measured gaps, roadmap phases and explicit non-goals.',
     body: `<header class="page-band page-band--red">
       <div>
+        ${productMark(assets.markImage, 'large')}
         <p class="kicker">${config.products.image}</p>
         <h1>${config.products.image}</h1>
         <p>Layered image editing in an internal desktop build. The desktop app builds for Linux and Windows. It is not publicly distributed.</p>
