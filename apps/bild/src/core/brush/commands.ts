@@ -7,11 +7,47 @@ import {
   DEFAULT_BRUSH_SETTINGS, DEFAULT_CLONE_SETTINGS, changeBrushHardness as stepHardness,
   changeBrushSize as stepSize, type BrushMode, type BrushSettings,
 } from './settings';
-import { beginStroke, type CloneSample, type Stroke, type StrokeResult, type StrokeUpdate } from './stroke';
+import { beginStroke, type BeginStrokeOptions, type CloneSample, type Stroke, type StrokeResult, type StrokeUpdate } from './stroke';
 import { RecordedBrushStroke, type GpuBrushPreview } from './gpuPreview';
 import { noteColorUsed } from '../color/recent';
 
 interface LastPoint { readonly point: Point; readonly layerId: string; readonly mask: boolean }
+interface DeferredStrokeUpdate {
+  readonly points: readonly Point[];
+  readonly options?: { readonly pressure?: number | readonly number[]; readonly tilt?: number | readonly number[] };
+}
+
+/** Clone's source sampler is exact but not GPU-serialisable. Record geometry during input and replay once on commit. */
+class DeferredCloneStroke implements Stroke {
+  private readonly updates: DeferredStrokeUpdate[] = [];
+  private readonly pointsValue: Point[] = [];
+  private done = false;
+  constructor(private readonly options: BeginStrokeOptions) {}
+  addPoints(points: readonly Point[], options?: DeferredStrokeUpdate['options']): StrokeUpdate {
+    if (this.done) return { dirty: [] };
+    const copied = points.map((point) => ({ ...point }));
+    this.updates.push({ points: copied, ...(options ? { options: {
+      ...(options.pressure === undefined ? {} : { pressure: clonePressure(options.pressure) }),
+      ...(options.tilt === undefined ? {} : { tilt: clonePressure(options.tilt) }),
+    } } : {}) });
+    this.pointsValue.push(...copied);
+    const radius = this.options.settings.diameter / 2 + 2;
+    return { dirty: copied.map((point) => ({ x: point.x - radius, y: point.y - radius,
+      width: radius * 2, height: radius * 2 })) };
+  }
+  currentRaster(): Raster { return this.options.layer.raster!; }
+  currentTransform(): Layer['transform'] { return this.options.layer.transform; }
+  finish(): StrokeResult {
+    if (this.done) throw new Error('Clone stroke is no longer active');
+    this.done = true;
+    const exact = beginStroke(this.options);
+    for (const update of this.updates) exact.addPoints(update.points, update.options);
+    return exact.finish();
+  }
+  cancel(): void { this.done = true; }
+  get points(): readonly Point[] { return this.pointsValue; }
+  get diameter(): number { return this.options.settings.diameter; }
+}
 interface ActiveStroke {
   readonly stroke: Stroke;
   readonly gpu: GpuBrushPreview | null;
@@ -148,7 +184,8 @@ export function beginBrushStroke(session: EditorSession, point: Point, options: 
   // The selection is immutable during a stroke, so the GPU and worker can cache it; Clone still
   // needs an arbitrary source sampler and retains the CPU preview.
   const recorded = session.tool === 'brush' && !clone ? new RecordedBrushStroke(strokeOptions) : null;
-  const stroke = recorded ?? beginStroke(strokeOptions);
+  const deferredClone = clone ? new DeferredCloneStroke(strokeOptions) : null;
+  const stroke = recorded ?? deferredClone ?? beginStroke(strokeOptions);
   const name = mask ? 'Paint Mask' : settings.mode === 'erase' ? 'Erase'
     : settings.mode === 'dodge' ? 'Dodge' : settings.mode === 'burn' ? 'Burn' : settings.mode === 'sponge' ? 'Sponge'
     : session.tool === 'cloneStamp' ? 'Clone Stamp' : 'Brush Stroke';
@@ -194,6 +231,12 @@ export function currentBrushPreview(session: EditorSession): { layerId: string; 
 export function currentGpuBrushPreview(session: EditorSession): GpuBrushPreview | null {
   const value = state(session), active = value.active ?? value.pending?.active ?? null;
   return active?.gpu ?? null;
+}
+
+export function currentDeferredBrushGeometry(session: EditorSession): { readonly diameter: number; readonly points: readonly Point[] } | null {
+  const value = state(session), active = value.active ?? value.pending?.active ?? null;
+  return active?.stroke instanceof DeferredCloneStroke
+    ? { diameter: active.stroke.diameter, points: active.stroke.points } : null;
 }
 
 /** CPU previews are registered only for brush modes that cannot use MetalBrushCoverage-equivalent rendering. */

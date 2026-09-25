@@ -8,6 +8,7 @@ import type { EditorSession } from './session';
 import { getBrushSettings } from './brush/commands';
 import { beginStroke, type Stroke, type StrokeResult, type StrokeUpdate } from './brush/stroke';
 import type { BrushSettings } from './brush/settings';
+import { replayHealCoverageInBackground, type HealCoverageUpdate } from './healCoverageClient';
 import { KernelClient } from '../workers/kernelClient';
 import type { SpotHealMode } from '../wasm/kernels';
 import { premultiplyRgba8InPlace, unpremultiplyRgba8InPlace } from './pixel/color';
@@ -47,7 +48,13 @@ export class SpotHealingStroke {
   readonly settings: SpotHealingSettings;
   private readonly layer: Layer;
   private readonly source: Raster;
-  private readonly coverage: Stroke;
+  private readonly coverageLayer: Layer;
+  private readonly coverageBrush: BrushSettings;
+  private readonly coverageCanvas: Size;
+  private readonly coverageSelection: DocumentSelection | null;
+  private readonly coveragePixelLimit: number;
+  private readonly coverageUpdates: HealCoverageUpdate[] = [];
+  private readonly pointsValue: Point[] = [];
   private readonly kernels: KernelClient;
   private readonly liveBase: Raster;
   private done = false;
@@ -64,14 +71,15 @@ export class SpotHealingStroke {
     this.source = options.layer.raster;
     this.settings = options.settings;
     this.kernels = options.kernels ?? new KernelClient();
-    const brush: BrushSettings = {
+    this.coverageBrush = {
       diameter: options.settings.diameter, hardness: options.settings.hardness, opacity: 1,
       red: 1, green: 1, blue: 1, mode: 'paint',
     };
     // BrushStroke.heal reads the stroke's accumulated coverage, not its dark live wash.
-    const coverageLayer: Layer = { ...options.layer, raster: Raster.blank(this.source.width, this.source.height, 4), mask: null };
-    this.coverage = beginStroke({ layer: coverageLayer, canvas: options.canvas, settings: brush,
-      selection: options.selection, pixelLimit: options.pixelLimit });
+    this.coverageLayer = { ...options.layer, raster: Raster.blank(this.source.width, this.source.height, 4), mask: null };
+    this.coverageCanvas = options.canvas;
+    this.coverageSelection = options.selection ?? null;
+    this.coveragePixelLimit = options.pixelLimit ?? 100_000_000;
     const map = pixelToDocument(options.layer.transform, this.source.width, this.source.height);
     const canvasInPixels = transformedBounds(invert(map), { x: 0, y: 0, ...options.canvas });
     const extent = integralUnion({ x: 0, y: 0, width: this.source.width, height: this.source.height }, canvasInPixels);
@@ -84,15 +92,23 @@ export class SpotHealingStroke {
 
   addPoints(points: readonly Point[], options?: { readonly pressure?: number | readonly number[] }): StrokeUpdate {
     if (this.done) throw new Error('Spot Healing stroke is no longer active');
-    return this.coverage.addPoints(points, options);
+    const copied = points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+      .map((point) => ({ ...point }));
+    if (!copied.length) return { dirty: [] };
+    this.pointsValue.push(...copied);
+    const pressure = Array.isArray(options?.pressure) ? [...options.pressure] : options?.pressure;
+    this.coverageUpdates.push({ points: copied, ...(pressure === undefined ? {} : { pressure }) });
+    const radius = this.settings.diameter / 2 + 2;
+    return { dirty: copied.map((point) => ({ x: point.x - radius, y: point.y - radius,
+      width: radius * 2, height: radius * 2 })) };
   }
 
   /** BrushStroke's fixed 45% dark wash over the accumulated healing coverage. */
   /** Placement of `currentRaster()` (the stroke's working grid). */
-  currentTransform(): LayerTransform { return this.coverage.currentTransform(); }
+  currentTransform(): LayerTransform { return this.replayCoverage().currentTransform(); }
 
   currentRaster(): Raster {
-    const coverage = this.coverage.currentRaster();
+    const coverage = this.replayCoverage().currentRaster();
     let preview = this.liveBase;
     for (let row = 0; row < coverage.rows; row++) for (let col = 0; col < coverage.cols; col++) {
       const tile = coverage.tiles[row * coverage.cols + col];
@@ -117,7 +133,6 @@ export class SpotHealingStroke {
 
   cancel(): void {
     if (this.done) return;
-    this.coverage.cancel();
     this.done = true;
   }
 
@@ -125,7 +140,9 @@ export class SpotHealingStroke {
     if (this.done) throw new Error('Spot Healing stroke is no longer active');
     this.healing = true;
     try {
-      const painted = this.coverage.finish();
+      const background = replayHealCoverageInBackground(this.coverageLayer, this.coverageCanvas,
+        this.coverageBrush, this.coverageSelection, this.coveragePixelLimit, this.coverageUpdates);
+      const painted = background ? await background : this.replayCoverage().finish();
       const result = await this.heal(painted);
       this.done = true;
       return result;
@@ -134,6 +151,18 @@ export class SpotHealingStroke {
       this.done = true;
       throw error;
     } finally { this.healing = false; }
+  }
+
+  get geometry(): { readonly diameter: number; readonly points: readonly Point[] } {
+    return { diameter: this.settings.diameter, points: this.pointsValue };
+  }
+
+  private replayCoverage(): Stroke {
+    const stroke = beginStroke({ layer: this.coverageLayer, canvas: this.coverageCanvas,
+      settings: this.coverageBrush, selection: this.coverageSelection, pixelLimit: this.coveragePixelLimit });
+    for (const update of this.coverageUpdates) stroke.addPoints(update.points,
+      update.pressure === undefined ? undefined : { pressure: update.pressure });
+    return stroke;
   }
 
   private async heal(painted: StrokeResult): Promise<StrokeResult> {
@@ -262,9 +291,10 @@ export function addSpotHealingPoints(session: EditorSession, points: Point | rea
 }
 
 /** The stroke in progress for the canvas preview (darkened coverage over the layer). */
-export function currentSpotHealingPreview(session: EditorSession): { layerId: string; mask: false; raster: Raster; transform: LayerTransform } | null {
-  const active = sessionState(session).active;
-  return active ? { layerId: active.layerId, mask: false, raster: active.stroke.currentRaster(), transform: active.stroke.currentTransform() } : null;
+export function currentSpotHealingPreview(_session: EditorSession): null { return null; }
+
+export function currentSpotHealingGeometry(session: EditorSession): { readonly diameter: number; readonly points: readonly Point[] } | null {
+  return sessionState(session).active?.stroke.geometry ?? null;
 }
 
 export function currentSpotHealingRaster(session: EditorSession): Raster | null {

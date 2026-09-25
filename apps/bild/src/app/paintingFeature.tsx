@@ -16,10 +16,11 @@ import type { EditorSession, PaletteColor, Tool } from '../core/session';
 import type { Point } from '../core/geometry';
 import {
   beginBrushStroke, cancelBrushStroke, changeBrushHardness, changeBrushSize, cloneSamplePoint, currentCpuBrushPreview,
-  extendBrushStroke, finishBrushStroke, getBrushSettings, getCloneSettings, isBrushStrokeActive, setBrushSettings,
+  currentDeferredBrushGeometry, extendBrushStroke, finishBrushStroke, getBrushSettings, getCloneSettings, isBrushStrokeActive, setBrushSettings,
   setCloneSettings, setCloneSource, waitForBrushStroke, brushOutlineRadius, type BrushSettings, type BrushMode,
 } from '../core/brush';
-import { beginRetouch, cancelRetouch, commitRetouch, currentRetouchPreview, updateRetouch, type RetouchMode } from '../core/retouch';
+import { beginRetouch, cancelRetouch, commitRetouch, currentRetouchGeometry, currentRetouchPreview, updateRetouch,
+  waitForRetouch, type RetouchMode } from '../core/retouch';
 import {
   beginGradient, cancelGradient, commitGradient, defaultGradientSettings, endGradientDrag, handleGradientKey, pendingGradient,
   pendingGradientPreview, refreshGradient, updateGradient, type GradientSettings, type GradientShape, type GradientStyle,
@@ -157,6 +158,7 @@ class SmearTool implements ToolHandler {
     this.active = false;
     commitRetouch(c.session);
     syncPreview(c.session);
+    void waitForRetouch(c.session).then(() => syncPreview(c.session));
   }
   cancel(session: EditorSession): void {
     this.active = false;
@@ -259,6 +261,17 @@ function paintCursors(view: CanvasView) {
     const document = session.document;
     if (!document) return;
     const ppp = session.viewport.pointsPerPixel;
+    const geometry = currentDeferredBrushGeometry(session) ?? currentRetouchGeometry(session);
+    if (geometry?.points.length) {
+      const points = geometry.points.map((point) => session.viewport.viewPoint(point, document));
+      context.lineCap = 'round'; context.lineJoin = 'round';
+      context.lineWidth = Math.max(1, geometry.diameter * ppp);
+      context.strokeStyle = session.tool === 'cloneStamp' ? 'rgba(90,160,255,0.28)' : 'rgba(255,255,255,0.22)';
+      context.beginPath(); context.moveTo(points[0]!.x, points[0]!.y);
+      for (const point of points.slice(1)) context.lineTo(point.x, point.y);
+      if (points.length === 1) context.lineTo(points[0]!.x + 0.01, points[0]!.y);
+      context.stroke();
+    }
     // Brush outline and hardness ring at the pointer (BrushCursorOverlay).
     const point = view.hoverPoint;
     if (point && isBrushLike(session.tool)) {

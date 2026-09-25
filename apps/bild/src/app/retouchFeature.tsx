@@ -12,7 +12,7 @@ import type { EditorSession } from '../core/session';
 import type { Point } from '../core/geometry';
 import { DEFAULT_WAND_SETTINGS, magicWand, type WandSampleSize, type WandSettings } from '../core/wand';
 import {
-  addSpotHealingPoints, beginSpotHealing, cancelSpotHealing, currentSpotHealingPreview, finishSpotHealing, getSpotHealingMode,
+  addSpotHealingPoints, beginSpotHealing, cancelSpotHealing, currentSpotHealingGeometry, currentSpotHealingPreview, finishSpotHealing, getSpotHealingMode,
   setSpotHealingMode, spotHealingState, SPOT_HEALING_MODES, type SpotHealingMode,
 } from '../core/heal';
 import { getBrushSettings } from '../core/brush';
@@ -201,6 +201,18 @@ export function installRetouch(controller: EditorController): void {
   controller.canvasSetups.push((view) => {
     view.tools.wand = new WandTool(controller);
     view.tools.spotHealing = new SpotHealingTool();
+    view.painters.push((context, session) => {
+      const document = session.document, geometry = currentSpotHealingGeometry(session);
+      if (!document || !geometry?.points.length) return;
+      const points = geometry.points.map((point) => session.viewport.viewPoint(point, document));
+      context.lineCap = 'round'; context.lineJoin = 'round';
+      context.lineWidth = Math.max(1, geometry.diameter * session.viewport.pointsPerPixel);
+      context.strokeStyle = 'rgba(31,31,31,0.45)';
+      context.beginPath(); context.moveTo(points[0]!.x, points[0]!.y);
+      for (const point of points.slice(1)) context.lineTo(point.x, point.y);
+      if (points.length === 1) context.lineTo(points[0]!.x + 0.01, points[0]!.y);
+      context.stroke();
+    });
   });
   controller.wandControls = (session) => <WandControls controller={controller} session={session} />;
   controller.spotHealingControls = (session) => <SpotHealingControls controller={controller} session={session} />;

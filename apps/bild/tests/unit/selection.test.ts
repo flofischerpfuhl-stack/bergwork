@@ -9,10 +9,11 @@ import {
 } from '../../src/core/selectionOps';
 import {
   addMaskFromSelection, applySelection, beginPixelMove, beginSelectionTransform, cancelPixelMove, clearSelectedPixels,
-  displayedSelection, fillSelection, finishPixelMove, invertPixels, loadLayerSelection, movePixels, nudgePixels,
+  displayedSelection, documentWithPixelMovePreview, fillSelection, finishPixelMove, invertPixels, loadLayerSelection, movePixels, nudgePixels,
   pixelMoveState,
 } from '../../src/core/selectionCommands';
 import { InMemoryPixelClipboard, copySelection, cutSelection, paste } from '../../src/core/clipboard';
+import { compositeRegion } from '../../src/core/composite';
 
 function solid(width: number, height: number, rgba: readonly [number, number, number, number]): Raster {
   const data = new Uint8Array(width * height * 4);
@@ -171,15 +172,24 @@ describe('moving selected pixels (SelectionEditTests.swift)', () => {
     return Raster.fromPixels(100, 40, 4, data);
   }
 
-  it('cmdDragMovesSelectedPixelsAndOutlineAsOneUndo and previews through the override', () => {
+  it('cmdDragMovesSelectedPixelsAndOutlineAsOneUndo with a geometry-only preview', () => {
     const session = sessionWith(twoColor());
+    const masked = { ...session.activeLayer!, opacity: 0.63,
+      mask: { raster: Raster.fromPixels(100, 40, 1, new Uint8Array(4000).fill(173)), enabled: true, linked: true, placement: null } };
+    session.replaceDocument({ ...session.document!, layers: [masked] });
     applySelection(session, rectangleSelection({ x: 10, y: 10, width: 10, height: 10 }, session.document!), 'New', 'Select');
     const before = session.document, count = session.history.undoCount;
     expect(beginPixelMove(session)).toBe(true);
     expect(movePixels(session, 30.4, 0)).toBe(true);
     expect(movePixels(session, 60.2, 5)).toBe(true);
     expect(pixelMoveState(session)?.offset).toEqual({ x: 60, y: 5 });
-    expect(session.rasterOverrides.get('pixels')).toBe(pixelMoveState(session)?.preview);
+    expect(session.rasterOverrides.has('pixels')).toBe(false);
+    const preview = documentWithPixelMovePreview(session);
+    expect(preview).not.toBe(session.document);
+    expect(preview.layers.map((layer) => layer.id)).toEqual([
+      'pixels', '__fw-move-base:pixels', '__fw-move-lifted:pixels',
+    ]);
+    const previewPixels = compositeRegion(preview, { x: 0, y: 0, width: 100, height: 40 }).rgba;
     expect(selectionBounds(displayedSelection(session)!)).toEqual({ x: 70, y: 15, width: 10, height: 10 });
     expect(finishPixelMove(session)).toBe(true);
     expect(session.rasterOverrides.size).toBe(0);
@@ -188,6 +198,7 @@ describe('moving selected pixels (SelectionEditTests.swift)', () => {
     expect(session.activeLayer!.raster!.pixel(15, 15)[3]).toBe(0);
     expect(session.activeLayer!.raster!.pixel(75, 20)).toEqual([255, 0, 0, 255]);
     expect(session.activeLayer!.raster!.pixel(85, 20)).toEqual([0, 0, 255, 255]);
+    expect(compositeRegion(session.document!, { x: 0, y: 0, width: 100, height: 40 }).rgba).toEqual(previewPixels);
     session.undo();
     expect(session.document).toBe(before);
   });
@@ -224,9 +235,9 @@ describe('moving selected pixels (SelectionEditTests.swift)', () => {
     applySelection(session, soft, 'New', 'Select');
     const before = session.document;
     expect(beginPixelMove(session)).toBe(true); movePixels(session, 20, 0);
-    const preview = pixelMoveState(session)?.preview;
-    expect(preview).not.toBeNull();
-    expect([...preview!.toPixels()].some((value, index) => index % 4 === 3 && value > 0 && value < 255)).toBe(true);
+    const state = pixelMoveState(session)!;
+    expect(state.preview).toBeNull();
+    expect([...state.lifted.toPixels()].some((value, index) => index % 4 === 3 && value > 0 && value < 255)).toBe(true);
     expect(finishPixelMove(session)).toBe(true);
     expect(session.activeLayer!.raster!.width).toBeGreaterThan(20);
     expect(session.activeLayer!.transform.size.width).toBeGreaterThan(20);
