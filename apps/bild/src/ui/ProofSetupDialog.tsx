@@ -8,8 +8,9 @@ import {
 
 export function ProofSetupDialog({ controller, close }: { controller: EditorController; close: () => void }) {
   const session = controller.session, current = session.proofProfile;
-  const [choice, setChoice] = useState<BundledCmykProfileId | 'user'>(current?.id ?? 'fogra39-approx');
+  const [choice, setChoice] = useState<string>(current?.id ?? 'fogra39-approx');
   const [custom, setCustom] = useState<CmykProfile | null>(current?.id === 'user' ? current : null);
+  const [installed, setInstalled] = useState<readonly CmykProfile[]>([]);
   const [intent, setIntent] = useState<CmykRenderingIntent>(session.proofOptions.intent);
   const [bpc, setBpc] = useState(session.proofOptions.blackPointCompensation);
   const [paper, setPaper] = useState(session.proofOptions.simulatePaperWhite);
@@ -20,8 +21,11 @@ export function ProofSetupDialog({ controller, close }: { controller: EditorCont
     void Promise.all([bundledCmykProfile('swop-approx'), bundledCmykProfile('fogra39-approx')]).then(([swop, fogra]) => {
       if (active) setNames({ 'swop-approx': swop.name, 'fogra39-approx': fogra.name });
     });
+    void controller.capabilities.color?.outputProfiles?.().then((profiles) => {
+      if (active) setInstalled(profiles.map((profile) => userCmykProfile(profile.name, profile.bytes)));
+    }).catch(() => { /* A host discovery failure must not disable bundled/file profiles. */ });
     return () => { active = false; };
-  }, []);
+  }, [controller]);
   const chooseFile = async (file: File | undefined) => {
     if (!file) return;
     try { const profile = userCmykProfile(file.name, new Uint8Array(await file.arrayBuffer())); setCustom(profile); setChoice('user'); setError(null); }
@@ -30,7 +34,8 @@ export function ProofSetupDialog({ controller, close }: { controller: EditorCont
   const apply = async () => {
     setBusy(true); setError(null);
     try {
-      const profile = choice === 'user' ? custom : await bundledCmykProfile(choice);
+      const profile = choice === 'user' ? custom : choice.startsWith('system:')
+        ? installed[Number(choice.slice(7))] : await bundledCmykProfile(choice as BundledCmykProfileId);
       if (!profile) throw new Error('Choose an ICC output profile.');
       await controller.setProofSetup(profile, { intent, blackPointCompensation: bpc, simulatePaperWhite: paper });
       close();
@@ -43,6 +48,7 @@ export function ProofSetupDialog({ controller, close }: { controller: EditorCont
         <select className={styles.select} value={choice} data-testid="proof-profile" onChange={(event) => setChoice(event.target.value as typeof choice)}>
           <option value="fogra39-approx">{names?.['fogra39-approx'] ?? 'Generic FOGRA39-like (approximation)'}</option>
           <option value="swop-approx">{names?.['swop-approx'] ?? 'Generic SWOP-like (approximation)'}</option>
+          {installed.map((profile, index) => <option value={`system:${index}`} key={`${profile.name}:${index}`}>{profile.name}</option>)}
           {custom ? <option value="user">{custom.name}</option> : null}
         </select>
       </label>

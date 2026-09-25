@@ -724,14 +724,40 @@ export async function benchmark10(page: Page): Promise<void> {
 }
 
 export async function benchmark11(page: Page): Promise<void> {
-  await createCanvas(page, 80, 60);
+  await createCanvas(page, 80, 60, 'pro');
   await importFile(page, 'print-photo.tiff', 'image/tiff', await adobeRgbTiff(page, 80, 60));
   expect((await manifest(page)).layers.at(-1)?.name).toBe('print-photo');
   expect((await manifest(page)).assets.at(-1)?.width).toBe(80);
   const converted = rgbaAt(await exportedPixels(page), 40, 30);
   expect(converted[3]).toBe(255);
   expect(converted).not.toEqual([190, 70, 35, 255]);
-  missing('CMYK soft-proof controls (before CMYK TIFF export)', task(11));
+  await page.getByTestId('menu-View').click();
+  await page.getByTestId('menu-proof-setup').click();
+  await expect(page.getByTestId('proof-setup-dialog')).toBeVisible();
+  await page.getByTestId('proof-profile').selectOption('fogra39-approx');
+  await page.getByTestId('proof-intent').selectOption('relative-colorimetric');
+  await page.getByTestId('proof-bpc').check();
+  await page.getByTestId('proof-apply').click();
+  await expect(page.getByTestId('proof-setup-dialog')).toHaveCount(0);
+  await page.getByTestId('menu-View').click();
+  await page.getByTestId('menu-proof-colors').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__editorForTests.session.proofColors)).toBe(true);
+  const files = await exportAs(page, async () => {
+    await page.getByTestId('export-format-tiff').click();
+    await page.getByTestId('export-color-cmyk').click();
+    await page.getByTestId('export-depth-16').click();
+    await expect(page.getByTestId('export-cmyk-settings')).toContainText('FOGRA39-like');
+  });
+  expect(files).toHaveLength(1);
+  const result = await page.evaluate(async (bytes) => {
+    const load = (path: string): Promise<any> => import(/* @vite-ignore */ path);
+    const { decodeTiffNative } = await load('/src/io/tiff.ts');
+    const decoded = await decodeTiffNative(Uint8Array.from(bytes));
+    return { width: decoded.width, height: decoded.height, bitDepth: decoded.bitDepth, hasIcc: decoded.hasIcc,
+      pixel: Array.from(decoded.data.slice((30 * decoded.width + 40) * 4, (30 * decoded.width + 40) * 4 + 4)) };
+  }, Array.from(files[0]!.bytes));
+  expect(result).toMatchObject({ width: 80, height: 60, bitDepth: 16, hasIcc: true });
+  expect(result.pixel[3]).toBe(65535);
 }
 
 export async function benchmark12(page: Page): Promise<void> {

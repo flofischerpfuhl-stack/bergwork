@@ -34,6 +34,12 @@ pub struct DisplayProfile {
 }
 
 #[derive(Serialize)]
+pub struct InstalledProfile {
+    name: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Serialize)]
 pub struct ComputeResult {
     bytes: Vec<u8>,
 }
@@ -65,6 +71,10 @@ fn font_roots() -> Vec<PathBuf> {
             roots.push(PathBuf::from(home).join(".local/share/fonts"));
         }
         roots
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        Vec::new()
     }
 }
 
@@ -313,6 +323,97 @@ pub fn display_icc_profile() -> DisplayProfile {
         );
     }
     profile
+}
+
+fn color_profile_roots() -> Vec<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        return vec![
+            PathBuf::from(env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into()))
+                .join("System32/spool/drivers/color"),
+        ];
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut roots = vec![
+            PathBuf::from("/System/Library/ColorSync/Profiles"),
+            PathBuf::from("/Library/ColorSync/Profiles"),
+        ];
+        if let Some(home) = env::var_os("HOME") {
+            roots.push(PathBuf::from(home).join("Library/ColorSync/Profiles"));
+        }
+        return roots;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let mut roots = vec![
+            PathBuf::from("/usr/share/color/icc"),
+            PathBuf::from("/usr/local/share/color/icc"),
+        ];
+        if let Some(home) = env::var_os("HOME") {
+            roots.push(PathBuf::from(&home).join(".local/share/color/icc"));
+            roots.push(PathBuf::from(home).join(".color/icc"));
+        }
+        roots
+    }
+}
+
+fn collect_output_profiles(directory: &Path, result: &mut Vec<InstalledProfile>) {
+    if result.len() >= 128 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if result.len() >= 128 {
+            break;
+        }
+        let path = entry.path();
+        if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            collect_output_profiles(&path, result);
+            continue;
+        }
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !matches!(extension.as_str(), "icc" | "icm") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.len() < 128 || metadata.len() > 16 * 1024 * 1024 {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        // ICC header bytes 16…19 are the data colour space. Only device-CMYK output profiles
+        // belong in Proof Setup; display/RGB profiles stay behind displayProfile().
+        if bytes.get(16..20) != Some(b"CMYK".as_slice()) {
+            continue;
+        }
+        let name = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("CMYK profile")
+            .replace(['_', '-'], " ");
+        result.push(InstalledProfile { name, bytes });
+    }
+}
+
+#[tauri::command]
+pub fn list_output_profiles() -> Vec<InstalledProfile> {
+    let mut profiles = Vec::new();
+    for root in color_profile_roots() {
+        collect_output_profiles(&root, &mut profiles);
+    }
+    profiles.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    profiles.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name) && a.bytes == b.bytes);
+    profiles
 }
 
 /// Files named on a command line. Relative paths resolve against the launching process's working directory

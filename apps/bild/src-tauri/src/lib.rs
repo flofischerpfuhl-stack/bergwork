@@ -163,6 +163,7 @@ pub fn run() {
             raw_codec::raw_codec_available,
             raw_codec::decode_raw,
             host::display_icc_profile,
+            host::list_output_profiles,
             screen_color::pick_screen_color,
             screen_color::screen_color_support,
             a4c_archive_path,

@@ -33,6 +33,8 @@ readonly SOURCE="$BUILD_DIR/lcms2-${LCMS_VERSION}"
   "$SOURCE"/src/*.c \
   -I"$SOURCE/include" \
   -I"$SOURCE/src" \
+  -ffile-prefix-map="$SOURCE"="/usr/src/lcms2-${LCMS_VERSION}" \
+  -ffile-prefix-map="$ROOT"=/usr/src/fernwork-bildeditor \
   -O3 \
   -msimd128 \
   -DCMS_NO_PTHREADS=1 \
@@ -46,7 +48,7 @@ readonly SOURCE="$BUILD_DIR/lcms2-${LCMS_VERSION}"
   -sASSERTIONS=0 \
   -sINCOMING_MODULE_JS_API='["locateFile","wasmBinary"]' \
   -sEXPORTED_RUNTIME_METHODS='["HEAPU8"]' \
-  -sEXPORTED_FUNCTIONS='["_malloc","_free","_lcms_create_transform","_lcms_do_transform","_lcms_delete_transform","_lcms_create_rgb_profile","_lcms_create_gray_profile","_lcms_create_cmyk_profile"]' \
+  -sEXPORTED_FUNCTIONS='["_malloc","_free","_lcms_create_transform","_lcms_create_rgb_to_cmyk_transform","_lcms_create_proof_transform","_lcms_do_transform","_lcms_delete_transform","_lcms_create_rgb_profile","_lcms_create_gray_profile","_lcms_create_cmyk_profile"]' \
   -o "$ROOT/src/wasm/lcms/lcms.mjs"
 
 chmod 0644 "$ROOT/src/wasm/lcms/lcms.mjs" "$ROOT/src/wasm/lcms/lcms.wasm"

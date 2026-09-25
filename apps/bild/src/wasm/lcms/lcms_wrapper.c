@@ -17,6 +17,22 @@ static cmsColorSpaceSignature expected_space(int model) {
     return (cmsColorSpaceSignature) 0;
 }
 
+static cmsUInt32Number rgb_format(int bits) {
+    return bits == 16 ? TYPE_RGB_16 : bits == 8 ? TYPE_RGB_8 : 0;
+}
+
+static cmsUInt32Number rgba_format(int bits) {
+    return bits == 16 ? TYPE_RGBA_16 : bits == 8 ? TYPE_RGBA_8 : 0;
+}
+
+static cmsUInt32Number cmyk_format(int bits) {
+    return bits == 16 ? TYPE_CMYK_16 : bits == 8 ? TYPE_CMYK_8 : 0;
+}
+
+static int valid_intent(int intent) {
+    return intent == INTENT_PERCEPTUAL || intent == INTENT_RELATIVE_COLORIMETRIC;
+}
+
 cmsHTRANSFORM lcms_create_transform(const uint8_t* profile_data, uint32_t profile_size,
                                     int model, int bits, int output_bits) {
     cmsHPROFILE source = NULL, destination = NULL;
@@ -43,6 +59,51 @@ void lcms_do_transform(cmsHTRANSFORM transform, const void* input, uint8_t* outp
 
 void lcms_delete_transform(cmsHTRANSFORM transform) {
     if (transform) cmsDeleteTransform(transform);
+}
+
+// Exact device-link direction used by CMYK export. RGBA input deliberately consumes four
+// samples per pixel, so the JS bridge can replace a rendered row chunk in place without ever
+// allocating a second full-image CMYK buffer.
+cmsHTRANSFORM lcms_create_rgb_to_cmyk_transform(const uint8_t* profile_data, uint32_t profile_size,
+                                                int bits, int intent, int black_point_compensation) {
+    cmsHPROFILE source = NULL, destination = NULL;
+    cmsHTRANSFORM transform = NULL;
+    cmsUInt32Number flags = black_point_compensation ? cmsFLAGS_BLACKPOINTCOMPENSATION : 0;
+    if (!profile_data || !profile_size || !rgba_format(bits) || !cmyk_format(bits) || !valid_intent(intent)) return NULL;
+    source = cmsCreate_sRGBProfile();
+    destination = cmsOpenProfileFromMem(profile_data, profile_size);
+    if (!source || !destination || cmsGetColorSpace(destination) != cmsSigCmykData) goto done;
+    transform = cmsCreateTransform(source, rgba_format(bits), destination, cmyk_format(bits), intent, flags);
+done:
+    if (destination) cmsCloseProfile(destination);
+    if (source) cmsCloseProfile(source);
+    return transform;
+}
+
+// sRGB -> output-device proof -> sRGB. With gamut_check Little CMS writes the configured
+// alarm colour for out-of-gamut samples; the bridge converts that marker to the LUT alpha.
+cmsHTRANSFORM lcms_create_proof_transform(const uint8_t* profile_data, uint32_t profile_size,
+                                          int bits, int intent, int black_point_compensation,
+                                          int simulate_paper_white, int gamut_check) {
+    cmsHPROFILE source = NULL, destination = NULL, proof = NULL;
+    cmsHTRANSFORM transform = NULL;
+    cmsUInt32Number flags = cmsFLAGS_SOFTPROOFING;
+    cmsUInt16Number alarm[cmsMAXCHANNELS] = { 65535, 0, 65535, 0 };
+    int proof_intent = simulate_paper_white ? INTENT_ABSOLUTE_COLORIMETRIC : intent;
+    if (!profile_data || !profile_size || !rgb_format(bits) || !valid_intent(intent)) return NULL;
+    if (black_point_compensation) flags |= cmsFLAGS_BLACKPOINTCOMPENSATION;
+    if (gamut_check) { flags |= cmsFLAGS_GAMUTCHECK; cmsSetAlarmCodes(alarm); }
+    source = cmsCreate_sRGBProfile();
+    destination = cmsCreate_sRGBProfile();
+    proof = cmsOpenProfileFromMem(profile_data, profile_size);
+    if (!source || !destination || !proof || cmsGetColorSpace(proof) != cmsSigCmykData) goto done;
+    transform = cmsCreateProofingTransform(source, rgb_format(bits), destination, rgb_format(bits), proof,
+                                           intent, proof_intent, flags);
+done:
+    if (proof) cmsCloseProfile(proof);
+    if (destination) cmsCloseProfile(destination);
+    if (source) cmsCloseProfile(source);
+    return transform;
 }
 
 static cmsToneCurve* make_curve(double gamma, int srgb_curve) {
