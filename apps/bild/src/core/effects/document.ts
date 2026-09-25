@@ -1,8 +1,8 @@
 import { newLayer, type CanvasDocument, type Layer } from '../document';
 import { apply, concat, pixelToDocument, placing, samePlacement, scaling, translation, type LayerTransform } from '../geometry';
 import { mapPlacement, maskBackground, preparePlacement, prepareSampler, sampleMask } from '../resample';
-import { TILE, type Raster } from '../raster';
-import { renderEffectPasses, type EffectPass } from './render';
+import { Raster, TILE } from '../raster';
+import { renderEffectPasses, renderPsdInnerEffectPasses, type EffectPass, type PsdInnerEffect } from './render';
 import { homography } from '../distort';
 
 export interface EffectSourceHooks {
@@ -42,6 +42,57 @@ interface ResolvedEffectSource {
   readonly rasterScale: number;
 }
 
+interface PsdPatternOverlay {
+  readonly pattern: Raster;
+  readonly opacity: number;
+  readonly blendMode: Layer['blendMode'];
+  readonly scale: number;
+  readonly phase: { readonly x: number; readonly y: number };
+  readonly align: boolean;
+}
+
+function psdPatternOverlays(layer: Layer): readonly PsdPatternOverlay[] {
+  return (layer as Layer & { readonly psdPatternOverlays?: readonly PsdPatternOverlay[] }).psdPatternOverlays ?? [];
+}
+
+function psdInnerEffects(layer: Layer): readonly PsdInnerEffect[] {
+  return (layer as Layer & { readonly psdInnerEffects?: readonly PsdInnerEffect[] }).psdInnerEffects ?? [];
+}
+
+function modulo(value: number, divisor: number): number { return ((value % divisor) + divisor) % divisor; }
+
+/** PSD pattern resources are layer-owned inputs; this pass never reads the saved document composite. */
+function patternPasses(alpha: Uint8Array, width: number, height: number, transform: LayerTransform,
+  overlays: readonly PsdPatternOverlay[]): readonly EffectPass[] {
+  if (!overlays.length) return [];
+  const localToDocument = pixelToDocument(transform, width, height), output: EffectPass[] = [];
+  for (const overlay of overlays) {
+    const pattern = overlay.pattern.toPixels(), pixels = new Uint8Array(width * height * 4);
+    const scale = Math.max(0.01, overlay.scale), layerBaseX = overlay.align ? transform.origin.x : 0;
+    const layerBaseY = overlay.align ? transform.origin.y : 0;
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const point = apply(localToDocument, { x: x + 0.5, y: y + 0.5 });
+      const fx = (point.x - layerBaseX - overlay.phase.x) / scale - 0.5;
+      const fy = (point.y - layerBaseY - overlay.phase.y) / scale - 0.5;
+      const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+      const sample = (sx: number, sy: number, channel: number): number => pattern[
+        (Math.floor(modulo(sy, overlay.pattern.height)) * overlay.pattern.width
+          + Math.floor(modulo(sx, overlay.pattern.width))) * 4 + channel]!;
+      const channel = (index: number): number => {
+        const top = sample(x0, y0, index) + (sample(x0 + 1, y0, index) - sample(x0, y0, index)) * tx;
+        const bottom = sample(x0, y0 + 1, index) + (sample(x0 + 1, y0 + 1, index) - sample(x0, y0 + 1, index)) * tx;
+        return Math.round(top + (bottom - top) * ty);
+      };
+      const target = (y * width + x) * 4;
+      pixels[target] = channel(0); pixels[target + 1] = channel(1); pixels[target + 2] = channel(2);
+      pixels[target + 3] = Math.round(alpha[y * width + x]! * channel(3) / 255);
+    }
+    output.push({ placement: 'above', raster: Raster.fromPixels(width, height, 4, pixels), sourceX: 0, sourceY: 0,
+      blendMode: overlay.blendMode, opacity: overlay.opacity, scalesWithFillOpacity: false });
+  }
+  return output;
+}
+
 function effectAlpha(layer: Layer, source: ResolvedEffectSource): Uint8Array {
   const { raster } = source;
   const alpha = new Uint8Array(raster.width * raster.height);
@@ -59,7 +110,9 @@ function effectAlpha(layer: Layer, source: ResolvedEffectSource): Uint8Array {
   const sourceToDocument = pixelToDocument(layerTransform, raster.width, raster.height);
   const sampler = prepareSampler(maskRaster, 'High quality', maskRaster.width);
   const prepared = preparePlacement({ ...placement, sampling: 'High quality' }, maskRaster.width, maskRaster.height);
-  const placed = !samePlacement(placement, layerTransform), background = placed ? maskBackground(maskRaster) : 0;
+  const placed = !samePlacement(placement, layerTransform), psdDefault =
+    (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault;
+  const background = placed ? psdDefault === undefined ? maskBackground(maskRaster) : psdDefault / 255 : 0;
   const location = new Float64Array(3);
   for (let y = 0; y < raster.height; y++) for (let x = 0; x < raster.width; x++) {
     const point = apply(sourceToDocument, { x: x + 0.5, y: y + 0.5 });
@@ -106,11 +159,15 @@ function synthetic(source: Layer, effect: EffectPass, index: number, transform: 
 /** Expands live styles to ordinary immutable layers consumed identically by CPU and WebGL compositors. */
 export function documentWithLayerEffects(document: CanvasDocument, hooks: EffectSourceHooks,
   diagnostics?: EffectRenderDiagnostics): CanvasDocument {
-  if (!document.layers.some((layer) => layer.effects.some((effect) => effect.enabled))) return document;
+  if (!document.layers.some((layer) => layer.effects.some((effect) => effect.enabled)
+    || psdPatternOverlays(layer).length || psdInnerEffects(layer).length)) return document;
   const resolved = new Map<Layer, ResolvedEffectSource>();
   let sourceKey = '';
   for (const layer of document.layers) {
-    if (!layer.visible || !layer.effects.some((effect) => effect.enabled)) { sourceKey += ';'; continue; }
+    if (!layer.visible || (!layer.effects.some((effect) => effect.enabled)
+      && !psdPatternOverlays(layer).length && !psdInnerEffects(layer).length)) {
+      sourceKey += ';'; continue;
+    }
     const raster = hooks.raster(layer);
     if (!raster || raster.channels !== 4) { sourceKey += `${raster?.serial ?? 0};`; continue; }
     const transform = hooks.transform(layer);
@@ -135,14 +192,21 @@ export function documentWithLayerEffects(document: CanvasDocument, hooks: Effect
     if (!source) { layers.push(layer); continue; }
     const { raster, transform } = source;
     const effects = rasterEffects(layer, source.rasterScale);
-    const key = `${JSON.stringify(effects)}|${document.globalLightAngle ?? 120}|${source.maskRaster?.serial ?? 0}`
+    const patterns = psdPatternOverlays(layer);
+    const innerEffects = psdInnerEffects(layer);
+    const key = `${JSON.stringify(effects)}|${JSON.stringify(innerEffects)}|${patterns.map((value) => `${value.pattern.serial}/${value.opacity}/${value.blendMode}/`
+      + `${value.scale}/${value.phase.x}/${value.phase.y}/${value.align ? 1 : 0}`).join(',')}|${document.globalLightAngle ?? 120}|${source.maskRaster?.serial ?? 0}`
       + `|${placementKey(transform)}|${placementKey(source.maskPlacement)}`;
     let variants = cache.get(raster);
     if (!variants) { variants = new Map(); cache.set(raster, variants); }
     let passes = variants.get(key);
     if (!passes) {
-      passes = renderEffectPasses(effectAlpha(layer, source), raster.width, raster.height, effects,
-        { globalLightAngle: document.globalLightAngle, rasterScale: source.rasterScale });
+      const alpha = effectAlpha(layer, source);
+      passes = [...renderEffectPasses(alpha, raster.width, raster.height, effects,
+        { globalLightAngle: document.globalLightAngle, rasterScale: source.rasterScale }),
+      ...renderPsdInnerEffectPasses(alpha, raster.width, raster.height, innerEffects,
+        { globalLightAngle: document.globalLightAngle, rasterScale: source.rasterScale }),
+      ...patternPasses(alpha, raster.width, raster.height, transform, patterns)];
       if (diagnostics) diagnostics.effectRegenerations++;
       if (variants.size >= 8) variants.delete(variants.keys().next().value as string);
       variants.set(key, passes);

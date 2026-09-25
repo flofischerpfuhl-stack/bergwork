@@ -21,6 +21,19 @@ export interface RenderEffectOptions {
   readonly rasterScale?: number;
 }
 
+export interface PsdInnerEffect {
+  readonly kind: 'innerShadow' | 'innerGlow';
+  readonly opacity: number;
+  readonly blendMode: BlendMode;
+  readonly color: RGB;
+  readonly size: number;
+  readonly choke: number;
+  readonly angle: number;
+  readonly distance: number;
+  readonly useGlobalLight: boolean;
+  readonly source: 'edge' | 'center';
+}
+
 function clamp01(value: number): number { return Math.min(1, Math.max(0, value)); }
 function finite(value: number | undefined, fallback: number): number {
   return value === undefined || !Number.isFinite(value) ? fallback : value;
@@ -267,4 +280,35 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
     }
   }
   return [...behind, ...above];
+}
+
+/** Photoshop inner styles are clipped to the source shape and rendered above its fill. */
+export function renderPsdInnerEffectPasses(alpha: Uint8Array, width: number, height: number,
+  effects: readonly PsdInnerEffect[], options: RenderEffectOptions = {}): readonly EffectPass[] {
+  if (!effects.length) return [];
+  const solid = Uint8Array.from(alpha, (value) => value > 0 ? 1 : 0);
+  const toOutside = distanceTransform(solid, width, height, false), output: EffectPass[] = [];
+  for (const effect of effects) {
+    const rgba = new Uint8Array(width * height * 4), size = Math.max(0, effect.size);
+    const spread = Math.max(0, Math.min(size, size * effect.choke / 100));
+    const softness = Math.max(1e-6, size - spread);
+    const angle = (effect.useGlobalLight ? finite(options.globalLightAngle, DEFAULT_GLOBAL_LIGHT_ANGLE) : effect.angle) * Math.PI / 180;
+    const dx = -Math.cos(angle) * effect.distance, dy = Math.sin(angle) * effect.distance;
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const index = y * width + x, shape = alpha[index]! / 255;
+      if (shape <= 0) continue;
+      let coverage: number;
+      if (effect.kind === 'innerGlow' && effect.source === 'center') {
+        const maximum = Math.max(1e-6, Math.hypot(width, height) / 2);
+        coverage = clamp01(toOutside[index]! / Math.min(maximum, Math.max(1e-6, size)));
+      } else {
+        const distance = sampleDistance(toOutside, width, height,
+          effect.kind === 'innerShadow' ? x - dx : x, effect.kind === 'innerShadow' ? y - dy : y);
+        coverage = size <= 0 ? 0 : distance <= spread ? 1 : clamp01(1 - (distance - spread) / softness);
+      }
+      putPixel(rgba, index * 4, effect.color, coverage * shape, x, y, width, height);
+    }
+    output.push(pass(rgba, width, height, 0, 'above', effect.blendMode, effect.opacity, false));
+  }
+  return output;
 }
