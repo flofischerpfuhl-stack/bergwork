@@ -341,7 +341,9 @@ export function ObjectSelectControls({ controller, session }: { controller: Edit
       {state.timing ? (
         <span className={styles.visuallyHidden} data-testid="object-select-timing" data-encoder-ms={Math.round(state.timing.encoderMs)}
           data-decoder-ms={Math.round(state.timing.decoderMs)} data-refinement-ms={Math.round(state.timing.refinementMs)}
-          data-backend={state.timing.backend} data-cache-hit={String(state.timing.embeddingCacheHit)} />
+          data-backend={state.timing.backend} data-threads={state.timing.threads}
+          data-fallback-reason={state.timing.fallbackReason}
+          data-cache-hit={String(state.timing.embeddingCacheHit)} />
       ) : null}
     </>
   );

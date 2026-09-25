@@ -20,10 +20,12 @@ export default defineConfig({
       testDir: 'tests/benchmarks',
       use: { ...devices['Desktop Chrome'] },
     }] : []),
-    // Real-GPU measurements (ANGLE on the host OpenGL driver); run with --project perf-gpu.
+    // Opt-in hardware-provider probe; each spec records its renderer/adapter before treating a result as GPU-backed.
     {
       name: 'perf-gpu', testMatch: /performance\.spec/,
-      use: { ...devices['Desktop Chrome'], launchOptions: { args: ['--use-angle=gl', '--enable-gpu', '--ignore-gpu-blocklist'] } },
+      use: { ...devices['Desktop Chrome'],
+        launchOptions: { args: ['--use-angle=gl-egl', '--enable-gpu', '--ignore-gpu-blocklist', '--enable-unsafe-webgpu',
+          '--enable-features=Vulkan'] } },
     },
     // Cross-browser runs of the workflow specs (opt-in: E2E_ALL_BROWSERS=1; needs `playwright install firefox webkit`).
     ...(process.env.E2E_ALL_BROWSERS ? [

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { loadTextEngine, type TextEngine } from '../../src/text';
+import { loadSharedTextEngine, type TextEngine } from '../../src/text';
 
 const wasmPath = path.resolve('node_modules/canvaskit-wasm/bin/canvaskit.wasm');
 const fontPath = path.resolve('public/fonts/NotoSans-Variable.ttf');
@@ -10,11 +10,16 @@ describe('PRODUCT-PLAN A5 CanvasKit CPU engine', () => {
   let engine: TextEngine;
 
   beforeAll(async () => {
-    engine = await loadTextEngine({ wasmUrl: wasmPath });
+    engine = await loadSharedTextEngine({ wasmUrl: wasmPath });
     engine.registerFont({ id: 'noto-variable', family: 'Noto Sans', bytes: fs.readFileSync(fontPath), source: fontPath });
   });
 
   afterAll(() => engine.dispose());
+
+  it('shares one lazy CanvasKit engine between editor consumers', async () => {
+    expect(await loadSharedTextEngine({ wasmUrl: wasmPath })).toBe(engine);
+    expect(engine.memoryUsage().wasmHeapBytes).toBe(128 * 1024 * 1024);
+  });
 
   it('shapes kerning, ligatures and German text into real tiled pixels', () => {
     const layout = engine.layoutParagraph({

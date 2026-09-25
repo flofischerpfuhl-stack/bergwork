@@ -7,6 +7,9 @@ import { selectObject, type ObjectSelectionInference } from '../../src/core/obje
 import { Raster } from '../../src/core/raster';
 import { EditorSession } from '../../src/core/session';
 import type { ModelHost } from '../../src/platform/hosts/types';
+import {
+  OBJECT_SELECT_GPU_BUFFER_BYTES, objectSelectWasmThreadCount, supportsObjectSelectWebGpu,
+} from '../../src/workers/objectSelectRuntime';
 
 describe('EfficientSAM object selection', () => {
   it('uses the highest-IoU mask and retains soft antialiasing around the zero-logit boundary', () => {
@@ -43,7 +46,7 @@ describe('EfficientSAM object selection', () => {
     const inference: ObjectSelectionInference = { async select(_key, _pixels, w, h, prompts) {
       expect(prompts).toEqual([{ kind: 'point', x: 32, y: 30, positive: true }]);
       return { mask: truth.slice(), width: w, height: h, score: 0.99,
-        timing: { encoderMs: 1, decoderMs: 1, refinementMs: 1, backend: 'wasm', embeddingCacheHit: false } };
+        timing: { encoderMs: 1, decoderMs: 1, refinementMs: 1, backend: 'wasm', threads: 2, embeddingCacheHit: false } };
     } };
     await selectObject(session, [{ kind: 'point', x: 32, y: 30, positive: true }], {
       inference, modelUrls: { encoder: 'blob:encoder', decoder: 'blob:decoder' },
@@ -55,6 +58,18 @@ describe('EfficientSAM object selection', () => {
     }
     expect(intersection / union).toBeGreaterThanOrEqual(0.9);
     expect(session.history.undoName).toBe('Object Selection');
+  });
+
+  it('enables a physical-core-sized WASM thread pool only under cross-origin isolation', () => {
+    expect(objectSelectWasmThreadCount(false, 8)).toBe(1);
+    expect([1, 2, 4, 8, 16].map((cores) => objectSelectWasmThreadCount(true, cores))).toEqual([1, 1, 2, 4, 4]);
+  });
+
+  it('requires FP16 and enough GPU buffer capacity before selecting WebGPU', () => {
+    expect(supportsObjectSelectWebGpu(true, OBJECT_SELECT_GPU_BUFFER_BYTES,
+      OBJECT_SELECT_GPU_BUFFER_BYTES)).toBe(true);
+    expect(supportsObjectSelectWebGpu(false, 2 ** 32, 2 ** 32)).toBe(false);
+    expect(supportsObjectSelectWebGpu(true, 256 * 1024 * 1024, 2 ** 32)).toBe(false);
   });
 
   it('has pinned manifests and makes no ModelHost request before explicit resolution', async () => {

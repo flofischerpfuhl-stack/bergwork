@@ -1,9 +1,15 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+const isolationHeaders = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+};
+
 export default defineConfig({
   plugins: [react()],
-  server: { host: '127.0.0.1' },
+  server: { host: '127.0.0.1', headers: isolationHeaders },
+  preview: { headers: isolationHeaders },
   worker: { format: 'es' },
   // Worktrees share one symlinked node_modules; a per-server cache keeps one dev server's re-optimisation from
   // breaking another server's already-loaded chunks (the e2e webServer sets VITE_CACHE_DIR per port).

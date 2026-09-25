@@ -13,6 +13,10 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
+      "headers": {
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp"
+      },
       "csp": {
         "default-src": "'self'",
         "script-src": "'self' 'wasm-unsafe-eval'",

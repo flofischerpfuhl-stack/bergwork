@@ -7,8 +7,17 @@ import type { BrushWorkerRequest, BrushWorkerResponse } from './workerProtocol';
 import { brushReach } from './tip';
 import type { BrushSettings } from './settings';
 
+/**
+ * Brush density is memory-bandwidth heavy. On SMT machines one worker per logical CPU makes every
+ * worker slower and regresses pointer-up latency under ordinary background load; four workers match
+ * the physical cores of the reference i7-7820HQ while retaining parallel tile ownership.
+ */
+export function recommendedBrushWorkerCount(hardwareConcurrency: number): number {
+  return Math.min(4, Math.max(1, Math.floor(hardwareConcurrency) || 1));
+}
+
 const PREWARM_WORKERS = typeof Worker === 'undefined' ? 0
-  : Math.min(8, Math.max(1, globalThis.navigator?.hardwareConcurrency ?? 1));
+  : recommendedBrushWorkerCount(globalThis.navigator?.hardwareConcurrency ?? 1);
 const workerPool: Worker[] = [];
 export let lastBrushWorkerTiming: readonly { init: number; settled: number; finish: number }[] = [];
 
@@ -102,8 +111,8 @@ export class BrushRasterWorker {
     this.source = patchable ? source : null;
     this.geometry = geometry;
     this.reach = brushReach(options.settings);
-    const concurrency = Math.max(1, globalThis.navigator?.hardwareConcurrency ?? 1);
-    const count = patchable && source ? Math.min(8, concurrency) : 1;
+    const count = patchable && source
+      ? recommendedBrushWorkerCount(globalThis.navigator?.hardwareConcurrency ?? 1) : 1;
     for (let index = 0; index < count; index++) {
       const worker = takeWorker(index);
       worker.onmessage = (event: MessageEvent<BrushWorkerResponse>) => this.receive(event.data, worker);

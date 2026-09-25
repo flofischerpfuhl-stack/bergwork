@@ -1,12 +1,15 @@
 /// <reference lib="webworker" />
 
 import * as ort from 'onnxruntime-web/webgpu';
-import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.wasm?url';
-import ortModuleUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.mjs?url';
+import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
+import ortModuleUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url';
 import { bestPromptMask, upscaleObjectMask } from '../core/objectSelect/postprocess';
 import { encodePrompts, prepareSlimSamImage } from '../core/objectSelect/preprocess';
 import type { ObjectSelectTiming } from '../core/objectSelect/types';
 import type { ObjectSelectWorkerRequest, ObjectSelectWorkerResponse } from './objectSelectProtocol';
+import {
+  OBJECT_SELECT_GPU_BUFFER_BYTES, objectSelectWasmThreadCount, supportsObjectSelectWebGpu,
+} from './objectSelectRuntime';
 
 interface EmbeddingEntry {
   readonly data: Float32Array;
@@ -27,10 +30,32 @@ const cancelled = new Set<number>();
 const embeddings = new Map<string, EmbeddingEntry>();
 let encoder: ort.InferenceSession | null = null, decoder: ort.InferenceSession | null = null;
 let modelKey = '', backend: 'webgpu' | 'wasm' = 'wasm';
+let fallbackReason: string | undefined;
+const wasmThreads = objectSelectWasmThreadCount(globalThis.crossOriginIsolated,
+  globalThis.navigator?.hardwareConcurrency ?? 1);
 
-ort.env.wasm.numThreads = 1;
+ort.env.wasm.numThreads = wasmThreads;
 ort.env.wasm.proxy = false;
 ort.env.wasm.wasmPaths = { wasm: ortWasmUrl, mjs: ortModuleUrl };
+
+async function webGpuProvider(): Promise<ort.InferenceSession.WebGpuExecutionProviderOption | null> {
+  if (typeof navigator === 'undefined' || !navigator.gpu) return null;
+  // SlimSAM's FP16 graph needs shader-f16. On dual-GPU systems the nominally high-performance adapter may
+  // lack it, so inspect both preferences and request a device with the feature explicitly enabled.
+  const high = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  const compatible = (candidate: GPUAdapter | null): candidate is GPUAdapter => !!candidate
+    && supportsObjectSelectWebGpu(candidate.features.has('shader-f16'), candidate.limits.maxBufferSize,
+      candidate.limits.maxStorageBufferBindingSize);
+  const low = compatible(high) ? null : await navigator.gpu.requestAdapter({ powerPreference: 'low-power' });
+  const adapter = compatible(high) ? high : compatible(low) ? low : null;
+  if (!adapter) return null;
+  const device = await adapter.requestDevice({ requiredFeatures: ['shader-f16'], requiredLimits: {
+    maxBufferSize: OBJECT_SELECT_GPU_BUFFER_BYTES, maxStorageBufferBindingSize: OBJECT_SELECT_GPU_BUFFER_BYTES,
+  } });
+  ort.env.webgpu.adapter = adapter;
+  ort.env.webgpu.device = device;
+  return { name: 'webgpu', device, storageBufferCacheMode: 'simple' };
+}
 
 function post(message: ObjectSelectWorkerResponse, transfer: Transferable[] = []): void { scope.postMessage(message, transfer); }
 function progress(id: number, stage: Extract<ObjectSelectWorkerResponse, { type: 'progress' }>['stage'], value: number): void {
@@ -42,15 +67,31 @@ async function loadModels(id: number, urls: { readonly encoder: string; readonly
   if (encoder && decoder && modelKey === key && (!forceWasm || backend === 'wasm')) return;
   progress(id, 'loading-model', 0);
   encoder?.release(); decoder?.release(); encoder = null; decoder = null; embeddings.clear();
-  const webgpu = !forceWasm && typeof navigator !== 'undefined' && 'gpu' in navigator;
+  let webgpu: ort.InferenceSession.WebGpuExecutionProviderOption | null = null;
+  if (!forceWasm) {
+    fallbackReason = undefined;
+    try { webgpu = await webGpuProvider(); }
+    catch (error) {
+      fallbackReason = error instanceof Error ? error.message : String(error);
+      console.warn('SlimSAM WebGPU device creation failed; falling back to threaded WASM.', error);
+    }
+  }
   if (webgpu) {
     try {
-      [encoder, decoder] = await Promise.all([
-        ort.InferenceSession.create(urls.encoder, { executionProviders: ['webgpu'], graphOptimizationLevel: 'all' }),
-        ort.InferenceSession.create(urls.decoder, { executionProviders: ['webgpu'], graphOptimizationLevel: 'all' }),
-      ]);
+      // ORT's direct WebGPU bridge registers one device while a session is being created; concurrent
+      // creation races that registration and rejects the second session.
+      encoder = await ort.InferenceSession.create(urls.encoder,
+        { executionProviders: [webgpu], graphOptimizationLevel: 'all' });
+      decoder = await ort.InferenceSession.create(urls.decoder,
+        { executionProviders: [webgpu], graphOptimizationLevel: 'all' });
       backend = 'webgpu';
-    } catch { encoder?.release(); decoder?.release(); encoder = null; decoder = null; }
+    } catch (error) {
+      fallbackReason = error instanceof Error ? error.message : String(error);
+      console.warn('SlimSAM WebGPU session creation failed; falling back to threaded WASM.', error);
+      encoder?.release(); decoder?.release(); encoder = null; decoder = null;
+    }
+  } else if (!forceWasm && typeof navigator !== 'undefined' && navigator.gpu && !fallbackReason) {
+    fallbackReason = 'No WebGPU adapter meets SlimSAM\'s shader-f16 and 512 MiB buffer requirements.';
   }
   if (!encoder || !decoder) {
     [encoder, decoder] = await Promise.all([
@@ -75,6 +116,8 @@ async function select(request: Extract<ObjectSelectWorkerRequest, { op: 'select'
     try { values = await encoder.run({ [input]: new ort.Tensor('float32', prepared.tensor, [1, 3, 1024, 1024]) }); }
     catch (error) {
       if (backend !== 'webgpu') throw error;
+      fallbackReason = error instanceof Error ? error.message : String(error);
+      console.warn('SlimSAM WebGPU encoder failed; falling back to threaded WASM.', error);
       await loadModels(request.id, request.modelUrls, true);
       if (!encoder) throw error;
       values = await encoder.run({ [input]: new ort.Tensor('float32', prepared.tensor, [1, 3, 1024, 1024]) });
@@ -105,6 +148,8 @@ async function select(request: Extract<ObjectSelectWorkerRequest, { op: 'select'
   try { outputs = await decoder.run(feeds); }
   catch (error) {
     if (backend !== 'webgpu') throw error;
+    fallbackReason = error instanceof Error ? error.message : String(error);
+    console.warn('SlimSAM WebGPU decoder failed; falling back to threaded WASM.', error);
     await loadModels(request.id, request.modelUrls, true);
     if (!decoder) throw error;
     outputs = await decoder.run(feeds);
@@ -125,7 +170,8 @@ async function select(request: Extract<ObjectSelectWorkerRequest, { op: 'select'
   const refinementMs = performance.now() - refineStarted;
   progress(request.id, 'refining', 1);
   if (cancelled.has(request.id)) return;
-  const timing: ObjectSelectTiming = { encoderMs, decoderMs, refinementMs, backend, embeddingCacheHit: cacheHit };
+  const timing: ObjectSelectTiming = { encoderMs, decoderMs, refinementMs, backend,
+    threads: backend === 'wasm' ? wasmThreads : 0, fallbackReason, embeddingCacheHit: cacheHit };
   post({ id: request.id, type: 'result', result: { mask, width: entry.width, height: entry.height,
     score: selected.score, timing } }, [mask.buffer]);
 }

@@ -7,6 +7,9 @@ export interface ObjectSelectTiming {
   readonly decoderMs: number;
   readonly refinementMs: number;
   readonly backend: 'webgpu' | 'wasm';
+  /** CPU threads used by WASM; zero for WebGPU. */
+  readonly threads: number;
+  readonly fallbackReason?: string;
   readonly embeddingCacheHit: boolean;
 }
 
