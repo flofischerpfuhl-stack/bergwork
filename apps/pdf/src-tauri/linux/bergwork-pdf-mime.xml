@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Declares the Fernwork PDF project type so the desktop can associate .fwdoc files with berg:work PDF. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/vnd.fernwork.pdf-project+json">
+    <comment>Fernwork PDF project</comment>
+    <sub-class-of type="application/json"/>
+    <glob pattern="*.fwdoc"/>
+  </mime-type>
+</mime-info>

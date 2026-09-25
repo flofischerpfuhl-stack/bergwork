@@ -1,0 +1,211 @@
+/* berg:work theme for the Fernwork PDF editor. Loaded after oo-pdf-tools.css (see main.js).
+ *
+ * 1. Host page base: what Fernwork's site stylesheet gives the editor on fernwork.net (reset, form controls),
+ *    expressed in the editor's own --pdf-* tokens. Fonts are system fonts: the app works offline.
+ * 2. Accent: a neutral grey instead of Fernwork green. The editor sets its tokens on
+ *    `body.oo-pdf-workbench-route, .oo-pdf-shell` and `html[data-theme="light"] …`; the
+ *    html[data-brand="bergwork"] prefix outranks both.
+ * 3. Title bar: the app icon and window controls the editor places in its top row.
+ */
+
+/* ── 1. Host page base ─────────────────────────────────────────────────── */
+
+/* In a cascade layer, so every editor rule wins over it, as it does on fernwork.net where the site stylesheet
+   loads first. */
+@layer bergwork-base {
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+  }
+
+  html {
+    color-scheme: dark;
+    background: #050505;
+  }
+
+  html[data-theme="light"] {
+    color-scheme: light;
+    background: #ffffff;
+  }
+
+  /* Before main.js has set data-theme, follow the OS directly so a light desktop does not flash black. */
+  @media (prefers-color-scheme: light) {
+    html:not([data-theme]) { color-scheme: light; background: #ffffff; }
+  }
+
+  body.oo-pdf-workbench-route {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--pdf-panel);
+    color: var(--pdf-text);
+    font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans", Ubuntu, Cantarell, Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    --font-ui: system-ui, -apple-system, "Segoe UI", "Noto Sans", Ubuntu, Cantarell, Roboto, sans-serif;
+    --font-sans: var(--font-ui);
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --surface-color: var(--pdf-panel);
+    --red: #ef4444;
+    --amber: #f59e0b;
+  }
+
+  img, video, canvas { max-width: 100%; display: block; }
+  a { color: inherit; }
+
+  input[type="text"], input[type="number"], input[type="password"],
+  input[type="search"], input[type="url"], input[type="email"],
+  input[type="date"], textarea, select {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--pdf-border);
+    border-radius: 8px;
+    outline: none;
+    background-color: var(--pdf-input-bg);
+    color: var(--pdf-text);
+    font-family: var(--font-mono);
+    font-size: 13px;
+  }
+
+  input:focus, textarea:focus, select:focus {
+    border-color: var(--pdf-accent);
+    box-shadow: 0 0 0 3px var(--pdf-selected);
+  }
+
+  textarea { resize: vertical; min-height: 80px; }
+
+  select {
+    appearance: none;
+    padding-right: 30px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    cursor: pointer;
+  }
+
+  input[type="checkbox"], input[type="radio"], input[type="range"], progress {
+    accent-color: var(--pdf-accent);
+  }
+
+  /* Toasts: the editor stylesheet has neutral defaults for hosts without Fernwork's site stylesheet. */
+}
+
+/* ── 2. Accent: neutral grey ───────────────────────────────────────────── */
+
+/* The accent also draws selection frames and handles on the white PDF page, so it stays a mid grey in both
+   themes; only --pdf-accent-strong (text on tinted chips) follows the panel colour. */
+html[data-brand="bergwork"] body.oo-pdf-workbench-route,
+html[data-brand="bergwork"] .oo-pdf-shell {
+  --pdf-accent: #71717a;
+  --pdf-accent-strong: #d4d4d8;
+  --pdf-accent-contrast: #ffffff;
+  --pdf-page-accent: #52525b;
+  --pdf-selected: rgba(161, 161, 170, 0.16);
+  --pdf-text-selection-bg: #d4d4d8;
+  --pdf-text-selection-text: #18181b;
+}
+
+html[data-brand="bergwork"][data-theme="light"] body.oo-pdf-workbench-route,
+html[data-brand="bergwork"][data-theme="light"] .oo-pdf-shell {
+  --pdf-accent: #52525b;
+  --pdf-accent-strong: #27272a;
+  --pdf-accent-contrast: #ffffff;
+  --pdf-page-accent: #52525b;
+  --pdf-selected: rgba(82, 82, 91, 0.12);
+  --pdf-text-selection-bg: #d4d4d8;
+  --pdf-text-selection-text: #18181b;
+}
+
+/* ── 3. Title bar ──────────────────────────────────────────────────────── */
+
+.bw-titlebar-icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+}
+
+.bw-titlebar-icon img {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+.bw-window-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  height: 36px;
+  margin-left: 4px;
+}
+
+.bw-window-controls[hidden] {
+  display: none;
+}
+
+.bw-window-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pdf-muted);
+  cursor: default;
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+.bw-window-control:hover {
+  background: var(--pdf-hover);
+  color: var(--pdf-text);
+}
+
+.bw-window-control:active {
+  background: var(--pdf-hover-strong);
+}
+
+.bw-window-control:focus-visible {
+  outline: 2px solid var(--pdf-accent);
+  outline-offset: -2px;
+}
+
+.bw-window-control-close:hover,
+.bw-window-control-close:focus-visible {
+  background: #c42b1c;
+  color: #ffffff;
+}
+
+.bw-window-control-close:active {
+  background: #b22a1d;
+  color: #ffffff;
+}
+
+.bw-glyph {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.bw-glyph-close {
+  shape-rendering: geometricPrecision;
+}
+
+.bw-window-controls .bw-glyph-restore,
+.bw-window-controls.is-maximized .bw-glyph-maximize {
+  display: none;
+}
+
+.bw-window-controls.is-maximized .bw-glyph-restore {
+  display: block;
+}

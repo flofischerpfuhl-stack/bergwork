@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=berg:work PDF
+GenericName=PDF Editor
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Keywords=PDF;Editor;Annotate;Sign;Redact;Merge;OCR;
+Categories={{categories}}
+Exec={{exec}} %F
+StartupWMClass={{exec}}
+Icon={{icon}}
+Terminal=false
+{{#if mime_type}}
+MimeType={{mime_type}}
+{{/if}}

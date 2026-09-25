@@ -8,7 +8,7 @@ are developed upstream; this repository adds everything that is platform-specifi
 
 | Path | Owns |
 | --- | --- |
-| `apps/pdf/` | berg:work PDF: Tauri shell, app host, packaging. `upstream/` holds the pinned editor build. |
+| `apps/pdf/` | berg:work PDF: Tauri shell (`src-tauri/`), host page (`web/`), packaging. `upstream/` holds the pinned editor build; `dist/` is assembled from `web/` and `upstream/` (see `apps/pdf/README.md`). |
 | `apps/bild/` | berg:work Image: the same for the image editor. |
 | `packages/host-tauri/` | Host implementation shared by both apps: files, models, OCR, fonts, codecs, printing. |
 | `packages/hardware-profile/` | Hardware identity, capabilities, budgets and device quirks (TypeScript side). |

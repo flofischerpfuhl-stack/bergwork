@@ -1,0 +1,15 @@
+{
+  "name": "@bergwork/pdf",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "BUSL-1.1",
+  "scripts": {
+    "build:web": "node scripts/build-frontend.mjs",
+    "tauri:dev": "node scripts/tauri.mjs dev",
+    "tauri:build": "node scripts/tauri.mjs build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.5"
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "bergwork PDF",
+  "mainBinaryName": "bergwork-pdf",
+  "version": "0.1.0",
+  "identifier": "app.bergwork.pdf",
+  "build": {
+    "beforeDevCommand": { "script": "node scripts/build-frontend.mjs", "wait": true },
+    "beforeBuildCommand": "node scripts/build-frontend.mjs",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "berg:work PDF",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600,
+        "center": true,
+        "resizable": true,
+        "decorations": false,
+        "shadow": true
+      }
+    ],
+    "security": {
+      "headers": {
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp"
+      },
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self' 'wasm-unsafe-eval'",
+        "worker-src": "'self' blob:",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data: blob:",
+        "font-src": "'self' data: blob:",
+        "media-src": "'self' blob:",
+        "frame-src": "'self' blob:",
+        "object-src": "'none'",
+        "connect-src": "'self' ipc: http://ipc.localhost data: blob:"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "publisher": "berg:work",
+    "copyright": "© 2026 berg:work",
+    "license": "BUSL-1.1",
+    "category": "Productivity",
+    "shortDescription": "PDF editor that works offline",
+    "longDescription": "berg:work PDF edits, annotates, signs, redacts, merges and OCRs PDF documents on the device. It is the Fernwork PDF editor as a native app: files never leave the computer.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["pdf"],
+        "name": "PDF document",
+        "description": "PDF document",
+        "role": "Editor",
+        "mimeType": "application/pdf"
+      },
+      {
+        "ext": ["fwdoc"],
+        "name": "Fernwork PDF project",
+        "description": "Fernwork PDF project",
+        "role": "Editor",
+        "mimeType": "application/vnd.fernwork.pdf-project+json"
+      }
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico"
+      },
+      "wix": {
+        "language": "en-US"
+      }
+    }
+  }
+}

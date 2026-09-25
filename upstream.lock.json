@@ -28,8 +28,8 @@
         "tools/vendor/tesseract-5.0.4"
       ],
       "target": "apps/pdf/upstream",
-      "commit": "0472448a892bbee25b677fbf8aa0f3d2912f6b27",
-      "digest": "e2fec402ea08f572875696051650d52b80f948cc986c3ac4fdd61bcd411c4f82",
+      "commit": "6f9537dc6303488b62fb339de42edfe747ed9632",
+      "digest": "5bce74e521487fed8ff38a7bc812e64660f9a459d2d4699f116a16790e110752",
       "fileCount": 282
     },
     "compositor-image": {

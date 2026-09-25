@@ -1,6 +1,24 @@
 # PDF editor host contract
 
-Status: design proposal; no implementation is implied by this document.
+Status: design proposal. The first slice exists in Fernwork since 2026-09-25 (see "Implemented so far" below);
+the rest is not implemented.
+
+## Implemented so far
+
+`mount(element, options?)` accepts `options.host.capabilities.shell` with `version: 1` and uses these members of
+`ShellHost`; everything else in this document is still a proposal. Without a host the editor behaves as the
+Fernwork browser tool.
+
+| Member | Editor behaviour |
+| --- | --- |
+| `setTitle(title, { dirty })` | Called with the active document's name and its unsaved state instead of setting `document.title`. |
+| `setFullscreen?(fullscreen)` | With a shell but without this method the editor shows no fullscreen toggle. |
+| `titleBar?.leading`, `titleBar?.trailing` | DOM nodes the editor places first and last in its top row (app icon, window controls). The host keeps ownership; unmounting only detaches them. |
+| `titleBar?.startDrag()`, `titleBar?.toggleMaximize()` | Called on a primary-button press (a second press of a double-click toggles maximise) on empty space of the top row or the tab strip. |
+
+Source: `vendor/build/src/pdf-tools-shell.jsx` (`normalizeShellHost`, `HostSlot`), covered by
+`test/e2e/pdf-floating-toolbar.spec.ts` in Fernwork. The editor stylesheet also carries zero-specificity toast
+defaults so a host page does not need Fernwork's site stylesheet.
 
 This document describes the host boundary that Fernwork's PDF editor should expose to berg:work. Source references are relative to the Fernwork repository unless another root is named, and line numbers refer to the working tree inspected on 2026-09-25. The implementation remains in Fernwork; berg:work consumes only the committed upstream build, as required by `upstream.lock.json:4-33` and `docs/ARCHITECTURE.md:19-40` in this repository.
 

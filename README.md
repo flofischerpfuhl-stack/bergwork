@@ -23,7 +23,8 @@ Monorepo; the architecture and the rules for the upstream editors are in `docs/A
 
 ## Product status
 
-- The PDF editor works in Fernwork's browser build. Its separate Tauri shell has not started.
+- The PDF editor works in Fernwork's browser build. Its Tauri app (`apps/pdf/`) builds for Linux (.deb, .rpm,
+  AppImage); it has no native file access yet.
 - The image editor has an internal Tauri build on the compositor workspace's `integration` branch.
 - Neither app has a public build. Pricing and final first-release scope have not been announced.
 

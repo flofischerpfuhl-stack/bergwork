@@ -5,6 +5,8 @@ node_modules/
 # Upstream editor builds: materialised from upstream.lock.json by `npm run sync:install`
 .cache/
 apps/*/upstream/
+# Assembled app frontends (apps/pdf/scripts/build-frontend.mjs)
+apps/*/dist/
 target/
 __pycache__/
 *.pyc

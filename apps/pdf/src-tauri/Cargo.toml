@@ -1,0 +1,27 @@
+[package]
+name = "bergwork-pdf"
+version = "0.1.0"
+description = "berg:work PDF: native shell around the Fernwork PDF editor"
+authors = ["berg:work"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+# staticlib/cdylib are what `tauri android|ios` link against; the desktop binary uses the rlib.
+name = "bergwork_pdf_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+
+[target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dependencies]
+tauri-plugin-single-instance = "2"
+
+[lints]
+workspace = true

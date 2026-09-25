@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Put on PATH by tauri-build.sh for linuxdeploy's GTK plugin only (cargo's build scripts call `pkg-config`, not
+# `pkgconf`). The plugin asks where GTK's runtime modules, gdk-pixbuf loaders and GSettings schemas live; through the
+# rootless prefix the answer would be the prefix, which holds only headers and link stubs. Without the prefix the
+# lookups fail and the plugin falls back to the system locations, which is where the runtime files are.
+exec env -u PKG_CONFIG_PATH /usr/bin/pkgconf "$@"

@@ -1,0 +1,19 @@
+{
+  "bundle": {
+    "targets": ["deb", "rpm", "appimage"],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/bergwork-pdf.desktop",
+        "files": {
+          "/usr/share/mime/packages/bergwork-pdf.xml": "linux/bergwork-pdf-mime.xml"
+        }
+      },
+      "rpm": {
+        "desktopTemplate": "linux/bergwork-pdf.desktop",
+        "files": {
+          "/usr/share/mime/packages/bergwork-pdf.xml": "linux/bergwork-pdf-mime.xml"
+        }
+      }
+    }
+  }
+}
