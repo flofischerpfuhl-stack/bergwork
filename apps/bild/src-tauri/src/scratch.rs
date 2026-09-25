@@ -168,7 +168,10 @@ impl ScratchFile {
         let target = self.directory.join("scratch-index.json");
         let bytes = serde_json::to_vec(&self.index).map_err(|error| error.to_string())?;
         fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
-        File::open(&temporary)
+        // Windows: FlushFileBuffers needs a handle with write access (a read-only handle fails with os error 5).
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&temporary)
             .and_then(|file| file.sync_all())
             .map_err(|error| error.to_string())?;
         fs::rename(temporary, target).map_err(|error| error.to_string())?;
