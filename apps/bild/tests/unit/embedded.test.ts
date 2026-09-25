@@ -18,7 +18,8 @@ import { cpuCompositeRegion } from '../../src/render/cpuRender';
 import type { FileSystemHost } from '../../src/platform/hosts';
 import { validatePdfPlacement } from '../../src/io/pdf';
 import { writePsdUint8Array, type Psd } from 'ag-psd';
-import { readPsdDocument } from '../../src/io/psd';
+import { meshWarpToPsd, readPsdDocument } from '../../src/io/psd';
+import { createMeshWarp } from '../../src/core/meshWarp';
 
 function solid(width: number, height: number, rgba: readonly [number, number, number, number]): Raster {
   const pixels = new Uint8Array(width * height * 4);
@@ -157,9 +158,12 @@ describe('embedded rendering and persistence', () => {
     const id = '20953ddb-9391-11ec-b4f1-c15674f50bc4';
     const preview = new Uint8ClampedArray(4 * 4 * 4);
     for (let offset = 0; offset < preview.length; offset += 4) preview.set([200, 10, 20, 255], offset);
+    const placedTransform = makeTransform({ x: 8, y: 10 }, { width: 8, height: 8 });
+    const baseMesh = createMeshWarp(placedTransform);
+    const mesh = { ...baseMesh, points: baseMesh.points.map((point, index) => index % 4 === 2 ? { ...point, y: point.y - 0.8 } : point) };
     const psd: Psd = { width: 30, height: 30, children: [{ name: 'Mockup target', top: 10, left: 8, bottom: 14, right: 12,
       imageData: { width: 4, height: 4, data: preview }, placedLayer: { id, type: 'raster', width: 2, height: 2,
-        transform: [8, 10, 16, 10, 16, 18, 8, 18] } }], linkedFiles: [{ id, name: 'source.png', data: source.bytes }],
+        transform: [8, 10, 16, 10, 16, 18, 8, 18], warp: meshWarpToPsd(mesh, placedTransform, 2, 2) } }], linkedFiles: [{ id, name: 'source.png', data: source.bytes }],
       imageData: { width: 30, height: 30, data: new Uint8ClampedArray(30 * 30 * 4) } };
     const imported = readPsdDocument(writePsdUint8Array(psd, { generateThumbnail: false }));
     const layer = imported.document.layers[0]!;
@@ -169,5 +173,7 @@ describe('embedded rendering and persistence', () => {
     expect(layer.transform).toMatchObject({ origin: { x: 8, y: 10 }, size: { width: 8, height: 8 }, rotation: 0 });
     expect(imported.document.resources?.[0]?.bytes).toEqual(source.bytes);
     expect(layer.raster?.pixel(0, 0)).toEqual([12, 34, 56, 255]);
+    expect(layer.warp?.kind).toBe('mesh');
+    if (layer.warp?.kind === 'mesh') expect(layer.warp.points).toHaveLength(16);
   });
 });

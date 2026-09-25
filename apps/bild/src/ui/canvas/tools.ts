@@ -177,7 +177,20 @@ export class MoveTool implements ToolHandler {
       session.beginDuplicateTransform();
     }
     const corners = dragCorners(drag, c.pixel, c.modifiers.shift);
-    if (corners) { session.previewCorners(corners); return; }
+    if (corners) {
+      if (session.perspectiveConstrained && drag.mode.kind === 'distort' && drag.mode.handle % 2 === 0 && drag.originalCorners) {
+        const corner = drag.mode.handle / 2, original = drag.originalCorners;
+        const dx = corners[corner]!.x - original[corner]!.x, dy = corners[corner]!.y - original[corner]!.y;
+        if (Math.abs(dx) >= Math.abs(dy)) {
+          corners[corner] = { x: corners[corner]!.x, y: original[corner]!.y };
+          const pair = corner ^ 1; corners[pair] = { x: original[pair]!.x - dx, y: original[pair]!.y };
+        } else {
+          corners[corner] = { x: original[corner]!.x, y: corners[corner]!.y };
+          const pair = corner ^ 3; corners[pair] = { x: original[pair]!.x, y: original[pair]!.y - dy };
+        }
+      }
+      session.previewCorners(corners); return;
+    }
     let draft = roundedTransform(dragUpdated(drag, c.pixel, session.locksTransformRatio, c.modifiers.shift, c.modifiers.option));
     if (drag.mode.kind === 'move' && !c.modifiers.control) {
       const edit = session.transformEdit;

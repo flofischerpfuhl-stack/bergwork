@@ -126,6 +126,34 @@ export function sampleRgba(sampler: RasterSampler, x: number, y: number, out: Fl
   }
 }
 
+function cubicWeight(distance: number): number {
+  const x = Math.abs(distance);
+  return x <= 1 ? 1.5 * x * x * x - 2.5 * x * x + 1
+    : x < 2 ? -0.5 * x * x * x + 2.5 * x * x - 4 * x + 2 : 0;
+}
+
+/** Format-generic Catmull-Rom sample in premultiplied space, used by live bicubic mesh warps. */
+export function sampleRgbaBicubic(sampler: RasterSampler, x: number, y: number, out: Float32Array): void {
+  if (sampler.sampling === 'Nearest') { sampleRgba(sampler, x, y, out); return; }
+  const scale = 2 ** sampler.level, rx = x / scale - 0.5, ry = y / scale - 0.5;
+  const x0 = Math.floor(rx), y0 = Math.floor(ry), maximum = sampler.raster.maximum;
+  out.fill(0);
+  let total = 0;
+  for (let oy = -1; oy <= 2; oy++) for (let ox = -1; ox <= 2; ox++) {
+    const weight = cubicWeight(rx - (x0 + ox)) * cubicWeight(ry - (y0 + oy));
+    if (weight === 0) continue;
+    const alpha = byteAt(sampler, x0 + ox, y0 + oy, 3) / maximum;
+    const premultiplied = sampler.reduced !== null;
+    out[3]! += alpha * weight;
+    out[0]! += byteAt(sampler, x0 + ox, y0 + oy, 0) / maximum * (premultiplied ? 1 : alpha) * weight;
+    out[1]! += byteAt(sampler, x0 + ox, y0 + oy, 1) / maximum * (premultiplied ? 1 : alpha) * weight;
+    out[2]! += byteAt(sampler, x0 + ox, y0 + oy, 2) / maximum * (premultiplied ? 1 : alpha) * weight;
+    total += weight;
+  }
+  if (Math.abs(total) > 1e-9) for (let channel = 0; channel < 4; channel++) out[channel] = Math.min(1, Math.max(0, out[channel]! / total));
+  for (let channel = 0; channel < 3; channel++) out[channel] = Math.min(out[3]!, out[channel]!);
+}
+
 export function sampleMask(sampler: RasterSampler, x: number, y: number): number {
   if (sampler.width === 1 && sampler.height === 1) return byteAt(sampler, 0, 0, 0) / 255;
   const scale = 2 ** sampler.level, rx = x / scale, ry = y / scale;

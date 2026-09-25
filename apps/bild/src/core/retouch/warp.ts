@@ -5,13 +5,15 @@ import type { DocumentSelection } from '../selection';
 import { RasterMapping, selectionCoverage, unionRects, validPoint } from './common';
 import type { LayerTransform } from '../geometry';
 
-export type WarpMode = 'smudge' | 'liquify';
+export type WarpMode = 'smudge' | 'liquify' | 'push' | 'bloat' | 'pucker' | 'reconstruct';
 
 export interface WarpSettings {
   readonly diameter: number;
   readonly hardness: number;
   /** Upstream opacity keys control Smudge carry / Liquify displacement strength. */
   readonly strength: number;
+  /** Repeated-dab rate, 0..1. Defaults to 1 for the legacy smear tool. */
+  readonly density?: number;
 }
 
 export interface RetouchStroke {
@@ -29,6 +31,7 @@ export class WarpStroke implements RetouchStroke {
   readonly diameter: number;
   readonly hardness: number;
   readonly strength: number;
+  readonly density: number;
   private readonly mapping: RasterMapping;
   private working: Raster;
   private last: Point | null = null;
@@ -36,11 +39,13 @@ export class WarpStroke implements RetouchStroke {
   private ended = false;
 
   constructor(readonly original: Raster, transform: LayerTransform, readonly mode: WarpMode,
-    settings: WarpSettings, private readonly selection: DocumentSelection | null = null) {
+    settings: WarpSettings, private readonly selection: DocumentSelection | null = null,
+    private readonly reconstructReference: Raster = original) {
     if (original.channels !== 4) throw new Error('Smudge and Liquify require an RGBA raster');
     this.diameter = Math.min(2000, Math.max(2, Number.isFinite(settings.diameter) ? settings.diameter : 2));
     this.hardness = Math.min(0.98, Math.max(0, Number.isFinite(settings.hardness) ? settings.hardness : 0));
     this.strength = Math.min(1, Math.max(0.01, Number.isFinite(settings.strength) ? settings.strength : 1));
+    this.density = Math.min(1, Math.max(0.01, Number.isFinite(settings.density) ? settings.density! : 1));
     this.mapping = new RasterMapping(original, transform);
     this.working = original;
   }
@@ -54,6 +59,10 @@ export class WarpStroke implements RetouchStroke {
       if (!from) {
         this.last = { ...point };
         if (this.mode === 'smudge') this.pickUp(point);
+        else if (this.mode === 'bloat' || this.mode === 'pucker' || this.mode === 'reconstruct') {
+          const changed = this.radial(point);
+          if (changed) dirty.push(this.mapping.documentBounds(changed));
+        }
         continue;
       }
       const distance = Math.hypot(point.x - from.x, point.y - from.y);
@@ -65,7 +74,9 @@ export class WarpStroke implements RetouchStroke {
       for (let step = 1; step <= steps; step++) {
         const t = step / steps;
         const next = { x: from.x + (point.x - from.x) * t, y: from.y + (point.y - from.y) * t };
-        const changed = this.mode === 'smudge' ? this.smudge(next) : this.push(previous, next);
+        const changed = this.mode === 'smudge' ? this.smudge(next)
+          : this.mode === 'bloat' || this.mode === 'pucker' || this.mode === 'reconstruct' ? this.radial(next)
+          : this.push(previous, next);
         if (changed) combined = unionRects(combined, changed);
         previous = next;
       }
@@ -152,6 +163,35 @@ export class WarpStroke implements RetouchStroke {
         const di = ((py - bounds.y) * bounds.width + px - bounds.x) * 4;
         this.writePremultiplied(output, di, rgba, 0);
       }
+    }
+    this.working = this.working.withRegion(bounds.x, bounds.y, bounds.width, bounds.height, output);
+    return paint;
+  }
+
+  private radial(center: Point): Rect | null {
+    const bounds = this.mapping.circleBounds(center, this.diameter / 2, 2);
+    const paint = this.mapping.circleBounds(center, this.diameter / 2);
+    if (!bounds || !paint) return null;
+    const source = this.working.readRegionNative(bounds.x, bounds.y, bounds.width, bounds.height);
+    const original = this.reconstructReference.readRegionNative(bounds.x, bounds.y, bounds.width, bounds.height);
+    const output = source.slice(), rgba = new Float32Array(4), base = new Float32Array(4);
+    const radius = this.diameter / 2;
+    for (let py = paint.y; py < paint.y + paint.height; py++) for (let px = paint.x; px < paint.x + paint.width; px++) {
+      const doc = this.mapping.documentPoint({ x: px, y: py });
+      const dx = doc.x - center.x, dy = doc.y - center.y;
+      let weight = this.weight(Math.hypot(dx, dy) / radius) * this.density * this.strength;
+      weight *= selectionCoverage(this.selection, doc);
+      if (weight <= 0) continue;
+      const di = ((py - bounds.y) * bounds.width + px - bounds.x) * 4;
+      if (this.mode === 'reconstruct') {
+        this.readPremultiplied(source, di, rgba, 0); this.readPremultiplied(original, di, base, 0);
+        for (let channel = 0; channel < 4; channel++) rgba[channel] = rgba[channel]! + (base[channel]! - rgba[channel]!) * weight;
+      } else {
+        const factor = this.mode === 'bloat' ? 1 - 0.55 * weight : 1 + 0.8 * weight;
+        const behind = this.mapping.pixelPoint({ x: center.x + dx * factor, y: center.y + dy * factor });
+        this.samplePremultiplied(source, bounds, behind.x, behind.y, rgba);
+      }
+      this.writePremultiplied(output, di, rgba, 0);
     }
     this.working = this.working.withRegion(bounds.x, bounds.y, bounds.width, bounds.height, output);
     return paint;

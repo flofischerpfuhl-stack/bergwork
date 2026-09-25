@@ -9,10 +9,11 @@ import type { Affine, LayerSampling, LayerTransform, Rect } from './geometry';
 import { concat, invert, pixelToDocument, samePlacement } from './geometry';
 import { alphaBounds, Raster, TILE } from './raster';
 import {
-  mapPlacement, maskBackground, preparePlacement, prepareSampler, sampleMask, sampleRgba,
+  mapPlacement, maskBackground, preparePlacement, prepareSampler, sampleMask, sampleRgba, sampleRgbaBicubic,
   type PreparedPlacement, type RasterSampler,
 } from './resample';
 import { inverseHomography } from './distort';
+import { inverseMeshPoint } from './meshWarp';
 
 export type AdjustmentApplier = (adjustment: LayerAdjustment, rgba: Float32Array,
   width: number, height: number, originX: number, originY: number,
@@ -265,7 +266,9 @@ class BandRenderer {
     if (!sampler) return 0;
     const raster = this.raster(layer)!;
     if (layer.warp) {
-      const unit = inverseHomography(layer.warp.corners)({ x, y });
+      const unit = layer.warp.kind === 'quad'
+        ? inverseHomography(layer.warp.corners)({ x, y }) : inverseMeshPoint(layer.warp, { x, y });
+      if (!unit) return 0;
       if (!Number.isFinite(unit.x) || !Number.isFinite(unit.y)
         || unit.x < 0 || unit.x >= 1 || unit.y < 0 || unit.y >= 1) return 0;
       const px = unit.x * raster.width, py = unit.y * raster.height;
@@ -277,7 +280,8 @@ class BandRenderer {
       const cy = clamp01(0.5 + Math.min(py, raster.height - py) * transform.size.height / raster.height * viewScaleY);
       const coverage = cx * cy;
       if (coverage <= 0) return 0;
-      sampleRgba(sampler, px, py, sample);
+      if (layer.warp.kind === 'mesh') sampleRgbaBicubic(sampler, px, py, sample);
+      else sampleRgba(sampler, px, py, sample);
       return coverage;
     }
     const prepared = this.preparedPlacement(`source:${layer.id}`, this.transform(layer), raster.width,

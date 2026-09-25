@@ -16,8 +16,10 @@ export function vectorLayerWithTransform(layer: Layer, transform: LayerTransform
   let moved: Layer = { ...layer, transform };
   if (layer.warp && !transformsEqual(layer.transform, transform)) {
     const carry = concat(invert(unitToDocument(layer.transform)), unitToDocument(transform));
-    const corners = layer.warp.corners.map((point) => apply(carry, point)) as [Point, Point, Point, Point];
-    moved = { ...moved, warp: { ...layer.warp, corners } };
+    const warp = layer.warp.kind === 'quad'
+      ? { ...layer.warp, corners: layer.warp.corners.map((point) => apply(carry, point)) as [Point, Point, Point, Point] }
+      : { ...layer.warp, points: layer.warp.points.map((point) => apply(carry, point)) };
+    moved = { ...moved, warp };
   }
   if (old.width === next.width && old.height === next.height) return moved;
   const scaleX = next.width / old.width, scaleY = next.height / old.height;

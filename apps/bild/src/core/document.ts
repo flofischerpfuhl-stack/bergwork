@@ -12,13 +12,13 @@ import { transformsEqual } from './geometry';
 import type {
   LayerAdjustmentKind, BlendMode, CanvasDocument, ColorLabel, CropParameters, EmbeddedLayer, FillParameters, Layer,
   LayerAdjustment, LayerEffect, LayerLocks, LayerMask, LayerShape, LegacyTextRun, LiveFilter, TextParagraph,
-  TextRun, TextRunStyle, VectorMask, VectorPath, VectorStyle, WarpQuad,
+  TextRun, TextRunStyle, VectorMask, VectorPath, VectorStyle, LayerWarp, WarpMesh, WarpQuad,
 } from './model';
 export type {
   LayerAdjustmentKind, Artboard, Guide, BlendMode, CanvasDocument, ColorLabel, CropParameters, DocumentFont, DocumentResource, EmbeddedLayer,
   FillLayer, FillParameters, GroupLayer, Layer, LayerAdjustment, LayerEffect, LayerLocks, LayerMask, ModelLayer,
   LayerShape, LegacyTextRun, LiveFilter, PixelLayer, TextLayer, TextParagraph, TextParagraphStyle, TextRun, TextRunStyle,
-  TextKerning, TextOpenTypeFeature, VectorLayer, VectorMask, VectorPath, VectorStyle, WarpQuad,
+  TextKerning, TextOpenTypeFeature, VectorLayer, VectorMask, VectorPath, VectorStyle, LayerWarp, WarpMesh, WarpQuad,
 } from './model';
 
 /** Compatibility type for the legacy UI icon registry; engine records use `LayerAdjustmentKind`. */
@@ -139,7 +139,7 @@ export interface NewLayerFields {
   blendMode?: BlendMode;
   locks?: LayerLocks;
   colorLabel?: ColorLabel;
-  warp?: WarpQuad | null;
+  warp?: LayerWarp | null;
   crop?: CropParameters | null;
   raster?: import('./raster').Raster | null;
   mask?: LayerMask | null;

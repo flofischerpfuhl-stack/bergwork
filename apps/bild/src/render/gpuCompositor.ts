@@ -23,10 +23,11 @@ import { floatToRgba16, makePixelArray, type PixelArray } from '../core/pixel/fo
 import type { BrushSegment, GpuBrushPreview } from '../core/brush';
 import { documentWithLayerEffects } from '../core/effects';
 import { inverseHomographyMatrix } from '../core/distort';
+import { tessellateMesh } from '../core/meshWarp';
 import {
   adjustFragment, BLEND_INDEX, BRUSH_COVERAGE_FRAGMENT, BRUSH_MASK_FRAGMENT, BRUSH_MAX_FRAGMENT, BRUSH_PAINT_FRAGMENT, COVERAGE_FRAGMENT,
   GROUP_FRAGMENT, IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT, STACK_FRAGMENT,
-  UNPREMULTIPLY_FRAGMENT, VERTEX,
+  UNPREMULTIPLY_FRAGMENT, VERTEX, WARP_MESH_FRAGMENT,
 } from './shaders';
 import { LiveFilterHookAdapter } from './liveFilterPasses';
 
@@ -348,6 +349,20 @@ export class GpuCompositor {
         uSnap: { value: 0, type: 'i32' },
         uReplace: { value: 0, type: 'i32' },
       }, ['uBackdrop', 'uLayer', 'uMask', 'uClip']],
+      warpMesh: [WARP_MESH_FRAGMENT, {
+        uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+        uLayerSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uLayerEdge: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uChunkOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uChunkSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uTextureSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uApron: { value: CHUNK_APRON, type: 'f32' },
+        uSampling: { value: 1, type: 'i32' }, uMipLevel: { value: 0, type: 'i32' },
+        uOpacity: { value: 1, type: 'f32' }, uFillOpacity: { value: 1, type: 'f32' },
+        uMode: { value: 0, type: 'i32' }, uDissolveSeed: { value: 0, type: 'i32' },
+        uHasMask: { value: 0, type: 'i32' }, uHasClip: { value: 0, type: 'i32' },
+        uSnap: { value: 0, type: 'i32' }, uReplace: { value: 0, type: 'i32' },
+      }, ['uBackdrop', 'uLayer', 'uMask', 'uClip']],
       mask: [MASK_FRAGMENT, {
         uHasPrevious: { value: 0, type: 'i32' },
         uDrawChunk: { value: 0, type: 'i32' },
@@ -470,6 +485,33 @@ export class GpuCompositor {
     this.mesh.position.set(drawRect?.x ?? 0, drawRect?.y ?? 0);
     this.mesh.scale.set(drawRect?.width ?? width, drawRect?.height ?? height);
     this.renderer.render({ container: this.mesh, target: target ?? undefined, clear: false });
+  }
+
+  private meshGeometry(warp: Extract<NonNullable<Layer['warp']>, { kind: 'mesh' }>, view: ViewSpec): MeshGeometry {
+    const data = tessellateMesh(warp);
+    const documentToView = invert(view.viewToDoc), positions = data.positions.slice();
+    for (let index = 0; index < positions.length; index += 2) {
+      const x = positions[index]!, y = positions[index + 1]!;
+      positions[index] = documentToView.a * x + documentToView.c * y + documentToView.tx;
+      positions[index + 1] = documentToView.b * x + documentToView.d * y + documentToView.ty;
+    }
+    return new MeshGeometry({ positions, uvs: data.uvs, indices: data.indices });
+  }
+
+  private runWarpMesh(warp: Extract<NonNullable<Layer['warp']>, { kind: 'mesh' }>, view: ViewSpec,
+    pass: Pass, target: RenderTexture, textures: Record<string, TextureSource>, uniforms: Record<string, unknown>): void {
+    for (const [key, value] of Object.entries(uniforms)) {
+      const current = pass.uniforms.uniforms[key];
+      if (current instanceof Float32Array && value instanceof Float32Array) current.set(value);
+      else pass.uniforms.uniforms[key] = value;
+    }
+    pass.uniforms.update();
+    for (const [key, source] of Object.entries(textures)) (pass.shader.resources as Record<string, unknown>)[key] = source;
+    const geometry = this.meshGeometry(warp, view);
+    const mesh = new Mesh({ geometry, shader: pass.shader as never, state: State.for2d() }) as unknown as Mesh<MeshGeometry, Shader>;
+    mesh.state.blend = false;
+    this.renderer.render({ container: mesh, target, clear: false });
+    mesh.destroy({ children: false, texture: false, textureSource: false });
   }
 
   // MARK: Render targets
@@ -1111,8 +1153,8 @@ export class GpuCompositor {
     const nearest = transform.sampling === 'Nearest';
     return {
       uDocToLayer: mat3(docToGrid),
-      uDocToWarp: warp ? inverseHomographyMatrix(warp.corners) : IDENTITY9,
-      uHasWarp: warp ? 1 : 0,
+      uDocToWarp: warp?.kind === 'quad' ? inverseHomographyMatrix(warp.corners) : IDENTITY9,
+      uHasWarp: warp?.kind === 'quad' ? 1 : 0,
       uLayerSize: new Float32Array([raster.width, raster.height]),
       uLayerEdge: new Float32Array([gx, gy]),
       uSampling: nearest ? 0 : (mipLevel > 0 ? 2 : 1),
@@ -1195,13 +1237,14 @@ export class GpuCompositor {
           ? this.gridRect(chunk.x, chunk.y, chunk.width, chunk.height, gridToDoc, view)
           : { x: 0, y: 0, width: view.width, height: view.height };
         if (!rect) continue;
-        this.run(this.pass('layer'), out, view.width, view.height, {
+        const textures = {
           uBackdrop: backdrop.source, uLayer: chunk.source, uMask: maskTarget?.source ?? this.white,
           uClip: clip?.source ?? this.white,
-        }, {
+        };
+        const uniforms = {
           uTarget: new Float32Array([view.width, view.height]), uViewToDoc: mat3(view.viewToDoc),
           uDocToLayer: u.uDocToLayer, uDocToWarp: u.uDocToWarp, uHasWarp: u.uHasWarp,
-          uLayerSize: u.uLayerSize, uLayerEdge: u.uLayerEdge, uSampling: u.uSampling,
+          uLayerSize: u.uLayerSize, uLayerEdge: u.uLayerEdge, uSampling: layer.warp?.kind === 'mesh' && u.uSampling !== 0 ? 3 : u.uSampling,
           uChunkOrigin: new Float32Array([chunk.x, chunk.y]), uChunkSize: new Float32Array([chunk.width, chunk.height]),
           uTextureSize: new Float32Array([chunk.width + CHUNK_APRON * 2, chunk.height + CHUNK_APRON * 2]), uApron: CHUNK_APRON,
           uMipLevel: u.uMipLevel, uRestrictChunk: restricted ? 1 : 0,
@@ -1210,7 +1253,9 @@ export class GpuCompositor {
           uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
           uHasMask: maskTarget ? 1 : 0,
           uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0, uReplace: replace ? 1 : 0,
-        }, rect);
+        };
+        if (layer.warp?.kind === 'mesh') this.runWarpMesh(layer.warp, view, this.pass('warpMesh'), out, textures, uniforms);
+        else this.run(this.pass('layer'), out, view.width, view.height, textures, uniforms, rect);
       }
       if (drawnRaster !== raster) {
         // Product-plan A4: retain the navigation result only under unresolved tiles; every
@@ -1225,22 +1270,25 @@ export class GpuCompositor {
           const rect = layer.warp ? { x: 0, y: 0, width: view.width, height: view.height }
             : this.gridRect(chunk.x, chunk.y, chunk.width, chunk.height, sharpGridToDoc, view);
           if (!rect) continue;
-          this.run(this.pass('layer'), sharpOut, view.width, view.height, {
+          const textures = {
             uBackdrop: backdrop.source, uLayer: chunk.source, uMask: maskTarget?.source ?? this.white,
             uClip: clip?.source ?? this.white,
-          }, {
+          };
+          const uniforms = {
             uTarget: new Float32Array([view.width, view.height]), uViewToDoc: mat3(view.viewToDoc),
             uDocToLayer: sharpUniforms.uDocToLayer, uDocToWarp: sharpUniforms.uDocToWarp,
             uHasWarp: sharpUniforms.uHasWarp, uLayerSize: sharpUniforms.uLayerSize,
-            uLayerEdge: sharpUniforms.uLayerEdge, uSampling: sharpUniforms.uSampling,
+            uLayerEdge: sharpUniforms.uLayerEdge, uSampling: layer.warp?.kind === 'mesh' && sharpUniforms.uSampling !== 0 ? 3 : sharpUniforms.uSampling,
             uChunkOrigin: new Float32Array([chunk.x, chunk.y]), uChunkSize: new Float32Array([chunk.width, chunk.height]),
             uTextureSize: new Float32Array([chunk.width + CHUNK_APRON * 2, chunk.height + CHUNK_APRON * 2]), uApron: CHUNK_APRON,
             uMipLevel: sharpUniforms.uMipLevel, uRestrictChunk: 1, uRestrictBounds: 0,
-            uOpacity: layer.opacity, uMode: BLEND_INDEX[mode] ?? 0,
+            uOpacity: layer.opacity, uFillOpacity: layer.fillOpacity, uMode: BLEND_INDEX[mode] ?? 0,
             uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
             uHasMask: maskTarget ? 1 : 0, uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0,
             uReplace: replace ? 1 : 0,
-          }, rect);
+          };
+          if (layer.warp?.kind === 'mesh') this.runWarpMesh(layer.warp, view, this.pass('warpMesh'), sharpOut, textures, uniforms);
+          else this.run(this.pass('layer'), sharpOut, view.width, view.height, textures, uniforms, rect);
         }
         this.release(out);
         out = sharpOut;

@@ -1,9 +1,10 @@
 import { newLayer, type CanvasDocument, type Layer } from '../document';
-import { apply, concat, pixelToDocument, placing, samePlacement, scaling, translation, type LayerTransform } from '../geometry';
+import { apply, concat, pixelToDocument, placing, samePlacement, scaling, translation, type LayerTransform, type Point } from '../geometry';
 import { mapPlacement, maskBackground, preparePlacement, prepareSampler, sampleMask } from '../resample';
 import { TILE, type Raster } from '../raster';
 import { renderEffectPasses, type EffectPass } from './render';
 import { homography } from '../distort';
+import { meshPoint } from '../meshWarp';
 
 export interface EffectSourceHooks {
   transform(layer: Layer): LayerTransform;
@@ -85,10 +86,18 @@ function passTransform(source: LayerTransform, sourceWidth: number, sourceHeight
 
 function effectWarp(source: Layer, effect: EffectPass, sourceWidth: number, sourceHeight: number): Layer['warp'] {
   if (!source.warp) return null;
-  const map = homography(source.warp.corners);
   const left = effect.sourceX / sourceWidth, top = effect.sourceY / sourceHeight;
   const right = (effect.sourceX + effect.raster.width) / sourceWidth;
   const bottom = (effect.sourceY + effect.raster.height) / sourceHeight;
+  if (source.warp.kind === 'mesh') {
+    const columns = source.warp.splits.x * 3 + 1, rows = source.warp.splits.y * 3 + 1, points: Point[] = [];
+    for (let row = 0; row < rows; row++) for (let column = 0; column < columns; column++) {
+      points.push(meshPoint(source.warp, { x: left + (right - left) * column / (columns - 1),
+        y: top + (bottom - top) * row / (rows - 1) }));
+    }
+    return { ...source.warp, points };
+  }
+  const map = homography(source.warp.corners);
   return { kind: 'quad', schemaVersion: 1, corners: [map({ x: left, y: top }), map({ x: right, y: top }),
     map({ x: right, y: bottom }), map({ x: left, y: bottom })] };
 }

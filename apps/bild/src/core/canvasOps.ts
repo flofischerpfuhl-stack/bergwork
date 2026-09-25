@@ -34,8 +34,10 @@ export function translated(layer: Layer, dx: number, dy: number): Layer {
   const placement = layer.mask?.placement;
   const mask = layer.mask && placement ? { ...layer.mask,
     placement: { ...placement, origin: { x: placement.origin.x + dx, y: placement.origin.y + dy } } } : layer.mask;
-  const warp = layer.warp ? { ...layer.warp, corners: layer.warp.corners.map((point) =>
-    ({ x: point.x + dx, y: point.y + dy })) as [Point, Point, Point, Point] } : null;
+  const warp = !layer.warp ? null : layer.warp.kind === 'quad'
+    ? { ...layer.warp, corners: layer.warp.corners.map((point) =>
+      ({ x: point.x + dx, y: point.y + dy })) as [Point, Point, Point, Point] }
+    : { ...layer.warp, points: layer.warp.points.map((point) => ({ x: point.x + dx, y: point.y + dy })) };
   return { ...layer, transform, mask, warp };
 }
 
