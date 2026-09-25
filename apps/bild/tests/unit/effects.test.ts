@@ -164,6 +164,24 @@ describe('layer effects (PRODUCT-PLAN 6.7)', () => {
       new Uint8Array([0, 255, 0, 255, 0, 0, 0, 0, 0, 255, 0, 255]));
   });
 
+  it('clips effects on clipped layers only when the PSD base groups clipped elements', () => {
+    const raster = Raster.fromPixels(1, 1, 4, [255, 255, 255, 255]);
+    const transform = makeTransform({ x: 0, y: 0 }, { width: 1, height: 1 });
+    const clipped = newLayer({ id: 'clip', name: 'Clip', raster, transform, maskSourceId: 'base',
+      effects: [{ kind: 'colorOverlay', schemaVersion: 1, enabled: true, opacity: 1, color: red }] });
+    const hooks = { transform: (value: typeof clipped) => value.transform,
+      maskPlacement: (value: typeof clipped) => value.mask?.placement ?? null,
+      raster: (value: typeof clipped) => value.raster, maskRaster: (value: typeof clipped) => value.mask?.raster };
+    const expanded = (blendClippedElements: boolean) => {
+      const base = { ...newLayer({ id: 'base', name: 'Base', raster, transform }),
+        psdBlendClippedElements: blendClippedElements };
+      return documentWithLayerEffects({ id: `clip-${blendClippedElements}`, width: 1, height: 1, resolution: 72,
+        selection: null, layers: [base, clipped] }, hooks);
+    };
+    expect(expanded(true).layers[2]!.maskSourceId).toBe('base');
+    expect(expanded(false).layers[2]!.maskSourceId).toBeNull();
+  });
+
   it('scales document-pixel effects to an oversampled derived raster', () => {
     const raster = Raster.fromPixels(16, 16, 4, new Uint8Array(16 * 16 * 4).fill(255));
     const layer = newLayer({ id: 'text', name: 'Text', kind: 'text', text: 'A', raster,

@@ -441,6 +441,8 @@ function common(layer: Layer, path: string, state: State): AgLayer {
   if ((layer as Layer & { readonly psdBlendInteriorEffects?: boolean }).psdBlendInteriorEffects === true) {
     output.blendInteriorElements = true;
   }
+  const blendClippedElements = (layer as Layer & { readonly psdBlendClippedElements?: boolean }).psdBlendClippedElements;
+  if (blendClippedElements !== undefined) output.blendClippendElements = blendClippedElements;
   const knockout = (layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | boolean }).psdKnockout;
   if (knockout) {
     output.knockout = true;

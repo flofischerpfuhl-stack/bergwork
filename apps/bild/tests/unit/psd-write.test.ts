@@ -68,6 +68,23 @@ describe('PRODUCT-PLAN A7 PSD writer', () => {
     expect(readRawPsdComposite(output.bytes).iccProfile).toEqual(srgbIccProfile());
   });
 
+  it('round-trips the PSD Blend Clipped Layers as Group flag and its effect pixels', () => {
+    const full = makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 }, { sampling: 'Nearest' });
+    const base = { ...newLayer({ id: 'base', name: 'Base', transform: full,
+      raster: Raster.fromPixels(2, 1, 4, [255, 0, 0, 255, 0, 0, 0, 0]) }), psdBlendClippedElements: false };
+    const clipped = newLayer({ id: 'clip', name: 'Clip', transform: full, maskSourceId: 'base',
+      raster: solid(2, 1, [255, 255, 255, 255]), effects: [
+        { kind: 'colorOverlay', schemaVersion: 1, enabled: true, opacity: 1, color: { red: 0, green: 0, blue: 1 } },
+      ] });
+    const input = document([base, clipped], { width: 2, height: 1 });
+    const expected = cpuCompositeRegion(input, { x: 0, y: 0, width: 2, height: 1 });
+    const reopened = readPsdDocument(writePsdDocument(input).bytes).document;
+    expect((reopened.layers[0] as typeof reopened.layers[number]
+      & { readonly psdBlendClippedElements?: boolean }).psdBlendClippedElements).toBe(false);
+    expect(maximumDifference(cpuCompositeRegion(reopened, { x: 0, y: 0, width: 2, height: 1 }), expected))
+      .toBeLessThanOrEqual(1);
+  });
+
   it('writes editable text, shape, adjustment, layer-style and embedded-content records with rendered caches', () => {
     const full = makeTransform({ x: 0, y: 0 }, { width: 4, height: 2 }, { sampling: 'Nearest' });
     const effects: LayerEffect[] = [

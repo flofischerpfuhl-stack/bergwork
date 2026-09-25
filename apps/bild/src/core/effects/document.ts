@@ -203,6 +203,7 @@ export function documentWithLayerEffects(document: CanvasDocument, hooks: Effect
   if (cachedDocument) return cachedDocument;
 
   const layers: Layer[] = [];
+  const layerById: ReadonlyMap<string, Layer> = new Map(document.layers.map((layer) => [layer.id, layer]));
   // Passes drawn above a layer go above its clipping stack: inserted between the base and the layers clipped to it,
   // they would break the stack and the clipped layers (adjustments) would stop applying.
   let pending: { readonly base: Layer; readonly passes: Layer[] } | null = null;
@@ -255,8 +256,14 @@ export function documentWithLayerEffects(document: CanvasDocument, hooks: Effect
       continue;
     }
     layers.push({ ...layer, effects: [] });
-    const abovePasses = above.map((pass, i) => synthetic(layer, pass, i, passTransform(transform, raster.width, raster.height, pass),
-      raster.width, raster.height));
+    const clippingBase: Layer | undefined = layer.maskSourceId ? layerById.get(layer.maskSourceId) : undefined;
+    const clipEffects: boolean = !!clippingBase
+      && (clippingBase as Layer & { readonly psdBlendClippedElements?: boolean }).psdBlendClippedElements !== false;
+    const abovePasses: Layer[] = above.map((pass, i): Layer => {
+      const value: Layer = synthetic(layer, pass, i, passTransform(transform, raster.width, raster.height, pass),
+        raster.width, raster.height);
+      return clipEffects ? { ...value, maskSourceId: layer.maskSourceId } : value;
+    });
     if (layer.maskSourceId) layers.push(...abovePasses);
     else { flush(); pending = { base: layer, passes: abovePasses }; }
   }

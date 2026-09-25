@@ -330,11 +330,16 @@ interface ImportedPsdMask {
 function decodedMask(mask: LayerMaskData | undefined, parameters: LayerMaskData | undefined,
   layerTransform: LayerTransform, state: ImportState, layerPath: string): ImportedPsdMask | null {
   if (!mask) return null;
+  const vectorParameters = mask.fromVectorData === true;
+  const density = (vectorParameters ? parameters?.vectorMaskDensity : parameters?.userMaskDensity) ?? 1;
+  const rawDefaultColor = mask.defaultColor ?? 0;
+  // Mask density weakens the whole mask, including the value beyond its stored rectangle.
+  // Applying it only to channel pixels leaves positioned masks fully hiding outside their cache.
+  const defaultColor = Math.round(255 - (255 - rawDefaultColor) * density);
   if (!mask.imageData) {
     const width = Math.max(0, (mask.right ?? 0) - (mask.left ?? 0));
     const height = Math.max(0, (mask.bottom ?? 0) - (mask.top ?? 0));
     if (!width || !height) {
-      const defaultColor = mask.defaultColor ?? 0;
       if (mask.disabled === true || defaultColor === 255) return null;
       return { raster: Raster.fromPixels(1, 1, 1, new Uint8Array([defaultColor])), enabled: true,
         placement: transform(0, 0, state.documentWidth, state.documentHeight), linked: false, defaultColor };
@@ -344,16 +349,14 @@ function decodedMask(mask: LayerMaskData | undefined, parameters: LayerMaskData 
   }
   const rgba = pixelDataToRgba8(mask.imageData);
   let pixels: Uint8Array<ArrayBufferLike> = new Uint8Array(mask.imageData.width * mask.imageData.height);
-  const vectorParameters = mask.fromVectorData === true;
-  const density = (vectorParameters ? parameters?.vectorMaskDensity : parameters?.userMaskDensity) ?? 1;
   for (let pixel = 0; pixel < pixels.length; pixel++) {
     const coverage = rgba[pixel * 4]!;
     pixels[pixel] = Math.round(255 - (255 - coverage) * density);
   }
-  if (density !== 1) issue(state, 'mask-density', 'Mask density was baked into its raster.', 'approximated', layerPath);
+  if (density !== 1) issue(state, 'mask-density', 'Mask density was baked into its raster and outside value.', 'editability-only', layerPath);
   const feather = (vectorParameters ? parameters?.vectorMaskFeather : parameters?.userMaskFeather) ?? 0;
   if (feather > 0) {
-    pixels = featherMask(pixels, mask.imageData.width, mask.imageData.height, feather, mask.defaultColor ?? 0);
+    pixels = featherMask(pixels, mask.imageData.width, mask.imageData.height, feather, defaultColor);
     issue(state, 'mask-feather', 'Mask feather was baked into its raster.', 'editability-only', layerPath);
   }
   const relative = mask.positionRelativeToLayer === true;
@@ -361,7 +364,6 @@ function decodedMask(mask: LayerMaskData | undefined, parameters: LayerMaskData 
   const top = (mask.top ?? 0) + (relative ? layerTransform.origin.y : 0);
   const placement = transform(left, top, mask.imageData.width, mask.imageData.height);
   const raster = Raster.fromPixels(mask.imageData.width, mask.imageData.height, 1, pixels);
-  const defaultColor = mask.defaultColor ?? 0;
   let edgeTotal = 0, edgeCount = 0;
   for (let y = 0; y < raster.height; y++) for (let x = 0; x < raster.width; x++) {
     if (y === 0 || y === raster.height - 1 || x === 0 || x === raster.width - 1) {
@@ -1164,6 +1166,9 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
       & { readonly psdGeneratedStyle: VectorStyle };
     if (source.effects && source.blendInteriorElements === true) imported = { ...imported,
       psdBlendInteriorEffects: true } as Layer & { readonly psdBlendInteriorEffects: true };
+    if (source.blendClippendElements !== undefined) imported = { ...imported,
+      psdBlendClippedElements: source.blendClippendElements } as Layer
+        & { readonly psdBlendClippedElements: boolean };
     result.push(imported);
     if (isGroup) {
       if (artboard && (artboard.backgroundType ?? 1) !== 3) {
