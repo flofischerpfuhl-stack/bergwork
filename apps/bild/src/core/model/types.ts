@@ -306,6 +306,31 @@ export interface TextParagraphStyle {
   readonly spaceAfter: number;
 }
 export interface TextParagraph { readonly from: number; readonly to: number; readonly style: TextParagraphStyle }
+/** Text on a path (Phase 3, PRODUCT-PLAN 6.6): the text layer owns a copy of the path, as Photoshop's type path. */
+export interface TextOnPath {
+  readonly schemaVersion: 1;
+  /** Cubic path in the layer's frame pixels: 0…size of `transform` maps onto its box, as a vector layer's paths. */
+  readonly path: VectorPath;
+  /** Start and end of the text range as fractions of the path length (0…1); a closed path wraps from end to start. */
+  readonly start: number;
+  readonly end: number;
+  /** The text runs on the other side of the path, in the opposite direction (Photoshop's flip). */
+  readonly flipped: boolean;
+  /** Baseline distance from the path in points; positive moves the text up, away from the path. */
+  readonly baselineOffset: number;
+}
+export type TextWarpStyle = 'arc' | 'arcLower' | 'arcUpper' | 'arch' | 'bulge' | 'shellLower' | 'shellUpper' | 'flag' | 'wave'
+  | 'fish' | 'rise' | 'fisheye' | 'inflate' | 'squeeze' | 'twist';
+/** Photoshop's Warp Text envelope; non-destructive and rendered from the shaped outlines at the target resolution. */
+export interface TextWarp {
+  readonly schemaVersion: 1;
+  readonly style: TextWarpStyle;
+  readonly orientation: 'horizontal' | 'vertical';
+  /** Percent, −100…100. */
+  readonly bend: number;
+  readonly horizontalDistortion: number;
+  readonly verticalDistortion: number;
+}
 export interface TextLayer extends LayerCommon, WithoutAdjustment, WithoutSourceShape {
   readonly kind: 'text'; readonly text: string; readonly runs: readonly TextRun[];
   readonly paragraphs: readonly TextParagraph[];
@@ -316,6 +341,9 @@ export interface TextLayer extends LayerCommon, WithoutAdjustment, WithoutSource
   readonly raster: Raster | null;
   /** Placement of an imported/saved preview; null means the editable transform. */
   readonly renderedTransform: LayerTransform | null;
+  /** Absent/null: the text is laid out in lines. Text on a path ignores `box` and `textWarp`. */
+  readonly textPath?: TextOnPath | null;
+  readonly textWarp?: TextWarp | null;
 }
 export interface EmbeddedLayer extends LayerCommon, WithoutAdjustment, WithoutSourceShape {
   readonly kind: 'embedded';

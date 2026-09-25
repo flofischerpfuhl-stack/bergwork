@@ -1,13 +1,13 @@
 import CanvasKitInit, {
-  type CanvasKit, type Color, type EmbindObject, type MallocObj, type Paint, type Paragraph, type Path,
+  type CanvasKit, type Color, type EmbindObject, type Font, type MallocObj, type Paint, type Paragraph, type Path,
   type Shader, type Surface, type TextStyle as CanvasTextStyle, type TypefaceFontProvider,
 } from 'canvaskit-wasm';
 import canvasKitWasmUrl from 'canvaskit-wasm/bin/canvaskit.wasm?url';
 import { Raster, TILE } from '../core/raster';
 import type {
-  FillPaint, FontRegistration, LoadTextEngineOptions, ParagraphBlock, ParagraphLayout, ParagraphRequest, ParagraphSpan, PathOperation,
-  PathRasterRequest, RasterizedOutput, RegisteredFont, RgbaColor, StrokePaint, TextAlignment, TextDirection,
-  TextEngine, TextEngineMemory, TextRect,
+  FillPaint, FontRegistration, GlyphRasterRequest, LoadTextEngineOptions, ParagraphBlock, ParagraphLayout, ParagraphRequest, ParagraphSpan,
+  PathOperation, PathRasterRequest, RasterizedOutput, RegisteredFont, RgbaColor, ShapedGlyphRun, ShapedTextLine, StrokePaint, TextAlignment,
+  TextDirection, TextEngine, TextEngineMemory, TextRect,
 } from './types';
 
 interface CanvasKitHeap extends CanvasKit { readonly HEAPU8?: Uint8Array }
@@ -19,6 +19,24 @@ interface LaidOutParagraph {
   readonly x: number;
   readonly y: number;
   readonly width: number;
+  /** The text handed to the paragraph builder (after a first-line-indent placeholder, when there is one). */
+  readonly text: string;
+  readonly placeholder: boolean;
+}
+
+/** UTF-8 byte offset → UTF-16 index of `text` (SkParagraph reports shaped offsets in UTF-8). */
+function utf8ToUtf16(text: string): Uint32Array {
+  let bytes = 0;
+  for (const char of text) { const cp = char.codePointAt(0)!; bytes += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4; }
+  const map = new Uint32Array(bytes + 1);
+  let byte = 0, unit = 0;
+  for (const char of text) {
+    const cp = char.codePointAt(0)!, length = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    for (let i = 0; i < length; i++) map[byte + i] = unit;
+    byte += length; unit += char.length;
+  }
+  map[bytes] = unit;
+  return map;
 }
 
 class CanvasKitParagraphLayout implements ParagraphLayout {
@@ -30,6 +48,7 @@ class CanvasKitParagraphLayout implements ParagraphLayout {
   readonly exceededMaxLines: boolean;
   readonly unresolvedCodepoints: readonly number[];
   private disposed = false;
+  private shaped: { readonly lines: readonly ShapedTextLine[]; readonly fonts: Font[][] } | null = null;
 
   constructor(readonly owner: CanvasKitTextEngine, readonly request: ParagraphRequest,
     readonly paragraphs: readonly LaidOutParagraph[], width: number, height: number) {
@@ -50,7 +69,63 @@ class CanvasKitParagraphLayout implements ParagraphLayout {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    for (const line of this.shaped?.fonts ?? []) for (const font of line) font.delete();
+    this.shaped = null;
     for (const value of this.paragraphs) value.paragraph.delete();
+  }
+
+  shapedLines(): readonly ShapedTextLine[] {
+    this.assertUsable(this.owner);
+    return this.shapes().lines;
+  }
+
+  /** The font of a shaped run, configured as SkParagraph draws it (slight hinting, subpixel positions). */
+  font(line: number, run: number): Font {
+    const font = this.shapes().fonts[line]?.[run];
+    if (!font) throw new RangeError('No such shaped glyph run');
+    return font;
+  }
+
+  private shapes(): { readonly lines: readonly ShapedTextLine[]; readonly fonts: Font[][] } {
+    if (this.shaped) return this.shaped;
+    const kit = this.owner.kit;
+    const lines: ShapedTextLine[] = [], fonts: Font[][] = [];
+    for (const value of this.paragraphs) {
+      const map = utf8ToUtf16(value.text), shift = value.placeholder ? 1 : 0;
+      const utf16 = (offset: number) => {
+        const local = map[Math.max(0, Math.min(map.length - 1, offset))]! - shift;
+        return Math.max(value.from, Math.min(value.to, value.from + local));
+      };
+      for (const line of value.paragraph.getShapedLines()) {
+        const runs: ShapedGlyphRun[] = [], lineFonts: Font[] = [];
+        for (const run of line.runs) {
+          const count = run.glyphs.length;
+          if (!count || !run.typeface) { run.typeface?.delete(); continue; }
+          const font = new kit.Font(run.typeface, run.size);
+          run.typeface.delete();
+          // Identical to SkParagraph's own run fonts: drawing these glyphs straight reproduces drawParagraph exactly.
+          font.setHinting(kit.FontHinting.Slight);
+          font.setSubpixel(true);
+          font.setEdging(kit.FontEdging.AntiAlias);
+          if (run.fakeBold) font.setEmbolden(true);
+          if (run.fakeItalic) font.setSkewX(-0.25);
+          const positions = new Float32Array(2 * (count + 1)), offsets = new Uint32Array(count + 1);
+          for (let i = 0; i <= count; i++) {
+            positions[2 * i] = value.x + (run.positions[2 * i] ?? run.positions[2 * count - 2] ?? 0);
+            positions[2 * i + 1] = value.y + (run.positions[2 * i + 1] ?? run.positions[2 * count - 1] ?? 0);
+            offsets[i] = utf16(run.offsets[i] ?? run.offsets[count - 1] ?? 0);
+          }
+          const glyphs = Uint16Array.from(run.glyphs);
+          runs.push({ size: run.size, glyphs, positions, offsets, bounds: font.getGlyphBounds(glyphs) });
+          lineFonts.push(font);
+        }
+        lines.push({ from: utf16(line.textRange.first), to: utf16(line.textRange.last), top: value.y + line.top,
+          bottom: value.y + line.bottom, baseline: value.y + line.baseline, runs });
+        fonts.push(lineFonts);
+      }
+    }
+    this.shaped = { lines, fonts };
+    return this.shaped;
   }
 
   caretIndexAt(x: number, y: number): number {
@@ -232,7 +307,7 @@ export class CanvasKitTextEngine implements TextEngine {
         const paragraph = builder.build();
         paragraph.layout(request.width);
         return new CanvasKitParagraphLayout(this, request,
-          [{ paragraph, from: 0, to: request.text.length, x: 0, y: 0, width: request.width }],
+          [{ paragraph, from: 0, to: request.text.length, x: 0, y: 0, width: request.width, text: request.text, placeholder: false }],
           request.width, Math.max(1, paragraph.getHeight()));
       } finally { builder.delete(); }
     }
@@ -273,7 +348,8 @@ export class CanvasKitTextEngine implements TextEngine {
           const paragraph = builder.build();
           paragraph.layout(availableWidth);
           y += Math.max(0, block.spaceBefore ?? 0);
-          laidOut.push({ paragraph, from: block.from, to: block.to, x: startIndent, y, width: availableWidth });
+          laidOut.push({ paragraph, from: block.from, to: block.to, x: startIndent, y, width: availableWidth,
+            text: (firstLineIndent ? '\ufffc' : '') + request.text.slice(block.from, contentTo), placeholder: firstLineIndent > 0 });
           actualWidth = Math.max(actualWidth, startIndent + paragraph.getLongestLine());
           y += paragraph.getHeight() + Math.max(0, block.spaceAfter ?? 0);
         } finally {
@@ -299,6 +375,48 @@ export class CanvasKitTextEngine implements TextEngine {
     canvas.clear(this.kit.TRANSPARENT);
     for (const value of layout.paragraphs) canvas.drawParagraph(value.paragraph, padding + value.x, padding + value.y);
     return { raster: this.readSurface(scratch.surface, width, height, scratch.pixels), origin: { x: padding, y: padding } };
+  }
+
+  rasterizeGlyphs(layout: ParagraphLayout, request: GlyphRasterRequest): RasterizedOutput {
+    this.assertUsable();
+    if (!(layout instanceof CanvasKitParagraphLayout)) throw new Error('Unsupported paragraph layout implementation');
+    layout.assertUsable(this);
+    positiveFinite(request.width, 'Glyph raster width');
+    positiveFinite(request.height, 'Glyph raster height');
+    const width = Math.ceil(request.width), height = Math.ceil(request.height);
+    const scratch = this.reusableParagraphSurface(width, height);
+    const canvas = scratch.surface.getCanvas();
+    canvas.clear(this.kit.TRANSPARENT);
+    const lines = layout.shapedLines();
+    const paint = new this.kit.Paint();
+    try {
+      paint.setAntiAlias(true);
+      paint.setStyle(this.kit.PaintStyle.Fill);
+      for (const draw of request.draws) {
+        const run = lines[draw.line]?.runs[draw.run];
+        if (!run) throw new RangeError('No such shaped glyph run');
+        const from = Math.max(0, Math.min(run.glyphs.length, draw.from)), to = Math.max(from, Math.min(run.glyphs.length, draw.to));
+        if (to <= from) continue;
+        if (!draw.matrix.every(Number.isFinite)) continue;
+        paint.setColor(color(this.kit, draw.color));
+        canvas.save();
+        if (draw.clip) {
+          const commands: number[] = [];
+          for (let i = 0; i + 1 < draw.clip.length; i += 2) commands.push(i ? this.kit.LINE_VERB : this.kit.MOVE_VERB, draw.clip[i]!, draw.clip[i + 1]!);
+          commands.push(this.kit.CLOSE_VERB);
+          const clip = this.kit.Path.MakeFromCmds(commands);
+          // Aliased clips partition pixel centres exactly, so neighbouring mesh pieces neither overlap nor leave seams.
+          if (clip) { canvas.clipPath(clip, this.kit.ClipOp.Intersect, false); clip.delete(); }
+        }
+        const [a, b, c, d, tx, ty] = draw.matrix;
+        canvas.concat([a, c, tx, b, d, ty, 0, 0, 1]);
+        canvas.drawGlyphs(run.glyphs.subarray(from, to), run.positions.subarray(2 * from, 2 * to), 0, 0, layout.font(draw.line, draw.run), paint);
+        canvas.restore();
+      }
+    } finally {
+      paint.delete();
+    }
+    return { raster: this.readSurface(scratch.surface, width, height, scratch.pixels), origin: { x: 0, y: 0 } };
   }
 
   combinePaths(firstSvg: string, secondSvg: string, operation: PathOperation): string {
