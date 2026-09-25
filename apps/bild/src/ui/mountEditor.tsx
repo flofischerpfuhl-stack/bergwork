@@ -38,6 +38,9 @@ export const mountEditor: MountEditorV2 = async (root, options) => {
     controller.destroy();
     container.remove();
   });
+  // Startup garbage collection must finish before callers can import/create content. Recovery
+  // prompts continue asynchronously so callers can interact with the already-rendered dialog.
   void controller.startRecovery();
+  await controller.whenRecoveryReady();
   return handle;
 };

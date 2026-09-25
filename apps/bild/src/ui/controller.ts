@@ -220,16 +220,21 @@ export class EditorController {
   readonly residency: RasterResidency | null;
   readonly tileBudgetBytes: number;
   readonly gpuTextureBudgetBytes: number;
+  readonly gpuTextureChunkSize: number | undefined;
   readonly limits: DocumentLimits;
   private readonly hydrationPending = new WeakSet<Raster>();
   private suppressCompositorHydration = 0;
   private pendingResolutionCount = 0;
   private resolutionWaiters: (() => void)[] = [];
+  private pendingContentResolutionCount = 0;
+  private contentResolutionWaiters: (() => void)[] = [];
+  private readonly saveWithoutCompositorBarrier: boolean;
 
   constructor(host: HostAdapter, locale: Locale, theme: 'dark' | 'light',
     profile: EditorProfile = profileFor((host as HostAdapter & Partial<ScratchHostCapability> & { defaultProfile?: 'lite' | 'pro' }).defaultProfile
       ?? (host as HostAdapter & Partial<ScratchHostCapability>).editorProfile ?? 'lite')) {
     this.host = host;
+    this.recoveryStartup = new Promise((resolve) => { this.finishRecoveryStartup = resolve; });
     this.capabilities = capabilitiesOf(host);
     this.profile = profile;
     this.locale = locale;
@@ -240,6 +245,8 @@ export class EditorController {
     this.limits = documentLimits(profile.id);
     this.tileBudgetBytes = scratch.tileBudgetBytes ?? (profile.id === 'pro' ? PRO_TILE_BUDGET : LITE_TILE_BUDGET);
     this.gpuTextureBudgetBytes = scratch.gpuTextureBudgetBytes ?? Math.min(1024 * 1024 * 1024, Math.floor(this.tileBudgetBytes / 4));
+    this.gpuTextureChunkSize = scratch.gpuTextureChunkSize;
+    this.saveWithoutCompositorBarrier = scratch.saveWithoutCompositorBarrier ?? false;
     this.residency = scratch.scratchHost ? new RasterResidency(new TileCache(scratch.scratchHost, this.tileBudgetBytes)) : null;
     this.features = this.hydratingFeatureRegistry();
     this.canvasSetups.push((view) => this.installHydratingTools(view));
@@ -271,6 +278,7 @@ export class EditorController {
     this.canvas = canvas;
     if (canvas) {
       canvas.gpu?.configureResidency({ textureByteBudget: this.gpuTextureBudgetBytes,
+        ...(this.gpuTextureChunkSize === undefined ? {} : { textureChunkSize: this.gpuTextureChunkSize }),
         requestHydration: (raster, rect) => this.requestRasterHydration(raster, rect) });
       for (const waiter of this.canvasWaiters.splice(0)) waiter();
     }
@@ -319,11 +327,20 @@ export class EditorController {
   whenFullyResolved(): Promise<void> {
     return this.isFullyResolved ? Promise.resolve() : new Promise((resolve) => this.resolutionWaiters.push(resolve));
   }
-  private trackResolution<T>(work: Promise<T>): Promise<T> {
+  private whenContentResolved(): Promise<void> {
+    return this.pendingContentResolutionCount === 0 ? Promise.resolve()
+      : new Promise((resolve) => this.contentResolutionWaiters.push(resolve));
+  }
+  private trackResolution<T>(work: Promise<T>, content = true): Promise<T> {
     this.pendingResolutionCount++;
+    if (content) this.pendingContentResolutionCount++;
     return work.finally(() => {
       this.pendingResolutionCount--;
       if (!this.pendingResolutionCount) for (const resolve of this.resolutionWaiters.splice(0)) resolve();
+      if (content) {
+        this.pendingContentResolutionCount--;
+        if (!this.pendingContentResolutionCount) for (const resolve of this.contentResolutionWaiters.splice(0)) resolve();
+      }
     });
   }
 
@@ -408,7 +425,7 @@ export class EditorController {
   private requestRasterHydration(raster: Raster, rect: import('../core/geometry').Rect): void {
     if (!this.residency || this.suppressCompositorHydration || this.hydrationPending.has(raster)) return;
     this.hydrationPending.add(raster);
-    void this.trackResolution(this.residency.ensureResident([raster], rect)).then((lease) => {
+    void this.trackResolution(this.residency.ensureResident([raster], rect), false).then((lease) => {
       this.canvas?.redraw();
       const release = () => { lease.release(); this.hydrationPending.delete(raster); };
       if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => requestAnimationFrame(release));
@@ -760,7 +777,8 @@ export class EditorController {
     emitChunk?: (chunk: Uint8Array) => void | Promise<void>): Promise<{ blob: Blob; manifest: ProjectManifestV2; document: CanvasDocument }> {
     const document = session.document;
     if (!document) throw new ProjectError('no-document', 'There is no canvas to save.');
-    await this.whenFullyResolved();
+    if (this.saveWithoutCompositorBarrier) await this.whenContentResolved();
+    else await this.whenFullyResolved();
     session.commitTransform();
     const final = session.document ?? document;
     const name = session.projectName ?? this.workspace.current.title;
@@ -772,18 +790,24 @@ export class EditorController {
   // MARK: Crash journal recovery (ScratchHost / OPFS)
 
   private recovery: RecoveryStore | null = null;
+  private readonly recoveryStartup: Promise<void>;
+  private finishRecoveryStartup!: () => void;
   private recoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private recoveryPaused = new Set<string>();
   private recoveryWatchers = new Map<string, () => void>();
   private recoveryOperations = new Map<string, Promise<void>>();
 
+  /** Resolves after startup garbage collection, before any recovery prompt needs user input. */
+  whenRecoveryReady(): Promise<void> { return this.recoveryStartup; }
+
   /** Offers archives left by an earlier page load, then keeps copies of modified tabs. */
   async startRecovery(): Promise<void> {
     const scratch = (this.host as HostAdapter & Partial<ScratchHostCapability>).scratchHost;
-    if (!RecoveryStore.available(scratch)) return;
+    if (!RecoveryStore.available(scratch)) { this.finishRecoveryStartup(); return; }
     this.recovery = new RecoveryStore(scratch);
     try {
       await this.recovery.collectGarbage(this.liveScratchKeys());
+      this.finishRecoveryStartup();
       const previous = await this.recovery.previous();
       if (previous.length) {
         const answer = await this.confirm(this.t(previous.length === 1 ? 'Recover an unsaved project?' : 'Recover unsaved projects?'),
@@ -814,6 +838,7 @@ export class EditorController {
         }
       }
     } catch (error) {
+      this.finishRecoveryStartup();
       this.host.reportError({ code: 'recovery-unavailable', message: technicalErrorMessage(error, 'Recovery is unavailable.') });
       this.recovery = null;
       return;
@@ -841,7 +866,10 @@ export class EditorController {
   }
 
   private startDocumentResidency(tab: ProjectTab): void {
-    void this.trackResolution(this.trackDocumentResidency(tab)).catch((error) => {
+    // Linux WebKit can continue background history registration while the streaming writer starts;
+    // the writer still awaits/manages every raster it actually consumes. Other hosts keep the
+    // original all-resolution barrier.
+    void this.trackResolution(this.trackDocumentResidency(tab), !this.saveWithoutCompositorBarrier).catch((error) => {
       this.host.reportError({ code: 'scratch-write-failed', message: technicalErrorMessage(error, 'Scratch storage write failed.') });
     });
   }

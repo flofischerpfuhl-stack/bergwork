@@ -3,6 +3,7 @@ import { sha256Hex } from '../../src/io/sha256';
 import type { ColorHost, ComputeHost, FileSystemHost, FontHost, HostCapabilityMap, HostFileReference, ModelHost, ScreenColorHost } from '../../src/platform/hosts';
 import { bindCapabilityRegistry } from '../../src/platform/hosts';
 import { requireScratchKey, type ScratchHost } from '../../src/platform/scratchHost';
+import { webKitGtkMemoryBudgets } from '../../src/platform/runtimeMemory';
 import type { EditorController } from '../../src/ui/controller';
 
 interface NativeTarget extends SaveTarget { readonly path: string }
@@ -60,13 +61,26 @@ export async function nativeProjectBlob(path: string): Promise<Blob> {
   return nativeProjectBlobRange(path, 0, size, 'application/zip');
 }
 
-async function writeChunk(path: string, chunk: Uint8Array, append: boolean): Promise<void> {
+const NATIVE_TRANSFER_CHUNK = 256 * 1024;
+
+async function writeNativeChunk(path: string, chunk: Uint8Array, append: boolean): Promise<void> {
   const encoded = new TextEncoder().encode(path);
   if (encoded.byteLength > 0xffff) throw new RangeError('Save path is too long');
   const body = new Uint8Array(3 + encoded.byteLength + chunk.byteLength);
   body[0] = append ? 1 : 0; new DataView(body.buffer).setUint16(1, encoded.byteLength, true);
   body.set(encoded, 3); body.set(chunk, 3 + encoded.byteLength);
   await window.__TAURI__.core.invoke('save_file_chunk', body);
+}
+
+/** WebKitGTK copies raw IPC bodies into JSC and GLib storage, so never send a PNG band as one body. */
+async function writeChunk(path: string, chunk: Uint8Array, append: boolean): Promise<void> {
+  if (!chunk.byteLength) {
+    await writeNativeChunk(path, chunk, append);
+    return;
+  }
+  for (let offset = 0; offset < chunk.byteLength; offset += NATIVE_TRANSFER_CHUNK) {
+    await writeNativeChunk(path, chunk.subarray(offset, offset + NATIVE_TRANSFER_CHUNK), append || offset > 0);
+  }
 }
 
 async function write(path: string, blob: Blob): Promise<void> {
@@ -118,10 +132,13 @@ class TauriScratchHost implements ScratchHost {
 export interface TauriHostOptions {
   readonly acceptanceArchivePath?: string;
   readonly tileBudgetBytes?: number;
+  readonly gpuTextureBudgetBytes?: number;
+  readonly gpuTextureChunkSize?: number;
   readonly controllerReady?: (controller: EditorController) => void;
+  readonly reportError?: (error: { readonly code: string; readonly message: string }) => void;
 }
 
-function nativeFiles(): FileSystemHost {
+function nativeFiles(acceptanceProjectPath?: string): FileSystemHost {
   const files: FileSystemHost = {
     version: 1,
     async chooseFiles(kind) {
@@ -131,6 +148,9 @@ function nativeFiles(): FileSystemHost {
       return paths.map((id) => ({ id, name: baseName(id) }));
     },
     async chooseSaveTarget(suggestedName, kind) {
+      if (acceptanceProjectPath && kind === 'project') {
+        return { name: baseName(acceptanceProjectPath), path: acceptanceProjectPath } as NativeTarget;
+      }
       const filters = kind === 'project' ? [PROJECT_FILTER] : [SAVE_FILTERS[kind]];
       const path = await window.__TAURI__.dialog.save({ defaultPath: suggestedName, filters });
       return path ? { name: baseName(path), path } as NativeTarget : null;
@@ -198,14 +218,18 @@ const screenColor: ScreenColorHost = {
 
 /** Tauri implementation of the same optional capability registry as the browser host. */
 export function createTauriHost(options: TauriHostOptions = {}): FileTargetHost {
-  const files = nativeFiles();
   const acceptance = options.acceptanceArchivePath;
+  const files = nativeFiles(acceptance);
+  const constrained = webKitGtkMemoryBudgets(navigator.userAgent);
   const capabilities: HostCapabilityMap = { files, fonts, codecs: { version: 1 }, compute, models, color, screenColor };
   const host: FileTargetHost = {
     defaultProfile: 'pro', capabilities,
     scratchHost: new TauriScratchHost(),
     editorProfile: 'pro',
-    ...(options.tileBudgetBytes === undefined ? {} : { tileBudgetBytes: options.tileBudgetBytes }),
+    ...({ tileBudgetBytes: options.tileBudgetBytes ?? constrained?.tileBudgetBytes,
+      gpuTextureBudgetBytes: options.gpuTextureBudgetBytes ?? constrained?.gpuTextureBudgetBytes,
+      gpuTextureChunkSize: options.gpuTextureChunkSize ?? constrained?.gpuTextureChunkSize,
+      saveWithoutCompositorBarrier: !!constrained }),
     ...(options.controllerReady ? { controllerReady: options.controllerReady } : {}),
     async chooseImages() {
       const selected = await window.__TAURI__.dialog.open({ multiple: true, directory: false, filters: [IMAGE_FILTER] });
@@ -243,7 +267,10 @@ export function createTauriHost(options: TauriHostOptions = {}): FileTargetHost 
       const target = await host.chooseSaveTarget?.(suggestedName, 'project');
       if (target) await host.saveFileTo?.(target, blob);
     },
-    reportError(error) { console.warn(`[Fernwork Bildeditor] ${error.code}: ${error.message}`); },
+    reportError(error) {
+      if (options.reportError) options.reportError(error);
+      else console.warn(`[Fernwork Bildeditor] ${error.code}: ${error.message}`);
+    },
   };
   return bindCapabilityRegistry(host);
 }

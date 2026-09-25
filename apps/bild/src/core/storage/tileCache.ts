@@ -37,6 +37,7 @@ export interface TileBinding {
 interface Entry extends TileAsset {
   value: PixelArray | null;
   persisted: boolean;
+  persisting: Promise<void> | null;
   lastUsed: number;
   pins: number;
   readonly bindings: Map<object, TileBinding>;
@@ -75,7 +76,7 @@ export class TileCache {
     const key = `tiles/${format}-${hash}.bin`;
     let entry = this.entries.get(key);
     if (!entry) {
-      entry = { key, format, byteLength: tile.byteLength, value: tile, persisted: false,
+      entry = { key, format, byteLength: tile.byteLength, value: tile, persisted: false, persisting: null,
         lastUsed: ++this.clock, pins: 0, bindings: new Map() };
       this.entries.set(key, entry);
       this.residentBytesValue += tile.byteLength;
@@ -98,7 +99,7 @@ export class TileCache {
   bind(asset: TileAsset, binding: TileBinding): void {
     let entry = this.entries.get(asset.key);
     if (!entry) {
-      entry = { ...asset, value: null, persisted: true, lastUsed: 0, pins: 0, bindings: new Map() };
+      entry = { ...asset, value: null, persisted: true, persisting: null, lastUsed: 0, pins: 0, bindings: new Map() };
       this.entries.set(asset.key, entry);
     }
     entry.bindings.set(binding.owner, binding);
@@ -117,20 +118,26 @@ export class TileCache {
   async persist(asset: TileAsset): Promise<void> {
     const entry = this.entries.get(asset.key);
     if (!entry) throw new Error(`Unknown tile asset: ${asset.key}`);
-    if (!entry.persisted) {
-      if (!entry.value) throw new Error(`Tile bytes are unavailable: ${asset.key}`);
-      await this.host.write(entry.key, bytesOf(entry.value));
-      entry.persisted = true;
-    }
+    if (entry.persisted) return;
+    if (entry.persisting) return entry.persisting;
+    if (!entry.value) throw new Error(`Tile bytes are unavailable: ${asset.key}`);
+    const value = bytesOf(entry.value);
+    const work = this.host.write(entry.key, value).then(() => { entry.persisted = true; });
+    entry.persisting = work;
+    try { await work; }
+    finally { if (entry.persisting === work) entry.persisting = null; }
   }
 
   async load(asset: TileAsset): Promise<PixelArray> {
     let entry = this.entries.get(asset.key);
     if (entry?.value) { entry.lastUsed = ++this.clock; return entry.value; }
     const bytes = await this.host.read(asset.key);
-    if (!bytes || bytes.byteLength !== asset.byteLength) throw new Error(`Scratch tile is missing or truncated: ${asset.key}`);
+    if (!bytes || bytes.byteLength !== asset.byteLength) {
+      const actual = bytes ? `${bytes.byteLength} bytes` : 'missing';
+      throw new Error(`Scratch tile is missing or truncated: ${asset.key} (expected ${asset.byteLength} bytes, got ${actual})`);
+    }
     const value = asset.format === 'rgba16' ? new Uint16Array(bytes.slice().buffer) : bytes.slice();
-    entry ??= { ...asset, value: null, persisted: true, lastUsed: 0, pins: 0, bindings: new Map() };
+    entry ??= { ...asset, value: null, persisted: true, persisting: null, lastUsed: 0, pins: 0, bindings: new Map() };
     entry.value = value;
     entry.persisted = true;
     entry.lastUsed = ++this.clock;

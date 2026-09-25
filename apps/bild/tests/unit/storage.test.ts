@@ -68,6 +68,24 @@ describe('scratch tile storage', () => {
       if (descriptor) Object.defineProperty(globalThis, 'navigator', descriptor);
       else Reflect.deleteProperty(globalThis, 'navigator');
     }
+  it('coalesces concurrent persistence of one immutable tile', async () => {
+    let writes = 0, unblock!: () => void;
+    const gate = new Promise<void>((resolve) => { unblock = resolve; });
+    class CountingHost extends MemoryScratchHost {
+      override async write(key: string, bytes: Uint8Array, options?: { append?: boolean }): Promise<void> {
+        writes++;
+        await gate;
+        await super.write(key, bytes, options);
+      }
+    }
+    const cache = new TileCache(new CountingHost(), 4);
+    const asset = await cache.store(new Uint8Array([1, 2, 3, 4]), 'rgba8');
+    const first = cache.persist(asset), second = cache.persist(asset);
+    await Promise.resolve();
+    expect(writes).toBe(1);
+    unblock();
+    await Promise.all([first, second]);
+    expect(writes).toBe(1);
   });
 
   it('evicts the least-recently-used immutable tile and reloads its exact bytes', async () => {

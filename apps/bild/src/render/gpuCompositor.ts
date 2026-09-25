@@ -177,7 +177,7 @@ export class GpuCompositor {
   readonly maxTextureSize: number;
   readonly floatTargets: boolean;
   private readonly mesh: Mesh<MeshGeometry, Shader>;
-  private readonly chunkSize: number;
+  private chunkSize: number;
   private readonly passes = new Map<string, Pass>();
   private readonly slots = new Map<string, Slot>();
   private readonly pool: RenderTexture[] = [];
@@ -273,10 +273,23 @@ export class GpuCompositor {
   }
 
   /** Tile RAM and GPU textures have independent caps; hosts may lower this for constrained devices. */
-  configureResidency(options: { textureByteBudget?: number; requestHydration?: (raster: Raster, rect: Rect) => void }): void {
+  configureResidency(options: { textureByteBudget?: number; textureChunkSize?: number;
+    requestHydration?: (raster: Raster, rect: Rect) => void }): void {
     if (options.textureByteBudget !== undefined) {
       if (!Number.isSafeInteger(options.textureByteBudget) || options.textureByteBudget < 0) throw new RangeError('Invalid GPU texture budget');
       this.textureByteBudget = options.textureByteBudget;
+    }
+    if (options.textureChunkSize !== undefined) {
+      const size = options.textureChunkSize;
+      const maximum = Math.floor((this.maxTextureSize - CHUNK_APRON * 2) / TILE) * TILE;
+      if (!Number.isSafeInteger(size) || size < TILE || size > maximum || size % TILE) {
+        throw new RangeError('Invalid GPU texture chunk size');
+      }
+      if (size !== this.chunkSize) {
+        for (const slot of this.slots.values()) for (const chunk of slot.chunks.values()) chunk.source.destroy();
+        this.slots.clear();
+        this.chunkSize = size;
+      }
     }
     this.requestHydration = options.requestHydration ?? null;
     this.collectTextures(true);

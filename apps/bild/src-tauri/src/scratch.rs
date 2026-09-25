@@ -95,7 +95,9 @@ impl ScratchFile {
             }
             .map_err(|error| error.to_string())?;
             map.copy_from_slice(bytes);
-            map.flush().map_err(|error| error.to_string())?;
+            // The mapping is written back by the kernel after it is dropped. Durability is
+            // established by scratch_flush before a journal commit; synchronously flushing every
+            // 256 KiB tile makes large-document eviction both slower and more memory intensive.
         }
         let segment = Segment {
             offset,
@@ -113,6 +115,7 @@ impl ScratchFile {
         Ok(())
     }
 
+    #[cfg(test)]
     fn read(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
         if !valid_key(key) {
             return Err("invalid scratch key".into());
@@ -140,6 +143,37 @@ impl ScratchFile {
             result.extend_from_slice(&map);
         }
         Ok(Some(result))
+    }
+
+    fn read_response(&self, key: &str) -> Result<Vec<u8>, String> {
+        if !valid_key(key) {
+            return Err("invalid scratch key".into());
+        }
+        let Some(segments) = self.index.entries.get(key) else {
+            return Ok(vec![0]);
+        };
+        let length = segments
+            .iter()
+            .try_fold(1usize, |sum, part| sum.checked_add(part.length))
+            .ok_or_else(|| "scratch entry is too large".to_string())?;
+        let mut response = Vec::with_capacity(length);
+        response.push(1);
+        for part in segments {
+            if part.length == 0 {
+                continue;
+            }
+            // Copy each temporary mmap directly into the response allocation. The old path first
+            // built a second complete Vec, doubling every WebKit-to-native scratch read.
+            let map: Mmap = unsafe {
+                MmapOptions::new()
+                    .offset(part.offset)
+                    .len(part.length)
+                    .map(&self.file)
+            }
+            .map_err(|error| error.to_string())?;
+            response.extend_from_slice(&map);
+        }
+        Ok(response)
     }
 
     fn remove(&mut self, key: &str) -> Result<(), String> {
@@ -210,16 +244,11 @@ pub fn scratch_write(state: State<'_, ScratchManager>, request: Request<'_>) -> 
 
 #[tauri::command]
 pub fn scratch_read(state: State<'_, ScratchManager>, key: String) -> Result<Response, String> {
-    let value = state
+    let response = state
         .0
         .lock()
         .map_err(|_| "scratch lock is poisoned".to_string())?
-        .read(&key)?;
-    let mut response = Vec::with_capacity(value.as_ref().map_or(1, |bytes| bytes.len() + 1));
-    response.push(u8::from(value.is_some()));
-    if let Some(bytes) = value {
-        response.extend(bytes);
-    }
+        .read_response(&key)?;
     Ok(Response::new(response))
 }
 

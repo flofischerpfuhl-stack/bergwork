@@ -8,6 +8,7 @@ import type { EditorController } from '../ui/controller';
 export interface LargeDocumentIo {
   save(): Promise<{ readonly archive: Blob; readonly bytes: number }>;
   closeAndReopen(archive: Blob): Promise<void>;
+  stage?(snapshot: LargeDocumentMemorySnapshot): void | Promise<void>;
 }
 
 export interface LargeDocumentMetrics {
@@ -26,6 +27,18 @@ export interface LargeDocumentMetrics {
   readonly reopenMs: number;
   readonly archiveBytes: number;
   readonly verifiedSamples: number;
+  readonly memorySnapshots: readonly LargeDocumentMemorySnapshot[];
+}
+
+export interface LargeDocumentMemorySnapshot {
+  readonly stage: string;
+  readonly elapsedMs: number;
+  readonly tileResidentBytes: number;
+  readonly scratchBytes: number;
+  readonly gpuTextureBytes: number;
+  readonly gpuTextureChunks: number;
+  readonly jsHeapUsedBytes?: number;
+  readonly jsHeapTotalBytes?: number;
 }
 
 const WIDTH = 20_000, HEIGHT = 10_000;
@@ -34,24 +47,32 @@ function percentile95(values: readonly number[]): number {
   return [...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1]!;
 }
 
-async function aesKey(): Promise<CryptoKey> {
-  return crypto.subtle.importKey('raw', new Uint8Array([
-    0x46, 0x65, 0x72, 0x6e, 0x77, 0x6f, 0x72, 0x6b, 0x2d, 0x41, 0x34, 0x63, 0x2d, 0x32, 0x30, 0x30,
-  ]), 'AES-CTR', false, ['encrypt']);
+const PATTERN_COUNT = 256;
+
+function generatedPatterns(): Uint8Array {
+  const bytes = new Uint8Array(PATTERN_COUNT * TILE * TILE * 4);
+  const words = new Uint32Array(bytes.buffer);
+  let state = 0x4645524e;
+  for (let index = 0; index < words.length; index++) {
+    state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
+    words[index] = state >>> 0;
+  }
+  return bytes;
 }
 
-async function generatedRaster(layerIndex: number, width: number, height: number, key: CryptoKey): Promise<Raster> {
+function generatedRaster(layerIndex: number, width: number, height: number, patterns: Uint8Array): Raster {
   const cols = Math.ceil(width / TILE), rows = Math.ceil(height / TILE);
   const tiles: Uint8Array[] = new Array(cols * rows);
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
       const tileWidth = Math.min(TILE, width - col * TILE), tileHeight = Math.min(TILE, height - row * TILE);
-      const tileNumber = BigInt(layerIndex * 100_000 + row * cols + col);
-      const counter = new Uint8Array(16);
-      new DataView(counter.buffer).setBigUint64(8, tileNumber * 16_384n, false);
-      const encrypted = await crypto.subtle.encrypt({ name: 'AES-CTR', counter, length: 64 }, key,
-        new Uint8Array(tileWidth * tileHeight * 4));
-      tiles[row * cols + col] = new Uint8Array(encrypted);
+      const tileNumber = layerIndex * 100_000 + row * cols + col;
+      const length = tileWidth * tileHeight * 4;
+      const start = (tileNumber & (PATTERN_COUNT - 1)) * TILE * TILE * 4;
+      const tile = patterns.slice(start, start + length);
+      const view = new DataView(tile.buffer);
+      view.setUint32(0, layerIndex, true); view.setUint32(4, tileNumber, true);
+      tiles[row * cols + col] = tile;
     }
   }
   return new Raster(width, height, 4 as Channels, tiles, { id: `a4c-raster-${layerIndex}` });
@@ -68,12 +89,29 @@ function context(controller: EditorController, x: number, y: number): ToolContex
 /** Deterministic, tile-at-a-time A4 acceptance exercise shared by Chromium and packaged Tauri. */
 export async function runLargeDocumentAcceptance(controller: EditorController, io: LargeDocumentIo): Promise<LargeDocumentMetrics> {
   if (!controller.residency || !controller.canvasView) throw new Error('Large-document acceptance needs scratch storage and a canvas');
-  const key = await aesKey(), layers: Layer[] = [], samples = new Map<string, readonly number[]>();
+  // WebKitGTK/JSC 2.52 retains WebCrypto result ArrayBuffers until severe process pressure. A4c's
+  // AES generator therefore accumulated many times the live raster bytes. This deterministic bank
+  // remains incompressible at PNG's 32 KiB window while using ordinary, promptly collectable arrays.
+  const patterns = generatedPatterns(), layers: Layer[] = [], samples = new Map<string, readonly number[]>();
+  const memorySnapshots: LargeDocumentMemorySnapshot[] = [];
+  const startedAt = performance.now();
+  const snapshot = async (stage: string): Promise<void> => {
+    const memory = (performance as Performance & { memory?: { usedJSHeapSize: number; totalJSHeapSize: number } }).memory;
+    const value: LargeDocumentMemorySnapshot = { stage, elapsedMs: performance.now() - startedAt,
+      tileResidentBytes: controller.residency!.cache.residentBytes,
+      scratchBytes: controller.residency!.cache.persistedBytes,
+      gpuTextureBytes: controller.canvasView?.gpu?.textureBytes ?? 0,
+      gpuTextureChunks: controller.canvasView?.gpu?.textureChunkCount ?? 0,
+      ...(memory ? { jsHeapUsedBytes: memory.usedJSHeapSize, jsHeapTotalBytes: memory.totalJSHeapSize } : {}) };
+    memorySnapshots.push(value);
+    await io.stage?.(value);
+  };
   let logicalLayerPixels = 0;
   const createStart = performance.now();
+  await snapshot('start');
   for (let index = 0; index < 20; index++) {
     const width = index < 5 ? WIDTH : [2_000, 4_000, 6_000][(index - 5) % 3]!;
-    const height = HEIGHT, raster = await generatedRaster(index, width, height, key);
+    const height = HEIGHT, raster = generatedRaster(index, width, height, patterns);
     const sampleX = Math.min(width - 1, 997 + index * 31), sampleY = 733 + index * 17;
     samples.set(`a4c-layer-${index}`, raster.pixel(sampleX, sampleY));
     const x = index < 5 ? 0 : Math.floor((WIDTH - width) * ((index % 5) / 4));
@@ -81,6 +119,7 @@ export async function runLargeDocumentAcceptance(controller: EditorController, i
       transform: makeTransform({ x, y: 0 }, { width, height }) }));
     logicalLayerPixels += width * height;
     await controller.residency.manage(raster, index === 19 ? 'visible' : 'offscreen');
+    await snapshot(`created-${index + 1}`);
     console.info(`[A4c] generated and swapped layer ${index + 1}/20`);
   }
   controller.session.installProject({ id: 'a4c-200mp', width: WIDTH, height: HEIGHT, resolution: 72,
@@ -98,6 +137,7 @@ export async function runLargeDocumentAcceptance(controller: EditorController, i
       controller.session.viewport.center, controller.session.document!);
   }
   console.info('[A4c] completed fit pan/zoom');
+  await snapshot('fit-navigation');
   controller.session.viewport.setZoom(1, controller.session.viewport.center, controller.session.document!);
   const at100: number[] = [];
   for (let i = 0; i < 8; i++) {
@@ -105,6 +145,7 @@ export async function runLargeDocumentAcceptance(controller: EditorController, i
     at100.push(view.renderNow());
     await controller.whenFullyResolved();
   }
+  await snapshot('100-percent-navigation');
   controller.session.selectLayer(layers[0]!.id);
   controller.session.selectTool('brush');
   setBrushSettings(controller.session, { ...getBrushSettings(controller.session), diameter: 180, hardness: 0.65 });
@@ -119,17 +160,21 @@ export async function runLargeDocumentAcceptance(controller: EditorController, i
   brush.up(context(controller, 9_700, 4_900));
   await controller.whenFullyResolved();
   const strokeCommitMs = performance.now() - strokeStart;
+  await snapshot('stroke');
   const adjustmentStart = performance.now();
   controller.session.addAdjustment('Levels');
   controller.session.adjustmentEditingId = null;
   if (!controller.session.undo() || !controller.session.redo()) throw new Error('Adjustment undo/redo failed');
   const adjustmentUndoRedoMs = performance.now() - adjustmentStart;
   console.info('[A4c] completed stroke and adjustment undo/redo');
+  await snapshot('adjustment-undo-redo');
   const saveStart = performance.now(), saved = await io.save(), saveMs = performance.now() - saveStart;
   console.info(`[A4c] saved ${saved.bytes} bytes`);
+  await snapshot('save');
   const reopenStart = performance.now();
   await io.closeAndReopen(saved.archive);
   console.info('[A4c] reopened archive');
+  await snapshot('reopen');
   const reopenMs = performance.now() - reopenStart;
   const restored = controller.session.document;
   if (!restored || restored.width !== WIDTH || restored.height !== HEIGHT) throw new Error('Reopened document dimensions differ');
@@ -148,5 +193,5 @@ export async function runLargeDocumentAcceptance(controller: EditorController, i
   return { dimensions: [WIDTH, HEIGHT], rasterLayers: 20, logicalLayerPixels, createImportMs,
     scratchBytes: controller.residency.cache.persistedBytes, residentBytes: controller.residency.cache.residentBytes,
     fitPanZoomP95Ms: percentile95(fit), pan100P95Ms: percentile95(at100), firstStrokeHydrationMs,
-    strokeCommitMs, adjustmentUndoRedoMs, saveMs, reopenMs, archiveBytes: saved.bytes, verifiedSamples };
+    strokeCommitMs, adjustmentUndoRedoMs, saveMs, reopenMs, archiveBytes: saved.bytes, verifiedSamples, memorySnapshots };
 }
