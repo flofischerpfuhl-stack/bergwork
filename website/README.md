@@ -108,6 +108,8 @@ Cloudflare Workers Builds deploys every push to `main` automatically; other bran
 
 A manual deploy from `website/` is `node build.mjs && npx wrangler deploy`.
 
+`www.bergwork.app` is served by the separate `bergwork-www-redirect` Worker in `www-redirect/`, which answers every request with a 301 to the same path on `bergwork.app`. It is not part of Workers Builds; deploy changes to it by hand with `npx wrangler deploy` from `website/www-redirect/`.
+
 ## Quality checks
 
 Run after a build:

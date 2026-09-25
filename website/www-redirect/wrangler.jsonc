@@ -1,0 +1,12 @@
+// Redirects www.bergwork.app to bergwork.app, keeping path and query.
+// Deployed by hand (not by Workers Builds): npx wrangler deploy (working directory website/www-redirect/)
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "bergwork-www-redirect",
+  "main": "index.js",
+  "compatibility_date": "2026-09-25",
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "www.bergwork.app", "custom_domain": true }
+  ]
+}
