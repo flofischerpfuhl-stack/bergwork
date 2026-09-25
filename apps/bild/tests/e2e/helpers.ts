@@ -25,7 +25,7 @@ export async function mountForTest(page: Page, options: { locale?: 'de' | 'en'; 
         (w.__targetWrites as unknown[]).push({ op: 'as', name, kind, answer });
         return answer === 'cancel' ? null : { name: answer };
       },
-      async saveFileTo(target: { name: string }, blob: Blob) { (w.__targetWrites as unknown[]).push({ op: 'to', name: target.name, size: blob.size }); },
+      async saveFileTo(target: { name: string }, blob: Blob) { (w.__targetWrites as unknown[]).push({ op: 'to', name: target.name, size: blob.size, blob }); },
     } : {};
     const w = window as unknown as Record<string, unknown>;
     w.__saved = [];
