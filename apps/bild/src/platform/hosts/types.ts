@@ -1,5 +1,6 @@
 import type { HostAdapter } from '../../../contracts';
 import type { PdfPlacementHost } from '../../io/pdf';
+import type { RawDecodeOptions } from '../../io/dng';
 
 export interface VersionedCapability { readonly version: number }
 
@@ -58,10 +59,22 @@ export interface HostDecodedImage {
   readonly orientation?: ExifOrientation;
 }
 
+export interface HostDecodedRaw {
+  readonly width: number;
+  readonly height: number;
+  /** Straight-alpha, colour-converted 16-bit RGBA in the requested working colour space. */
+  readonly rgba: Uint16Array;
+}
+
 /** Fallback: browser and opt-in WASM codecs. */
 export interface CodecHost extends VersionedCapability {
   readonly version: 1;
   decodeImage?(bytes: Uint8Array, mime: string): Promise<HostDecodedImage | null>;
+  /** OS codec (WIC) or an explicitly enabled, system-installed codec (LibRaw); never a bundled RAW library. */
+  decodeRaw?(bytes: Uint8Array, options: RawDecodeOptions): Promise<HostDecodedRaw | null>;
+  readonly rawBackend?: 'wic' | 'system-libraw';
+  systemRawEnabled?(): boolean;
+  setSystemRawEnabled?(enabled: boolean): void;
   readonly heicDecoder?: 'lgpl-wasm';
 }
 

@@ -544,6 +544,21 @@ HEVC/H.265 is covered by patents in a number of jurisdictions. The LGPL
 licences for libheif and libde265 do not grant patent licences; distributors
 are responsible for assessing any patent-licensing obligations.
 
+## Optional system RAW decoder (not loaded by default)
+
+On Linux only, the user may enable “Use system LibRaw (LGPL)” in Preferences.
+Fernwork does not contain, link at build time, download, or redistribute LibRaw;
+the Tauri host then opens a compatible `libraw.so` already installed by the
+operating system. LibRaw is available under LGPL-2.1-or-later or CDDL-1.0 at the
+user/distributor's choice. Its source and licence notices are provided by the
+system package and at https://www.libraw.org/. Disabling the preference prevents
+the library from being opened. Windows RAW uses the operating system's WIC codec
+(including the separately installed Microsoft Raw Image Extension).
+
+The native host uses `libloading` 0.8 (ISC) solely to resolve that optional
+system library at runtime. The exact Rust crate version is pinned in
+`src-tauri/Cargo.lock`.
+
 The test file `tests/e2e/heic-quadrants.heic` was generated for this project
 from an original 64×64 red/green image using Ubuntu libheif 1.17.6 and x265
 3.5 (`heif-enc --quality 95`). It contains no third-party artwork. Its SHA-256

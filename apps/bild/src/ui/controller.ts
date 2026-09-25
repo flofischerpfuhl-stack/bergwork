@@ -44,6 +44,7 @@ import { waitForBrushStroke } from '../core/brush';
 import { translator, type Locale } from './i18n';
 import { createUiStore, type Dialog, type UiStore } from './store';
 import { describeError, isCancellation } from './errors';
+import type { RawDecodeOptions } from '../io/dng';
 
 export interface ColorPickRequest {
   readonly title: string;
@@ -111,6 +112,8 @@ export class EditorController {
   readonly locale: Locale;
   readonly theme: 'dark' | 'light';
   readonly ui: UiStore = createUiStore();
+  /** Installed by the RAW UI module; null means the user cancelled RAW files in this import batch. */
+  requestRawImportOptions: ((files: readonly File[]) => Promise<RawDecodeOptions | null>) | null = null;
   private readonly imports: ImportQueue;
   canvas: CanvasHost | null = null;
   /** The mounted canvas view (tools, overlay painters, touch toggles). */
@@ -134,6 +137,8 @@ export class EditorController {
   canvasSetups: ((view: CanvasView) => void)[] = [];
   /** Extra dialogs by kind (Canvas Size, Image Size, adjustment panels…). */
   dialogs: Record<string, (close: () => void) => ReactNode> = {};
+  /** Optional cancellation for custom dialogs that own a pending promise. */
+  customDialogDismissers: Record<string, (() => void) | undefined> = {};
   /** Module key handlers; return true when the key was handled. */
   keyHandlers: ((event: KeyboardEvent) => boolean)[] = [];
   /** Non-modal panels drawn over the canvas (adjustment and filter panels). */
@@ -271,8 +276,8 @@ export class EditorController {
   }
 
   /** Uses optional capabilities carried by the mount host without widening contracts.ts. */
-  decodeImage(bytes: Uint8Array, remainingPixels: number) {
-    return decodeImageFile(bytes, remainingPixels, { host: this.capabilities.codecs, maxSide: this.limits.maxSide });
+  decodeImage(bytes: Uint8Array, remainingPixels: number, raw?: RawDecodeOptions) {
+    return decodeImageFile(bytes, remainingPixels, { host: this.capabilities.codecs, maxSide: this.limits.maxSide, raw });
   }
 
   get session(): EditorSession { return this.workspace.current.session; }
@@ -479,7 +484,7 @@ export class EditorController {
     this.alert(this.t('Fernwork Image Editor'), [
       this.t('Works offline. No account, no telemetry.'),
       this.t('Parts of this editor are based on Compositor by Wonder Assembly LLC (MIT License).'),
-      this.t('Third-party components and their licences include libwebp (BSD), libavif (BSD), dav1d (BSD), libaom (BSD), libjpeg-turbo (IJG/BSD), lcms / Little CMS (MIT), ONNX Runtime Web (MIT), CanvasKit/Skia (BSD-3-Clause), PixiJS, React, zustand, immer, idb, fflate (MIT/ISC), U²-Netp (Apache-2.0), and the optional downloads BiRefNet (MIT), SlimSAM (Apache-2.0), MI-GAN (MIT) and Real-ESRGAN (BSD-3-Clause). libheif is an opt-in HEIC capability (LGPL-3.0) and is not loaded by default. See THIRD_PARTY_NOTICES.md for the complete inventory.'),
+      this.t('Third-party components and their licences include libwebp (BSD), libavif (BSD), dav1d (BSD), libaom (BSD), libjpeg-turbo (IJG/BSD), lcms / Little CMS (MIT), ONNX Runtime Web (MIT), CanvasKit/Skia (BSD-3-Clause), PixiJS, React, zustand, immer, idb, fflate (MIT/ISC), U²-Netp (Apache-2.0), and the optional downloads BiRefNet (MIT), SlimSAM (Apache-2.0), MI-GAN (MIT) and Real-ESRGAN (BSD-3-Clause). libheif and system LibRaw are opt-in LGPL capabilities and are not loaded by default. See THIRD_PARTY_NOTICES.md for the complete inventory.'),
     ].join('\n\n'));
   }
   confirm(title: string, message: string, buttons: Extract<Dialog, { kind: 'confirm' }>['buttons']): Promise<string> {
@@ -522,7 +527,7 @@ export class EditorController {
   async importFiles(files: readonly File[], into: ProjectTab = this.workspace.current, point: { x: number; y: number } | null = null,
     importPsdAsLayers = false): Promise<string[]> {
     const psd = files.filter((file) => /\.ps[db]$/i.test(file.name));
-    const images = files.filter((file) => !/\.ps[db]$/i.test(file.name));
+    let images = files.filter((file) => !/\.ps[db]$/i.test(file.name));
     const psdIds: string[] = [];
     for (const file of psd) {
       try {
@@ -533,11 +538,14 @@ export class EditorController {
         this.reportError('import-failed', error, this.t('Import couldn’t finish'));
       }
     }
+    const rawFiles = images.filter((file) => /\.(?:dng|3fr|arw|cr2|cr3|erf|kdc|mos|mrw|nef|nrw|orf|pef|raf|raw|rw2|rwl|srw)$/i.test(file.name));
+    const rawOptions = rawFiles.length && this.requestRawImportOptions ? await this.requestRawImportOptions(rawFiles) : undefined;
+    if (rawOptions === null) images = images.filter((file) => !rawFiles.includes(file));
     const result = await this.imports.enqueue(into.session, images.map((file) => ({
       name: file.name,
       layerName: fileBaseName(file.name),
       read: async () => new Uint8Array(await file.arrayBuffer()),
-    })), { point });
+    })), { point, ...(rawOptions ? { decoder: (bytes, remaining) => this.decodeImage(bytes, remaining, rawOptions) } : {}) });
     const message = failureMessage(result);
     if (message) this.reportError('import-failed', new Error(message), this.t('Import couldn’t finish'));
     return [...psdIds, ...result.layerIds];

@@ -260,7 +260,7 @@ export function createBrowserHost(): FileTargetHost {
     ...(OpfsScratchHost.available() || typeof indexedDB !== 'undefined'
       ? { scratchHost: new BrowserScratchHost(), editorProfile: 'lite' as const } : {}),
     async chooseImages() {
-      return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,image/webp,image/avif,image/gif,image/vnd.adobe.photoshop,.heic,.heif,.tif,.tiff,.webp,.avif,.gif,.psd,.psb', true);
+      return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,image/webp,image/avif,image/gif,image/x-adobe-dng,image/vnd.adobe.photoshop,.heic,.heif,.tif,.tiff,.webp,.avif,.gif,.dng,.psd,.psb', true);
     },
     async chooseContent() {
       return pick('image/jpeg,image/png,image/heic,image/heif,image/tiff,image/webp,image/avif,image/gif,image/svg+xml,application/pdf,application/zip,.heic,.heif,.tif,.tiff,.webp,.avif,.gif,.svg,.pdf,.fwimg', false);

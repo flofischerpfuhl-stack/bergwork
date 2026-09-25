@@ -1,13 +1,15 @@
 import type { FileByteSink, FileTargetHost, SaveTarget } from '../../src/platform/browserHost';
 import { sha256Hex } from '../../src/io/sha256';
-import type { ColorHost, ComputeHost, FileSystemHost, FontHost, HostCapabilityMap, HostFileReference, ModelHost, ScreenColorHost } from '../../src/platform/hosts';
+import type { CodecHost, ColorHost, ComputeHost, FileSystemHost, FontHost, HostCapabilityMap, HostFileReference, ModelHost, ScreenColorHost } from '../../src/platform/hosts';
 import { bindCapabilityRegistry } from '../../src/platform/hosts';
 import { requireScratchKey, type ScratchHost } from '../../src/platform/scratchHost';
 import { webKitGtkMemoryBudgets } from '../../src/platform/runtimeMemory';
 import type { EditorController } from '../../src/ui/controller';
+import { invokeRawDecoder, rawBackendFor } from './rawCodec';
 
 interface NativeTarget extends SaveTarget { readonly path: string }
-const IMAGE_FILTER = { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif', 'tif', 'tiff', 'heic', 'heif', 'psd', 'psb'] };
+const RAW_EXTENSIONS = ['dng', '3fr', 'arw', 'cr2', 'cr3', 'erf', 'kdc', 'mos', 'mrw', 'nef', 'nrw', 'orf', 'pef', 'raf', 'raw', 'rw2', 'rwl', 'srw'];
+const IMAGE_FILTER = { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif', 'tif', 'tiff', 'heic', 'heif', 'psd', 'psb', ...RAW_EXTENSIONS] };
 const CONTENT_FILTER = { name: 'Placeable content', extensions: ['png', 'jpg', 'jpeg', 'webp', 'avif', 'gif', 'tif', 'tiff', 'heic', 'heif', 'svg', 'pdf', 'fwimg'] };
 const PROJECT_FILTER = { name: 'Fernwork image project or PSD', extensions: ['fwimg', 'zip', 'psd', 'psb'] };
 const BATCH_FILTER = { name: 'Images and projects', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff', 'heic', 'heif', 'psd', 'psb', 'fwimg'] };
@@ -244,12 +246,23 @@ const screenColor: ScreenColorHost = {
   },
 };
 
+const isWindows = rawBackendFor(navigator.userAgent) === 'wic';
+const rawPreferenceKey = 'fernwork.useSystemLibRaw';
+const codecs: CodecHost = {
+  version: 1,
+  rawBackend: isWindows ? 'wic' : 'system-libraw',
+  systemRawEnabled: () => isWindows || globalThis.localStorage?.getItem(rawPreferenceKey) === 'on',
+  setSystemRawEnabled(enabled) { if (!isWindows) globalThis.localStorage?.setItem(rawPreferenceKey, enabled ? 'on' : 'off'); },
+  decodeRaw(bytes, options) { return invokeRawDecoder(window.__TAURI__.core.invoke, bytes, options,
+    this.systemRawEnabled?.() ?? false, isWindows ? 'srgb' : 'linear-prophoto'); },
+};
+
 /** Tauri implementation of the same optional capability registry as the browser host. */
 export function createTauriHost(options: TauriHostOptions = {}): FileTargetHost {
   const acceptance = options.acceptanceArchivePath;
   const files = nativeFiles(acceptance);
   const constrained = webKitGtkMemoryBudgets(navigator.userAgent);
-  const capabilities: HostCapabilityMap = { files, fonts, codecs: { version: 1 }, compute, models, color, screenColor };
+  const capabilities: HostCapabilityMap = { files, fonts, codecs, compute, models, color, screenColor };
   const host: FileTargetHost = {
     defaultProfile: 'pro', capabilities,
     scratchHost: new TauriScratchHost(),
