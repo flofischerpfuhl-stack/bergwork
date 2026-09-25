@@ -47,6 +47,28 @@ export function isValidLayerEffect(value: unknown): value is LayerEffect {
     && effect.contour === 'linear' && effect.noise === 0;
   if (effect.kind === 'colorOverlay') return range(effect.opacity, 0, 1) && rgb(effect.color)
     && (effect.blendMode === undefined || mode(effect.blendMode));
-  return effect.kind === 'gradientOverlay' && range(effect.opacity, 0, 1) && mode(effect.blendMode)
+  if (effect.kind === 'gradientOverlay') return range(effect.opacity, 0, 1) && mode(effect.blendMode)
     && number(effect.angle) && range(effect.scale, 1, 10_000) && gradient(effect.gradient);
+  if (effect.kind === 'innerShadow') return range(effect.opacity, 0, 1) && mode(effect.blendMode) && rgb(effect.color)
+    && number(effect.angle) && typeof effect.useGlobalLight === 'boolean' && range(effect.distance, 0, 10_000)
+    && range(effect.choke, 0, 100) && range(effect.size, 0, 10_000) && effect.contour === 'linear';
+  if (effect.kind === 'innerGlow') return range(effect.opacity, 0, 1) && mode(effect.blendMode) && rgb(effect.color)
+    && ['edge', 'center'].includes(effect.source ?? '') && range(effect.choke, 0, 100)
+    && range(effect.size, 0, 10_000) && effect.contour === 'linear';
+  if (effect.kind === 'bevelEmboss') return ['innerBevel', 'outerBevel', 'emboss', 'pillowEmboss'].includes(effect.style ?? '')
+    && ['smooth', 'chiselHard', 'chiselSoft'].includes(effect.technique ?? '') && range(effect.depth, 1, 1000)
+    && ['up', 'down'].includes(effect.direction ?? '') && range(effect.size, 0, 250) && range(effect.soften, 0, 16)
+    && number(effect.angle) && range(effect.altitude, 0, 90) && typeof effect.useGlobalLight === 'boolean'
+    && mode(effect.highlightMode) && rgb(effect.highlightColor) && range(effect.highlightOpacity, 0, 1)
+    && mode(effect.shadowMode) && rgb(effect.shadowColor) && range(effect.shadowOpacity, 0, 1)
+    && effect.glossContour === 'linear';
+  if (effect.kind === 'satin') return range(effect.opacity, 0, 1) && mode(effect.blendMode) && rgb(effect.color)
+    && number(effect.angle) && range(effect.distance, 0, 10_000) && range(effect.size, 0, 250)
+    && typeof effect.invert === 'boolean' && effect.contour === 'linear';
+  return effect.kind === 'patternOverlay' && range(effect.opacity, 0, 1) && mode(effect.blendMode)
+    && typeof effect.resourceId === 'string' && effect.resourceId.length > 0
+    && Number.isInteger(effect.patternWidth) && range(effect.patternWidth, 1, 30_000)
+    && Number.isInteger(effect.patternHeight) && range(effect.patternHeight, 1, 30_000)
+    && range(effect.scale, 1, 10_000) && number(effect.angle) && typeof effect.linkWithLayer === 'boolean'
+    && (effect.phase === undefined || (number(effect.phase.x) && number(effect.phase.y)));
 }

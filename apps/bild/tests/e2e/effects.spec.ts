@@ -34,13 +34,28 @@ test('layer effects render identically through WebGL2 and the software reference
           { offset: 0, color: { red: 0, green: 0, blue: 0 }, opacity: 1 },
           { offset: 1, color: { red: 1, green: 1, blue: 1 }, opacity: 1 },
         ] } },
+      { kind: 'innerShadow', schemaVersion: 1, enabled: true, opacity: 0.55, blendMode: 'multiply',
+        color: { red: 0.1, green: 0.05, blue: 0 }, angle: 210, useGlobalLight: true,
+        distance: 2, choke: 10, size: 3, contour: 'linear' },
+      { kind: 'innerGlow', schemaVersion: 1, enabled: true, opacity: 0.4, blendMode: 'screen',
+        color: { red: 1, green: 0.8, blue: 0.2 }, source: 'edge', choke: 5, size: 2, contour: 'linear' },
+      { kind: 'bevelEmboss', schemaVersion: 1, enabled: true, style: 'innerBevel', technique: 'smooth', depth: 120,
+        direction: 'up', size: 2, soften: 1, angle: 210, altitude: 30, useGlobalLight: true,
+        highlightMode: 'screen', highlightColor: { red: 1, green: 1, blue: 1 }, highlightOpacity: 0.6,
+        shadowMode: 'multiply', shadowColor: { red: 0, green: 0, blue: 0 }, shadowOpacity: 0.5, glossContour: 'linear' },
+      { kind: 'satin', schemaVersion: 1, enabled: true, opacity: 0.3, blendMode: 'multiply',
+        color: { red: 0.2, green: 0, blue: 0.4 }, angle: 25, distance: 2, size: 3, invert: false, contour: 'linear' },
+      { kind: 'patternOverlay', schemaVersion: 1, enabled: true, opacity: 0.2, blendMode: 'normal',
+        resourceId: 'test-pattern', patternWidth: 2, patternHeight: 2, scale: 100, angle: 20, linkWithLayer: true },
     ];
     const background = newLayer({ id: 'bg', name: 'Background', raster: Raster.fromPixels(width, height, 4,
       new Uint8Array(width * height * 4).fill(255)), transform: makeTransform({ x: 0, y: 0 }, { width, height }, { sampling: 'Nearest' }) });
     const styled = newLayer({ id: 'styled', name: 'Styled', raster: Raster.fromPixels(8, 6, 4, pixels), effects,
       opacity: 0.8, fillOpacity: 0.65, transform: makeTransform({ x: 8, y: 6 }, { width: 8, height: 6 }, { sampling: 'Nearest' }) });
     const document = { id: 'effects', width, height, resolution: 72, globalLightAngle: 210,
-      layers: [background, styled], selection: null };
+      resources: [{ id: 'test-pattern', role: 'pattern', mime: 'application/x-fernwork-rgba8', bytes: new Uint8Array([
+        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+      ]) }], layers: [background, styled], selection: null };
     const canvas = globalThis.document.createElement('canvas'); globalThis.document.body.append(canvas);
     const gpu = await GpuCompositor.create(canvas, 1, 1);
     const actual = gpu.readRegion(document, 0, 0, width, height) as Uint8Array;

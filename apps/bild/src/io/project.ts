@@ -929,7 +929,7 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
         || !num(record.fillOpacity) || record.fillOpacity < 0 || record.fillOpacity > 1
         || !BLEND_MODE_SET.has(record.blendMode) || !isLayerTransform(record.transform) || !validWarp(record.warp)
         || !validLocks(record.locks) || !['none', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray'].includes(record.colorLabel)
-        || !Array.isArray(record.effects) || !record.effects.every(validEffect)
+        || !Array.isArray(record.effects) || !record.effects.every((effect: import('../../contracts-v2').EffectRecordV2) => validEffect(effect, records))
         || !Array.isArray(record.filters) || !record.filters.every(validLiveFilter)
         || !validVectorMaskRecord(record.vectorMask)) invalid('v2 layer');
       ids.add(record.id);
@@ -1150,7 +1150,8 @@ function validFill(value: import('../../contracts-v2').FillRecordV2, assets: Rea
     && num(value.scale) && value.scale > 0 && num(value.angle);
 }
 
-function validEffect(value: import('../../contracts-v2').EffectRecordV2): boolean {
+function validEffect(value: import('../../contracts-v2').EffectRecordV2,
+  assets: ReadonlyMap<string, AssetRecordV2>): boolean {
   if (!value || value.schemaVersion !== 1 || typeof value.enabled !== 'boolean') return false;
   if (value.kind === 'dropShadow') return validRgb(value.color)
     && unit(value.opacity) && num(value.angle) && range(value.distance, 0, 10_000) && range(value.blur, 0, 10_000)
@@ -1167,8 +1168,30 @@ function validEffect(value: import('../../contracts-v2').EffectRecordV2): boolea
     && BLEND_MODE_SET.has(value.blendMode) && value.contour === 'linear' && value.noise === 0;
   if (value.kind === 'gradientOverlay') return unit(value.opacity) && num(value.angle) && range(value.scale, 1, 10_000)
     && BLEND_MODE_SET.has(value.blendMode) && validEffectGradient(value.gradient);
-  return value.kind === 'colorOverlay' && validRgb(value.color) && unit(value.opacity)
+  if (value.kind === 'colorOverlay') return validRgb(value.color) && unit(value.opacity)
     && (value.blendMode === undefined || BLEND_MODE_SET.has(value.blendMode));
+  if (value.kind === 'innerShadow') return validRgb(value.color) && unit(value.opacity) && BLEND_MODE_SET.has(value.blendMode)
+    && num(value.angle) && typeof value.useGlobalLight === 'boolean' && range(value.distance, 0, 10_000)
+    && range(value.choke, 0, 100) && range(value.size, 0, 10_000) && value.contour === 'linear';
+  if (value.kind === 'innerGlow') return validRgb(value.color) && unit(value.opacity) && BLEND_MODE_SET.has(value.blendMode)
+    && ['edge', 'center'].includes(value.source) && range(value.choke, 0, 100) && range(value.size, 0, 10_000)
+    && value.contour === 'linear';
+  if (value.kind === 'bevelEmboss') return ['innerBevel', 'outerBevel', 'emboss', 'pillowEmboss'].includes(value.style)
+    && ['smooth', 'chiselHard', 'chiselSoft'].includes(value.technique) && range(value.depth, 1, 1000)
+    && ['up', 'down'].includes(value.direction) && range(value.size, 0, 250) && range(value.soften, 0, 16)
+    && num(value.angle) && range(value.altitude, 0, 90) && typeof value.useGlobalLight === 'boolean'
+    && BLEND_MODE_SET.has(value.highlightMode) && validRgb(value.highlightColor) && unit(value.highlightOpacity)
+    && BLEND_MODE_SET.has(value.shadowMode) && validRgb(value.shadowColor) && unit(value.shadowOpacity)
+    && value.glossContour === 'linear';
+  if (value.kind === 'satin') return validRgb(value.color) && unit(value.opacity) && BLEND_MODE_SET.has(value.blendMode)
+    && num(value.angle) && range(value.distance, 0, 10_000) && range(value.size, 0, 250)
+    && typeof value.invert === 'boolean' && value.contour === 'linear';
+  return value.kind === 'patternOverlay' && unit(value.opacity) && BLEND_MODE_SET.has(value.blendMode)
+    && typeof value.resourceId === 'string' && assets.get(value.resourceId)?.role === 'pattern'
+    && Number.isInteger(value.patternWidth) && range(value.patternWidth, 1, 30_000)
+    && Number.isInteger(value.patternHeight) && range(value.patternHeight, 1, 30_000)
+    && range(value.scale, 1, 10_000) && num(value.angle) && typeof value.linkWithLayer === 'boolean'
+    && (value.phase === undefined || (num(value.phase.x) && num(value.phase.y)));
 }
 
 function range(value: unknown, minimum: number, maximum: number): value is number {

@@ -4,7 +4,7 @@ import type { HostAdapter } from '../../contracts';
 import { applyAdjustment } from '../../src/core/adjust/apply';
 import { curvesTables } from '../../src/core/adjust/levels';
 import { defaultCurves, defaultHueSaturation } from '../../src/core/adjustments';
-import { newLayer, type CanvasDocument, type Layer, type LayerAdjustment } from '../../src/core/document';
+import { newLayer, type CanvasDocument, type LayerAdjustment } from '../../src/core/document';
 import { renderPsdInnerEffectPasses } from '../../src/core/effects/render';
 import { makeTransform } from '../../src/core/geometry';
 import { Raster } from '../../src/core/raster';
@@ -59,12 +59,12 @@ describe('PSD colour modes and product wiring', () => {
     const transform = makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 });
     const base = newLayer({ id: 'pattern', name: 'pattern', transform,
       raster: Raster.fromPixels(2, 1, 4, new Uint8Array([0, 0, 0, 255, 0, 0, 0, 255])) });
-    const patterned = { ...base, psdPatternOverlays: [{
-      pattern: Raster.fromPixels(2, 1, 4, new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255])),
-      opacity: 1, blendMode: 'normal', scale: 1, phase: { x: 0, y: 0 }, align: true,
-    }] } as Layer & { readonly psdPatternOverlays: readonly unknown[] };
+    const patterned = { ...base, effects: [{ kind: 'patternOverlay' as const, schemaVersion: 1 as const, enabled: true,
+      opacity: 1, blendMode: 'normal' as const, resourceId: 'psd-pattern', patternWidth: 2, patternHeight: 1,
+      scale: 100, angle: 0, linkWithLayer: true }] };
     const document: CanvasDocument = { id: 'psd-style', width: 2, height: 1, resolution: 72,
-      layers: [patterned], selection: null };
+      resources: [{ id: 'psd-pattern', role: 'pattern', mime: 'application/x-fernwork-rgba8',
+        bytes: new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]) }], layers: [patterned], selection: null };
     expect(cpuCompositeRegion(document, { x: 0, y: 0, width: 2, height: 1 }))
       .toEqual(new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]));
   });

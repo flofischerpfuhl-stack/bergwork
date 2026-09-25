@@ -187,7 +187,27 @@ export type LayerEffect =
   | { readonly kind: 'colorOverlay'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number;
       readonly color: RGB; readonly blendMode?: BlendMode }
   | { readonly kind: 'gradientOverlay'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number;
-      readonly blendMode: BlendMode; readonly angle: number; readonly scale: number; readonly gradient: EffectGradient };
+      readonly blendMode: BlendMode; readonly angle: number; readonly scale: number; readonly gradient: EffectGradient }
+  | { readonly kind: 'innerShadow'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number;
+      readonly blendMode: BlendMode; readonly color: RGB; readonly angle: number; readonly useGlobalLight: boolean;
+      readonly distance: number; readonly choke: number; readonly size: number; readonly contour: 'linear' }
+  | { readonly kind: 'innerGlow'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number;
+      readonly blendMode: BlendMode; readonly color: RGB; readonly source: 'edge' | 'center'; readonly choke: number;
+      readonly size: number; readonly contour: 'linear' }
+  | { readonly kind: 'bevelEmboss'; readonly schemaVersion: 1; readonly enabled: boolean;
+      readonly style: 'innerBevel' | 'outerBevel' | 'emboss' | 'pillowEmboss';
+      readonly technique: 'smooth' | 'chiselHard' | 'chiselSoft'; readonly depth: number; readonly direction: 'up' | 'down';
+      readonly size: number; readonly soften: number; readonly angle: number; readonly altitude: number;
+      readonly useGlobalLight: boolean; readonly highlightMode: BlendMode; readonly highlightColor: RGB;
+      readonly highlightOpacity: number; readonly shadowMode: BlendMode; readonly shadowColor: RGB;
+      readonly shadowOpacity: number; readonly glossContour: 'linear' }
+  | { readonly kind: 'satin'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number;
+      readonly blendMode: BlendMode; readonly color: RGB; readonly angle: number; readonly distance: number;
+      readonly size: number; readonly invert: boolean; readonly contour: 'linear' }
+  | { readonly kind: 'patternOverlay'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number;
+      readonly blendMode: BlendMode; readonly resourceId: string; readonly patternWidth: number; readonly patternHeight: number;
+      readonly scale: number; readonly angle: number; readonly linkWithLayer: boolean;
+      readonly phase?: Readonly<{ x: number; y: number }> };
 
 export type LiveFilter =
   | { readonly kind: 'gaussianBlur'; readonly schemaVersion: 1; readonly enabled: boolean; readonly radius: number }

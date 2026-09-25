@@ -16,6 +16,7 @@ import {
   type DocumentLimits, type Guide, LITE_DOCUMENT_LIMITS,
 } from './document';
 import type { ColorLabel, LayerLocks } from './model';
+import type { DocumentResource } from './model';
 import type { TextParagraphStyle, TextRunStyle } from './model';
 import {
   apply, boundingBox, center, corners as transformCorners, following, invert, isValidTransform, makeTransform, mirrored,
@@ -163,6 +164,7 @@ export class EditorSession {
   layerEffectEditId: string | null = null;
   globalLightEdit = false;
   copiedLayerStyle: readonly LayerEffect[] | null = null;
+  private copiedLayerStyleResources: readonly DocumentResource[] = [];
   renamingLayerId: string | null = null;
   adjustmentEditingId: string | null = null;
   private liveFilterEdit: { readonly layerId: string; readonly original: readonly LiveFilter[] } | null = null;
@@ -1050,15 +1052,38 @@ export class EditorSession {
   copyLayerStyle(layerId: string = this.activeLayerId ?? ''): readonly LayerEffect[] | null {
     const layer = this.layer(layerId);
     this.copiedLayerStyle = layer ? layer.effects.map((effect) => structuredClone(effect)) : null;
+    const ids = new Set(this.copiedLayerStyle?.flatMap((effect) => effect.kind === 'patternOverlay' ? [effect.resourceId] : []) ?? []);
+    this.copiedLayerStyleResources = (this.document?.resources ?? []).filter((resource) => ids.has(resource.id))
+      .map((resource) => ({ ...resource, bytes: resource.bytes.slice() }));
     return this.copiedLayerStyle;
   }
 
   pasteLayerStyle(layerId: string = this.activeLayerId ?? '', style = this.copiedLayerStyle): boolean {
     const layer = this.layer(layerId);
     if (!layer || !style || !style.every(isValidLayerEffect) || !this.canEditLayers || this.refuseLayerEdit(layerId, 'appearance')) return false;
-    const effects = style.map((effect) => structuredClone(effect));
-    if (JSON.stringify(effects) === JSON.stringify(layer.effects)) return false;
-    this.edit('Paste Layer Style', () => this.updateLayer(layerId, (value) => ({ ...value, effects })));
+    let effects = style.map((effect) => structuredClone(effect));
+    const additions: DocumentResource[] = [];
+    if (style === this.copiedLayerStyle && this.document) {
+      const resources = this.document.resources ?? [];
+      const remap = new Map<string, string>();
+      for (const resource of this.copiedLayerStyleResources) {
+        const existing = resources.find((candidate) => candidate.id === resource.id);
+        if (!existing) additions.push({ ...resource, bytes: resource.bytes.slice() });
+        else if (existing.mime !== resource.mime || existing.bytes.length !== resource.bytes.length
+          || existing.bytes.some((byte, index) => byte !== resource.bytes[index])) {
+          const id = `${resource.id}-${uuid()}`; remap.set(resource.id, id);
+          additions.push({ ...resource, id, bytes: resource.bytes.slice() });
+        }
+      }
+      if (remap.size) effects = effects.map((effect) => effect.kind === 'patternOverlay' && remap.has(effect.resourceId)
+        ? { ...effect, resourceId: remap.get(effect.resourceId)! } : effect);
+    }
+    if (!additions.length && JSON.stringify(effects) === JSON.stringify(layer.effects)) return false;
+    this.edit('Paste Layer Style', () => {
+      if (additions.length && this.document) this.document = { ...this.document,
+        resources: [...(this.document.resources ?? []), ...additions] };
+      this.updateLayer(layerId, (value) => ({ ...value, effects }));
+    });
     return true;
   }
 
