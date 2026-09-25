@@ -32,11 +32,15 @@ async function main(): Promise<void> {
     let controller!: EditorController;
     let markReady!: (value: EditorController) => void;
     const ready = new Promise<EditorController>((resolve) => { markReady = resolve; });
-    const host = createTauriHost({ acceptanceArchivePath: archivePath, tileBudgetBytes: 4 * 1024 ** 3,
-      controllerReady(value) { controller = value; markReady(value); } });
+    const host = createTauriHost({ acceptanceArchivePath: archivePath,
+      controllerReady(value) { controller = value; markReady(value); },
+      reportError(error) { throw new Error(`${error.code}: ${error.message}`); } });
     await mountEditor(root, { host, locale: 'en', theme: 'dark' });
     await ready;
     const result = await runLargeDocumentAcceptance(controller, {
+      async stage(snapshot) {
+        await window.__TAURI__.core.invoke('a4d_write_progress', { progress: JSON.stringify(snapshot) });
+      },
       async save() {
         await controller.save(true);
         const archive = await nativeProjectBlob(archivePath);

@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 use std::{
     env,
+    fs::OpenOptions,
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
@@ -24,6 +25,19 @@ fn write_matrix_result(result: String) -> Result<(), String> {
         .map(PathBuf::from)
         .ok_or_else(|| "FERNWORK_MATRIX_RESULT is not set".to_string())?;
     std::fs::write(path, result).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn a4d_write_progress(progress: String) -> Result<(), String> {
+    let Some(path) = env::var_os("FERNWORK_A4D_PROGRESS").map(PathBuf::from) else {
+        return Ok(());
+    };
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    writeln!(file, "{progress}").map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -146,6 +160,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             write_matrix_result,
+            a4d_write_progress,
             host::list_system_fonts,
             host::load_system_font,
             host::recent_files,

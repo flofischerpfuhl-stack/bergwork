@@ -123,7 +123,7 @@ try {
       reportError(error) { throw new Error(`${error.code}: ${error.message}`); },
     };
     const editorRoot = document.getElementById('root');
-    await mountEditor(editorRoot, { host, locale: 'en', theme: 'dark' });
+    await mountEditor(editorRoot, { host, profile: 'pro', locale: 'en', theme: 'dark' });
     const controller = window.__editorForTests;
     const io = {
       async save() {

@@ -11,6 +11,10 @@ export interface ScratchHostCapability {
   readonly tileBudgetBytes?: number;
   /** Separate WebGL texture cap. Defaults to one quarter of the tile budget, at most 1 GiB. */
   readonly gpuTextureBudgetBytes?: number;
+  /** Optional host-specific texture chunk side; must be a multiple of the 256 px raster tile. */
+  readonly gpuTextureChunkSize?: number;
+  /** Lets constrained WebViews stream-save once edits/storage are ready without waiting for viewport refinement. */
+  readonly saveWithoutCompositorBarrier?: boolean;
 }
 
 export const PRO_MAX_SIDE = 60_000;
