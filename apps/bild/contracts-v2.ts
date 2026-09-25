@@ -156,7 +156,20 @@ export type EffectRecordV2 =
       spread: number; size: number; contour: 'linear'; noise: 0 }
   | { kind: 'colorOverlay'; schemaVersion: 1; enabled: boolean; opacity: number; color: RGBV2; blendMode?: string }
   | { kind: 'gradientOverlay'; schemaVersion: 1; enabled: boolean; opacity: number; blendMode: string; angle: number;
-      scale: number; gradient: EffectGradientV2 };
+      scale: number; gradient: EffectGradientV2 }
+  | { kind: 'innerShadow'; schemaVersion: 1; enabled: boolean; opacity: number; blendMode: string; color: RGBV2;
+      angle: number; useGlobalLight: boolean; distance: number; choke: number; size: number; contour: 'linear' }
+  | { kind: 'innerGlow'; schemaVersion: 1; enabled: boolean; opacity: number; blendMode: string; color: RGBV2;
+      source: 'edge' | 'center'; choke: number; size: number; contour: 'linear' }
+  | { kind: 'bevelEmboss'; schemaVersion: 1; enabled: boolean; style: 'innerBevel' | 'outerBevel' | 'emboss' | 'pillowEmboss';
+      technique: 'smooth' | 'chiselHard' | 'chiselSoft'; depth: number; direction: 'up' | 'down'; size: number; soften: number;
+      angle: number; altitude: number; useGlobalLight: boolean; highlightMode: string; highlightColor: RGBV2;
+      highlightOpacity: number; shadowMode: string; shadowColor: RGBV2; shadowOpacity: number; glossContour: 'linear' }
+  | { kind: 'satin'; schemaVersion: 1; enabled: boolean; opacity: number; blendMode: string; color: RGBV2;
+      angle: number; distance: number; size: number; invert: boolean; contour: 'linear' }
+  | { kind: 'patternOverlay'; schemaVersion: 1; enabled: boolean; opacity: number; blendMode: string;
+      resourceId: AssetIdV2; patternWidth: number; patternHeight: number; scale: number; angle: number;
+      linkWithLayer: boolean; phase?: PointV2 };
 
 export type FilterRecordV2 =
   | { kind: 'gaussianBlur'; schemaVersion: 1; enabled: boolean; radius: number }

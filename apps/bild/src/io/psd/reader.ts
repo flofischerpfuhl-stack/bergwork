@@ -173,8 +173,6 @@ function gradient(value: EffectSolidGradient | undefined): import('../../core/mo
 function importEffects(source: AgLayer, state: ImportState, layerPath: string): readonly LayerEffect[] {
   const info: LayerEffectsInfo | undefined = source.effects;
   if (!info || info.disabled) return [];
-  const rendered = (effect: { present?: boolean; enabled?: boolean } | undefined): boolean =>
-    !!effect && effect.present !== false && effect.enabled !== false;
   // Effect dimensions are already final pixels. The list-wide Scl metadata is not a render-time
   // multiplier (psd-tools test_second_stroke_traces_the_layer pins 1 px strokes with Scl 208%).
   const result: LayerEffect[] = [];
@@ -184,10 +182,21 @@ function importEffects(source: AgLayer, state: ImportState, layerPath: string): 
     blur: units(shadow.size), size: units(shadow.size), spread: units(shadow.choke), color: rgb(shadow.color),
     blendMode: effectBlend(shadow.blendMode, 'multiply'), contour: 'linear', noise: 0, knockout: shadow.layerConceals !== false,
   });
+  for (const shadow of info.innerShadow ?? []) if (shadow.present !== false) result.push({
+    kind: 'innerShadow', schemaVersion: 1, enabled: shadow.enabled !== false, opacity: shadow.opacity ?? 1,
+    blendMode: effectBlend(shadow.blendMode, 'multiply'), color: rgb(shadow.color), angle: shadow.angle ?? 120,
+    useGlobalLight: shadow.useGlobalLight ?? false, distance: units(shadow.distance), choke: units(shadow.choke),
+    size: units(shadow.size), contour: 'linear',
+  });
   const glow = info.outerGlow;
   if (glow?.present !== false && glow) result.push({ kind: 'outerGlow', schemaVersion: 1, enabled: glow.enabled !== false,
     opacity: glow.opacity ?? 1, color: rgb(glow.color), blendMode: effectBlend(glow.blendMode, 'screen'),
     spread: units(glow.choke), size: units(glow.size), contour: 'linear', noise: 0 });
+  const innerGlow = info.innerGlow;
+  if (innerGlow?.present !== false && innerGlow) result.push({ kind: 'innerGlow', schemaVersion: 1,
+    enabled: innerGlow.enabled !== false, opacity: innerGlow.opacity ?? 1, color: rgb(innerGlow.color),
+    blendMode: effectBlend(innerGlow.blendMode, 'screen'), source: innerGlow.source ?? 'edge',
+    choke: units(innerGlow.choke), size: units(innerGlow.size), contour: 'linear' });
   for (const fill of info.solidFill ?? []) if (fill.present !== false) result.push({
     kind: 'colorOverlay', schemaVersion: 1, enabled: fill.enabled !== false, opacity: fill.opacity ?? 1,
     color: rgb(fill.color), blendMode: effectBlend(fill.blendMode, 'normal'),
@@ -215,60 +224,46 @@ function importEffects(source: AgLayer, state: ImportState, layerPath: string): 
       position: stroke.position ?? 'outside', fill, opacity: stroke.opacity ?? 1,
       blendMode: effectBlend(stroke.blendMode, 'normal') });
   }
-  if (rendered(info.bevel)) issue(state, 'bevel', 'Bevel/emboss needs a rasterised effect pass.', 'not-rendered', layerPath);
-  if (rendered(info.satin)) issue(state, 'satin', 'Satin needs a rasterised effect pass.', 'not-rendered', layerPath);
-  return result;
-}
-
-interface PsdPatternOverlay {
-  readonly pattern: Raster;
-  readonly opacity: number;
-  readonly blendMode: BlendMode;
-  readonly scale: number;
-  readonly phase: { readonly x: number; readonly y: number };
-  readonly align: boolean;
-}
-
-interface PsdInnerEffect {
-  readonly kind: 'innerShadow' | 'innerGlow';
-  readonly opacity: number;
-  readonly blendMode: BlendMode;
-  readonly color: RGB;
-  readonly size: number;
-  readonly choke: number;
-  readonly angle: number;
-  readonly distance: number;
-  readonly useGlobalLight: boolean;
-  readonly source: 'edge' | 'center';
-}
-
-function importedInnerEffects(source: AgLayer): readonly PsdInnerEffect[] {
-  const result: PsdInnerEffect[] = [];
-  for (const shadow of source.effects?.innerShadow ?? []) if (shadow.present !== false && shadow.enabled !== false) result.push({
-    kind: 'innerShadow', opacity: shadow.opacity ?? 1, blendMode: effectBlend(shadow.blendMode, 'multiply'),
-    color: rgb(shadow.color), size: units(shadow.size), choke: units(shadow.choke), angle: shadow.angle ?? 120,
-    distance: units(shadow.distance), useGlobalLight: shadow.useGlobalLight ?? false, source: 'edge',
-  });
-  const glow = source.effects?.innerGlow;
-  if (glow && glow.present !== false && glow.enabled !== false) result.push({
-    kind: 'innerGlow', opacity: glow.opacity ?? 1, blendMode: effectBlend(glow.blendMode, 'screen'), color: rgb(glow.color),
-    size: units(glow.size), choke: units(glow.choke), angle: 0, distance: 0, useGlobalLight: false,
-    source: glow.source ?? 'edge',
-  });
-  return result;
-}
-
-function importedPatternOverlays(source: AgLayer, state: ImportState, layerPath: string): readonly PsdPatternOverlay[] {
-  const overlay = source.effects?.patternOverlay;
-  if (!overlay || overlay.present === false || overlay.enabled === false) return [];
+  const bevel = info.bevel;
+  if (bevel?.present !== false && bevel) {
+    const style = bevel.style === 'outer bevel' ? 'outerBevel' : bevel.style === 'emboss' ? 'emboss'
+      : bevel.style === 'pillow emboss' ? 'pillowEmboss' : 'innerBevel';
+    const technique = bevel.technique === 'chisel hard' ? 'chiselHard'
+      : bevel.technique === 'chisel soft' ? 'chiselSoft' : 'smooth';
+    const strength = bevel.strength ?? 1;
+    result.push({ kind: 'bevelEmboss', schemaVersion: 1, enabled: bevel.enabled !== false, style, technique,
+      depth: Math.max(1, strength <= 10 ? strength * 100 : strength), direction: bevel.direction ?? 'up',
+      size: units(bevel.size), soften: units(bevel.soften), angle: bevel.angle ?? 120, altitude: bevel.altitude ?? 30,
+      useGlobalLight: bevel.useGlobalLight ?? false, highlightMode: effectBlend(bevel.highlightBlendMode, 'screen'),
+      highlightColor: rgb(bevel.highlightColor, { red: 1, green: 1, blue: 1 }), highlightOpacity: bevel.highlightOpacity ?? 0.75,
+      shadowMode: effectBlend(bevel.shadowBlendMode, 'multiply'), shadowColor: rgb(bevel.shadowColor),
+      shadowOpacity: bevel.shadowOpacity ?? 0.75, glossContour: 'linear' });
+  }
+  const satin = info.satin;
+  if (satin?.present !== false && satin) result.push({ kind: 'satin', schemaVersion: 1, enabled: satin.enabled !== false,
+    opacity: satin.opacity ?? 0.5, blendMode: effectBlend(satin.blendMode, 'multiply'), color: rgb(satin.color),
+    angle: satin.angle ?? 19, distance: units(satin.distance), size: units(satin.size), invert: satin.invert ?? true,
+    contour: 'linear' });
+  const overlay = info.patternOverlay;
+  if (overlay && overlay.present !== false) {
   const pattern = overlay.pattern?.id ? state.patterns.get(overlay.pattern.id) : undefined;
   if (!pattern || pattern.data.length !== pattern.bounds.w * pattern.bounds.h * 4) {
-    issue(state, 'pattern-overlay', 'Pattern overlay pixels are absent from the PSD pattern table.', 'not-rendered', layerPath);
-    return [];
+      if (overlay.enabled !== false) issue(state, 'pattern-overlay', 'Pattern overlay pixels are absent from the PSD pattern table.', 'not-rendered', layerPath);
+    } else {
+      const resourceId = `psd-pattern-${sha256Hex(pattern.data)}`;
+      if (!state.resources.some((resource) => resource.id === resourceId)) state.resources.push({
+        id: resourceId, role: 'pattern', mime: 'application/x-fernwork-rgba8', bytes: pattern.data.slice(),
+      });
+      result.push({ kind: 'patternOverlay', schemaVersion: 1, enabled: overlay.enabled !== false,
+        opacity: overlay.opacity ?? 1, blendMode: effectBlend(overlay.blendMode, 'normal'), resourceId,
+        patternWidth: pattern.bounds.w, patternHeight: pattern.bounds.h, scale: Math.max(1, (overlay.scale ?? 1) * 100),
+        angle: (overlay as typeof overlay & { angle?: number }).angle ?? 0,
+        linkWithLayer: overlay.align !== false, phase: overlay.phase ?? { x: 0, y: 0 } });
+    }
   }
-  return [{ pattern: Raster.fromPixels(pattern.bounds.w, pattern.bounds.h, 4, pattern.data),
-    opacity: overlay.opacity ?? 1, blendMode: effectBlend(overlay.blendMode, 'normal'),
-    scale: Math.max(0.01, overlay.scale ?? 1), phase: overlay.phase ?? { x: 0, y: 0 }, align: overlay.align !== false }];
+  const rank: Record<LayerEffect['kind'], number> = { dropShadow: 0, outerGlow: 1, colorOverlay: 2,
+    gradientOverlay: 3, patternOverlay: 4, satin: 5, innerGlow: 6, innerShadow: 7, stroke: 8, bevelEmboss: 9 };
+  return result.sort((a, b) => rank[a.kind] - rank[b.kind]);
 }
 
 function featherMask(source: Uint8Array, width: number, height: number, sigma: number,
@@ -1048,12 +1043,6 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
       effects: importEffects(source, state, layerPath),
       ...(adjustment ? { adjustment } : {}),
     });
-    const patternOverlays = importedPatternOverlays(source, state, layerPath);
-    if (patternOverlays.length) imported = { ...imported, psdPatternOverlays: patternOverlays } as Layer
-      & { readonly psdPatternOverlays: readonly PsdPatternOverlay[] };
-    const innerEffects = importedInnerEffects(source);
-    if (innerEffects.length) imported = { ...imported, psdInnerEffects: innerEffects } as Layer
-      & { readonly psdInnerEffects: readonly PsdInnerEffect[] };
     if (isGroup) imported = { ...imported,
       psdIsolated: sourceMode !== 'pass through', psdKnockout: source.knockout === true } as Layer
         & { readonly psdIsolated: boolean; readonly psdKnockout: boolean };

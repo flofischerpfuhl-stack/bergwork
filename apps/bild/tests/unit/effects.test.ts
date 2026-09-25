@@ -80,10 +80,74 @@ describe('layer effects (PRODUCT-PLAN 6.7)', () => {
         scale: 100, gradient: { stops: [{ offset: 0, color: red, opacity: 1 }, { offset: 1, color: blue, opacity: 0.5 }] } },
     ];
     const passes = renderEffectPasses(new Uint8Array([255, 128]), 2, 1, effects);
-    expect(passes[0]).toMatchObject({ scalesWithFillOpacity: true, opacity: 0.4 });
+    expect(passes[0]).toMatchObject({ scalesWithFillOpacity: true, opacity: 0.4, stackOrder: 2 });
     expect(at(passes[0]!, 1, 0)).toEqual([0, 255, 0, 128]);
+    expect(passes[1]).toMatchObject({ scalesWithFillOpacity: true, opacity: 1, stackOrder: 3 });
     expect(at(passes[1]!, 0, 0)).toEqual([255, 0, 0, 255]);
     expect(at(passes[1]!, 1, 0)).toEqual([0, 0, 255, 64]);
+  });
+
+  it('renders hand-computed inner shadow and edge/centre inner glow pixels', () => {
+    const alpha = new Uint8Array(25);
+    for (let y = 1; y <= 3; y++) for (let x = 1; x <= 3; x++) alpha[y * 5 + x] = 255;
+    const innerShadow: LayerEffect = { kind: 'innerShadow', schemaVersion: 1, enabled: true, opacity: 1,
+      blendMode: 'multiply', color: red, angle: 0, useGlobalLight: false, distance: 0, choke: 0, size: 2, contour: 'linear' };
+    const edgeGlow: LayerEffect = { kind: 'innerGlow', schemaVersion: 1, enabled: true, opacity: 1,
+      blendMode: 'screen', color: green, source: 'edge', choke: 0, size: 2, contour: 'linear' };
+    const centreGlow: LayerEffect = { ...edgeGlow, color: blue, source: 'center' };
+    const [edge, centre, shadow] = renderEffectPasses(alpha, 5, 5, [innerShadow, edgeGlow, centreGlow]);
+    // Boundary pixels are one pixel from transparency: the two-pixel linear contour is exactly 50%.
+    expect(at(shadow!, 1, 2)).toEqual([255, 0, 0, 128]);
+    expect(at(edge!, 1, 2)).toEqual([0, 255, 0, 128]);
+    expect(at(edge!, 2, 2)[3]).toBe(0);
+    expect(at(centre!, 1, 2)).toEqual([0, 0, 255, 128]);
+    expect(at(centre!, 2, 2)).toEqual([0, 0, 255, 255]);
+  });
+
+  it('renders hand-computed bevel highlight/shadow sides and satin lobes', () => {
+    const alpha = new Uint8Array([0, 255, 255, 255, 0]);
+    const bevel: LayerEffect = { kind: 'bevelEmboss', schemaVersion: 1, enabled: true, style: 'innerBevel',
+      technique: 'chiselHard', depth: 100, direction: 'up', size: 1, soften: 0, angle: 0, altitude: 0,
+      useGlobalLight: false, highlightMode: 'screen', highlightColor: green, highlightOpacity: 1,
+      shadowMode: 'multiply', shadowColor: red, shadowOpacity: 1, glossContour: 'linear' };
+    const satin: LayerEffect = { kind: 'satin', schemaVersion: 1, enabled: true, opacity: 1, blendMode: 'multiply',
+      color: blue, angle: 0, distance: 1, size: 1, invert: false, contour: 'linear' };
+    const [satinPass, highlight, shadow] = renderEffectPasses(alpha, 5, 1, [bevel, satin]);
+    // A 0° light sees the right outward normal and shades the left; hard chisel makes both full coverage.
+    expect(at(highlight!, 3, 0)).toEqual([0, 255, 0, 255]);
+    expect(at(shadow!, 1, 0)).toEqual([255, 0, 0, 255]);
+    // Satin compares the two one-pixel-shifted edge ramps: the two inner edge pixels differ by one.
+    expect(at(satinPass!, 1, 0)).toEqual([0, 0, 255, 255]);
+    expect(at(satinPass!, 2, 0)[3]).toBe(0);
+    expect(at(satinPass!, 3, 0)).toEqual([0, 0, 255, 255]);
+  });
+
+  it('tiles a hand-computed embedded pattern resource through the live pattern overlay', () => {
+    const pattern = new Uint8Array([255, 0, 0, 255, 0, 255, 0, 255]);
+    const effect: LayerEffect = { kind: 'patternOverlay', schemaVersion: 1, enabled: true, opacity: 1,
+      blendMode: 'normal', resourceId: 'pattern', patternWidth: 2, patternHeight: 1,
+      scale: 100, angle: 0, linkWithLayer: false };
+    const layer = newLayer({ id: 'patterned', name: 'Patterned', raster: Raster.fromPixels(4, 1, 4,
+      new Uint8Array(16).fill(255)), transform: makeTransform({ x: 0, y: 0 }, { width: 4, height: 1 }), effects: [effect] });
+    const document: CanvasDocument = { id: 'pattern-doc', width: 4, height: 1, resolution: 72, selection: null,
+      resources: [{ id: 'pattern', role: 'pattern', mime: 'application/x-fernwork-rgba8', bytes: pattern }], layers: [layer] };
+    const expanded = documentWithLayerEffects(document, { transform: (value) => value.transform,
+      maskPlacement: (value) => value.mask?.placement ?? null, raster: (value) => value.raster,
+      maskRaster: (value) => value.mask?.raster });
+    expect(expanded.layers[1]!.raster!.toPixels()).toEqual(new Uint8Array([
+      255, 0, 0, 255, 0, 255, 0, 255, 255, 0, 0, 255, 0, 255, 0, 255,
+    ]));
+
+    const disabled = { ...effect, enabled: false };
+    const color: LayerEffect = { kind: 'colorOverlay', schemaVersion: 1, enabled: true, opacity: 1,
+      blendMode: 'normal', color: blue };
+    const disabledLayer = { ...layer, effects: [disabled, color] };
+    const withoutPattern = documentWithLayerEffects({ ...document, layers: [disabledLayer] }, {
+      transform: (value) => value.transform, maskPlacement: (value) => value.mask?.placement ?? null,
+      raster: (value) => value.raster, maskRaster: (value) => value.mask?.raster,
+    });
+    expect(withoutPattern.layers).toHaveLength(2);
+    expect(withoutPattern.layers[1]!.raster!.pixel(0, 0)).toEqual([0, 0, 255, 255]);
   });
 
   it('enlarges render bounds and keeps stroke independent from Fill Opacity', () => {
@@ -188,7 +252,26 @@ describe('layer effects (PRODUCT-PLAN 6.7)', () => {
     expect(session.document!.globalLightAngle).toBeUndefined();
   });
 
-  it('round-trips every Phase-2 style parameter and global light in format v2', async () => {
+  it('copies an embedded pattern resource with a layer style across documents', () => {
+    const transform = makeTransform({ x: 0, y: 0 }, { width: 1, height: 1 });
+    const effect: LayerEffect = { kind: 'patternOverlay', schemaVersion: 1, enabled: true, opacity: 1,
+      blendMode: 'normal', resourceId: 'copied-pattern', patternWidth: 1, patternHeight: 1,
+      scale: 100, angle: 0, linkWithLayer: true };
+    const session = new EditorSession();
+    session.installProject({ id: 'source', width: 1, height: 1, resolution: 72, selection: null,
+      resources: [{ id: 'copied-pattern', role: 'pattern', mime: 'application/x-fernwork-rgba8',
+        bytes: new Uint8Array([4, 8, 12, 255]) }], layers: [newLayer({ id: 'a', name: 'a', transform,
+        raster: Raster.fromPixels(1, 1, 4, [255, 255, 255, 255]), effects: [effect] })] }, 'a', 'Source');
+    session.copyLayerStyle('a');
+    session.installProject({ id: 'target', width: 1, height: 1, resolution: 72, selection: null,
+      layers: [newLayer({ id: 'b', name: 'b', transform, raster: Raster.fromPixels(1, 1, 4, [255, 255, 255, 255]) })] }, 'b', 'Target');
+    expect(session.pasteLayerStyle('b')).toBe(true);
+    expect(session.layer('b')!.effects).toEqual([effect]);
+    expect(session.document!.resources).toEqual([{ id: 'copied-pattern', role: 'pattern',
+      mime: 'application/x-fernwork-rgba8', bytes: new Uint8Array([4, 8, 12, 255]) }]);
+  });
+
+  it('round-trips every editable style parameter, pattern resource and global light in format v2', async () => {
     const effects: LayerEffect[] = [
       { kind: 'dropShadow', schemaVersion: 1, enabled: true, opacity: 0.8, angle: 30, useGlobalLight: true,
         distance: 4, blur: 6, size: 6, spread: 25, color: red, blendMode: 'multiply', contour: 'linear', noise: 0, knockout: true },
@@ -201,17 +284,32 @@ describe('layer effects (PRODUCT-PLAN 6.7)', () => {
       { kind: 'colorOverlay', schemaVersion: 1, enabled: false, opacity: 0.4, color: blue, blendMode: 'color' },
       { kind: 'gradientOverlay', schemaVersion: 1, enabled: true, opacity: 0.7, blendMode: 'overlay', angle: 90,
         scale: 120, gradient: { stops: [{ offset: 0, color: red, opacity: 1 }, { offset: 1, color: green, opacity: 1 }] } },
+      { kind: 'innerShadow', schemaVersion: 1, enabled: true, opacity: 0.4, blendMode: 'multiply', color: red,
+        angle: 30, useGlobalLight: true, distance: 4, choke: 12, size: 8, contour: 'linear' },
+      { kind: 'innerGlow', schemaVersion: 1, enabled: true, opacity: 0.6, blendMode: 'screen', color: green,
+        source: 'center', choke: 3, size: 9, contour: 'linear' },
+      { kind: 'bevelEmboss', schemaVersion: 1, enabled: true, style: 'pillowEmboss', technique: 'chiselSoft',
+        depth: 220, direction: 'down', size: 7, soften: 2, angle: 40, altitude: 25, useGlobalLight: false,
+        highlightMode: 'screen', highlightColor: green, highlightOpacity: 0.8,
+        shadowMode: 'multiply', shadowColor: red, shadowOpacity: 0.65, glossContour: 'linear' },
+      { kind: 'satin', schemaVersion: 1, enabled: true, opacity: 0.45, blendMode: 'multiply', color: blue,
+        angle: 19, distance: 11, size: 14, invert: true, contour: 'linear' },
+      { kind: 'patternOverlay', schemaVersion: 1, enabled: true, opacity: 0.9, blendMode: 'normal',
+        resourceId: 'roundtrip-pattern', patternWidth: 1, patternHeight: 1, scale: 125, angle: 15,
+        linkWithLayer: true, phase: { x: 2, y: 3 } },
     ];
     const layer = newLayer({ id: 'styled', name: 'Styled', effects,
       raster: Raster.fromPixels(1, 1, 4, [10, 20, 30, 255]), transform: makeTransform({ x: 0, y: 0 }, { width: 1, height: 1 }) });
     const document: CanvasDocument = { id: 'roundtrip', width: 1, height: 1, resolution: 72,
-      globalLightAngle: 215, selection: null, layers: [layer] };
+      globalLightAngle: 215, selection: null, layers: [layer], resources: [{ id: 'roundtrip-pattern', role: 'pattern',
+        mime: 'application/x-fernwork-rgba8', bytes: new Uint8Array([2, 4, 6, 255]) }] };
     const archive = writeArchive(document, 'Styles', 'styled');
     const loaded = await readArchive(archive.blob, async (bytes) => {
       const decoded = decodePng(bytes); return { width: decoded.width, height: decoded.height, channels: decoded.channels, data: decoded.data };
     });
     expect(loaded.document.globalLightAngle).toBe(215);
     expect(loaded.document.layers[0]!.effects).toEqual(effects);
+    expect(loaded.document.resources).toEqual(document.resources);
   });
 
   it('imports the Phase-2 PSD effects as live records and preserves Photoshop global light', () => {

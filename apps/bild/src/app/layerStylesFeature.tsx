@@ -15,9 +15,10 @@ import type { MenuEntry } from '../ui/menus';
 import { useSession } from '../ui/hooks';
 import { Icon } from '../ui/icons';
 import { editBlockers, type EditorSession } from '../core/session';
-import { BLEND_MODES, type Layer } from '../core/document';
+import { BLEND_MODES, type CanvasDocument, type Layer } from '../core/document';
 import { DEFAULT_GLOBAL_LIGHT_ANGLE } from '../core/effects/render';
 import type { BlendMode, EffectFill, EffectGradient, GradientStop, LayerEffect, RGB } from '../core/model/types';
+import { decodeImageFile } from '../io/imageImport';
 import { FloatingPanel } from './panels';
 import { Check, Segmented } from './adjustmentsFeature';
 
@@ -25,15 +26,41 @@ type EffectKind = LayerEffect['kind'];
 type EffectOf<K extends EffectKind> = Extract<LayerEffect, { kind: K }>;
 
 /** Photoshop's Layer Style list order (the top of the stack first). */
-const KINDS: readonly EffectKind[] = ['stroke', 'colorOverlay', 'gradientOverlay', 'outerGlow', 'dropShadow'];
+const KINDS: readonly EffectKind[] = ['bevelEmboss', 'stroke', 'innerShadow', 'innerGlow', 'satin',
+  'colorOverlay', 'gradientOverlay', 'patternOverlay', 'outerGlow', 'dropShadow'];
 const LABELS: Record<EffectKind, string> = {
-  stroke: 'Stroke', colorOverlay: 'Color Overlay', gradientOverlay: 'Gradient Overlay', outerGlow: 'Outer Glow', dropShadow: 'Drop Shadow',
+  bevelEmboss: 'Bevel & Emboss', stroke: 'Stroke', innerShadow: 'Inner Shadow', innerGlow: 'Inner Glow', satin: 'Satin',
+  colorOverlay: 'Color Overlay', gradientOverlay: 'Gradient Overlay', patternOverlay: 'Pattern Overlay',
+  outerGlow: 'Outer Glow', dropShadow: 'Drop Shadow',
 };
 /** Stacking from the bottom: new effects are inserted where Photoshop draws them. */
-const RANK: Record<EffectKind, number> = { dropShadow: 0, outerGlow: 1, gradientOverlay: 2, colorOverlay: 3, stroke: 4 };
+const RANK: Record<EffectKind, number> = { dropShadow: 0, outerGlow: 1, colorOverlay: 2, gradientOverlay: 3,
+  patternOverlay: 4, satin: 5, innerGlow: 6, innerShadow: 7, stroke: 8, bevelEmboss: 9 };
 
 const BLACK: RGB = { red: 0, green: 0, blue: 0 };
 const clamp = (value: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, value));
+
+const PATTERNS = {
+  checker: { id: 'fernwork-pattern-checker', width: 8, height: 8, pixel: (x: number, y: number) => ((x >> 2) + (y >> 2)) % 2 ? 176 : 232 },
+  dots: { id: 'fernwork-pattern-dots', width: 8, height: 8, pixel: (x: number, y: number) => ((x - 3.5) ** 2 + (y - 3.5) ** 2 < 5 ? 90 : 225) },
+  diagonal: { id: 'fernwork-pattern-diagonal', width: 8, height: 8, pixel: (x: number, y: number) => ((x + y) % 8 < 2 ? 100 : 235) },
+} as const;
+type PatternPreset = keyof typeof PATTERNS;
+
+function ensureProceduralPattern(session: EditorSession, preset: PatternPreset) {
+  const spec = PATTERNS[preset], document = session.document;
+  if (!document) return { resourceId: spec.id, patternWidth: spec.width, patternHeight: spec.height };
+  if (!document.resources?.some((resource) => resource.id === spec.id)) {
+    const bytes = new Uint8Array(spec.width * spec.height * 4);
+    for (let y = 0; y < spec.height; y++) for (let x = 0; x < spec.width; x++) {
+      const index = (y * spec.width + x) * 4, value = spec.pixel(x, y);
+      bytes[index] = value; bytes[index + 1] = value; bytes[index + 2] = value; bytes[index + 3] = 255;
+    }
+    session.replaceDocument({ ...document, resources: [...(document.resources ?? []),
+      { id: spec.id, role: 'pattern', mime: 'application/x-fernwork-rgba8', bytes }] });
+  }
+  return { resourceId: spec.id, patternWidth: spec.width, patternHeight: spec.height };
+}
 
 /** Photoshop's defaults for a newly enabled effect. */
 function defaultEffect(kind: EffectKind, session: EditorSession): LayerEffect {
@@ -46,6 +73,18 @@ function defaultEffect(kind: EffectKind, session: EditorSession): LayerEffect {
     case 'colorOverlay': return { kind, schemaVersion: 1, enabled: true, blendMode: 'normal', opacity: 1, color: { red: 1, green: 0, blue: 0 } };
     case 'gradientOverlay': return { kind, schemaVersion: 1, enabled: true, blendMode: 'normal', opacity: 1, angle: 90, scale: 100,
       gradient: paletteGradient(session) };
+    case 'innerShadow': return { kind, schemaVersion: 1, enabled: true, blendMode: 'multiply', color: BLACK, opacity: 0.35,
+      angle: 120, useGlobalLight: true, distance: 5, choke: 0, size: 5, contour: 'linear' };
+    case 'innerGlow': return { kind, schemaVersion: 1, enabled: true, blendMode: 'screen', color: { red: 1, green: 1, blue: 190 / 255 },
+      opacity: 0.35, source: 'edge', choke: 0, size: 5, contour: 'linear' };
+    case 'bevelEmboss': return { kind, schemaVersion: 1, enabled: true, style: 'innerBevel', technique: 'smooth', depth: 100,
+      direction: 'up', size: 5, soften: 0, angle: 120, altitude: 30, useGlobalLight: true,
+      highlightMode: 'screen', highlightColor: { red: 1, green: 1, blue: 1 }, highlightOpacity: 0.75,
+      shadowMode: 'multiply', shadowColor: BLACK, shadowOpacity: 0.75, glossContour: 'linear' };
+    case 'satin': return { kind, schemaVersion: 1, enabled: true, blendMode: 'multiply', color: BLACK, opacity: 0.5,
+      angle: 19, distance: 11, size: 14, invert: true, contour: 'linear' };
+    case 'patternOverlay': return { kind, schemaVersion: 1, enabled: true, blendMode: 'normal', opacity: 1,
+      ...ensureProceduralPattern(session, 'checker'), scale: 100, angle: 0, linkWithLayer: true };
   }
 }
 
@@ -81,6 +120,7 @@ interface StyleEdit {
   readonly layerId: string;
   readonly before: readonly LayerEffect[];
   readonly beforeAngle: number;
+  readonly beforeResources: CanvasDocument['resources'];
   /** Effects of each kind the layer had when the dialog opened; later ones of that kind were added in the dialog. */
   readonly beforeCounts: Readonly<Record<EffectKind, number>>;
   selected: { kind: EffectKind; ordinal: number };
@@ -122,6 +162,7 @@ function openStyle(controller: EditorController, layerId: string, target?: Effec
     const first = [...layer.effects.keys()].sort((a, b) => KINDS.indexOf(layer.effects[a]!.kind) - KINDS.indexOf(layer.effects[b]!.kind))[0];
     edit = {
       layerId, before: layer.effects, beforeAngle: session.document.globalLightAngle ?? DEFAULT_GLOBAL_LIGHT_ANGLE, beforeCounts: counts,
+      beforeResources: session.document.resources,
       selected: first === undefined ? { kind: 'dropShadow', ordinal: 0 } : { kind: layer.effects[first]!.kind, ordinal: ordinalOf(layer.effects, first) },
     };
     session.beginEdit('Layer Style');
@@ -158,10 +199,26 @@ function finishStyle(controller: EditorController, commit: boolean): void {
         return ordinal >= edit.beforeCounts[effect.kind] && !effect.enabled ? index : -1;
       }).filter((index) => index >= 0).reverse();
       for (const index of drop) session.removeLayerEffect(edit.layerId, index);
+      const document = session.document;
+      if (document?.resources) {
+        const used = new Set<string>();
+        for (const candidate of document.layers) {
+          for (const effect of candidate.effects) if (effect.kind === 'patternOverlay') used.add(effect.resourceId);
+          if (candidate.kind === 'fill' && candidate.fill.kind === 'pattern') used.add(candidate.fill.assetId);
+          if (candidate.kind === 'vector') {
+            if (candidate.style.fill?.kind === 'pattern') used.add(candidate.style.fill.assetId);
+            if (candidate.style.stroke?.paint?.kind === 'pattern') used.add(candidate.style.stroke.paint.assetId);
+          }
+        }
+        const prior = new Set(edit.beforeResources?.map((resource) => resource.id) ?? []);
+        const resources = document.resources.filter((resource) => resource.role !== 'pattern' || prior.has(resource.id) || used.has(resource.id));
+        if (resources.length !== document.resources.length) session.replaceDocument({ ...document, resources });
+      }
     } else if (layer) {
       if (edit.before.length) session.pasteLayerStyle(edit.layerId, edit.before);
       else session.clearLayerStyle(edit.layerId);
       session.setGlobalLightAngle(edit.beforeAngle);
+      if (session.document) session.replaceDocument({ ...session.document, resources: edit.beforeResources });
     }
   });
   edits.delete(session);
@@ -442,6 +499,160 @@ function EffectControls({ controller, session, effect, change }: {
               })} />
             </>
           ) : null}
+        </>
+      );
+    }
+    case 'innerShadow': {
+      const global = effect.useGlobalLight;
+      const angle = global ? session.document?.globalLightAngle ?? DEFAULT_GLOBAL_LIGHT_ANGLE : effect.angle;
+      return (
+        <>
+          <BlendRow controller={controller} mode={effect.blendMode} onChange={(blendMode) => change(() => ({ blendMode }))}>{colorWell(effect.color)}</BlendRow>
+          {opacity(effect.opacity)}
+          <AngleRow controller={controller} value={angle} onChange={(value) => {
+            if (global) own(() => session.setGlobalLightAngle(value)); else change(() => ({ angle: value }));
+          }}>
+            <Check label={t('Use Global Light')} checked={global} testId="style-global-light"
+              onChange={(useGlobalLight) => change((e) => ({ useGlobalLight, ...(useGlobalLight ? {}
+                : { angle: session.document?.globalLightAngle ?? (e as EffectOf<'innerShadow'>).angle }) }))} />
+          </AngleRow>
+          <RangeRow label={t('Distance')} value={effect.distance} min={0} max={10_000} sliderMax={250} suffix="px" testId="style-distance"
+            onChange={(distance) => change(() => ({ distance }))} />
+          <RangeRow label={t('Choke')} value={effect.choke} min={0} max={100} suffix="%" testId="style-choke"
+            onChange={(choke) => change(() => ({ choke }))} />
+          <RangeRow label={t('Size')} value={effect.size} min={0} max={250} suffix="px" testId="style-size"
+            onChange={(size) => change(() => ({ size }))} />
+        </>
+      );
+    }
+    case 'innerGlow':
+      return (
+        <>
+          <BlendRow controller={controller} mode={effect.blendMode} onChange={(blendMode) => change(() => ({ blendMode }))}>{colorWell(effect.color)}</BlendRow>
+          {opacity(effect.opacity)}
+          <div className={styles.panelRow}>
+            <span className={styles.panelLabel}>{t('Source')}</span>
+            <Segmented label={t('Source')} options={['center', 'edge'] as const} value={effect.source}
+              labelOf={(source) => t(source === 'center' ? 'Center' : 'Edge')} onChange={(source) => change(() => ({ source }))} />
+          </div>
+          <RangeRow label={t('Choke')} value={effect.choke} min={0} max={100} suffix="%" testId="style-choke"
+            onChange={(choke) => change(() => ({ choke }))} />
+          <RangeRow label={t('Size')} value={effect.size} min={0} max={250} suffix="px" testId="style-size"
+            onChange={(size) => change(() => ({ size }))} />
+        </>
+      );
+    case 'bevelEmboss': {
+      const global = effect.useGlobalLight;
+      const angle = global ? session.document?.globalLightAngle ?? DEFAULT_GLOBAL_LIGHT_ANGLE : effect.angle;
+      return (
+        <>
+          <div className={styles.panelRow}><span className={styles.panelLabel}>{t('Style')}</span>
+            <select className={`${styles.select} ${styles.styleSelect}`} value={effect.style} data-testid="style-bevel-style"
+              onChange={(event) => change(() => ({ style: event.target.value as EffectOf<'bevelEmboss'>['style'] }))}>
+              <option value="innerBevel">{t('Inner Bevel')}</option><option value="outerBevel">{t('Outer Bevel')}</option>
+              <option value="emboss">{t('Emboss')}</option><option value="pillowEmboss">{t('Pillow Emboss')}</option>
+            </select>
+          </div>
+          <div className={styles.panelRow}><span className={styles.panelLabel}>{t('Technique')}</span>
+            <select className={`${styles.select} ${styles.styleSelect}`} value={effect.technique} data-testid="style-bevel-technique"
+              onChange={(event) => change(() => ({ technique: event.target.value as EffectOf<'bevelEmboss'>['technique'] }))}>
+              <option value="smooth">{t('Smooth Technique')}</option><option value="chiselHard">{t('Chisel Hard')}</option>
+              <option value="chiselSoft">{t('Chisel Soft')}</option>
+            </select>
+          </div>
+          <RangeRow label={t('Depth')} value={effect.depth} min={1} max={1000} sliderMax={250} suffix="%" testId="style-depth"
+            onChange={(depth) => change(() => ({ depth }))} />
+          <div className={styles.panelRow}><span className={styles.panelLabel}>{t('Bevel Direction')}</span>
+            <Segmented label={t('Bevel Direction')} options={['up', 'down'] as const} value={effect.direction}
+              labelOf={(direction) => t(direction === 'up' ? 'Up' : 'Down')} onChange={(direction) => change(() => ({ direction }))} />
+          </div>
+          <RangeRow label={t('Size')} value={effect.size} min={0} max={250} suffix="px" testId="style-size"
+            onChange={(size) => change(() => ({ size }))} />
+          <RangeRow label={t('Soften')} value={effect.soften} min={0} max={16} suffix="px" testId="style-soften"
+            onChange={(soften) => change(() => ({ soften }))} />
+          <AngleRow controller={controller} value={angle} onChange={(value) => {
+            if (global) own(() => session.setGlobalLightAngle(value)); else change(() => ({ angle: value }));
+          }}>
+            <Check label={t('Use Global Light')} checked={global} testId="style-global-light"
+              onChange={(useGlobalLight) => change((e) => ({ useGlobalLight, ...(useGlobalLight ? {}
+                : { angle: session.document?.globalLightAngle ?? (e as EffectOf<'bevelEmboss'>).angle }) }))} />
+          </AngleRow>
+          <RangeRow label={t('Altitude')} value={effect.altitude} min={0} max={90} suffix="°" testId="style-altitude"
+            onChange={(altitude) => change(() => ({ altitude }))} />
+          <div className={styles.panelRow}><span className={styles.panelLabel}>{t('Highlight Mode')}</span>
+            <select className={`${styles.select} ${styles.styleSelect}`} value={effect.highlightMode} data-testid="style-highlight-mode"
+              onChange={(event) => change(() => ({ highlightMode: event.target.value as BlendMode }))}>
+              {BLEND_MODES.map((mode) => <option key={mode.mode} value={mode.mode}>{t(mode.label)}</option>)}
+            </select><ColorWell controller={controller} title={t('Highlight Mode')} color={effect.highlightColor} testId="style-highlight-color"
+              onChange={(highlightColor) => change(() => ({ highlightColor }))} />
+          </div>
+          <RangeRow label={t('Highlight Opacity')} value={effect.highlightOpacity * 100} min={0} max={100} suffix="%" testId="style-highlight-opacity"
+            onChange={(value) => change(() => ({ highlightOpacity: value / 100 }))} />
+          <div className={styles.panelRow}><span className={styles.panelLabel}>{t('Shadow Mode')}</span>
+            <select className={`${styles.select} ${styles.styleSelect}`} value={effect.shadowMode} data-testid="style-shadow-mode"
+              onChange={(event) => change(() => ({ shadowMode: event.target.value as BlendMode }))}>
+              {BLEND_MODES.map((mode) => <option key={mode.mode} value={mode.mode}>{t(mode.label)}</option>)}
+            </select><ColorWell controller={controller} title={t('Shadow Mode')} color={effect.shadowColor} testId="style-shadow-color"
+              onChange={(shadowColor) => change(() => ({ shadowColor }))} />
+          </div>
+          <RangeRow label={t('Shadow Opacity')} value={effect.shadowOpacity * 100} min={0} max={100} suffix="%" testId="style-shadow-opacity"
+            onChange={(value) => change(() => ({ shadowOpacity: value / 100 }))} />
+        </>
+      );
+    }
+    case 'satin':
+      return (
+        <>
+          <BlendRow controller={controller} mode={effect.blendMode} onChange={(blendMode) => change(() => ({ blendMode }))}>{colorWell(effect.color)}</BlendRow>
+          {opacity(effect.opacity)}
+          <AngleRow controller={controller} value={effect.angle} onChange={(angle) => change(() => ({ angle }))} />
+          <RangeRow label={t('Distance')} value={effect.distance} min={0} max={250} suffix="px" testId="style-distance"
+            onChange={(distance) => change(() => ({ distance }))} />
+          <RangeRow label={t('Size')} value={effect.size} min={0} max={250} suffix="px" testId="style-size"
+            onChange={(size) => change(() => ({ size }))} />
+          <div className={styles.panelRow}><span className={styles.panelLabel} />
+            <Check label={t('Invert')} checked={effect.invert} testId="style-invert" onChange={(invert) => change(() => ({ invert }))} />
+          </div>
+        </>
+      );
+    case 'patternOverlay': {
+      const selectPreset = (preset: PatternPreset) => change(() => ({ ...ensureProceduralPattern(session, preset) }));
+      const importPattern = async (file: File) => {
+        try {
+          const raster = await decodeImageFile(new Uint8Array(await file.arrayBuffer()), 16_777_216);
+          const source = raster.toPixels(), bytes = new Uint8Array(raster.width * raster.height * 4);
+          for (let i = 0; i < bytes.length; i++) bytes[i] = Math.round(source[i]! * 255 / raster.maximum);
+          const resourceId = `pattern-${globalThis.crypto.randomUUID()}`, document = session.document;
+          if (!document || !edits.has(session)) return;
+          own(() => {
+            session.replaceDocument({ ...document, resources: [...(document.resources ?? []),
+              { id: resourceId, role: 'pattern', mime: 'application/x-fernwork-rgba8', bytes }] });
+            change(() => ({ resourceId, patternWidth: raster.width, patternHeight: raster.height }));
+          });
+        } catch (error) { controller.reportError('pattern-import-failed', error, t('Import couldn’t finish')); }
+      };
+      const preset = (Object.keys(PATTERNS) as PatternPreset[]).find((key) => PATTERNS[key].id === effect.resourceId) ?? '';
+      return (
+        <>
+          <BlendRow controller={controller} mode={effect.blendMode} onChange={(blendMode) => change(() => ({ blendMode }))} />
+          {opacity(effect.opacity)}
+          <div className={styles.panelRow}><span className={styles.panelLabel}>{t('Pattern')}</span>
+            <select className={`${styles.select} ${styles.styleSelect}`} value={preset} data-testid="style-pattern-preset"
+              onChange={(event) => selectPreset(event.target.value as PatternPreset)}>
+              {!preset ? <option value="">{t('Imported')}</option> : null}
+              <option value="checker">{t('Checker')}</option><option value="dots">{t('Dots')}</option>
+              <option value="diagonal">{t('Diagonal')}</option>
+            </select>
+            <label className={styles.pill}>{t('From Image…')}<input type="file" accept="image/*" hidden data-testid="style-pattern-file"
+              onChange={(event) => { const file = event.target.files?.[0]; if (file) void importPattern(file); }} /></label>
+          </div>
+          <RangeRow label={t('Scale')} value={effect.scale} min={1} max={1000} sliderMax={250} suffix="%" testId="style-scale"
+            onChange={(scale) => change(() => ({ scale }))} />
+          <AngleRow controller={controller} value={effect.angle} onChange={(angle) => change(() => ({ angle }))} />
+          <div className={styles.panelRow}><span className={styles.panelLabel} />
+            <Check label={t('Link with Layer')} checked={effect.linkWithLayer} testId="style-pattern-link"
+              onChange={(linkWithLayer) => change(() => ({ linkWithLayer }))} />
+          </div>
         </>
       );
     }

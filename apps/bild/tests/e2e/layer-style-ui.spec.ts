@@ -248,3 +248,65 @@ test('German labels in the menus, the dialog and the Layers panel', async ({ pag
   await page.getByTestId('menu-Bearbeiten').click();
   await expect(page.getByTestId('menu-undo')).toHaveText(/Widerrufen Ebenenstil/);
 });
+
+test('remaining editable styles expose German controls, import a pattern and commit live records', async ({ page }) => {
+  await setup(page, 'de');
+  await openFromLayerMenu(page, 'Abgeflachte Kante und Relief …', 'Ebene', 'Ebenenstil');
+  const dialog = page.getByTestId('layer-style-dialog');
+  for (const text of ['Abgeflachte Kante und Relief', 'Schatten nach innen', 'Schein nach innen', 'Glanz', 'Musterüberlagerung']) {
+    await expect(dialog.getByText(text, { exact: true }).first()).toBeVisible();
+  }
+  await page.getByTestId('style-bevel-style').selectOption('outerBevel');
+  await page.getByTestId('style-bevel-technique').selectOption('chiselHard');
+  await page.getByTestId('style-depth').fill('180');
+  await dialog.getByRole('radio', { name: 'Nach unten' }).click();
+  await page.getByTestId('style-soften').fill('3');
+  await page.getByTestId('style-altitude').fill('42');
+  for (const text of ['Stil', 'Technik', 'Tiefe', 'Richtung', 'Weichzeichnen', 'Höhe', 'Lichtermodus', 'Tiefenmodus']) {
+    await expect(dialog.getByText(text, { exact: true }).first()).toBeVisible();
+  }
+
+  await page.getByTestId('style-enable-innerShadow').check();
+  await expect(page.getByTestId('style-body')).toHaveAttribute('data-kind', 'innerShadow');
+  await page.getByTestId('style-choke').fill('23');
+  await page.getByTestId('style-distance').fill('7');
+
+  await page.getByTestId('style-enable-innerGlow').check();
+  await expect(page.getByTestId('style-body')).toHaveAttribute('data-kind', 'innerGlow');
+  await dialog.getByRole('radio', { name: 'Mitte' }).click();
+  await page.getByTestId('style-size').fill('9');
+  await expect(dialog.getByText('Unterfüllen', { exact: true })).toBeVisible();
+
+  await page.getByTestId('style-enable-satin').check();
+  await page.getByTestId('style-invert').uncheck();
+  await page.getByTestId('style-distance').fill('13');
+
+  await page.getByTestId('style-enable-patternOverlay').check();
+  await page.getByTestId('style-pattern-preset').selectOption('dots');
+  await page.getByTestId('style-scale').fill('140');
+  await page.getByTestId('style-angle').fill('25');
+  await page.getByTestId('style-pattern-link').uncheck();
+  await page.getByTestId('style-pattern-file').setInputFiles({ name: 'tile.png', mimeType: 'image/png',
+    buffer: solidPng(2, 1, [20, 80, 200, 255]) });
+  await expect.poll(async () => {
+    const effect = (await layerNamed(page, 'square1')).effects.find((value: any) => value.kind === 'patternOverlay');
+    return { id: effect?.resourceId?.startsWith('pattern-'), width: effect?.patternWidth, height: effect?.patternHeight };
+  }).toEqual({ id: true, width: 2, height: 1 });
+  await page.getByTestId('style-ok').click();
+
+  const state = await page.evaluate(() => {
+    const document = (window as any).__editorForTests.session.document;
+    const effects = document.layers.find((layer: any) => layer.name === 'square1').effects;
+    return { effects, patterns: document.resources.filter((resource: any) => resource.role === 'pattern').map((resource: any) => resource.id) };
+  });
+  expect(state.effects.find((effect: any) => effect.kind === 'bevelEmboss')).toMatchObject({
+    style: 'outerBevel', technique: 'chiselHard', depth: 180, direction: 'down', soften: 3, altitude: 42,
+  });
+  expect(state.effects.find((effect: any) => effect.kind === 'innerShadow')).toMatchObject({ choke: 23, distance: 7 });
+  expect(state.effects.find((effect: any) => effect.kind === 'innerGlow')).toMatchObject({ source: 'center', size: 9 });
+  expect(state.effects.find((effect: any) => effect.kind === 'satin')).toMatchObject({ invert: false, distance: 13 });
+  expect(state.effects.find((effect: any) => effect.kind === 'patternOverlay')).toMatchObject({
+    patternWidth: 2, patternHeight: 1, scale: 140, angle: 25, linkWithLayer: false,
+  });
+  expect(state.patterns).toHaveLength(1);
+});

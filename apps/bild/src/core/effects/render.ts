@@ -13,6 +13,8 @@ export interface EffectPass {
   readonly opacity: number;
   /** Overlays are interior content and therefore follow Fill Opacity. */
   readonly scalesWithFillOpacity: boolean;
+  /** Photoshop's fixed kind stack, from drop shadow (bottom) to bevel/emboss (top). */
+  readonly stackOrder: number;
 }
 
 export interface RenderEffectOptions {
@@ -21,17 +23,11 @@ export interface RenderEffectOptions {
   readonly rasterScale?: number;
 }
 
+/** @deprecated PSD import now creates live LayerEffect records; retained as a delegating compatibility API. */
 export interface PsdInnerEffect {
-  readonly kind: 'innerShadow' | 'innerGlow';
-  readonly opacity: number;
-  readonly blendMode: BlendMode;
-  readonly color: RGB;
-  readonly size: number;
-  readonly choke: number;
-  readonly angle: number;
-  readonly distance: number;
-  readonly useGlobalLight: boolean;
-  readonly source: 'edge' | 'center';
+  readonly kind: 'innerShadow' | 'innerGlow'; readonly opacity: number; readonly blendMode: BlendMode;
+  readonly color: RGB; readonly size: number; readonly choke: number; readonly angle: number;
+  readonly distance: number; readonly useGlobalLight: boolean; readonly source: 'edge' | 'center';
 }
 
 function clamp01(value: number): number { return Math.min(1, Math.max(0, value)); }
@@ -185,10 +181,13 @@ function expandedAlpha(alpha: Uint8Array, width: number, height: number, margin:
 }
 
 function pass(rgba: Uint8Array, width: number, height: number, margin: number, placement: EffectPass['placement'],
-  blendMode: BlendMode, opacity: number, scalesWithFillOpacity: boolean): EffectPass {
+  blendMode: BlendMode, opacity: number, scalesWithFillOpacity: boolean, stackOrder: number): EffectPass {
   return { placement, raster: Raster.fromPixels(width, height, 4, rgba), sourceX: -margin, sourceY: -margin,
-    blendMode, opacity: clamp01(opacity), scalesWithFillOpacity };
+    blendMode, opacity: clamp01(opacity), scalesWithFillOpacity, stackOrder };
 }
+
+const EFFECT_STACK: Readonly<Record<LayerEffect['kind'], number>> = { dropShadow: 0, outerGlow: 1, colorOverlay: 2,
+  gradientOverlay: 3, patternOverlay: 4, satin: 5, innerGlow: 6, innerShadow: 7, stroke: 8, bevelEmboss: 9 };
 
 function sampleNearest(values: Float32Array | Uint8Array, width: number, height: number, x: number, y: number): number {
   const px = Math.round(x), py = Math.round(y);
@@ -216,8 +215,13 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
       margin = Math.max(margin, Math.ceil(size + Math.max(0, effect.distance)) + 2);
     } else if (effect.kind === 'outerGlow') margin = Math.max(margin, Math.ceil(Math.max(0, effect.size)) + 2);
     else if (effect.kind === 'stroke' && effect.position !== 'inside') margin = Math.max(margin, Math.ceil(effect.width) + 1);
+    else if (effect.kind === 'bevelEmboss' && effect.style !== 'innerBevel') {
+      margin = Math.max(margin, Math.ceil(effect.size + effect.soften) + 2);
+    }
   }
   if (enabled.some((effect) => effect.kind === 'stroke' && effect.position !== 'outside')) margin = Math.max(margin, 1);
+  if (enabled.some((effect) => effect.kind === 'innerShadow' || effect.kind === 'innerGlow'
+    || effect.kind === 'bevelEmboss' || effect.kind === 'satin')) margin = Math.max(margin, 1);
   const alignment = Math.max(1, Math.round(finite(options.rasterScale, 1)));
   margin = Math.ceil(margin / alignment) * alignment;
   const outWidth = width + margin * 2, outHeight = height + margin * 2;
@@ -226,9 +230,16 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
   for (let i = 0; i < source.length; i++) solid[i] = source[i]! > 0 ? 1 : 0;
   let toSolid: Float32Array | null = null;
   const solidDistances = () => toSolid ??= distanceTransform(solid, outWidth, outHeight, true);
+  let toOutside: Float32Array | null = null;
+  const outsideDistances = () => toOutside ??= distanceTransform(solid, outWidth, outHeight, false);
+  let signed: Float32Array | null = null;
+  const bevelReach = enabled.reduce((reach, effect) => effect.kind === 'bevelEmboss'
+    ? Math.max(reach, effect.size + effect.soften + 1) : reach, 1);
+  const signedDistances = () => signed ??= signedDistance(source, outWidth, outHeight, bevelReach);
   const behind: EffectPass[] = [], above: EffectPass[] = [];
 
   for (const effect of enabled) {
+    const stackOrder = EFFECT_STACK[effect.kind];
     const rgba = new Uint8Array(outWidth * outHeight * 4);
     if (effect.kind === 'dropShadow') {
       const angle = (effect.useGlobalLight ? finite(options.globalLightAngle, DEFAULT_GLOBAL_LIGHT_ANGLE) : effect.angle) * Math.PI / 180;
@@ -247,7 +258,7 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
         if (effect.knockout ?? true) coverage *= 1 - source[y * outWidth + x]! / 255;
         putPixel(rgba, (y * outWidth + x) * 4, effect.color, coverage, x - margin, y - margin, width, height);
       }
-      behind.push(pass(rgba, outWidth, outHeight, margin, 'behind', effect.blendMode ?? 'multiply', effect.opacity, false));
+      behind.push(pass(rgba, outWidth, outHeight, margin, 'behind', effect.blendMode ?? 'multiply', effect.opacity, false, stackOrder));
     } else if (effect.kind === 'outerGlow') {
       const size = Math.max(0, effect.size), spread = Math.max(0, Math.min(size, size * effect.spread / 100));
       const distances = solidDistances(), softness = Math.max(1e-6, size - spread);
@@ -257,7 +268,67 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
         putPixel(rgba, i * 4, effect.color, coverage, i % outWidth - margin,
           Math.floor(i / outWidth) - margin, width, height);
       }
-      behind.push(pass(rgba, outWidth, outHeight, margin, 'behind', effect.blendMode, effect.opacity, false));
+      behind.push(pass(rgba, outWidth, outHeight, margin, 'behind', effect.blendMode, effect.opacity, false, stackOrder));
+    } else if (effect.kind === 'innerShadow' || effect.kind === 'innerGlow') {
+      const distances = outsideDistances(), size = Math.max(0, effect.size);
+      const choke = Math.max(0, Math.min(size, size * effect.choke / 100));
+      const softness = Math.max(1e-6, size - choke);
+      const angle = effect.kind === 'innerShadow'
+        ? (effect.useGlobalLight ? finite(options.globalLightAngle, DEFAULT_GLOBAL_LIGHT_ANGLE) : effect.angle) * Math.PI / 180 : 0;
+      const dx = effect.kind === 'innerShadow' ? -Math.cos(angle) * effect.distance : 0;
+      const dy = effect.kind === 'innerShadow' ? Math.sin(angle) * effect.distance : 0;
+      for (let y = 0; y < outHeight; y++) for (let x = 0; x < outWidth; x++) {
+        const index = y * outWidth + x, shape = source[index]! / 255;
+        if (shape <= 0) continue;
+        const distance = sampleDistance(distances, outWidth, outHeight, x - dx, y - dy);
+        let coverage: number;
+        if (effect.kind === 'innerGlow' && effect.source === 'center') {
+          coverage = size <= 0 ? 0 : distance <= choke ? 0 : clamp01((distance - choke) / softness);
+        } else coverage = size <= 0 ? 0 : distance <= choke ? 1 : clamp01(1 - (distance - choke) / softness);
+        putPixel(rgba, index * 4, effect.color, coverage * shape, x - margin, y - margin, width, height);
+      }
+      above.push(pass(rgba, outWidth, outHeight, margin, 'above', effect.blendMode, effect.opacity, false, stackOrder));
+    } else if (effect.kind === 'bevelEmboss') {
+      const distances = signedDistances(), highlight = new Uint8Array(rgba.length), shadow = new Uint8Array(rgba.length);
+      const size = Math.max(0.5, effect.size + effect.soften), radians =
+        (effect.useGlobalLight ? finite(options.globalLightAngle, DEFAULT_GLOBAL_LIGHT_ANGLE) : effect.angle) * Math.PI / 180;
+      const lx = Math.cos(radians), ly = -Math.sin(radians), altitude = effect.altitude * Math.PI / 180;
+      const lightScale = Math.cos(altitude), depth = effect.depth / 100;
+      for (let y = 0; y < outHeight; y++) for (let x = 0; x < outWidth; x++) {
+        const index = y * outWidth + x, distance = distances[index]!;
+        const inner = distance <= 0 && distance >= -size, outer = distance >= 0 && distance <= size;
+        const included = effect.style === 'innerBevel' ? inner : effect.style === 'outerBevel' ? outer : inner || outer;
+        if (!included) continue;
+        let profile = clamp01(1 - Math.abs(distance) / size);
+        if (effect.technique === 'chiselHard') profile = profile > 0 ? 1 : 0;
+        else if (effect.technique === 'chiselSoft') profile *= profile;
+        const left = distances[y * outWidth + Math.max(0, x - 1)]!;
+        const right = distances[y * outWidth + Math.min(outWidth - 1, x + 1)]!;
+        const top = distances[Math.max(0, y - 1) * outWidth + x]!;
+        const bottom = distances[Math.min(outHeight - 1, y + 1) * outWidth + x]!;
+        const gx = right - left, gy = bottom - top, length = Math.max(1e-6, Math.hypot(gx, gy));
+        let lighting = (gx / length * lx + gy / length * ly) * lightScale;
+        if (effect.style === 'pillowEmboss' && outer) lighting = -lighting;
+        if (effect.direction === 'down') lighting = -lighting;
+        const amount = clamp01(Math.abs(lighting) * profile * depth) * (source[index]! / 255 || (outer ? 1 : 0));
+        if (lighting >= 0) putPixel(highlight, index * 4, effect.highlightColor, amount, x - margin, y - margin, width, height);
+        else putPixel(shadow, index * 4, effect.shadowColor, amount, x - margin, y - margin, width, height);
+      }
+      above.push(pass(highlight, outWidth, outHeight, margin, 'above', effect.highlightMode, effect.highlightOpacity, false, stackOrder));
+      above.push(pass(shadow, outWidth, outHeight, margin, 'above', effect.shadowMode, effect.shadowOpacity, false, stackOrder));
+    } else if (effect.kind === 'satin') {
+      const distances = outsideDistances(), radians = effect.angle * Math.PI / 180;
+      const dx = Math.cos(radians) * effect.distance, dy = -Math.sin(radians) * effect.distance;
+      const falloff = (distance: number) => effect.size <= 0 ? 0 : clamp01(1 - distance / effect.size);
+      for (let y = 0; y < outHeight; y++) for (let x = 0; x < outWidth; x++) {
+        const index = y * outWidth + x, shape = source[index]! / 255;
+        if (!shape) continue;
+        let coverage = Math.abs(falloff(sampleDistance(distances, outWidth, outHeight, x - dx, y - dy))
+          - falloff(sampleDistance(distances, outWidth, outHeight, x + dx, y + dy)));
+        if (effect.invert) coverage = 1 - coverage;
+        putPixel(rgba, index * 4, effect.color, coverage * shape, x - margin, y - margin, width, height);
+      }
+      above.push(pass(rgba, outWidth, outHeight, margin, 'above', effect.blendMode, effect.opacity, false, stackOrder));
     } else if (effect.kind === 'stroke') {
       const radius = Math.max(0, effect.width), fill = solidFill(effect);
       const low = effect.position === 'inside' ? -radius : effect.position === 'center' ? -radius / 2 : 0;
@@ -268,47 +339,27 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
         const coverage = distances ? distanceBand(distances[i]!, low, high) : 0;
         putPixel(rgba, i * 4, fill, coverage, i % outWidth - margin, Math.floor(i / outWidth) - margin, width, height);
       }
-      above.push(pass(rgba, outWidth, outHeight, margin, 'above', effect.blendMode ?? 'normal', effect.opacity ?? 1, false));
-    } else {
+      above.push(pass(rgba, outWidth, outHeight, margin, 'above', effect.blendMode ?? 'normal', effect.opacity ?? 1, false, stackOrder));
+    } else if (effect.kind === 'colorOverlay' || effect.kind === 'gradientOverlay') {
       const fill: EffectFill = effect.kind === 'colorOverlay' ? { kind: 'color', color: effect.color }
         : { kind: 'gradient', gradient: effect.gradient, angle: effect.angle, scale: effect.scale };
       for (let y = 0; y < outHeight; y++) for (let x = 0; x < outWidth; x++) {
         const coverage = source[y * outWidth + x]! / 255;
         putPixel(rgba, (y * outWidth + x) * 4, fill, coverage, x - margin, y - margin, width, height);
       }
-      above.push(pass(rgba, outWidth, outHeight, margin, 'above', effect.blendMode ?? 'normal', effect.opacity, true));
+      above.push(pass(rgba, outWidth, outHeight, margin, 'above', effect.blendMode ?? 'normal', effect.opacity, true, stackOrder));
     }
   }
-  return [...behind, ...above];
+  return [...behind.sort((a, b) => a.stackOrder - b.stackOrder), ...above.sort((a, b) => a.stackOrder - b.stackOrder)];
 }
 
-/** Photoshop inner styles are clipped to the source shape and rendered above its fill. */
+/** @deprecated Delegates old callers to the live effect renderer. */
 export function renderPsdInnerEffectPasses(alpha: Uint8Array, width: number, height: number,
   effects: readonly PsdInnerEffect[], options: RenderEffectOptions = {}): readonly EffectPass[] {
-  if (!effects.length) return [];
-  const solid = Uint8Array.from(alpha, (value) => value > 0 ? 1 : 0);
-  const toOutside = distanceTransform(solid, width, height, false), output: EffectPass[] = [];
-  for (const effect of effects) {
-    const rgba = new Uint8Array(width * height * 4), size = Math.max(0, effect.size);
-    const spread = Math.max(0, Math.min(size, size * effect.choke / 100));
-    const softness = Math.max(1e-6, size - spread);
-    const angle = (effect.useGlobalLight ? finite(options.globalLightAngle, DEFAULT_GLOBAL_LIGHT_ANGLE) : effect.angle) * Math.PI / 180;
-    const dx = -Math.cos(angle) * effect.distance, dy = Math.sin(angle) * effect.distance;
-    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-      const index = y * width + x, shape = alpha[index]! / 255;
-      if (shape <= 0) continue;
-      let coverage: number;
-      if (effect.kind === 'innerGlow' && effect.source === 'center') {
-        const maximum = Math.max(1e-6, Math.hypot(width, height) / 2);
-        coverage = clamp01(toOutside[index]! / Math.min(maximum, Math.max(1e-6, size)));
-      } else {
-        const distance = sampleDistance(toOutside, width, height,
-          effect.kind === 'innerShadow' ? x - dx : x, effect.kind === 'innerShadow' ? y - dy : y);
-        coverage = size <= 0 ? 0 : distance <= spread ? 1 : clamp01(1 - (distance - spread) / softness);
-      }
-      putPixel(rgba, index * 4, effect.color, coverage * shape, x, y, width, height);
-    }
-    output.push(pass(rgba, width, height, 0, 'above', effect.blendMode, effect.opacity, false));
-  }
-  return output;
+  return renderEffectPasses(alpha, width, height, effects.map((effect) => effect.kind === 'innerShadow'
+    ? { kind: 'innerShadow', schemaVersion: 1, enabled: true, opacity: effect.opacity, blendMode: effect.blendMode,
+      color: effect.color, size: effect.size, choke: effect.choke, angle: effect.angle, distance: effect.distance,
+      useGlobalLight: effect.useGlobalLight, contour: 'linear' }
+    : { kind: 'innerGlow', schemaVersion: 1, enabled: true, opacity: effect.opacity, blendMode: effect.blendMode,
+      color: effect.color, size: effect.size, choke: effect.choke, source: effect.source, contour: 'linear' }), options);
 }
