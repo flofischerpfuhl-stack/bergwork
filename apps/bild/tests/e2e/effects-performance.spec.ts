@@ -38,6 +38,7 @@ test('4096² cached drop shadow, stroke and outer glow stay within the GPU frame
     const view = { width: 1000, height: 700,
       viewToDoc: { a: side / 700, b: 0, c: 0, d: side / 700, tx: 0, ty: 0 }, scale: 700 / side, snap: false };
     let target = gpu.composite(document, view); gpu.gl.finish(); gpu.releaseTarget(target);
+    const countersBefore = gpu.performanceCounters;
     const times: number[] = [];
     for (let i = 0; i < 60; i++) {
       const start = performance.now(); target = gpu.composite(document, view); gpu.gl.finish();
@@ -45,10 +46,14 @@ test('4096² cached drop shadow, stroke and outer glow stay within the GPU frame
     }
     const gl = gpu.gl as WebGL2RenderingContext, extension = gl.getExtension('WEBGL_debug_renderer_info');
     const renderer = extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    const countersAfter = gpu.performanceCounters;
     times.sort((a, b) => a - b); gpu.destroy();
-    return { renderer: String(renderer), median: times[Math.floor(times.length / 2)]!, p95: times[Math.floor(times.length * 0.95)]! };
+    return { renderer: String(renderer), median: times[Math.floor(times.length / 2)]!, p95: times[Math.floor(times.length * 0.95)]!,
+      unchangedFrames: { effectRegenerations: countersAfter.effectRegenerations - countersBefore.effectRegenerations,
+        textureUploads: countersAfter.textureUploads - countersBefore.textureUploads } };
   });
   console.log('Layer styles GPU performance', measured);
+  expect(measured.unchangedFrames).toEqual({ effectRegenerations: 0, textureUploads: 0 });
   expect(measured.p95).toBeGreaterThan(0);
   if (!/swiftshader|llvmpipe|softpipe|software/i.test(measured.renderer)) expect(measured.p95).toBeLessThanOrEqual(16);
 });

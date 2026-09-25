@@ -28,7 +28,7 @@ import {
   GROUP_FRAGMENT, IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT, STACK_FRAGMENT,
   UNPREMULTIPLY_FRAGMENT, VERTEX,
 } from './shaders';
-import { liveFilterHooks } from './liveFilterPasses';
+import { LiveFilterHookAdapter } from './liveFilterPasses';
 
 export { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
 import { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
@@ -69,6 +69,11 @@ export interface ViewSpec {
   readonly scale: number;
   /** Show whole document pixels hard-edged (zoom ≥ 200%, EditorCanvas.crispZoom). */
   readonly snap: boolean;
+}
+
+export interface GpuPerformanceCounters {
+  readonly effectRegenerations: number;
+  readonly textureUploads: number;
 }
 
 /** GLSL for one adjustment kind plus how to fill its uniforms. Provided by the adjustment module. */
@@ -192,6 +197,8 @@ export class GpuCompositor {
   /** The LUT samples last uploaded per layer, so an unchanged adjustment is not re-uploaded every frame. */
   private lutUploaded = new Map<string, Uint8Array | Float32Array>();
   private activeDocument: CanvasDocument | undefined;
+  private readonly filteredHooks = new LiveFilterHookAdapter(DEFAULT_HOOKS);
+  private readonly performanceCounterValue = { effectRegenerations: 0, textureUploads: 0 };
   /** Set per composite: RGBA8 layers get half-float textures (see PRECISION_SENSITIVE_MODES). */
   private preciseTextures = false;
   private textureByteBudget = 384 * 1024 * 1024;
@@ -271,6 +278,9 @@ export class GpuCompositor {
     for (const slot of this.slots.values()) for (const chunk of slot.chunks.values()) bytes += chunk.bytes;
     return bytes;
   }
+
+  /** Cumulative diagnostics used by performance regression tests. */
+  get performanceCounters(): GpuPerformanceCounters { return { ...this.performanceCounterValue }; }
 
   /** Tile RAM and GPU textures have independent caps; hosts may lower this for constrained devices. */
   configureResidency(options: { textureByteBudget?: number; textureChunkSize?: number;
@@ -489,6 +499,7 @@ export class GpuCompositor {
     const gl = this.gl;
     this.renderer.texture.bindSource(source, 0);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, channels === 4);
+    this.performanceCounterValue.textureUploads++;
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, channels === 4 ? gl.RGBA : gl.RED, gl.UNSIGNED_BYTE, data);
     this.restoreUnpack();
   }
@@ -501,6 +512,7 @@ export class GpuCompositor {
   private uploadRasterData(x: number, y: number, width: number, height: number, format: number,
     data: PixelArray, wide = false): void {
     const gl = this.gl;
+    this.performanceCounterValue.textureUploads++;
     if (wide && data instanceof Uint8Array) {
       // RGBA8 into a half-float chunk: widen to 16 bit, then premultiply at that precision like a 16-bit raster.
       const wider = new Uint16Array(data.length);
@@ -656,7 +668,10 @@ export class GpuCompositor {
       }
     }
     if (!enforceBudget && this.textureBytes <= this.textureByteBudget) return;
-    const cold = [...this.slots.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed);
+    // The active frame is the minimum viable working set. Evicting one of its slots here only
+    // guarantees that the next unchanged frame uploads it again (a9fe5e2 regression).
+    const cold = [...this.slots.entries()].filter((entry) => entry[1].lastUsed < this.frame)
+      .sort((a, b) => a[1].lastUsed - b[1].lastUsed);
     for (const [key, slot] of cold) {
       if (this.textureBytes <= this.textureByteBudget) break;
       for (const chunk of slot.chunks.values()) chunk.source.destroy();
@@ -870,7 +885,8 @@ export class GpuCompositor {
     let baseSource = this.transparentSource();
     let baseOriginX = 0, baseOriginY = 0, baseApron = 0, baseWidth = 1, baseHeight = 1, hasBase = 0;
     if (source) {
-      const slot = this.texture(`${preview.target === 'mask' ? 'mask' : 'px'}:${preview.layerId}:brush-resident`,
+      const prefix = preview.target === 'mask' ? 'mask' : 'px';
+      const slot = this.texture(`${prefix}:${preview.layerId}${source.hasSwappedTiles ? ':brush-resident' : ''}`,
         source.hasSwappedTiles ? residentView(source) : source);
       const centerX = chunk.x + chunk.width / 2, centerY = chunk.y + chunk.height / 2;
       const sx = Math.min(source.width - 1, Math.max(0,
@@ -916,8 +932,8 @@ export class GpuCompositor {
   composite(document: CanvasDocument, view: ViewSpec, hooks: CompositeHooks = DEFAULT_HOOKS): RenderTexture {
     // Live filters change a layer's content; effects are then computed from the filtered alpha (Photoshop order).
     this.activeDocument = document;
-    hooks = liveFilterHooks(hooks);
-    document = documentWithLayerEffects(document, hooks);
+    hooks = this.filteredHooks.use(hooks);
+    document = documentWithLayerEffects(document, hooks, this.performanceCounterValue);
     this.frame++;
     this.skippedAdjustments = 0;
     // Float targets only: an 8-bit accumulation target would lose the precision again.
