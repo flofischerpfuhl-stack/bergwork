@@ -35,6 +35,27 @@ No dependency or bundled model was added, so `THIRD_PARTY_NOTICES.md` is unchang
 
 Photoshop itself is not available in this environment. Compatibility evidence therefore consists of Fernwork read/write/read state and pixel checks, the pinned corpus, raw descriptor assertions, and independent `psd-tools` opening/compositing.
 
+### PSDW3 regression audit (2026-09-25)
+
+The reported ten-file post-merge regression is not present at integration commit `5d3a28e`. The exact required
+`write-roundtrip.test.ts` command accepted all 300 corpus files and passed the maximum-channel-delta ≤ 1 assertion in
+337.75 s. Each named PSD also passed in a fresh process when filtered individually; the two inferred additional files
+are the PSB twins `layer_comps.psb` and `layer_params.psb`. Layer/record inspection of the most cross-cutting case,
+`transparency/fill-opacity.psd`, found its text cache, zero fill opacity, positioned raster mask, and Pattern Overlay
+resource unchanged after write and reopen (maximum delta 0). The grayscale Curves/Levels, generated fills, layer comps,
+live effects, layer parameters, and pattern cases likewise passed unchanged. No production mapping was changed: doing so
+without a reproducible failing state would risk lowering the independently measured 215/300 native-read baseline.
+
+This audit was performed after the PSD5 merge, which is already part of the task's starting commit. It therefore records
+the discrepancy rather than claiming that the writer supplied Photoshop semantics which were not exercised. The complete
+native-fidelity run remained at 215/300; no saved composite was used as a render source (M14).
+
+- Combined PSD gate: 3 files/6 tests passed in 481.08 s; load average 1.02/1.85/1.90 before and 1.74/1.75/1.84 after.
+- Save As PSD E2E: Chromium 1/1 passed in 6.7 s with `E2E_PORT=6101`, one worker, and `/tmp/pw-out-psdw3`.
+- `npx tsc --noEmit -p .`: passed with no diagnostics.
+- Full unit run (`--maxWorkers=2`): 91 files/774 tests passed in 42.03 s; load average 1.21/1.62/1.79 before and
+  1.54/1.65/1.79 after. No timeout, retry, or isolated benchmark rerun was needed.
+
 ## Known limitations
 
 - Features for which neither Photoshop nor `ag-psd` exposes an equivalent editable descriptor are rasterized and noticed; their appearance is retained but editability is not.
