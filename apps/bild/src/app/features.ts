@@ -132,5 +132,14 @@ export function installFeatures(controller: EditorController, profile: EditorPro
   for (const tool of profile.tools) controller.availableTools.add(tool);
 
   const lazyFeatures = (Object.keys(imports) as LazyFeature[]).filter(allowed);
-  idle(() => { for (const feature of lazyFeatures) void load(feature).catch(() => undefined); });
+  // Loading every split chunk in one early idle callback delayed first interaction by hundreds of
+  // milliseconds, especially in WebKitGTK. Give the first frame and input a quiet window, then warm
+  // one feature per idle period; direct tool/menu use still calls load() immediately above.
+  let warmIndex = 0;
+  const warmNext = (): void => {
+    const feature = lazyFeatures[warmIndex++];
+    if (!feature) return;
+    idle(() => { void load(feature).catch(() => undefined).finally(() => setTimeout(warmNext, 50)); });
+  };
+  setTimeout(warmNext, 2_500);
 }

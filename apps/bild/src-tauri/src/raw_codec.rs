@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use tauri::ipc::{InvokeBody, Request, Response};
 
 #[derive(Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -10,11 +11,18 @@ pub struct RawOptions {
     highlight_recovery: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct RawImage {
     width: u32,
     height: u32,
     rgba: Vec<u16>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBinaryHeader {
+    options: RawOptions,
+    allow_system_libraw: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -202,13 +210,30 @@ mod platform {
 #[tauri::command]
 pub fn raw_codec_available() -> bool { platform::available() }
 
+/** Binary IPC avoids serialising camera files and 16-bit output as millions of JSON numbers. */
 #[tauri::command]
-pub fn decode_raw(bytes: Vec<u8>, options: RawOptions, allow_system_libraw: bool) -> Result<Option<RawImage>, String> {
+pub fn decode_raw_binary(request: Request<'_>) -> Result<Response, String> {
+    let body = match request.body() {
+        InvokeBody::Raw(bytes) => bytes.as_slice(),
+        _ => return Err("decode_raw_binary needs a binary IPC body".into()),
+    };
+    if body.len() < 4 { return Err("truncated RAW request".into()); }
+    let header_length = u32::from_le_bytes(body[..4].try_into().unwrap()) as usize;
+    if header_length > 64 * 1024 || body.len() < 4 + header_length {
+        return Err("invalid RAW request header".into());
+    }
+    let header: RawBinaryHeader = serde_json::from_slice(&body[4..4 + header_length])
+        .map_err(|error| error.to_string())?;
     #[cfg(target_os = "linux")]
-    if !allow_system_libraw { return Ok(None); }
+    if !header.allow_system_libraw { return Ok(Response::new(Vec::new())); }
     #[cfg(not(target_os = "linux"))]
-    let _ = allow_system_libraw;
-    platform::decode(&bytes, &options).map(Some)
+    let _ = header.allow_system_libraw;
+    let image = platform::decode(&body[4 + header_length..], &header.options)?;
+    let mut output = Vec::with_capacity(8 + image.rgba.len() * 2);
+    output.extend_from_slice(&image.width.to_le_bytes());
+    output.extend_from_slice(&image.height.to_le_bytes());
+    for sample in image.rgba { output.extend_from_slice(&sample.to_le_bytes()); }
+    Ok(Response::new(output))
 }
 
 #[cfg(all(test, target_os = "linux"))]

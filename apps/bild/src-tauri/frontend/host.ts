@@ -1,3 +1,5 @@
+/// <reference path="./tauri-globals.d.ts" />
+
 import type { FileByteSink, FileTargetHost, SaveTarget } from '../../src/platform/browserHost';
 import { sha256Hex } from '../../src/io/sha256';
 import type { CodecHost, ColorHost, ComputeHost, FileSystemHost, FontHost, HostCapabilityMap, HostFileReference, ModelHost, ScreenColorHost } from '../../src/platform/hosts';
@@ -31,9 +33,11 @@ const SAVE_FILTERS: Record<'png' | 'jpeg' | 'webp' | 'avif' | 'tiff' | 'zip' | '
   recipe: { name: 'Fernwork recipe', extensions: ['fwrecipe'] },
 };
 const baseName = (path: string) => path.split(/[\\/]/).at(-1) || path;
-const ownedBytes = (bytes: Uint8Array): Uint8Array<ArrayBuffer> => new Uint8Array(bytes);
 async function asFiles(paths: readonly string[]): Promise<File[]> {
-  return Promise.all(paths.map(async (path) => new File([ownedBytes(await window.__TAURI__.fs.readFile(path))], baseName(path))));
+  // A Blob-shaped range reader keeps native input lazy and bounded. The previous fs.readFile →
+  // Uint8Array copy → File path held two complete encoded files in WebKit/JSC and eagerly read every
+  // file in a multi-import before the sequential import queue could start.
+  return Promise.all(paths.map(async (path) => nativeProjectBlob(path, '') as unknown as File));
 }
 function nativeProjectBlobRange(path: string, start: number, end: number, type: string): Blob {
   const size = Math.max(0, end - start);
@@ -71,9 +75,9 @@ function nativeProjectBlobRange(path: string, start: number, end: number, type: 
   } as unknown as Blob;
 }
 
-export async function nativeProjectBlob(path: string): Promise<Blob> {
+export async function nativeProjectBlob(path: string, type = 'application/zip'): Promise<Blob> {
   const size = await window.__TAURI__.core.invoke<number>('file_size', { path });
-  return nativeProjectBlobRange(path, 0, size, 'application/zip');
+  return nativeProjectBlobRange(path, 0, size, type);
 }
 
 const NATIVE_TRANSFER_CHUNK = 256 * 1024;
@@ -257,8 +261,11 @@ const codecs: CodecHost = {
   rawBackend: isWindows ? 'wic' : 'system-libraw',
   systemRawEnabled: () => isWindows || globalThis.localStorage?.getItem(rawPreferenceKey) === 'on',
   setSystemRawEnabled(enabled) { if (!isWindows) globalThis.localStorage?.setItem(rawPreferenceKey, enabled ? 'on' : 'off'); },
-  decodeRaw(bytes, options) { return invokeRawDecoder(window.__TAURI__.core.invoke, bytes, options,
-    this.systemRawEnabled?.() ?? false, isWindows ? 'srgb' : 'linear-prophoto'); },
+  decodeRaw(bytes, options) {
+    const enabled = this.systemRawEnabled?.() ?? false;
+    if (!isWindows && !enabled) return Promise.resolve(null);
+    return invokeRawDecoder(window.__TAURI__.core.invoke, bytes, options, enabled, isWindows ? 'srgb' : 'linear-prophoto');
+  },
 };
 
 /** Tauri implementation of the same optional capability registry as the browser host. */

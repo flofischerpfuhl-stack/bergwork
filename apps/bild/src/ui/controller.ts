@@ -22,7 +22,8 @@ import { buildManifest, buildManifestV2, readArchive, writeArchiveStreaming, Pro
 import { readCompPackage, readCompZip, writeCompZip } from '../io/compPackage';
 import { unzipSync } from 'fflate';
 import { isQuotaError, RecoveryStore } from '../platform/recovery';
-import { decodeImageAsset, decodeImageFile, fileBaseName, ImageImportError } from '../io/imageImport';
+import { decodeImageFile, fileBaseName, ImageImportError } from '../io/imageImport';
+import { decodeImageAssetInBackground, decodeImageFileInBackground } from '../workers/imageDecodeClient';
 import { DEFAULT_JPEG, type JpegOptions } from '../io/export';
 import {
   planExport, type ExportFile, type ExportFormat, type ExportPlanItem, type ExportRenderer, type ExportRequest, type ExportRunOptions,
@@ -283,7 +284,8 @@ export class EditorController {
 
   /** Uses optional capabilities carried by the mount host without widening contracts.ts. */
   decodeImage(bytes: Uint8Array, remainingPixels: number, raw?: RawDecodeOptions) {
-    return decodeImageFile(bytes, remainingPixels, { host: this.capabilities.codecs, maxSide: this.limits.maxSide, raw });
+    return decodeImageFileInBackground(bytes, remainingPixels,
+      { host: this.capabilities.codecs, maxSide: this.limits.maxSide, raw });
   }
 
   get session(): EditorSession { return this.workspace.current.session; }
@@ -726,7 +728,7 @@ export class EditorController {
       // Retained non-PNG sources must repeat ImageImporter.decode's colour/orientation pipeline;
       // PNG entries still take the reader's tile-streaming fast path when no conversion is needed.
       try {
-        loaded = await readArchive(blob, (data) => decodeImageAsset(data, this.limits.maxPixels,
+        loaded = await readArchive(blob, (data) => decodeImageAssetInBackground(data, this.limits.maxPixels,
           { host: this.capabilities.codecs, maxSide: this.limits.maxSide }), this.limits, this.residency ?? undefined);
       } catch (error) {
         // Ambiguous legacy `.zip` files have no useful extension. Only pay for a contiguous copy

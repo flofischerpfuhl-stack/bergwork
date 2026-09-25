@@ -393,6 +393,21 @@ describe('document limit profiles', () => {
 });
 
 describe('streaming project archive', () => {
+  it('does not clone immutable ZIP chunks when a host sink consumes them', async () => {
+    const payload = new Uint8Array(2 * 1024 * 1024).fill(73), chunks: Uint8Array[] = [];
+    const writer = new Zip64StreamWriter((chunk) => { chunks.push(chunk); });
+    await writer.add('assets/large.bin', (input) => input.push(payload, true));
+    writer.finish();
+    await writer.drain();
+    expect(writer.metrics.copiedBytes).toBe(0);
+    expect(writer.metrics.emittedBytes).toBeGreaterThan(payload.byteLength);
+    // The stored payload reaches the sink by identity; only ZIP headers/trailers are separate.
+    expect(chunks.some((chunk) => chunk === payload)).toBe(true);
+    const archive = new Blob(chunks as BlobPart[]), restored: number[] = [];
+    for await (const entry of readZipEntries(archive)) for await (const chunk of entry.chunks) restored.push(...chunk.subarray(0, 4));
+    expect(restored).toEqual([73, 73, 73, 73]);
+  });
+
   it('does not mistake a ZIP data-descriptor signature inside a stored asset for its end', async () => {
     const payload = new Uint8Array(1024);
     for (let index = 0; index < payload.length; index++) payload[index] = (index * 73 + 19) & 255;
