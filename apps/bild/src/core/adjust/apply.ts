@@ -5,7 +5,7 @@ import { basicColor } from './basic';
 import { colourLuminance, colourPanelColor } from './colour';
 import { lookupCube, parseCubeLut, type CubeLut } from './cube';
 import { adjustHueColor, hueResponse } from './hue';
-import { curvesTables, levelsTables } from './levels';
+import { curveValue, curvesTables, levelRangeValue, levelsTables } from './levels';
 import { linearToSrgb, srgbToLinear } from '../pixel/color';
 
 export type AdjustmentApplier = (adjustment: LayerAdjustment, rgba: Float32Array,
@@ -225,21 +225,42 @@ export const applyAdjustment: AdjustmentApplier = (adjustment, rgba, width, heig
     if (nativeGray) r = g = b = decodeGray((r + g + b) / 3);
     let nativeCmyk = false;
     if (psd.psdCmykTransfer && (adjustment.kind === 'Invert' || adjustment.kind === 'Posterize'
-      || adjustment.kind === 'Threshold')) {
+      || adjustment.kind === 'Threshold' || adjustment.kind === 'Levels' || adjustment.kind === 'Curves'
+      || adjustment.kind === 'Brightness/Contrast')) {
       const cmyk = sampleCubeChannels(psd.psdCmykTransfer.inverse, psd.psdCmykTransfer.inverseSize, 4, r, g, b);
       if (adjustment.kind === 'Invert') for (let channel = 0; channel < 4; channel++) cmyk[channel] = 1 - cmyk[channel]!;
       else if (adjustment.kind === 'Threshold') {
         // Photoshop's CMYK threshold result is process white or K-only process black,
-        // not RGB white/black converted after the adjustment.
-        const boundary = sampleCmykForward(psd.psdCmykTransfer,
-          [0, 0, 0, 1 - adjustment.parameters.level / 255]);
-        const ink = 0.299 * r + 0.587 * g + 0.114 * b
-          < 0.299 * boundary[0] + 0.587 * boundary[1] + 0.114 * boundary[2] ? 1 : 0;
+        // not RGB white/black converted after the adjustment. Its legacy composite
+        // channel is the native-ink density projection pinned by the CMYK corpus.
+        const density = 0.252 * cmyk[0]! + 0.632 * cmyk[1]! + 0.109 * cmyk[2]! + 0.371 * cmyk[3]!;
+        const ink = density > 1 - adjustment.parameters.level / 255 ? 1 : 0;
         cmyk.fill(0); cmyk[3] = ink;
       }
       else if (adjustment.kind === 'Posterize') {
         const levels = Math.max(2, adjustment.parameters.levels), steps = levels - 1;
         for (let channel = 0; channel < 4; channel++) cmyk[channel] = Math.min(steps, Math.floor(clamp01(cmyk[channel]!) * levels)) / steps;
+      }
+      else if (adjustment.kind === 'Levels') {
+        const ranges = adjustment.parameters.ranges;
+        for (let channel = 0; channel < 4; channel++) {
+          const local = ranges[channel + 1];
+          const input = 1 - cmyk[channel]!;
+          const value = local ? levelRangeValue(input, local) : input;
+          cmyk[channel] = 1 - levelRangeValue(value, ranges[0]!);
+        }
+      }
+      else if (adjustment.kind === 'Curves') {
+        const settings = adjustment.parameters;
+        for (let channel = 0; channel < 4; channel++) {
+          const local = settings.channels[channel + 1];
+          const input = (1 - cmyk[channel]!) * 255;
+          const value = local ? curveValue(input, settings, channel + 1) : input;
+          cmyk[channel] = 1 - curveValue(value, settings, 0) / 255;
+        }
+      }
+      else if (brightnessTable) {
+        for (let channel = 0; channel < 4; channel++) cmyk[channel] = 1 - brightnessContrast(1 - cmyk[channel]!, brightnessTable);
       }
       [r, g, b] = sampleCmykForward(psd.psdCmykTransfer, cmyk); nativeCmyk = true;
     }

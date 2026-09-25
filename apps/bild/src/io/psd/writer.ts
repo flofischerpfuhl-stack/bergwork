@@ -246,6 +246,21 @@ function effects(values: readonly LayerEffect[], state: State, path: string): La
       break;
     }
     case 'stroke': {
+      const pattern = (effect as typeof effect & { readonly psdPattern?: { readonly data: Uint8Array;
+        readonly width: number; readonly height: number; readonly x: number; readonly y: number;
+        readonly id: string; readonly name: string; readonly linked: boolean } }).psdPattern;
+      if (pattern && pattern.data.length === pattern.width * pattern.height * 4) {
+        if (!state.patterns.some((value) => value.id === pattern.id)) state.patterns.push({ name: pattern.name,
+          id: pattern.id, x: pattern.x, y: pattern.y, bounds: { x: pattern.x, y: pattern.y,
+            w: pattern.width, h: pattern.height }, data: pattern.data.slice() });
+        result.stroke ??= [];
+        result.stroke.push({ present: true, enabled: effect.enabled, size: pixelsUnit(effect.width), position: effect.position,
+          // ag-psd 31 declares Lnkd as boolean but its descriptor writer classifies the
+          // key as an integer. Omitting the default true value keeps the block valid.
+          fillType: 'pattern', pattern: { name: pattern.name, id: pattern.id },
+          opacity: clamp01(effect.opacity ?? 1), blendMode: BLENDS[effect.blendMode ?? 'normal'] });
+        break;
+      }
       const fill = effect.fill ?? (effect.color ? { kind: 'color' as const, color: effect.color } : null);
       result.stroke ??= [];
       if (fill?.kind === 'gradient') result.stroke.push({ present: true, enabled: effect.enabled, size: pixelsUnit(effect.width),
@@ -423,6 +438,15 @@ function common(layer: Layer, path: string, state: State): AgLayer {
     'The non-destructive crop was baked into layer pixels because PSD has no equivalent editable layer crop.', 'editability-only', path);
   if (layer.warp && layer.kind !== 'embedded') notice(state, 'parametric-warp',
     'Warp appearance was baked into layer pixels.', 'editability-only', path);
+  if ((layer as Layer & { readonly psdBlendInteriorEffects?: boolean }).psdBlendInteriorEffects === true) {
+    output.blendInteriorElements = true;
+  }
+  const knockout = (layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | boolean }).psdKnockout;
+  if (knockout) {
+    output.knockout = true;
+    output.id = state.nextNativeLayerId++;
+    state.knockoutModes.set(output.id, knockout === 'shallow' ? 'shallow' : 'deep');
+  }
   return output;
 }
 
@@ -435,12 +459,6 @@ function convertLayer(layer: Layer, path: string, children: AgLayer[], state: St
     delete output.imageData;
     output.children = children;
     output.blendMode = isolated ? BLENDS[blendMode] : 'pass through';
-    const knockout = (layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | boolean }).psdKnockout;
-    output.knockout = !!knockout;
-    if (knockout) {
-      output.id = state.nextNativeLayerId++;
-      state.knockoutModes.set(output.id, knockout === 'shallow' ? 'shallow' : 'deep');
-    }
     const artboard = (layer as Layer & { readonly psdArtboardRect?: Rect }).psdArtboardRect;
     if (artboard) output.artboard = { rect: { top: artboard.y, left: artboard.x,
       bottom: artboard.y + artboard.height, right: artboard.x + artboard.width }, backgroundType: 3,

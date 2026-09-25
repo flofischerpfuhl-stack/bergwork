@@ -1357,6 +1357,10 @@ export class GpuCompositor {
     const renderSequence = (layers: readonly Layer[], root = false, scopeParent: string | null = null): RenderTexture => {
       let surface = this.acquire(width, height); this.clear(surface, root
         && (document as CanvasDocument & { readonly psdOpaqueCanvas?: boolean }).psdOpaqueCanvas === true);
+      const hasLayerKnockout = layers.some((layer) => layer.kind !== 'group'
+        && !!(layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout);
+      const layerKnockoutBase = hasLayerKnockout ? this.acquire(width, height) : null;
+      if (layerKnockoutBase) this.run(this.pass('copy'), layerKnockoutBase, width, height, { uSource: surface.source }, {});
       let knockoutBase: RenderTexture | null = null;
       const passThroughBases = new Map<string, RenderTexture>();
       const stacks = new Map<string, Layer[]>(), stacked = new Set<string>();
@@ -1415,7 +1419,18 @@ export class GpuCompositor {
           if (!live) continue;
           combined = clip ? this.multiplyTargets(clip, live, view, temporaries) : live;
         }
-        const next = this.drawLayer(surface, layer, view, hooks, combined, hooks.blendMode(layer));
+        const knockout = (layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout;
+        let next: RenderTexture;
+        if (knockout && layerKnockoutBase) {
+          const empty = this.acquire(width, height); this.clear(empty);
+          const layerSurface = this.drawLayer(empty, { ...layer, opacity: 1, fillOpacity: 1 }, view, hooks, combined, 'normal');
+          const shallowBase = passThroughAncestors.map((ancestor) => passThroughBases.get(ancestor.id))
+            .find((candidate): candidate is RenderTexture => !!candidate);
+          next = this.drawGroupSurface(surface, layerSurface,
+            knockout === 'shallow' ? shallowBase ?? layerKnockoutBase : layerKnockoutBase,
+            null, layer, view, hooks.blendMode(layer));
+          this.release(empty); this.release(layerSurface);
+        } else next = this.drawLayer(surface, layer, view, hooks, combined, hooks.blendMode(layer));
         this.release(surface); surface = next;
         if (root && !knockoutBase && layer.locks.transparency) {
           knockoutBase = this.acquire(width, height);
@@ -1424,6 +1439,7 @@ export class GpuCompositor {
       }
       for (const base of passThroughBases.values()) this.release(base);
       if (knockoutBase) this.release(knockoutBase);
+      if (layerKnockoutBase) this.release(layerKnockoutBase);
       return surface;
     };
     let acc = renderSequence(sequence(null), true);

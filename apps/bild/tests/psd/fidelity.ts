@@ -176,8 +176,21 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
   const rendered = results.filter((result) => result.rendered).length;
   const passed = results.filter((result) => result.passed).length;
   const passRate = results.length ? passed / results.length * 100 : 0;
+  const roundSevenChanges: readonly [string, string, string][] = [
+    ['adjustments/brightnesscontrast_cmyk.psd', '8.143 / 61', 'profile-space CMYK brightness/contrast'],
+    ['adjustments/curves_cmyk.psd', '23.136 / 136', 'native fifth-channel parser and profile-space CMYK curves'],
+    ['adjustments/levels_cmyk.psd', '13.904 / 104', 'native fifth-channel parser and profile-space CMYK levels'],
+    ['adjustments/threshold_cmyk.psd', '18.684 / 224', 'Photoshop CMYK composite-density threshold'],
+    ['advanced-blending.psd', '5.353 / 22', 'Blend Interior Effects as Group isolation'],
+    ['colormodes/4x4_16bit_grayscale.psd', '16.406 / 48', 'native-space cache-less reflected-gradient preview'],
+    ['colormodes/4x4_16bit_lab.psd', '66.281 / 255', 'D50 Lab cache-less reflected-gradient preview'],
+    ['colormodes/4x4_16bit_rgb.psd', '18.000 / 86', 'high-depth reflected-gradient preview transform'],
+    ['colormodes/4x4_32bit_grayscale.psd', '9.844 / 30', 'native-space cache-less reflected-gradient preview'],
+    ['colormodes/4x4_32bit_rgb.psd', '15.813 / 89', 'high-depth reflected-gradient preview transform'],
+    ['transparency/knockout-isolated-groups.psd', '3.162 / 73', 'ordinary-layer shallow/deep knockout backdrops'],
+  ];
   const lines = [
-    '# PSD native-fidelity report — sixth round', '',
+    '# PSD native-fidelity report — seventh round', '',
     `Corpus: psd-tools commit \`${commit}\`; ${results.length} PSD/PSB files. ag-psd 31.0.2 plus native non-RGB layer-channel decoding.`, '',
     'The oracle is each PSD’s embedded Photoshop composite. Metrics are absolute byte deltas over premultiplied RGB plus',
     'alpha (so undefined straight RGB below transparency is ignored): mean over all channels and the nearest-rank 99th',
@@ -185,26 +198,21 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
     'The runner is a measurement baseline: fidelity failures are reported but do not make the command itself fail.', '',
     `Overall: ${parsed}/${results.length} parsed, ${rendered}/${results.length} rendered, ${passed}/${results.length} passed (${passRate.toFixed(1)}%).`,
     `The Product Plan A7 acceptance target of at least 90% is ${passRate >= 90 ? 'met' : '**not met**'} by this baseline.`, '',
-    `Sixth-round input: 215/300 (71.7%). Current native result: ${passed}/${results.length} (${passRate.toFixed(1)}%), a net gain of ${passed - 215} files.`,
-    `Primary-folder changes are: blend modes 28→${summarize(results, 'blend-modes').passed}, adjustments 24→${summarize(results, 'adjustments').passed}, layers 32→${summarize(results, 'layers').passed}, effects 11→${summarize(results, 'effects').passed},`,
-    `path operations 12→${summarize(results, 'path-operations').passed}, masks 0→${summarize(results, 'masks').passed}, group clipping 1→${summarize(results, 'group-clipping').passed}, transparency 14→${summarize(results, 'transparency').passed}, colour modes 5→${summarize(results, 'colormodes').passed}, colour profiles`,
+    `Seventh-round input: 224/300 (74.7%). Current native result: ${passed}/${results.length} (${passRate.toFixed(1)}%), a net gain of ${passed - 224} files.`,
+    `Primary-folder changes are: blend modes 28→${summarize(results, 'blend-modes').passed}, adjustments 32→${summarize(results, 'adjustments').passed}, layers 32→${summarize(results, 'layers').passed}, effects 11→${summarize(results, 'effects').passed},`,
+    `path operations 12→${summarize(results, 'path-operations').passed}, masks 0→${summarize(results, 'masks').passed}, group clipping 1→${summarize(results, 'group-clipping').passed}, transparency 15→${summarize(results, 'transparency').passed}, colour modes 5→${summarize(results, 'colormodes').passed}, colour profiles`,
     `1→${summarize(results, 'colorprofiles').passed}, gradients 4→${summarize(results, 'gradients').passed}, descriptors 5→${summarize(results, 'descriptors').passed}, and root 78→${summarize(results, 'root').passed}. The overlapping 16/32-bit and PSB tags changed`,
-    `18→${summarize(results, '16/32-bit').passed} and 30→${summarize(results, 'PSB').passed} respectively. No primary-folder pass count regressed.`, '',
+    `21→${summarize(results, '16/32-bit').passed} and 30→${summarize(results, 'PSB').passed} respectively. No primary-folder pass count regressed.`, '',
     '| Newly passing file | Before mean / p99 | After mean / p99 | Native change |',
     '|---|---:|---:|---|',
-    '| adjustments/invert_cmyk.psd | 37.293 / 133 | 0.350 / 3 | ICC CMYK inverse/forward transforms around native-channel inversion |',
-    '| adjustments/invert_grayscale.psd | 10.375 / 43 | 0.030 / 1 | embedded gray-profile transfer around native-channel inversion |',
-    '| adjustments/posterize_16bits_cmyk.psd | 14.106 / 237 | 1.612 / 28 | profile-space CMYK posterization |',
-    '| adjustments/posterize_16bits_grayscale.psd | 11.817 / 255 | 0.065 / 1 | 65,536-sample gray-profile transfer |',
-    '| adjustments/posterize_cmyk.psd | 9.292 / 85 | 1.438 / 21 | profile-space CMYK posterization |',
-    '| adjustments/posterize_grayscale.psd | 11.715 / 128 | 0.816 / 14 | gray-profile-domain posterization |',
-    '| adjustments/threshold_16bits_grayscale.psd | 19.221 / 255 | 0.187 / 0 | 65,536-sample gray-profile threshold |',
-    '| adjustments/threshold_grayscale.psd | 20.062 / 255 | 0.072 / 0 | gray-profile-domain threshold |',
-    '| transparency/knockout-shallow-nested-pt.psd | 63.500 / 127 | 0.000 / 0 | native knko selector and pass-through group-entry backdrop |', '',
-    '## Thresholds and feature summary', '',
-    '| Feature | Limits (mean / p99) | Files | Parsed | Rendered | Passed | Pass rate | Top failure causes |',
-    '|---|---:|---:|---:|---:|---:|---:|---|',
   ];
+  for (const [file, before, change] of roundSevenChanges) {
+    const result = results.find((candidate) => candidate.file === file);
+    if (result?.passed) lines.push(`| ${file} | ${before} | ${decimal(result.metrics?.mean)} / ${result.metrics?.p99 ?? '—'} | ${change} |`);
+  }
+  lines.push('', '## Thresholds and feature summary', '',
+    '| Feature | Limits (mean / p99) | Files | Parsed | Rendered | Passed | Pass rate | Top failure causes |',
+    '|---|---:|---:|---:|---:|---:|---:|---|');
   for (const category of categories) {
     const summary = summarize(results, category), threshold = THRESHOLDS[category]!;
     const rate = summary.files ? `${(summary.passed / summary.files * 100).toFixed(1)}%` : '—';
@@ -268,16 +276,17 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
     '- CMYK and grayscale layer channels use Little CMS with an embedded profile when present and deterministic default profiles',
     '  otherwise. Lab uses a D50 Lab-to-sRGB conversion; duotone/multichannel use their available channel values because the',
     '  proprietary Photoshop ink curves are not present in the parsed data.',
-    '- RGBA16 layer data is retained. The 32-bit path clamps floating samples to display range; it does not reproduce Photoshop’s',
-    '  document-specific 32-bit preview/tone-mapping transform, which remains a major corpus failure source.',
+    '- RGBA16 layer data is retained. Cache-less 16/32-bit reflected fills are generated in their document colour space;',
+    '  other 32-bit layer data still clamps floating samples instead of reproducing Photoshop’s document-specific tone map.',
     '- Isolated groups, group opacity/fill, nested group order, and the corpus knockout cases are composited natively on CPU and GPU.',
     '  A bounded native knko parser preserves Photoshop’s shallow/deep selector; shallow knockout restores the containing',
-    '  pass-through group’s entry backdrop. Knockout on ordinary, non-group layers remains approximated.',
+    '  pass-through group’s entry backdrop; ordinary non-group knockout uses the same bounded backdrop model.',
     '- Embedded/default gray and CMYK profiles now provide pre-CMS adjustment transfers for grayscale Invert, Posterize,',
-    '  Threshold, Levels, and Curves and CMYK Invert/Posterize. CMYK Threshold improves but remains outside tolerance;',
-    '  CMYK Levels/Curves/Brightness-Contrast and non-colorize Hue/Saturation ranges remain mismatched.',
+    '  Threshold, Levels, and Curves and CMYK Invert/Posterize/Threshold/Levels/Curves/Brightness-Contrast.',
+    '  Non-colorize Hue/Saturation ranges remain mismatched.',
     '- The PSD -2 mask channel is used as Photoshop’s composed vector/user-mask cache; -3 is decoded as the real-mask fallback',
-    '  when that cache is absent. Vector/group masks without either pixel channel, smart filters, blend-if, and pattern strokes remain unsupported.',
+    '  when that cache is absent. Zero-area cache-less masks use their document-wide default. Smart filters and blend-if remain unsupported;',
+    '  pattern strokes render from the PSD pattern table, while files whose parser omits that table remain reported.',
     '  Text, vector, and smart-object layers use their layer-owned saved pixel caches; never the document merged composite.',
     '- Bounded raster masks retain the PSD outside-mask default. Density is baked into mask samples; feather is still unsupported.',
     '- Dissolve uses a deterministic local dither because the PSD layer data contains neither Photoshop’s process-local random',

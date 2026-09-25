@@ -40,6 +40,9 @@ function solidFill(effect: Extract<LayerEffect, { kind: 'stroke' }>): EffectFill
   return effect.fill ?? { kind: 'color', color: effect.color ?? { red: 0, green: 0, blue: 0 } };
 }
 
+interface PsdStrokePattern { readonly data: Uint8Array; readonly width: number; readonly height: number;
+  readonly x: number; readonly y: number; readonly linked: boolean }
+
 function putPixel(output: Uint8Array, index: number, fill: EffectFill | RGB, alpha: number,
   x: number, y: number, sourceWidth: number, sourceHeight: number): void {
   let color: RGB, opacity = 1;
@@ -331,13 +334,23 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
       above.push(pass(rgba, outWidth, outHeight, margin, 'above', effect.blendMode, effect.opacity, false, stackOrder));
     } else if (effect.kind === 'stroke') {
       const radius = Math.max(0, effect.width), fill = solidFill(effect);
+      const pattern = (effect as typeof effect & { readonly psdPattern?: PsdStrokePattern }).psdPattern;
       const low = effect.position === 'inside' ? -radius : effect.position === 'center' ? -radius / 2 : 0;
       const high = effect.position === 'inside' ? 0 : effect.position === 'center' ? radius / 2 : radius;
       const distances = radius > 0 ? signedDistance(source, outWidth, outHeight, Math.max(Math.abs(low), Math.abs(high)) + 1)
         : null;
       for (let i = 0; i < source.length; i++) {
         const coverage = distances ? distanceBand(distances[i]!, low, high) : 0;
-        putPixel(rgba, i * 4, fill, coverage, i % outWidth - margin, Math.floor(i / outWidth) - margin, width, height);
+        if (pattern && pattern.width > 0 && pattern.height > 0) {
+          const localX = i % outWidth - margin, localY = Math.floor(i / outWidth) - margin;
+          const px = ((Math.floor(localX) - pattern.x) % pattern.width + pattern.width) % pattern.width;
+          const py = ((Math.floor(localY) - pattern.y) % pattern.height + pattern.height) % pattern.height;
+          const sourceAt = (py * pattern.width + px) * 4, target = i * 4;
+          rgba[target] = pattern.data[sourceAt]!; rgba[target + 1] = pattern.data[sourceAt + 1]!;
+          rgba[target + 2] = pattern.data[sourceAt + 2]!;
+          rgba[target + 3] = Math.round(clamp01(coverage) * pattern.data[sourceAt + 3]!);
+        } else putPixel(rgba, i * 4, fill, coverage, i % outWidth - margin,
+          Math.floor(i / outWidth) - margin, width, height);
       }
       above.push(pass(rgba, outWidth, outHeight, margin, 'above', effect.blendMode ?? 'normal', effect.opacity ?? 1, false, stackOrder));
     } else if (effect.kind === 'colorOverlay' || effect.kind === 'gradientOverlay') {

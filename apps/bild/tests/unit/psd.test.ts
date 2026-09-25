@@ -3,14 +3,14 @@ import { writePsdUint8Array, type Layer as AgLayer, type Psd } from 'ag-psd';
 import type { HostAdapter } from '../../contracts';
 import { applyAdjustment } from '../../src/core/adjust/apply';
 import { curvesTables } from '../../src/core/adjust/levels';
-import { defaultCurves, defaultHueSaturation } from '../../src/core/adjustments';
+import { defaultCurves, defaultHueSaturation, defaultLevels } from '../../src/core/adjustments';
 import { newLayer, type CanvasDocument, type LayerAdjustment } from '../../src/core/document';
-import { renderPsdInnerEffectPasses } from '../../src/core/effects/render';
+import { renderEffectPasses, renderPsdInnerEffectPasses } from '../../src/core/effects/render';
 import { makeTransform } from '../../src/core/geometry';
 import { Raster } from '../../src/core/raster';
 import { psdHasMergedTransparency, readRawPsdComposite } from '../../src/io/psd/composite';
 import { decodePsdLayerChannels } from '../../src/io/psd/layerChannels';
-import { patchPsdLayerKnockouts, readPsdLayerKnockouts } from '../../src/io/psd/layerInfo';
+import { patchPsdLayerKnockouts, readPsdCmykAdjustmentChannels, readPsdLayerKnockouts } from '../../src/io/psd/layerInfo';
 import { readPsdDocument, readPsdDocumentManaged } from '../../src/io/psd';
 import { cpuCompositeRegion } from '../../src/render/cpuRender';
 import { adjustmentProgram } from '../../src/render/adjustPrograms';
@@ -120,6 +120,17 @@ describe('PSD colour modes and product wiring', () => {
     expect(grayInverted[2]).toBeCloseTo(0.7, 7); expect(grayInverted[3]).toBe(1);
     const grayInvertLayer = newLayer({ id: 'gray-invert', name: 'gray invert', transform, adjustment: grayInvert });
     expect(adjustmentProgram(grayInvertLayer)?.key).toBe('psd-gray-8:Invert');
+
+    const cmykTransfer = { inverseSize: 2, inverse: new Uint8Array(2 ** 3 * 4),
+      forwardSize: 2, forward: new Uint8Array(2 ** 4 * 4) };
+    const cmykCurves = Object.assign({}, adjustment, { psdColorMode: 4, psdCmykTransfer: cmykTransfer }) as LayerAdjustment;
+    const cmykCurvesLayer = newLayer({ id: 'cmyk-curves', name: 'CMYK curves', transform, adjustment: cmykCurves });
+    expect(adjustmentProgram(cmykCurvesLayer)?.key).toBe('psd-cmyk:Curves');
+    const levels = { kind: 'Levels' as const, schemaVersion: 1 as const,
+      parameters: defaultLevels() };
+    const cmykLevels = Object.assign(levels, { psdColorMode: 4, psdCmykTransfer: cmykTransfer }) as LayerAdjustment;
+    const cmykLevelsLayer = newLayer({ id: 'cmyk-levels', name: 'CMYK levels', transform, adjustment: cmykLevels });
+    expect(adjustmentProgram(cmykLevelsLayer)?.key).toBe('psd-cmyk:Levels');
   });
 
   it('parses native shallow and deep knockout bytes without collapsing their modes', () => {
@@ -132,6 +143,26 @@ describe('PSD colour modes and product wiring', () => {
     const patched = patchPsdLayerKnockouts(bytes, new Map([[17, 'deep'], [29, 'shallow']]));
     expect([...readPsdLayerKnockouts(patched)]).toEqual([[17, 'deep'], [29, 'shallow']]);
     expect([...readPsdLayerKnockouts(bytes)]).toEqual([[17, 'shallow'], [29, 'deep']]);
+  });
+
+  it('parses the native CMYK black channel omitted by ag-psd Levels and Curves', () => {
+    const encoder = new TextEncoder();
+    const block = (key: string, value: Uint8Array) => join([encoder.encode(`8BIM${key}`), u32(value.length), value,
+      ...(value.length % 2 ? [new Uint8Array(1)] : [])]);
+    const signed = (value: number) => u16(value & 0xffff);
+    const level = (black: number, white: number, outputBlack: number, outputWhite: number, gamma: number) =>
+      join([signed(black), signed(white), signed(outputBlack), signed(outputWhite), signed(gamma)]);
+    const levels = join([u16(2), level(0, 255, 0, 255, 100), level(0, 255, 0, 255, 100),
+      level(0, 255, 0, 255, 100), level(0, 255, 0, 255, 100), level(12, 234, 5, 245, 175)]);
+    const curve = (points: readonly [number, number][]) => join([u16(points.length),
+      ...points.map(([x, y]) => join([signed(y), signed(x)]))]);
+    const curves = join([new Uint8Array([0]), u16(1), u16(0), u16(0x11),
+      curve([[0, 0], [255, 255]]), curve([[0, 9], [200, 240], [255, 255]])]);
+    const parsed = readPsdCmykAdjustmentChannels(join([
+      block('levl', levels), block('lyid', u32(17)), block('curv', curves), block('lyid', u32(29)),
+    ]));
+    expect(parsed.get(17)?.levelsBlack).toEqual({ black: 12, white: 234, outputBlack: 5, outputWhite: 245, gamma: 1.75 });
+    expect(parsed.get(29)?.curvesBlack).toEqual([{ x: 0, y: 9 }, { x: 200, y: 240 }, { x: 255, y: 255 }]);
   });
 
   it('restores a pass-through group boundary for a nested shallow knockout', () => {
@@ -150,6 +181,49 @@ describe('PSD colour modes and product wiring', () => {
       layers: [background, outer, green, inner, blue], selection: null };
     expect(cpuCompositeRegion(document, { x: 0, y: 0, width: 1, height: 1 }))
       .toEqual(new Uint8Array([127, 0, 128, 255]));
+  });
+
+  it('restores the enclosing group entry behind an ordinary shallow-knockout layer', () => {
+    const transform = makeTransform({ x: 0, y: 0 }, { width: 1, height: 1 });
+    const pixel = (rgba: readonly number[]) => Raster.fromPixels(1, 1, 4, new Uint8Array(rgba));
+    const background = newLayer({ id: 'background', name: 'Background', transform,
+      raster: pixel([255, 255, 255, 255]), locks: { transparency: true, pixels: false, position: false, all: false } });
+    const group = { ...newLayer({ id: 'group', name: 'Group', kind: 'group', transform }), psdIsolated: false };
+    const green = newLayer({ id: 'green', name: 'Green', parentId: group.id, transform,
+      raster: pixel([0, 255, 0, 255]) });
+    const blue = { ...newLayer({ id: 'blue', name: 'Blue', parentId: group.id, transform,
+      raster: pixel([0, 0, 255, 255]), blendMode: 'multiply' }), psdKnockout: 'shallow' as const };
+    const document: CanvasDocument = { id: 'layer-knockout', width: 1, height: 1, resolution: 72,
+      layers: [background, group, green, blue], selection: null };
+    expect(cpuCompositeRegion(document, { x: 0, y: 0, width: 1, height: 1 }))
+      .toEqual(new Uint8Array([0, 0, 255, 255]));
+  });
+
+  it('groups PSD interior effects before applying Fill Opacity and renders pattern stroke pixels', () => {
+    const transform = makeTransform({ x: 0, y: 0 }, { width: 1, height: 1 });
+    const styled = { ...newLayer({ id: 'styled', name: 'Styled', transform, fillOpacity: 0.5,
+      raster: Raster.fromPixels(1, 1, 4, new Uint8Array([255, 0, 0, 255])), effects: [{
+        kind: 'colorOverlay' as const, schemaVersion: 1 as const, enabled: true, opacity: 1,
+        color: { red: 0, green: 0, blue: 1 }, blendMode: 'normal' as const,
+      }] }), psdBlendInteriorEffects: true };
+    const background = newLayer({ id: 'white', name: 'White', transform,
+      raster: Raster.fromPixels(1, 1, 4, new Uint8Array([255, 255, 255, 255])) });
+    const document: CanvasDocument = { id: 'interior-effects', width: 1, height: 1, resolution: 72,
+      layers: [background, styled], selection: null };
+    expect(cpuCompositeRegion(document, { x: 0, y: 0, width: 1, height: 1 }))
+      .toEqual(new Uint8Array([128, 128, 255, 255]));
+
+    const pattern = { data: new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]), width: 2, height: 1,
+      x: 0, y: 0, linked: true };
+    const stroke = { kind: 'stroke' as const, schemaVersion: 1 as const, enabled: true, width: 1,
+      position: 'outside' as const, opacity: 1, blendMode: 'normal' as const,
+      psdPattern: pattern } as Parameters<typeof renderEffectPasses>[3][number];
+    const pass = renderEffectPasses(new Uint8Array([255]), 1, 1, [stroke])[0]!;
+    expect(pass.raster.toPixels()).toContain(255);
+    expect(Array.from(pass.raster.toPixels()).some((value, index, pixels) => index % 4 === 0
+      && value === 255 && pixels[index + 2] === 0)).toBe(true);
+    expect(Array.from(pass.raster.toPixels()).some((value, index, pixels) => index % 4 === 2
+      && value === 255 && pixels[index - 2] === 0)).toBe(true);
   });
 
   it('decodes CMYK pixels from layer-owned channels without consulting the merged composite', () => {

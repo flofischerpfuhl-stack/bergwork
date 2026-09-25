@@ -317,9 +317,10 @@ class BandRenderer {
   }
 
   private drawLayer(layer: Layer, target: Float32Array, width: number, height: number, originX: number, originY: number,
-    includeLive: boolean, includeFolders: boolean, mode = this.blendMode(layer)): void {
+    includeLive: boolean, includeFolders: boolean, mode = this.blendMode(layer), knockoutBase: Float32Array | null = null): void {
+    const knockout = !!(layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout;
     if ((!includeLive || !layer.maskSourceId) && (!includeFolders || !this.hasFolderMask(layer))
-      && !layer.mask?.enabled && !layer.vectorMask?.enabled
+      && !layer.mask?.enabled && !layer.vectorMask?.enabled && !knockout
       && this.drawAlignedOneToOne(layer, target, width, height, originX, originY, mode)) return;
     const sample = new Float32Array(4);
     const visiting = new Set<string>();
@@ -342,6 +343,11 @@ class BandRenderer {
         if (includeFolders) coverage *= this.folderCoverage(layer, x, y);
         if (coverage <= 0) continue;
         const offset = (py * width + px) * 4;
+        if (knockout) {
+          const cut = clamp01(sample[3]! * coverage * layer.opacity * layer.fillOpacity);
+          for (let channel = 0; channel < 4; channel++) target[offset + channel] = target[offset + channel]! * (1 - cut)
+            + (knockoutBase?.[offset + channel] ?? 0) * cut;
+        }
         compositePremultipliedWithFill(target, offset, sample[0]!, sample[1]!, sample[2]!, sample[3]!,
           coverage, layer.opacity, layer.fillOpacity, mode, this.blendScratch,
           mode === 'dissolve' ? dissolveNoise(Math.floor(x), Math.floor(y), seed) : 0);
@@ -529,6 +535,7 @@ class BandRenderer {
     const target = new Float32Array(width * height * 4);
     if (this.rootKnockout
       && (this.document as CanvasDocument & { readonly psdOpaqueCanvas?: boolean }).psdOpaqueCanvas === true) target.fill(1);
+    const documentBase = target.slice();
     let knockoutBase: Float32Array | null = null;
     const passThroughBases = new Map<string, Float32Array>();
     for (const layer of this.order) {
@@ -557,7 +564,13 @@ class BandRenderer {
       else if (layer.adjustment) {
         // LiveMaskRenderer skips adjustment layers linked outside a clipping stack.
         if (!layer.maskSourceId) this.adjust(layer, target, width, height, originX, originY, true);
-      } else this.drawLayer(layer, target, width, height, originX, originY, true, true);
+      } else {
+        const knockout = (layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout;
+        const shallowBase = ancestors.map((ancestor) => passThroughBases.get(ancestor.id))
+          .find((candidate): candidate is Float32Array => !!candidate);
+        this.drawLayer(layer, target, width, height, originX, originY, true, true, this.blendMode(layer),
+          knockout === 'shallow' ? shallowBase ?? documentBase : knockout === 'deep' ? documentBase : null);
+      }
       if (this.rootKnockout && !knockoutBase && layer.locks.transparency) knockoutBase = target.slice();
     }
     return target;
