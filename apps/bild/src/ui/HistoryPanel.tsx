@@ -1,14 +1,20 @@
 import styles from './editor.module.css';
 import type { EditorController } from './controller';
-import { useSession } from './hooks';
+import { useSessionSelector } from './hooks';
 import { useState } from 'react';
+import { markUiRender } from './performance';
 
 /**
  * History panel (PRODUCT-PLAN 6.1, P7): every recorded step in order, the current state highlighted, steps after it
  * dimmed. Clicking a step goes back or forward to the state after it; the first row is the state before any step.
  */
 export function HistoryPanel({ controller }: { controller: EditorController }) {
-  const session = useSession(controller.session);
+  markUiRender('HistoryPanel');
+  const session = controller.session;
+  useSessionSelector(session, (current) => JSON.stringify([
+    current.history.pastNames, current.history.futureNames, current.history.enabled,
+    current.canUseHistory, !!current.document,
+  ]));
   const t = controller.t;
   const history = session.history;
   const past = history.pastNames, future = history.futureNames;

@@ -12,6 +12,7 @@ import { EditorRoot } from './EditorRoot';
 import { installFeatures } from '../app/features';
 import { profileFor } from '../app/profiles';
 import type { CapabilityHost } from '../platform/hosts';
+import { uiPerformanceAuditApi, type UiPerformanceAuditApi } from './performance';
 
 export const mountEditor: MountEditorV2 = async (root, options) => {
   // Keep lazy-codec and CanvasKit requests observable in development even after
@@ -28,7 +29,11 @@ export const mountEditor: MountEditorV2 = async (root, options) => {
   flushSync(() => reactRoot.render(<EditorRoot controller={controller} />));
   const stopOpenEvents = controller.capabilities.files?.onOpenFiles((files) => { void controller.openHostFiles(files); });
   // Measurement and test hook; harmless in production (a property on the host window only in dev).
-  if (import.meta.env.DEV) (window as unknown as { __editorForTests?: EditorController }).__editorForTests = controller;
+  if (import.meta.env.DEV) {
+    const developmentWindow = window as unknown as { __editorForTests?: EditorController; __editorUiPerformance?: UiPerformanceAuditApi };
+    developmentWindow.__editorForTests = controller;
+    developmentWindow.__editorUiPerformance = uiPerformanceAuditApi(controller);
+  }
   let destroyed = false;
   const handle: EditorHandleV2 = controller.handle(() => {
     if (destroyed) return;

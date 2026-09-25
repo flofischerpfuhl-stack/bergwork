@@ -21,6 +21,7 @@ import {
 } from '../io/exportPlan';
 import type { ExportSizeEstimate } from '../io/exportPipeline';
 import { profileHasFeature } from '../app/profiles';
+import { markUiRender } from './performance';
 
 type SizeRow = { readonly id: number; readonly mode: 'scale'; readonly scale: number } | { readonly id: number; readonly mode: 'width' | 'height'; readonly value: string };
 
@@ -191,6 +192,7 @@ function previewRequest(request: ExportRequest, item: ExportPlanItem): ExportReq
 }
 
 export function ExportDialog({ controller, close }: { controller: EditorController; close: () => void }) {
+  markUiRender('ExportDialog');
   const t = controller.t, locale = controller.locale;
   const session = controller.session;
   const document = session.document;

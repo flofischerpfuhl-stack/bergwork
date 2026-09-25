@@ -1,8 +1,9 @@
 import styles from './editor.module.css';
 import type { EditorController } from './controller';
-import { useSession, useWorkspace } from './hooks';
+import { useSessionSelector, useWorkspaceSelector } from './hooks';
 import { Icon, type IconName } from './icons';
 import { TOOL_LABELS, TOOLS, type Tool } from '../core/session';
+import { markUiRender } from './performance';
 
 function toolIcon(controller: EditorController, tool: Tool): IconName {
   const extra = controller.toolIcon?.(tool);
@@ -11,8 +12,14 @@ function toolIcon(controller: EditorController, tool: Tool): IconName {
 }
 
 export function ToolRail({ controller }: { controller: EditorController }) {
-  useWorkspace(controller);
-  const session = useSession(controller.session);
+  markUiRender('ToolRail');
+  useWorkspaceSelector(controller, (workspace) => workspace.selectedId);
+  const session = controller.session;
+  useSessionSelector(session, (current) => {
+    const foreground = current.paletteColor(false), background = current.paletteColor(true);
+    const activeIcon = controller.toolIcon?.(current.tool) ?? '';
+    return `${controller.availableTools.size}|${current.tool}|${activeIcon}|${current.canEditPalette ? 1 : 0}|${foreground.red},${foreground.green},${foreground.blue}|${background.red},${background.green},${background.blue}`;
+  });
   const t = controller.t;
   const color = (c: { red: number; green: number; blue: number }) => `rgb(${Math.round(c.red * 255)},${Math.round(c.green * 255)},${Math.round(c.blue * 255)})`;
   const fg = session.paletteColor(false), bg = session.paletteColor(true);

@@ -8,16 +8,19 @@ import { useEffect, useRef } from 'react';
 import type { LayerTransform } from '../core/geometry';
 import { pixelToDocument } from '../core/geometry';
 import type { Raster } from '../core/raster';
+import { markThumbnail, markUiRender } from './performance';
 
 const previews = new WeakMap<Raster, { canvas: HTMLCanvasElement | OffscreenCanvas; edge: number }>();
 
 /** A ≤96 px preview of a raster (straight alpha, box-filtered), cached per raster. */
 function preview(raster: Raster): { canvas: HTMLCanvasElement | OffscreenCanvas; edge: number } {
+  markThumbnail('previewRequests');
   // Recovered/swapped full rasters are intentionally never pinned for a list thumbnail.
   const reduced = raster.reducedCopy ?? raster.tileOverlay?.source.reducedCopy;
   const sourceRaster = raster.hasSwappedTiles && reduced ? reduced : raster;
   const cached = previews.get(sourceRaster);
-  if (cached) return cached;
+  if (cached) { markThumbnail('cacheHits'); return cached; }
+  markThumbnail('builds');
   const factor = Math.min(1, 96 / Math.max(sourceRaster.width, sourceRaster.height));
   const width = Math.max(1, Math.round(sourceRaster.width * factor)), height = Math.max(1, Math.round(sourceRaster.height * factor));
   const out = new Uint8ClampedArray(width * height * 4);
@@ -68,9 +71,12 @@ export function fittedSize(canvas: { width: number; height: number }, box: numbe
 export function CanvasThumbnail({ raster, transform, canvasSize, box, mask = false, className }: {
   raster: Raster | null; transform: LayerTransform; canvasSize: { width: number; height: number }; box: number; mask?: boolean; className?: string;
 }) {
+  markUiRender('CanvasThumbnail');
+  markThumbnail('renders');
   const ref = useRef<HTMLCanvasElement>(null);
   const size = fittedSize(canvasSize, box);
   useEffect(() => {
+    markThumbnail('draws');
     const element = ref.current;
     if (!element) return;
     const scale = 2;
