@@ -11,11 +11,17 @@ try { await access(ROOT); } catch { present = false; }
 
 describe.skipIf(!present)('psd-tools embedded-composite fidelity corpus', () => {
   it('measures every licensed fixture and writes the A7 report', async () => {
-    const files = await corpusFiles(ROOT);
+    const allFiles = await corpusFiles(ROOT);
+    const filter = process.env.PSD_FIDELITY_FILE?.replaceAll('\\', '/');
+    const files = filter ? allFiles.filter((file) => path.relative(ROOT, file).split(path.sep).join('/').includes(filter)) : allFiles;
     expect(files.length).toBeGreaterThan(0);
     const results = [];
-    for (const file of files) results.push(await measureFile(file, ROOT));
+    for (const file of files) {
+      const result = await measureFile(file, ROOT);
+      results.push(result);
+      if (filter) console.log(JSON.stringify(result));
+    }
     expect(results).toHaveLength(files.length);
-    await writeFidelityReport(results, REPORT, COMMIT);
+    if (!filter) await writeFidelityReport(results, REPORT, COMMIT);
   });
 });

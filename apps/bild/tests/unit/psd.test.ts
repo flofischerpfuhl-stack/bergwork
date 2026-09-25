@@ -8,7 +8,7 @@ import { newLayer, type CanvasDocument, type LayerAdjustment } from '../../src/c
 import { renderPsdInnerEffectPasses } from '../../src/core/effects/render';
 import { makeTransform } from '../../src/core/geometry';
 import { Raster } from '../../src/core/raster';
-import { readRawPsdComposite } from '../../src/io/psd/composite';
+import { psdHasMergedTransparency, readRawPsdComposite } from '../../src/io/psd/composite';
 import { decodePsdLayerChannels } from '../../src/io/psd/layerChannels';
 import { readPsdDocument, readPsdDocumentManaged } from '../../src/io/psd';
 import { cpuCompositeRegion } from '../../src/render/cpuRender';
@@ -131,6 +131,40 @@ describe('PSD colour modes and product wiring', () => {
     const palette = new Uint8Array(768); palette[7] = 12; palette[256 + 7] = 34; palette[512 + 7] = 56;
     expect(readRawPsdComposite(rawPsd(2, [new Uint8Array([7])], palette)).rgba)
       .toEqual(new Uint8Array([12, 34, 56, 255]));
+  });
+
+  it('renders an opaque zero-layer PSD canvas without borrowing its merged oracle', () => {
+    const oracle = image([0, 0, 0, 255, 0, 0, 0, 255]);
+    const imported = readPsdDocument(writePsdUint8Array({ width: 2, height: 1, children: [], imageData: oracle },
+      { generateThumbnail: false }));
+    expect(imported.document.layers.every((layer) => !layer.raster)).toBe(true);
+    expect(imported.oracle?.toPixels()).toEqual(new Uint8Array(oracle.data));
+    expect(cpuCompositeRegion(imported.document, { x: 0, y: 0, width: 2, height: 1 }))
+      .toEqual(new Uint8Array([255, 255, 255, 255, 255, 255, 255, 255]));
+  });
+
+  it('parses the native Mt32 merged-transparency declaration instead of guessing from channels', () => {
+    const header = [new TextEncoder().encode('8BPS'), u16(1), new Uint8Array(6), u16(4), u32(1), u32(1),
+      u16(32), u16(3), u32(0), u32(0)];
+    const plain = join([...header, u32(4), u32(0)]);
+    const mt32 = new TextEncoder().encode('8BIMMt32');
+    const layerSection = join([u32(0), mt32, u32(0)]);
+    const hdr = join([...header, u32(layerSection.length), layerSection]);
+    expect(psdHasMergedTransparency(plain)).toBe(false);
+    expect(psdHasMergedTransparency(hdr)).toBe(true);
+  });
+
+  it('uses Photoshop\'s composed -2 mask cache when an editable -3 real mask is also present', () => {
+    const layer: AgLayer = { name: 'Two masks', top: 0, left: 0, bottom: 1, right: 2,
+      imageData: image([255, 0, 0, 255, 255, 0, 0, 255]),
+      mask: { top: 0, left: 0, bottom: 1, right: 2, defaultColor: 0, fromVectorData: true,
+        imageData: image([255, 255, 255, 255, 0, 0, 0, 255]) },
+      realMask: { top: 0, left: 0, bottom: 1, right: 2, defaultColor: 0, fromVectorData: false,
+        imageData: image([0, 0, 0, 255, 255, 255, 255, 255]) } };
+    const imported = readPsdDocument(writePsdUint8Array({ width: 2, height: 1, children: [layer],
+      imageData: image([255, 0, 0, 255, 0, 0, 0, 0]) }, { generateThumbnail: false }));
+    expect(imported.document.layers[0]?.mask?.raster.toPixels()).toEqual(new Uint8Array([255, 0]));
+    expect(imported.unsupported.some((issue) => issue.code === 'real-mask')).toBe(false);
   });
 
   it('uses the Little CMS default CMYK profile on the product-open path', async () => {

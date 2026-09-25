@@ -1,7 +1,7 @@
 import {
   initializeCanvas, readPsd, type BlendMode as AgBlendMode, type Layer as AgLayer,
   type BezierPath, type Color as AgColor, type EffectSolidGradient, type LayerEffectsInfo, type LayerTextData, type LinkedFile, type PixelData, type Psd,
-  type PatternInfo, type UnitsValue, type VectorContent,
+  type LayerMaskData, type PatternInfo, type UnitsValue, type VectorContent,
 } from 'ag-psd';
 import {
   type BlendMode, type CanvasDocument, type ColorLabel, type FillParameters, type Layer, type LayerAdjustment, type LayerEffect,
@@ -301,27 +301,31 @@ function featherMask(source: Uint8Array, width: number, height: number, sigma: n
   return output;
 }
 
-function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportState,
-  layerPath: string): Layer['mask'] {
-  const mask = source.mask;
+interface ImportedPsdMask {
+  readonly raster: Raster;
+  readonly enabled: boolean;
+  readonly placement: LayerTransform | null;
+  readonly linked: boolean;
+  readonly defaultColor: number;
+}
+
+function decodedMask(mask: LayerMaskData | undefined, parameters: LayerMaskData | undefined,
+  layerTransform: LayerTransform, state: ImportState, layerPath: string): ImportedPsdMask | null {
   if (!mask) return null;
   if (!mask.imageData) {
-    const cached = mask.fromVectorData && source.imageData;
-    issue(state, 'mask-pixels', cached
-      ? 'Vector-derived mask uses the layer pixel cache and is not editable.'
-      : 'Layer mask has no decodable pixel channel.', cached ? 'editability-only' : 'not-rendered', layerPath);
+    issue(state, 'mask-pixels', 'Layer mask has no decodable pixel channel.', 'not-rendered', layerPath);
     return null;
   }
   const rgba = pixelDataToRgba8(mask.imageData);
   let pixels: Uint8Array<ArrayBufferLike> = new Uint8Array(mask.imageData.width * mask.imageData.height);
   const vectorParameters = mask.fromVectorData === true;
-  const density = (vectorParameters ? mask.vectorMaskDensity : mask.userMaskDensity) ?? 1;
+  const density = (vectorParameters ? parameters?.vectorMaskDensity : parameters?.userMaskDensity) ?? 1;
   for (let pixel = 0; pixel < pixels.length; pixel++) {
     const coverage = rgba[pixel * 4]!;
     pixels[pixel] = Math.round(255 - (255 - coverage) * density);
   }
   if (density !== 1) issue(state, 'mask-density', 'Mask density was baked into its raster.', 'approximated', layerPath);
-  const feather = (vectorParameters ? mask.vectorMaskFeather : mask.userMaskFeather) ?? 0;
+  const feather = (vectorParameters ? parameters?.vectorMaskFeather : parameters?.userMaskFeather) ?? 0;
   if (feather > 0) {
     pixels = featherMask(pixels, mask.imageData.width, mask.imageData.height, feather, mask.defaultColor ?? 0);
     issue(state, 'mask-feather', 'Mask feather was baked into its raster.', 'editability-only', layerPath);
@@ -344,7 +348,24 @@ function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportS
       'approximated', layerPath);
   }
   return { raster, enabled: mask.disabled !== true, placement: samePlacement(placement, layerTransform) ? null : placement,
-    linked: relative };
+    linked: relative, defaultColor };
+}
+
+function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportState,
+  layerPath: string): { readonly mask: Layer['mask']; readonly defaultColor?: number } {
+  const primary = decodedMask(source.mask, source.mask, layerTransform, state, layerPath);
+  const real = decodedMask(source.realMask, source.mask, layerTransform, state, layerPath);
+  if (!primary && !real) {
+    const cached = source.mask?.fromVectorData && source.imageData;
+    if (cached) issue(state, 'mask-pixels',
+      'Vector-derived mask uses the layer pixel cache and is not editable.', 'editability-only', layerPath);
+    return { mask: null };
+  }
+  // When both records exist, channel -2 is Photoshop's rendered mask cache (already composing
+  // vector and real/user mask data); -3 is the editable user-mask source. Rendering both would
+  // square its coverage. Fall back to -3 only for files that omit the composed cache.
+  const value = primary ?? real!;
+  return { mask: value, defaultColor: value.defaultColor };
 }
 
 function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportState, layerPath: string): void {
@@ -355,7 +376,6 @@ function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportSta
   if (source.text?.textPath) issue(state, 'text-path', 'PSD type on a path keeps its saved preview; after editing it is laid out as point text.', 'approximated', layerPath);
   if (source.placedLayer?.filter) issue(state, 'smart-filter',
     'Smart-object filters remain in the PSD preview; their editable parameters are not imported.', 'editability-only', layerPath);
-  if (source.realMask) issue(state, 'real-mask', 'The real/vector-derived mask channel is not rendered.', 'not-rendered', layerPath);
   if (source.filterEffectsMasks) issue(state, 'smart-filter', 'Smart filters and their masks are not rendered.', 'not-rendered', layerPath);
   if (source.knockout) issue(state, 'knockout', 'Knockout is rendered from the layer shape; its boundary is inferred from group nesting.',
     'approximated', layerPath);
@@ -368,7 +388,7 @@ function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportSta
     issue(state, 'blend-if', 'Non-default blend-if channel ranges are not rendered.', 'not-rendered', layerPath);
   }
   const hasClippedChildren = isGroup && source.children?.some((child) => child.clipping) === true;
-  if (source.transparencyShapesLayer === false || (source.effects && source.blendInteriorElements === false)
+  if (source.transparencyShapesLayer === false || (source.effects && source.blendInteriorElements === true)
     || (hasClippedChildren && source.blendClippendElements === false)) {
     issue(state, 'advanced-blending', 'Advanced blending flags are not rendered.', 'not-rendered', layerPath);
   }
@@ -1012,7 +1032,8 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     // runtime resolves. Decodable embedded PNGs use their true original grid and the PlLd/SoLd transform directly.
     const placement = placed && placedPixels ? placedTransform(source, layerTransform) : { transform: vectorTransform, warp: null };
     const vectorMask = vectorContent ? null : psdVectorMask(source, editableTransform.origin);
-    let importedMask = maskFor(source, placement.transform, state, layerPath);
+    const importedMaskResult = maskFor(source, placement.transform, state, layerPath);
+    let importedMask = importedMaskResult.mask;
     const artboard = isGroup ? legacyArtboard(source, state) : undefined;
     if (artboard && !importedMask) {
       const rect = artboard.rect;
@@ -1046,7 +1067,8 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     if (isGroup) imported = { ...imported,
       psdIsolated: sourceMode !== 'pass through', psdKnockout: source.knockout === true } as Layer
         & { readonly psdIsolated: boolean; readonly psdKnockout: boolean };
-    if (source.mask) imported = { ...imported, psdMaskDefault: source.mask.defaultColor ?? 0 } as Layer
+    if (importedMaskResult.defaultColor !== undefined) imported = { ...imported,
+      psdMaskDefault: importedMaskResult.defaultColor } as Layer
       & { readonly psdMaskDefault: number };
     else if (artboard) imported = { ...imported, psdMaskDefault: 0 } as Layer
       & { readonly psdMaskDefault: number };
@@ -1088,7 +1110,7 @@ function resolution(psd: Psd): number {
 function parserWarningImpact(message: string): PsdUnsupportedImpact {
   // psd-tools writes generator/content-authentication/OCIO bookkeeping on otherwise pixel-identical files.
   // ag-psd also reports descriptor padding as unread bytes; neither participates in compositing.
-  if (/^Unhandled additional info: (?:CAI  |GenI|OCIO)$/.test(message)
+  if (/^Unhandled additional info: (?:CAI\s*|GenI|OCIO|Mt32)$/.test(message)
     || /^Unread (?:2|4) bytes left for additional info: (?:vstk|PtFl|artb|brst)$/.test(message)) {
     return 'editability-only';
   }
@@ -1214,7 +1236,9 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
   const layers = importSiblings(psd.children ?? [], null, '', state);
   // PSD's negative layer-count flag is the native declaration that the merged result carries
   // transparency. Otherwise Photoshop composites the editable stack over an opaque white canvas.
-  const opaqueCanvas = layers.length > 0 && !psdHasMergedTransparency(bytes);
+  // The PSD canvas is opaque unless layer info (including the HDR Mt32 convention) declares
+  // merged transparency. This also applies to zero-layer documents: their Photoshop canvas is white.
+  const opaqueCanvas = !psdHasMergedTransparency(bytes);
   if (layers.length > MAX_LAYERS) throw new RangeError(`PSD has ${layers.length} layers; the document limit is ${MAX_LAYERS}`);
   const oracle = oracleOverride ?? (psd.imageData ? rasterFromPixelData(psd.imageData) : null);
   if (!oracle) unsupported.push({ code: 'composite-image', message: 'PSD has no decodable embedded composite image.',
