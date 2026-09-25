@@ -8,9 +8,9 @@ test('canvas compositor audit: uploads, unchanged frames, pan and pixels', async
   await mountForTest(page);
   const result = await page.evaluate(async () => {
     const load = (path: string): Promise<any> => import(/* @vite-ignore */ path);
-    const [{ GpuCompositor, DEFAULT_HOOKS }, { Raster, TILE }, { newLayer }, { makeTransform }] = await Promise.all([
+    const [{ GpuCompositor, DEFAULT_HOOKS }, { Raster, TILE }, { newLayer }, { makeTransform }, { compositeView }] = await Promise.all([
       load('/src/render/gpuCompositor.ts'), load('/src/core/raster.ts'), load('/src/core/document.ts'),
-      load('/src/core/geometry.ts'),
+      load('/src/core/geometry.ts'), load('/src/core/composite.ts'),
     ]);
     const p95 = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length * 0.95)]!;
     const timing = (values: number[]): Timing => {
@@ -58,6 +58,69 @@ test('canvas compositor audit: uploads, unchanged frames, pan and pixels', async
     const movedSample = [...movedReadback.slice((300 * movedView.width + 400) * 4,
       (300 * movedView.width + 400) * 4 + 4)];
     uploadGpu.destroy(); uploadCanvas.remove();
+
+    // 46,137,344 unique resident pixels: unlike the shared-tile culling fixture above, this makes
+    // the LOD build perform the work and retain the bytes of a target-sized imported photograph.
+    const lodWidth = 8192, lodHeight = 5632, lodCols = lodWidth / TILE, lodRows = lodHeight / TILE;
+    const uniqueTiles = Array.from({ length: lodCols * lodRows }, (_, index) => {
+      const unique = tile.slice();
+      unique[index % (unique.length / 4) * 4] = 31;
+      return unique;
+    });
+    const lodRaster = new Raster(lodWidth, lodHeight, 4, uniqueTiles);
+    const fullLodLayer = newLayer({ id: 'lod-full', name: 'LOD full', raster: lodRaster,
+      transform: makeTransform({ x: 0, y: 0 }, { width: lodWidth, height: lodHeight }, { sampling: 'Nearest' }) });
+    const fullLodDocument = { id: 'lod-full-document', width: lodWidth, height: lodHeight, resolution: 72,
+      layers: [fullLodLayer], selection: null };
+    const lodView = { width: 640, height: 440,
+      viewToDoc: { a: 12.8, b: 0, c: 0, d: 12.8, tx: 0, ty: 0 }, scale: 1 / 12.8, snap: false, cache: true };
+    const fullLodCanvas = document.createElement('canvas'); document.body.append(fullLodCanvas);
+    const fullLodGpu = await GpuCompositor.create(fullLodCanvas, lodView.width, lodView.height);
+    let fullLodMeasured = finish(fullLodGpu, () => fullLodGpu.composite(fullLodDocument, lodView));
+    const fullLodMs = fullLodMeasured.ms, fullLodTextureMiB = fullLodGpu.textureBytes / 1048576;
+    fullLodGpu.releaseTarget(fullLodMeasured.target); fullLodGpu.destroy(); fullLodCanvas.remove();
+
+    const lodLayer = newLayer({ id: 'lod', name: 'LOD', raster: lodRaster,
+      transform: makeTransform({ x: 0, y: 0 }, { width: lodWidth, height: lodHeight }) });
+    const lodDocument = { id: 'lod-document', width: lodWidth, height: lodHeight, resolution: 72,
+      layers: [lodLayer], selection: null };
+    const lodCanvas = document.createElement('canvas'); document.body.append(lodCanvas);
+    const lodGpu = await GpuCompositor.create(lodCanvas, 640, 480);
+    const lodBefore = lodGpu.performanceCounters;
+    measured = finish(lodGpu, () => lodGpu.composite(lodDocument, lodView));
+    const lodColdMs = measured.ms;
+    lodGpu.releaseTarget(measured.target);
+    const lodAfter = lodGpu.performanceCounters;
+    const lodTextureMiB = lodGpu.textureBytes / 1048576;
+    const lodReadback = lodGpu.readView(lodDocument, lodView.width, lodView.height,
+      lodView.viewToDoc, lodView.scale);
+    const lodSample = [...lodReadback.slice((200 * lodView.width + 300) * 4,
+      (200 * lodView.width + 300) * 4 + 4)];
+    lodGpu.destroy(); lodCanvas.remove();
+
+    // Independent exact CPU oracle for resident LOD pixels (M14: not derived from GPU output).
+    const oracleSize = 512, oraclePixels = new Uint8Array(oracleSize * oracleSize * 4);
+    for (let y = 0; y < oracleSize; y++) for (let x = 0; x < oracleSize; x++) {
+      const at = (y * oracleSize + x) * 4;
+      oraclePixels[at] = (x * 13 + y * 3) & 255;
+      oraclePixels[at + 1] = (x * 5 + y * 11) & 255;
+      oraclePixels[at + 2] = (x ^ (y * 7)) & 255;
+      oraclePixels[at + 3] = 64 + ((x * 17 + y * 19) % 192);
+    }
+    const oracleRaster = Raster.fromPixels(oracleSize, oracleSize, 4, oraclePixels);
+    const oracleLayer = newLayer({ id: 'oracle', name: 'Oracle', raster: oracleRaster,
+      transform: makeTransform({ x: 0, y: 0 }, { width: oracleSize, height: oracleSize }) });
+    const oracleDocument = { id: 'oracle-document', width: oracleSize, height: oracleSize, resolution: 72,
+      layers: [oracleLayer], selection: null };
+    const oracleView = { a: 8, b: 0, c: 0, d: 8, tx: 0, ty: 0 };
+    const oracleCanvas = document.createElement('canvas'); document.body.append(oracleCanvas);
+    const oracleGpu = await GpuCompositor.create(oracleCanvas, 64, 64);
+    const lodPixels = oracleGpu.readView(oracleDocument, 64, 64, oracleView, 0.125);
+    const cpuPixels = compositeView(oracleDocument, 64, 64, oracleView).rgba as Uint8Array;
+    let lodCpuMaxDelta = 0;
+    for (let i = 0; i < lodPixels.length; i++) lodCpuMaxDelta = Math.max(lodCpuMaxDelta,
+      Math.abs(lodPixels[i]! - cpuPixels[i]!));
+    oracleGpu.destroy(); oracleCanvas.remove();
 
     const sceneSize = 1024, sceneTile = new Uint8Array(TILE * TILE * 4);
     for (let y = 0; y < TILE; y++) for (let x = 0; x < TILE; x++) {
@@ -136,6 +199,13 @@ test('canvas compositor audit: uploads, unchanged frames, pan and pixels', async
       const view = { ...baseView, viewToDoc: { ...baseView.viewToDoc, tx: baseView.viewToDoc.tx + i * 3 } };
       measured = finish(gpu, () => gpu.composite(scene, view)); pan.push(measured.ms); gpu.releaseTarget(measured.target);
     }
+    const finalPanView = { ...baseView, viewToDoc: { ...baseView.viewToDoc, tx: baseView.viewToDoc.tx + 29 * 3 } };
+    const reprojected = readTarget(measured.target);
+    const exactPan = finish(gpu, () => gpu.composite(scene, { ...finalPanView, cache: false }));
+    const exactPanPixels = readTarget(exactPan.target); gpu.releaseTarget(exactPan.target);
+    let panMaxDelta = 0;
+    for (let i = 0; i < reprojected.length; i++) panMaxDelta = Math.max(panMaxDelta,
+      Math.abs(reprojected[i]! - exactPanPixels[i]!));
     const counters = gpu.performanceCounters;
     const gl = gpu.gl as WebGL2RenderingContext, ext = gl.getExtension('WEBGL_debug_renderer_info');
     const renderer = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
@@ -148,29 +218,67 @@ test('canvas compositor audit: uploads, unchanged frames, pan and pixels', async
     editor.session.notify('ui');
     canvasView.renderNow();
     const canvasAfter = { view: canvasView.performanceCounters, gpu: canvasView.gpu.performanceCounters };
+    const screenCanvas = canvasView.element.querySelector('canvas') as HTMLCanvasElement;
+    const screenPixels = () => {
+      const gl = canvasView.gpu.gl as WebGL2RenderingContext;
+      const pixels = new Uint8Array(screenCanvas.width * screenCanvas.height * 4);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.readPixels(0, 0, screenCanvas.width, screenCanvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      return pixels;
+    };
+    const idleBefore = screenPixels();
+    canvasView.element.dispatchEvent(new WheelEvent('wheel', { deltaX: 0, deltaY: 0, bubbles: true, cancelable: true }));
+    canvasView.renderNow();
+    const interaction = { width: screenCanvas.width, counters: canvasView.performanceCounters };
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    canvasView.renderNow();
+    const idleAfter = screenPixels();
+    let idleRestoreMaxDelta = 0;
+    for (let i = 0; i < idleBefore.length; i++) idleRestoreMaxDelta = Math.max(idleRestoreMaxDelta,
+      Math.abs(idleBefore[i]! - idleAfter[i]!));
+    const idle = { width: screenCanvas.width, counters: canvasView.performanceCounters,
+      restoreMaxDelta: idleRestoreMaxDelta };
     return {
       renderer,
       viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
       upload: { coldMs: uploadColdMs, calls: uploadAfter.textureUploads - uploadBefore.textureUploads,
         textureMiB: uploadPixels / 1048576, movedTextureMiB, sample: uploadSample, movedSample },
-      unchanged: timing(unchanged), pan: timing(pan), counters, maximumPixelDelta, changedPixelCount,
+      lod: { fullMs: fullLodMs, fullTextureMiB: fullLodTextureMiB,
+        coldMs: lodColdMs, textureMiB: lodTextureMiB, sample: lodSample,
+        builds: lodAfter.residentLodBuilds - lodBefore.residentLodBuilds,
+        sourcePixels: lodAfter.residentLodSourcePixels - lodBefore.residentLodSourcePixels,
+        cpuMaxDelta: lodCpuMaxDelta },
+      unchanged: timing(unchanged), pan: timing(pan), panMaxDelta, counters, maximumPixelDelta, changedPixelCount,
       fullCompositeOnOverride: fullAfterOverride - fullBeforeOverride, hitAfterOverride,
       hydration: { before: beforeHydration, after: afterHydration },
-      canvasCounters: { before: canvasBefore, after: canvasAfter },
+      canvasCounters: { before: canvasBefore, after: canvasAfter, interaction, idle },
     };
   });
   console.log(`PERFVIEW ${JSON.stringify(result)}`);
   expect(result.maximumPixelDelta).toBe(0);
   expect(result.upload.sample).toEqual([31, 97, 181, 255]);
   expect(result.upload.movedSample).toEqual(result.upload.sample);
+  expect(result.lod.sample).toEqual(result.upload.sample);
+  expect(result.lod.textureMiB).toBeLessThan(10);
+  expect(result.lod.textureMiB).toBeLessThan(result.lod.fullTextureMiB / 16);
+  expect(result.lod.builds).toBe(1);
+  expect(result.lod.cpuMaxDelta).toBeLessThanOrEqual(1);
   expect(result.upload.movedTextureMiB).toBeLessThanOrEqual(100);
   expect(result.changedPixelCount).toBeGreaterThan(0);
   expect(result.fullCompositeOnOverride).toBe(1);
+  expect(result.panMaxDelta).toBeLessThanOrEqual(1 / 255);
   expect(result.hydration.before[0]).toBeGreaterThan(0.9);
   expect(result.hydration.after[2]).toBeGreaterThan(0.9);
   expect(result.canvasCounters.after.gpu.unchangedFrameHits
     - result.canvasCounters.before.gpu.unchangedFrameHits).toBe(1);
   expect(result.canvasCounters.after.view.frames - result.canvasCounters.before.view.frames).toBe(1);
   expect(result.upload.calls).toBeGreaterThan(0);
+  expect(result.counters.panReprojections).toBeGreaterThan(0);
+  expect(result.canvasCounters.idle.restoreMaxDelta).toBe(0);
+  expect(result.canvasCounters.idle.counters.lastRenderScale).toBe(result.viewport.dpr);
+  if (result.viewport.dpr > 1) {
+    expect(result.canvasCounters.interaction.width).toBeLessThan(result.canvasCounters.idle.width);
+    expect(result.canvasCounters.interaction.counters.lastRenderScale).toBe(1);
+  }
   expect(result.unchanged.p95).toBeGreaterThanOrEqual(0);
 });

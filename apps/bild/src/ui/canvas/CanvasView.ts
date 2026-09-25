@@ -28,6 +28,8 @@ export interface CanvasPerformanceCounters {
   readonly observedLongTasks: number;
   readonly observedLongTaskMs: number;
   readonly maximumFrameCpuMs: number;
+  readonly reducedResolutionFrames: number;
+  readonly lastRenderScale: number;
 }
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -58,7 +60,7 @@ export class CanvasView implements CanvasHost {
   /** Touch alternative for Cmd-dragging a handle. */
   distortArmed = false;
   private readonly pointers = new Map<number, Point>();
-  private active: { handler: ToolHandler; pointerId: number; session: EditorSession } | null = null;
+  private active: { handler: ToolHandler; pointerId: number; session: EditorSession; navigation: boolean } | null = null;
   private pinch: { distance: number; zoom: number; mid: Point } | null = null;
   private panning: { last: Point; pointerId: number } | null = null;
   private readonly hand = new HandTool();
@@ -69,10 +71,13 @@ export class CanvasView implements CanvasHost {
   private secondary: { drag: SecondaryDrag; pointerId: number; start: Point } | null = null;
   private autoscroll: { frame: number; event: PointerEvent; point: Point } | null = null;
   private animating = false;
+  private navigationInteraction = false;
+  private navigationIdleTimer = 0;
   private destroyed = false;
   private readonly performanceCounterValue = {
     redrawRequests: 0, overlayRedrawRequests: 0, frames: 0, overlayOnlyFrames: 0,
     mainThreadFramesOver50Ms: 0, observedLongTasks: 0, observedLongTaskMs: 0, maximumFrameCpuMs: 0,
+    reducedResolutionFrames: 0, lastRenderScale: 1,
   };
   private longTaskObserver: PerformanceObserver | null = null;
   failure: string | null = null;
@@ -148,6 +153,7 @@ export class CanvasView implements CanvasHost {
   destroy(): void {
     this.destroyed = true;
     cancelAnimationFrame(this.frame);
+    clearTimeout(this.navigationIdleTimer);
     this.resizeObserver.disconnect();
     this.longTaskObserver?.disconnect();
     this.unsubscribe?.();
@@ -162,7 +168,11 @@ export class CanvasView implements CanvasHost {
   private watchSession(): void {
     const session = this.controller.session;
     if (session === this.watched) { this.redraw(); return; }
-    if (this.active) { this.active.handler.cancel(this.active.session); this.active = null; }
+    if (this.active) {
+      const navigation = this.active.navigation;
+      this.active.handler.cancel(this.active.session); this.active = null;
+      if (navigation) this.endNavigationInteraction();
+    }
     this.unsubscribe?.();
     this.watched = session;
     this.unsubscribe = session.subscribe((kind) => { if (kind === 'overlay') this.redrawOverlayOnly(); else this.redraw(); });
@@ -223,7 +233,14 @@ export class CanvasView implements CanvasHost {
     const document = session.document;
     const rect = this.element.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    const width = Math.max(1, Math.round(rect.width * dpr)), height = Math.max(1, Math.round(rect.height * dpr));
+    // Navigation is transient: cap fill rate at one device pixel per CSS point, then redraw at the
+    // real backing scale as soon as the gesture becomes idle. Document/view coordinates stay on
+    // the full-DPR viewport, so the reduced frame cannot perturb tools or the final sample grid.
+    const renderScale = this.navigationInteraction ? Math.min(1, dpr) : dpr;
+    this.performanceCounterValue.lastRenderScale = renderScale;
+    if (renderScale < dpr) this.performanceCounterValue.reducedResolutionFrames++;
+    const width = Math.max(1, Math.round(rect.width * renderScale));
+    const height = Math.max(1, Math.round(rect.height * renderScale));
     const viewport = session.viewport;
     if (viewport.viewSize.width !== rect.width || viewport.viewSize.height !== rect.height || viewport.backingScale !== dpr) {
       viewport.resize({ width: rect.width, height: rect.height }, dpr, document);
@@ -231,7 +248,7 @@ export class CanvasView implements CanvasHost {
     const gpu = this.gpu;
     if (gpu) {
       if (!document) {
-        gpu.present(null, width, height, { x: 0, y: 0, width: 0, height: 0 }, dpr, false, 1);
+        gpu.present(null, width, height, { x: 0, y: 0, width: 0, height: 0 }, renderScale, false, 1);
       } else {
         const docRect = viewport.documentRect(document);
         // While cropping, the frame may reach past the canvas; show what lies there too (renderBounds).
@@ -239,21 +256,24 @@ export class CanvasView implements CanvasHost {
         const bounds = crop ? rectUnion({ x: 0, y: 0, width: document.width, height: document.height }, crop) : { x: 0, y: 0, width: document.width, height: document.height };
         const shown = { x: docRect.x + bounds.x * viewport.pointsPerPixel, y: docRect.y + bounds.y * viewport.pointsPerPixel,
           width: bounds.width * viewport.pointsPerPixel, height: bounds.height * viewport.pointsPerPixel };
-        const device = { x: shown.x * dpr, y: shown.y * dpr, width: shown.width * dpr, height: shown.height * dpr };
+        const device = { x: shown.x * renderScale, y: shown.y * renderScale,
+          width: shown.width * renderScale, height: shown.height * renderScale };
         const x0 = Math.max(0, Math.floor(device.x)), y0 = Math.max(0, Math.floor(device.y));
         const x1 = Math.min(width, Math.ceil(device.x + device.width)), y1 = Math.min(height, Math.ceil(device.y + device.height));
         const ppp = viewport.pointsPerPixel;
         let composite = null;
         if (x1 > x0 && y1 > y0) {
           const view: ViewSpec = {
-            width: x1 - x0, height: y1 - y0, scale: dpr * ppp, snap: viewport.zoom >= 2,
-            viewToDoc: { a: 1 / (dpr * ppp), b: 0, c: 0, d: 1 / (dpr * ppp), tx: (x0 / dpr - docRect.x) / ppp, ty: (y0 / dpr - docRect.y) / ppp },
+            width: x1 - x0, height: y1 - y0, scale: renderScale * ppp, snap: viewport.zoom >= 2,
+            viewToDoc: { a: 1 / (renderScale * ppp), b: 0, c: 0, d: 1 / (renderScale * ppp),
+              tx: (x0 / renderScale - docRect.x) / ppp, ty: (y0 / renderScale - docRect.y) / ppp },
             cache: true,
           };
           composite = gpu.composite(documentWithPixelAdjustmentPreview(session, document), view, this.hooks(session));
         }
         const proof = session.proofColors && session.proofLut ? { lut: session.proofLut, gamutWarning: session.gamutWarning } : undefined;
-        gpu.present(composite, width, height, device, dpr, session.showsPixelGrid && viewport.zoom >= 8, dpr * ppp, { x: x0, y: y0 }, proof);
+        gpu.present(composite, width, height, device, renderScale, session.showsPixelGrid && viewport.zoom >= 8,
+          renderScale * ppp, { x: x0, y: y0 }, proof);
         if (composite) gpu.releaseTarget(composite);
       }
     }
@@ -393,6 +413,27 @@ export class CanvasView implements CanvasHost {
     };
   }
 
+  private beginNavigationInteraction(): void {
+    clearTimeout(this.navigationIdleTimer);
+    this.navigationIdleTimer = 0;
+    if (this.navigationInteraction) return;
+    this.navigationInteraction = true;
+    this.redraw();
+  }
+
+  private endNavigationInteraction(delay = 0): void {
+    clearTimeout(this.navigationIdleTimer);
+    this.navigationIdleTimer = 0;
+    const finish = () => {
+      this.navigationIdleTimer = 0;
+      if (!this.navigationInteraction) return;
+      this.navigationInteraction = false;
+      this.redraw();
+    };
+    if (delay > 0) this.navigationIdleTimer = window.setTimeout(finish, delay);
+    else finish();
+  }
+
   private toolHandler(modifiers: Modifiers, point: Point | null = null): ToolHandler | null {
     const spaceHeld = this.controller.ui.getState().spaceHeld;
     if (spaceHeld) return this.hand;
@@ -412,11 +453,13 @@ export class CanvasView implements CanvasHost {
       if (this.active) { this.active.handler.cancel(this.active.session); this.active = null; this.redraw(); }
       const [a, b] = [...this.pointers.values()] as [Point, Point];
       this.pinch = { distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), zoom: this.session.viewport.zoom, mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } };
+      this.beginNavigationInteraction();
       return;
     }
     if (this.pointers.size > 1 || !this.session.document) return;
     if (event.button === 1 || (event.button === 0 && event.pointerType === 'mouse' && false)) {
       this.panning = { last: point, pointerId: event.pointerId };
+      this.beginNavigationInteraction();
       this.element.setPointerCapture(event.pointerId);
       return;
     }
@@ -437,7 +480,9 @@ export class CanvasView implements CanvasHost {
     if (handler === this.tools[this.session.tool] && PIXEL_TOOLS.has(this.session.tool) && layer && !event.altKey
       && this.session.refuseLayerEdit(layer.id, 'pixels')) return;
     this.element.setPointerCapture(event.pointerId);
-    this.active = { handler, pointerId: event.pointerId, session: this.session };
+    const navigation = handler === this.hand || this.session.tool === 'hand' || this.session.tool === 'zoom';
+    this.active = { handler, pointerId: event.pointerId, session: this.session, navigation };
+    if (navigation) this.beginNavigationInteraction();
     handler.down(this.context(event, point));
     this.redraw();
     event.preventDefault();
@@ -499,15 +544,16 @@ export class CanvasView implements CanvasHost {
       return;
     }
     if (this.pinch) {
-      if (this.pointers.size < 2) this.pinch = null;
+      if (this.pointers.size < 2) { this.pinch = null; this.endNavigationInteraction(); }
       return;
     }
-    if (this.panning?.pointerId === event.pointerId) { this.panning = null; return; }
+    if (this.panning?.pointerId === event.pointerId) { this.panning = null; this.endNavigationInteraction(); return; }
     if (this.active && this.active.pointerId === event.pointerId) {
       this.stopAutoscroll();
-      const { handler } = this.active;
+      const { handler, navigation } = this.active;
       this.active = null;
       handler.up(this.context(event, point));
+      if (navigation) this.endNavigationInteraction();
       this.redraw();
       this.updateHoverCursor(event, point);
     }
@@ -554,11 +600,14 @@ export class CanvasView implements CanvasHost {
     if (this.secondary?.pointerId === event.pointerId) { this.secondary.drag.end(); this.secondary = null; }
     if (this.pointers.size < 2) this.pinch = null;
     if (this.active && this.active.pointerId === event.pointerId) {
+      const navigation = this.active.navigation;
       this.active.handler.cancel(this.active.session);
       this.active = null;
+      if (navigation) this.endNavigationInteraction();
       this.redraw();
     }
     this.panning = null;
+    this.endNavigationInteraction();
   };
 
   private onPointerLeave = (): void => {
@@ -589,8 +638,10 @@ export class CanvasView implements CanvasHost {
   /** Escape during a drag abandons the gesture. */
   cancelGesture(): boolean {
     if (!this.active) return false;
+    const navigation = this.active.navigation;
     this.active.handler.cancel(this.active.session);
     this.active = null;
+    if (navigation) this.endNavigationInteraction();
     this.redraw();
     return true;
   }
@@ -600,6 +651,8 @@ export class CanvasView implements CanvasHost {
     const session = this.session;
     if (!session.document || this.active) return;
     event.preventDefault();
+    this.beginNavigationInteraction();
+    this.endNavigationInteraction(120);
     const point = this.localPoint(event);
     const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 400 : 1;
     if (event.ctrlKey || event.metaKey || event.altKey) {
