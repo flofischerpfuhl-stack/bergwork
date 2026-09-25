@@ -1,16 +1,19 @@
 import {
   writePsdUint8Array, type AdjustmentLayer as AgAdjustment, type BezierPath, type BlendMode as AgBlendMode,
   type EffectSolidGradient, type Layer as AgLayer, type LayerEffectsInfo, type LayerTextData, type LinkedFile,
-  type PixelData, type Psd, type VectorContent,
+  type PatternInfo, type PixelData, type Psd, type VectorContent,
 } from 'ag-psd';
 import {
   PRO_MAX_PIXELS, PRO_MAX_SIDE, type BlendMode, type CanvasDocument, type FillParameters,
   type Layer, type LayerAdjustment, type LayerEffect, type TextLayer, type VectorPath,
 } from '../../core/document';
+import { curveValue, levelValue } from '../../core/adjust/levels';
 import { artboardMembership } from '../../core/artboards';
 import { boundingBox, integralRect, type LayerTransform, type Rect } from '../../core/geometry';
+import { linearToSrgb, srgbToLinear } from '../../core/pixel/color';
+import { floatToRgba16, rgba16To8 } from '../../core/pixel/format';
 import type { Raster } from '../../core/raster';
-import { cpuCompositeRegion } from '../../render/cpuRender';
+import { cpuCompositeRegion, cpuCompositeRegionFloat } from '../../render/cpuRender';
 import { DEFAULT_HOOKS, type CompositeHooks } from '../../render/hooks';
 import { srgbIccProfile } from '../iccProfile';
 import { sha256Hex } from '../sha256';
@@ -56,6 +59,7 @@ interface State {
   readonly notices: PsdWriteNotice[];
   readonly linkedFiles: LinkedFile[];
   readonly native16Layers: Native16Layer[];
+  readonly patterns: PatternInfo[];
   readonly resources: ReadonlyMap<string, NonNullable<CanvasDocument['resources']>[number]>;
 }
 
@@ -129,9 +133,12 @@ function rasterizedLayer(layer: Layer, path: string, state: State): { data?: Pix
   const bare = { ...layer, parentId: null, visible: true, opacity: 1, fillOpacity: 1, blendMode: 'normal' as const,
     mask: null, vectorMask: null, maskSourceId: null, effects: [] } as Layer;
   const single = { ...state.document, layers: [bare], artboards: [] };
-  const rendered = cpuCompositeRegion(single, rect, state.hooks);
-  if (state.bits === 16 && raster.format === 'rgba16') notice(state, 'rasterized-16-bit-transform',
-    'A transformed 16-bit layer keeps its appearance but its transformed cache is quantized through the CPU renderer.', 'approximated', path);
+  let rendered: Uint8Array;
+  if (state.bits === 16 && raster.format === 'rgba16') {
+    const native = floatToRgba16(cpuCompositeRegionFloat(single, rect, state.hooks));
+    state.native16Layers.push({ width: rect.width, height: rect.height, rgba: native });
+    rendered = rgba16To8(native);
+  } else rendered = cpuCompositeRegion(single, rect, state.hooks);
   return { data: imageDataFromBytes(rendered, rect.width, rect.height, state.bits), left: rect.x, top: rect.y,
     right: rect.x + rect.width, bottom: rect.y + rect.height };
 }
@@ -169,7 +176,29 @@ function effectFill(value: LayerEffect & { readonly kind: 'gradientOverlay' }) {
   return gradient({ stops: value.gradient.stops });
 }
 
-function effects(values: readonly LayerEffect[]): LayerEffectsInfo | undefined {
+const LINEAR_CONTOUR = { name: 'Linear', curve: [{ x: 0, y: 0 }, { x: 255, y: 255 }] };
+
+function effectPattern(effect: LayerEffect & { readonly kind: 'patternOverlay' }, state: State,
+  path: string): { name: string; id: string } | undefined {
+  const resource = state.resources.get(effect.resourceId);
+  const validDimensions = Number.isInteger(effect.patternWidth) && Number.isInteger(effect.patternHeight)
+    && effect.patternWidth > 0 && effect.patternHeight > 0;
+  if (!resource || resource.role !== 'pattern' || !validDimensions
+    || resource.bytes.length !== effect.patternWidth * effect.patternHeight * 4) {
+    notice(state, 'pattern-overlay-resource',
+      'Pattern Overlay was not written as editable because its RGBA8 document pattern resource is missing or invalid.',
+      'editability-only', path);
+    return undefined;
+  }
+  const id = `fernwork-${effect.patternWidth}x${effect.patternHeight}-${sha256Hex(resource.bytes).slice(0, 32)}`;
+  if (!state.patterns.some((pattern) => pattern.id === id)) state.patterns.push({
+    name: effect.resourceId, id, x: 0, y: 0,
+    bounds: { x: 0, y: 0, w: effect.patternWidth, h: effect.patternHeight }, data: resource.bytes.slice(),
+  });
+  return { name: effect.resourceId, id };
+}
+
+function effects(values: readonly LayerEffect[], state: State, path: string): LayerEffectsInfo | undefined {
   if (!values.length) return undefined;
   const result: LayerEffectsInfo = { scale: 1 };
   for (const effect of values) switch (effect.kind) {
@@ -185,6 +214,34 @@ function effects(values: readonly LayerEffect[]): LayerEffectsInfo | undefined {
     case 'gradientOverlay': (result.gradientOverlay ??= []).push({ present: true, enabled: effect.enabled,
       opacity: clamp01(effect.opacity), blendMode: BLENDS[effect.blendMode], angle: effect.angle, scale: effect.scale / 100,
       type: 'linear', reverse: effect.gradient.reverse ?? false, gradient: effectFill(effect) }); break;
+    case 'innerShadow': (result.innerShadow ??= []).push({ present: true, enabled: effect.enabled,
+      opacity: clamp01(effect.opacity), blendMode: BLENDS[effect.blendMode], color: color(effect.color), angle: effect.angle,
+      useGlobalLight: effect.useGlobalLight, distance: pixelsUnit(effect.distance), choke: pixelsUnit(effect.choke),
+      size: pixelsUnit(effect.size), contour: LINEAR_CONTOUR }); break;
+    case 'innerGlow': result.innerGlow = { present: true, enabled: effect.enabled, opacity: clamp01(effect.opacity),
+      blendMode: BLENDS[effect.blendMode], color: color(effect.color), source: effect.source, technique: 'softer',
+      choke: pixelsUnit(effect.choke), size: pixelsUnit(effect.size), contour: LINEAR_CONTOUR, noise: 0, range: 1 }; break;
+    case 'bevelEmboss': result.bevel = { present: true, enabled: effect.enabled,
+      style: effect.style === 'innerBevel' ? 'inner bevel' : effect.style === 'outerBevel' ? 'outer bevel'
+        : effect.style === 'pillowEmboss' ? 'pillow emboss' : 'emboss',
+      technique: effect.technique === 'chiselHard' ? 'chisel hard' : effect.technique === 'chiselSoft' ? 'chisel soft' : 'smooth',
+      strength: effect.depth / 100, direction: effect.direction, size: pixelsUnit(effect.size), soften: pixelsUnit(effect.soften),
+      angle: effect.angle, altitude: effect.altitude, useGlobalLight: effect.useGlobalLight,
+      highlightBlendMode: BLENDS[effect.highlightMode], highlightColor: color(effect.highlightColor),
+      highlightOpacity: clamp01(effect.highlightOpacity), shadowBlendMode: BLENDS[effect.shadowMode],
+      shadowColor: color(effect.shadowColor), shadowOpacity: clamp01(effect.shadowOpacity), contour: LINEAR_CONTOUR,
+      useTexture: false, useShape: false }; break;
+    case 'satin': result.satin = { present: true, enabled: effect.enabled, opacity: clamp01(effect.opacity),
+      blendMode: BLENDS[effect.blendMode], color: color(effect.color), angle: effect.angle,
+      distance: pixelsUnit(effect.distance), size: pixelsUnit(effect.size), invert: effect.invert,
+      contour: LINEAR_CONTOUR }; break;
+    case 'patternOverlay': {
+      const pattern = effectPattern(effect, state, path);
+      if (pattern) result.patternOverlay = { present: true, enabled: effect.enabled, opacity: clamp01(effect.opacity),
+        blendMode: BLENDS[effect.blendMode], scale: effect.scale / 100, pattern, phase: effect.phase ?? { x: 0, y: 0 },
+        align: effect.linkWithLayer, angle: effect.angle } as NonNullable<LayerEffectsInfo['patternOverlay']> & { angle: number };
+      break;
+    }
     case 'stroke': {
       const fill = effect.fill ?? (effect.color ? { kind: 'color' as const, color: effect.color } : null);
       result.stroke ??= [];
@@ -200,7 +257,27 @@ function effects(values: readonly LayerEffect[]): LayerEffectsInfo | undefined {
   return result;
 }
 
+function grayscaleTransferAdjustment(value: Extract<LayerAdjustment, { kind: 'Levels' | 'Curves' }>): AgAdjustment {
+  const decode = (sample: number) => Math.max(0, srgbToLinear(sample)) ** (1 / 2.2);
+  const encode = (sample: number) => Math.min(1, Math.max(0, linearToSrgb(Math.min(1, Math.max(0, sample)) ** 2.2)));
+  const rgb = Array.from({ length: 256 }, (_, input) => {
+    const gray = decode(input / 255);
+    const adjusted = value.kind === 'Levels' ? levelValue(gray, value.parameters, 'Red')
+      : curveValue(curveValue(gray * 255, value.parameters, 1), value.parameters, 0) / 255;
+    return { input, output: Math.round(encode(adjusted) * 255) };
+  });
+  const identity = [{ input: 0, output: 0 }, { input: 255, output: 255 }];
+  return { type: 'curves', rgb, red: identity, green: identity, blue: identity };
+}
+
 function adjustment(value: LayerAdjustment, state: State, path: string): AgAdjustment | null {
+  if ((value.kind === 'Levels' || value.kind === 'Curves')
+    && (value as LayerAdjustment & { readonly psdColorMode?: number }).psdColorMode === 1) {
+    notice(state, 'adjustment-grayscale-transfer',
+      `“${value.kind}” was converted to an editable RGB Curves transfer because the PSD writer emits RGB documents.`,
+      'approximated', path);
+    return grayscaleTransferAdjustment(value);
+  }
   switch (value.kind) {
     case 'Levels': { const p = value.parameters; const [rgb, red, green, blue] = p.ranges.map((range) => ({ shadowInput: range.black,
       highlightInput: range.white, shadowOutput: range.outputBlack, highlightOutput: range.outputWhite,
@@ -272,7 +349,10 @@ function textData(layer: TextLayer, transform: LayerTransform): LayerTextData {
   } }));
   return { text, transform: [1, 0, 0, 1, transform.origin.x, transform.origin.y], orientation: 'horizontal', antiAlias: 'smooth',
     shapeType: layer.box ? 'box' : 'point', ...(layer.box ? { boxBounds: [0, 0, layer.box.width, layer.box.height] } : {}),
-    styleRuns, paragraphStyleRuns, style: styleRuns[0]?.style, paragraphStyle: paragraphStyleRuns[0]?.style };
+    styleRuns, paragraphStyleRuns, style: styleRuns[0]?.style, paragraphStyle: paragraphStyleRuns[0]?.style,
+    ...(layer.textWarp ? { warp: { style: layer.textWarp.style, value: layer.textWarp.bend,
+      perspective: layer.textWarp.horizontalDistortion, perspectiveOther: layer.textWarp.verticalDistortion,
+      rotate: layer.textWarp.orientation } } : {}) };
 }
 
 function layerMask(layer: Layer, state: State) {
@@ -321,7 +401,7 @@ function common(layer: Layer, path: string, state: State): AgLayer {
     : { transparency: layer.locks.transparency, composite: layer.locks.pixels, position: layer.locks.position };
   const output: AgLayer = { name: layer.name, hidden: !layer.visible, opacity: clamp01(layer.opacity), fillOpacity: clamp01(layer.fillOpacity),
     blendMode: BLENDS[state.hooks.blendMode(layer)], transparencyProtected: layer.locks.transparency || layer.locks.all,
-    protected: locks, layerColor: layer.colorLabel, clipping: !!layer.maskSourceId, effects: effects(layer.effects),
+    protected: locks, layerColor: layer.colorLabel, clipping: !!layer.maskSourceId, effects: effects(layer.effects, state, path),
     mask: layerMask(layer, state), left: placement.left, top: placement.top, right: placement.right, bottom: placement.bottom,
     ...(placement.data ? { imageData: placement.data } : {}) };
   if (layer.vectorMask) output.vectorMask = { invert: layer.vectorMask.inverted, disable: !layer.vectorMask.enabled,
@@ -329,7 +409,10 @@ function common(layer: Layer, path: string, state: State): AgLayer {
     paths: bezier(layer.vectorMask.paths, state.hooks.transform(layer)) };
   if (layer.filters.length) notice(state, 'live-filters', 'Live filters were baked into the layer pixels; Photoshop filter parameters are unavailable.',
     'editability-only', path);
-  if (layer.crop || layer.warp) notice(state, 'parametric-transform', 'Crop/warp appearance was baked into layer pixels.', 'editability-only', path);
+  if (layer.crop) notice(state, 'non-destructive-crop',
+    'The non-destructive crop was baked into layer pixels because PSD has no equivalent editable layer crop.', 'editability-only', path);
+  if (layer.warp && layer.kind !== 'embedded') notice(state, 'parametric-warp',
+    'Warp appearance was baked into layer pixels.', 'editability-only', path);
   return output;
 }
 
@@ -363,7 +446,9 @@ function convertLayer(layer: Layer, path: string, children: AgLayer[], state: St
       output.left = 0; output.top = 0; output.right = state.document.width; output.bottom = state.document.height;
     }
   } else if (layer.kind === 'text') {
-    output.text = textData(layer, layer.renderedTransform ?? transform);
+    if (layer.textPath) notice(state, 'text-path-rasterized',
+      'Text on a path was rasterized because ag-psd exposes Photoshop text paths as read-only data.', 'editability-only', path);
+    else output.text = textData(layer, layer.renderedTransform ?? transform);
     if (layer.runs.some((run) => Object.keys(run.style.axes).length > 0)) notice(state, 'text-variable-axes',
       'Variable-font axis values remain in the rendered text pixels but are not encoded by ag-psd.', 'editability-only', path);
   } else if (layer.kind === 'vector') {
@@ -442,6 +527,7 @@ export function writePsdDocument(document: CanvasDocument, options: PsdWriteOpti
   validate(document, format);
   const hooks = options.hooks ?? DEFAULT_HOOKS, bits = options.bitsPerChannel ?? inferredDepth(document, hooks);
   const state: State = { document, hooks, bits, notices: [], linkedFiles: [], native16Layers: [],
+    patterns: [],
     resources: new Map((document.resources ?? []).map((resource) => [resource.id, resource])) };
   const composite8 = cpuCompositeRegion(document, { x: 0, y: 0, width: document.width, height: document.height }, hooks);
   const psd: Psd = { width: document.width, height: document.height, bitsPerChannel: 8, colorMode: 3,
@@ -455,14 +541,14 @@ export function writePsdDocument(document: CanvasDocument, options: PsdWriteOpti
     ...(document.artboards?.length ? { artboards: { count: document.artboards.length, autoExpandEnabled: false,
       autoNestEnabled: true, autoPositionEnabled: false, shrinkwrapOnSaveEnabled: false,
       docDefaultNewArtboardBackgroundType: 1, docDefaultNewArtboardBackgroundColor: { r: 255, g: 255, b: 255 } } } : {}),
-    ...(state.linkedFiles.length ? { linkedFiles: state.linkedFiles } : {}) };
+    ...(state.linkedFiles.length ? { linkedFiles: state.linkedFiles } : {}),
+    ...(state.patterns.length ? { patterns: state.patterns } : {}) };
   let bytes = writePsdUint8Array(psd, { psb: format === 'psb', generateThumbnail: false, noBackground: true,
     trimImageData: false, invalidateTextLayers: false, logMissingFeatures: false, compress: format === 'psb' });
   if (bits === 16) {
-    bytes = promotePsdTo16(bytes, composite8, state.native16Layers);
-    state.notices.push({ code: '16-bit-precision',
-      message: 'Native 16-bit layer samples are retained; transformed and merged-image caches currently carry the CPU renderer’s 8-bit precision.',
-      impact: 'approximated' });
+    const composite16 = floatToRgba16(cpuCompositeRegionFloat(document,
+      { x: 0, y: 0, width: document.width, height: document.height }, hooks));
+    bytes = promotePsdTo16(bytes, composite16, state.native16Layers);
   } else bytes = replacePsdComposite(bytes, composite8);
   const profile = options.iccProfile === undefined ? srgbIccProfile() : options.iccProfile;
   if (profile) bytes = attachPsdIccProfile(bytes, profile);

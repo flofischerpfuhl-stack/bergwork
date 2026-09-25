@@ -1,6 +1,7 @@
 /**
  * ag-psd 31 reads 16-bit data but only emits 8-bit channels. This structural post-pass restores native
- * RGBA16 layer samples where available and expands rasterized/mask/composite samples to valid 16-bit channels.
+ * RGBA16 layer samples and float-rendered caches where available, and expands remaining 8-bit samples to valid
+ * 16-bit channels.
  */
 
 import { unzlibSync } from 'fflate';
@@ -105,14 +106,17 @@ interface LayerRecord { readonly width: number; readonly height: number; readonl
   readonly channels: readonly ChannelRecord[] }
 
 /** Promotes an ag-psd-generated RGB PSD/PSB from 8 to 16 bits per channel. */
-function compositeRaw(rgba: Uint8Array, width: number, height: number, channels: number, bits: 8 | 16): Uint8Array {
+function compositeRaw(rgba: Uint8Array | Uint16Array, width: number, height: number, channels: number, bits: 8 | 16): Uint8Array {
   if (rgba.length !== width * height * 4) throw new RangeError('PSD composite pixel count does not match');
+  if (bits === 8 && !(rgba instanceof Uint8Array) || bits === 16 && !(rgba instanceof Uint16Array)) {
+    throw new TypeError(`PSD ${bits}-bit composite requires matching native samples`);
+  }
   const sampleBytes = bits / 8, output = new Uint8Array(2 + width * height * channels * sampleBytes);
   let at = 2;
   for (let channel = 0; channel < channels; channel++) for (let pixel = 0; pixel < width * height; pixel++) {
     const value = rgba[pixel * 4 + channel]!;
-    output[at++] = value;
-    if (bits === 16) output[at++] = value;
+    if (bits === 16) { output[at++] = value >>> 8; output[at++] = value & 0xff; }
+    else output[at++] = value;
   }
   return output;
 }
@@ -131,7 +135,7 @@ export function replacePsdComposite(bytes: Uint8Array, rgba: Uint8Array, bits: 8
   return join([bytes.subarray(0, info.offset), compositeRaw(rgba, info.width, info.height, info.channels, bits)]);
 }
 
-export function promotePsdTo16(bytes: Uint8Array, compositeRgba: Uint8Array,
+export function promotePsdTo16(bytes: Uint8Array, compositeRgba: Uint16Array,
   nativeLayers: readonly Native16Layer[] = []): Uint8Array {
   const source = new Reader(bytes);
   if (String.fromCharCode(...bytes.subarray(0, 4)) !== '8BPS') throw new Error('Invalid PSD output');
