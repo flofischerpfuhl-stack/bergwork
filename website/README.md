@@ -98,13 +98,15 @@ The generated service worker precaches the application shell, uses network-first
 
 ## Cloudflare settings
 
-`wrangler.jsonc` points static assets at `./dist`. In the Cloudflare project, use:
+The site is served by the `bergwork` Worker (static assets from `./dist`) on the custom domain `bergwork.app`, with `404.html` as the not-found page. Both are set in `wrangler.jsonc`.
+
+Cloudflare Workers Builds deploys every push to `main` automatically; other branches get preview builds. The Git connection lives in the Cloudflare dashboard with:
 
 - Root directory: `website`
 - Build command: `node build.mjs`
-- Output directory: `dist`
+- Deploy command: `npx wrangler deploy`
 
-No deployment was performed as part of this work.
+A manual deploy from `website/` is `node build.mjs && npx wrangler deploy`.
 
 ## Quality checks
 
