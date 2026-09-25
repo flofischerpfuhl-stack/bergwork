@@ -15,6 +15,7 @@ import type { TextKerning, TextOpenTypeFeature, TextParagraphStyle, TextRunStyle
 import { BUNDLED_TEXT_FONTS, type MissingFont, type ParagraphStylePatch, type TextStylePatch } from '../../core/text';
 import { BUNDLED_FAMILIES, type TextRuntime } from './runtime';
 import type { TextEditor } from './editor';
+import { PathTextButton, WarpButton } from './warpControls';
 
 export interface TextUiParts { readonly runtime: TextRuntime; readonly editor: TextEditor }
 
@@ -29,7 +30,7 @@ function parseValue(text: string): number | null {
 }
 
 /** A number that applies on Enter, on leaving the field or per ↑/↓ step (Shift ×10) — one undo step each. */
-function ValueInput({ value, onCommit, label, locale, mixed = false, disabled, title, testId, step = 1, min = -Infinity, max = Infinity,
+export function ValueInput({ value, onCommit, label, locale, mixed = false, disabled, title, testId, step = 1, min = -Infinity, max = Infinity,
   placeholder, className }: {
   value: number | null; onCommit: (value: number) => void; label: string; locale: string; mixed?: boolean; disabled?: boolean;
   title?: string; testId?: string; step?: number; min?: number; max?: number; placeholder?: string; className?: string;
@@ -106,7 +107,7 @@ function facesFor(runtime: TextRuntime, family: string, current: TextRunStyle): 
 
 // MARK: Popover helpers
 
-function usePopover(open: boolean, close: () => void, anchor: React.RefObject<HTMLElement | null>, panel: React.RefObject<HTMLElement | null>,
+export function usePopover(open: boolean, close: () => void, anchor: React.RefObject<HTMLElement | null>, panel: React.RefObject<HTMLElement | null>,
   width: number, editor: TextEditor) {
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   useEffect(() => {
@@ -450,6 +451,8 @@ export function TextControls({ controller, ui }: { controller: EditorController;
         aria-expanded={panelOpen} data-testid="text-panel-toggle" onClick={() => setPanelOpen(!panelOpen)}>
         {t('Character & Paragraph')}
       </button>
+      <WarpButton controller={controller} ui={ui} session={session} disabled={disabled || !ui.runtime.isReady} />
+      <PathTextButton controller={controller} ui={ui} session={session} disabled={disabled} />
       {!ui.runtime.isReady && !ui.runtime.failure ? <span className={styles.secondary}>{t('Loading fonts…')}</span> : null}
       <span className={styles.spacer} />
       {editing ? (

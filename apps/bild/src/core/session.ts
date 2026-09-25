@@ -1401,7 +1401,8 @@ export class EditorSession {
     return this.derivedPixels(layer)?.transform ?? layer.transform;
   }
   private derivedPlacement(layer: Layer, transform: LayerTransform): LayerTransform {
-    if (layer.kind !== 'vector') return transform;
+    // Vector strokes, and text on a path or warped text, draw beyond the box the layer is placed by.
+    if (layer.kind !== 'vector' && !(layer.kind === 'text' && (layer.textPath || layer.textWarp))) return transform;
     for (const place of derivedPlacements) {
       const placed = place(this, layer, transform);
       if (placed) return placed;

@@ -1,7 +1,7 @@
 import type { CanvasDocument, Layer } from '../core/document';
-import type { LayerTransform } from '../core/geometry';
+import type { LayerTransform, Size } from '../core/geometry';
 import type { Raster } from '../core/raster';
-import { layoutTextLayer, type MissingFont, type TextFontRegistry, type TextLayerLayout } from '../core/text';
+import { layoutTextLayer, textPlacement, type MissingFont, type TextFontRegistry, type TextLayerLayout } from '../core/text';
 import type { TextEngine } from '../text';
 
 interface CacheEntry { readonly key: string; readonly layout: TextLayerLayout }
@@ -40,8 +40,10 @@ export class TextRasterCache {
       if (layer.kind !== 'text') continue;
       live.add(layer.id);
       // The placement is not part of the key: moving or rotating a layer never reshapes it (see transform()).
+      // Text on a path is laid out in its frame, so the frame's size is part of its shape (not its origin or rotation).
       const key = JSON.stringify([document.resolution, targetPixelsPerDocumentPixel, layer.text, layer.runs,
-        layer.paragraphs, layer.box]);
+        layer.paragraphs, layer.box, layer.textPath ?? null, layer.textWarp ?? null,
+        layer.textPath ? layer.transform.size : null]);
       if (this.entries.get(layer.id)?.key === key) continue;
       const next = layoutTextLayer(this.engine, this.fonts, document, layer, targetPixelsPerDocumentPixel, this.missing);
       this.entries.get(layer.id)?.layout.dispose();
@@ -51,12 +53,26 @@ export class TextRasterCache {
   }
 
   raster(layer: Layer): Raster | null { return layer.kind === 'text' ? this.entries.get(layer.id)?.layout.raster ?? layer.raster : layer.raster ?? null; }
-  /** The layer's live placement with the shaped logical size. */
+  /** The layer's live placement with the shaped logical size (and the raster's offset for bent or warped text). */
   transform(layer: Layer): LayerTransform {
     if (layer.kind !== 'text') return layer.transform;
-    const shaped = this.entries.get(layer.id)?.layout.transform;
-    return shaped ? { ...layer.transform, size: shaped.size } : layer.renderedTransform ?? layer.transform;
+    const shaped = this.entries.get(layer.id)?.layout;
+    if (!shaped) return layer.renderedTransform ?? layer.transform;
+    return textPlacement(shaped.onPath ? layer.transform : { ...layer.transform, size: shaped.frameSize }, shaped.frameSize,
+      shaped.rasterOffset, shaped.rasterSize);
   }
+  /** Where the shaped pixels sit for another placement of the layer's frame (a transform being dragged). */
+  placementFor(layer: Layer, frame: LayerTransform): LayerTransform | null {
+    if (layer.kind !== 'text') return null;
+    const shaped = this.entries.get(layer.id)?.layout;
+    if (!shaped || (!shaped.onPath && shaped.rasterOffset.x === 0 && shaped.rasterOffset.y === 0)) return null;
+    const sx = frame.size.width / Math.max(1e-9, layer.transform.size.width), sy = frame.size.height / Math.max(1e-9, layer.transform.size.height);
+    const basis = shaped.onPath ? layer.transform.size : shaped.frameSize;
+    return textPlacement({ ...frame, size: { width: basis.width * sx, height: basis.height * sy } }, shaped.frameSize,
+      shaped.rasterOffset, shaped.rasterSize);
+  }
+  /** The unwarped text box (the frame text grows in), or null before shaping. */
+  frameSize(layerId: string): Size | null { return this.entries.get(layerId)?.layout.frameSize ?? null; }
   /** Shaped layout; its document-space geometry uses the placement at shaping time. */
   layout(layerId: string): TextLayerLayout | null { return this.entries.get(layerId)?.layout ?? null; }
   missingFonts(): readonly MissingFont[] { return this.missing; }

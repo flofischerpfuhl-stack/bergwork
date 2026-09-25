@@ -354,7 +354,10 @@ function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportS
 
 function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportState, layerPath: string): void {
   if (source.text?.orientation === 'vertical') issue(state, 'vertical-text', 'Vertical PSD text is imported as horizontal text.', 'approximated', layerPath);
-  if (source.text?.warp?.style && source.text.warp.style !== 'none') issue(state, 'text-warp', 'Warped PSD text remains editable but its warp is not rendered.', 'not-rendered', layerPath);
+  const warpStyle = source.text?.warp?.style;
+  if (warpStyle === 'custom' || warpStyle === 'cylinder') issue(state, 'text-warp', 'A custom or cylinder text warp keeps the saved preview; it is not rendered after editing.', 'not-rendered', layerPath);
+  else if (warpStyle && warpStyle !== 'none') issue(state, 'text-warp', 'Warped PSD text is re-rendered with Fernwork’s envelope for its style after editing.', 'approximated', layerPath);
+  if (source.text?.textPath) issue(state, 'text-path', 'PSD type on a path keeps its saved preview; after editing it is laid out as point text.', 'approximated', layerPath);
   if (source.placedLayer?.filter) issue(state, 'smart-filter',
     'Smart-object filters remain in the PSD preview; their editable parameters are not imported.', 'editability-only', layerPath);
   if (source.realMask) issue(state, 'real-mask', 'The real/vector-derived mask channel is not rendered.', 'not-rendered', layerPath);
@@ -887,6 +890,19 @@ function psdParagraphs(data: LayerTextData, text: string) {
   });
 }
 
+const PSD_WARP_STYLES = new Set(['arc', 'arcLower', 'arcUpper', 'arch', 'bulge', 'shellLower', 'shellUpper', 'flag', 'wave', 'fish',
+  'rise', 'fisheye', 'inflate', 'squeeze', 'twist']);
+
+/** Photoshop's warp preset (style, bend, perspective distortions, orientation) as the editable text warp. */
+function psdTextWarp(data: LayerTextData): import('../../core/model').TextWarp | null {
+  const warp = data.warp;
+  if (!warp?.style || !PSD_WARP_STYLES.has(warp.style)) return null;
+  const percent = (value: number | undefined) => (Number.isFinite(value) ? Math.max(-100, Math.min(100, value!)) : 0);
+  return { schemaVersion: 1, style: warp.style as import('../../core/model').TextWarpStyle,
+    orientation: warp.rotate === 'vertical' ? 'vertical' : 'horizontal', bend: percent(warp.value),
+    horizontalDistortion: percent(warp.perspective), verticalDistortion: percent(warp.perspectiveOther) };
+}
+
 function psdTextBox(data: LayerTextData, width: number, height: number): { width: number; height: number } | null {
   if (data.shapeType !== 'box') return null;
   const bounds = data.boxBounds;
@@ -1015,7 +1031,8 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
       ...(placed ? { content: placed } : {}),
       ...(textData ? { text: editableText, runs: psdTextRuns(textData, editableText),
         paragraphs: psdParagraphs(textData, editableText), box: textBox,
-        alignment: psdAlignment(textData.paragraphStyle?.justification), renderedTransform: layerTransform } : {}),
+        alignment: psdAlignment(textData.paragraphStyle?.justification), renderedTransform: layerTransform,
+        textWarp: psdTextWarp(textData) } : {}),
       ...(vectorContent ? { paths: vectorPaths,
         // Force every renderer to use the same descriptor-derived cache. CanvasKit's generic gradient
         // lacks Photoshop classic interpolation and non-linear gradient styles.

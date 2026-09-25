@@ -71,7 +71,7 @@ export function installText(controller: EditorController): void {
     <Suspense fallback={<span className={styles.headerTitle}>{t('Text')}</span>}><LazyBar controller={controller} /></Suspense>
   );
   controller.panels.push(() => (loaded.has(controller) ? <Suspense fallback={null}><LazyPanels controller={controller} /></Suspense> : null));
-  controller.statusHints.text = () => t('Click to add text · Drag for a text box · Click text to edit it · Escape or ⌘Enter commits');
+  controller.statusHints.text = () => t('Click to add text · Click a path to type along it · Drag for a text box · Click text to edit it · Escape or ⌘Enter commits');
   controller.keyHandlers.push((event) => {
     if (event.metaKey || event.ctrlKey || event.altKey || event.key.toLowerCase() !== 't' || !controller.availableTools.has('text')) return false;
     if (!event.repeat) controller.session.selectTool('text');

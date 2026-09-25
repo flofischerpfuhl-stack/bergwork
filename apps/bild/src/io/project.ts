@@ -43,6 +43,8 @@ import { pngNeedsColorConversion } from './imageImport';
 import type { RasterResidency } from '../core/storage';
 import { convertStreamedPng, PngTileStreamDecoder, restoreStreamedPng, type StreamedPngRaster } from './pngStream';
 import { readZipEntries, Zip64StreamWriter } from './zipStream';
+import { validTextOnPath } from '../core/text/pathText';
+import { validTextWarp } from '../core/text/warp';
 
 export const EXTENSION_KEY = 'org.compositor.port';
 const MANIFEST_LIMIT = 4 * 1024 * 1024;
@@ -331,7 +333,9 @@ function v2Layer(layer: Layer, context: V2BuildContext): LayerRecordV2 {
       const value = layer as import('../core/model').TextLayer;
       return { ...common, kind: 'text', textSchemaVersion: 1, text: value.text, runs: value.runs,
         paragraphs: value.paragraphs, box: value.box,
-        alignment: value.alignment, previewAssetId: preview, previewTransform: value.renderedTransform };
+        alignment: value.alignment, previewAssetId: preview, previewTransform: value.renderedTransform,
+        ...(value.textPath ? { textPath: { ...value.textPath, schemaVersion: 1 as const, path: v2VectorPath(value.textPath.path) } } : {}),
+        ...(value.textWarp ? { textWarp: { ...value.textWarp, schemaVersion: 1 as const } } : {}) };
     }
     case 'embedded': {
       const value = layer as import('../core/model').EmbeddedLayer;
@@ -979,12 +983,17 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
           if ('textSchemaVersion' in record && record.textSchemaVersion !== 1) invalid('text schema');
           if ('paragraphs' in record && (!Array.isArray(record.paragraphs)
             || !record.paragraphs.every((paragraph: unknown) => validTextParagraph(paragraph, record.text.length)))) invalid('paragraph parameters');
+          if (record.textPath != null && (typeof record.textPath !== 'object' || !validVectorPath(record.textPath.path)
+            || !validTextOnPath({ ...record.textPath, path: normalizeVectorPath(record.textPath.path) }))) invalid('text path');
+          if (record.textWarp != null && (typeof record.textWarp !== 'object' || !validTextWarp(record.textWarp))) invalid('text warp');
           // Files written by the first v2 implementation used flat runs and one alignment.
           // `newLayer` performs that one-time migration; all new files carry textSchemaVersion 1.
           layers.push(newLayer({ ...common, kind: 'text', text: record.text, runs: record.runs,
             paragraphs: 'paragraphs' in record && Array.isArray(record.paragraphs) ? record.paragraphs : undefined,
             box: record.box, alignment: record.alignment,
-            renderedTransform: 'previewTransform' in record ? record.previewTransform : null })); break;
+            renderedTransform: 'previewTransform' in record ? record.previewTransform : null,
+            textPath: record.textPath ? { ...record.textPath, path: normalizeVectorPath(record.textPath.path) } : null,
+            textWarp: record.textWarp ? { ...record.textWarp } : null })); break;
         case 'embedded': {
           const content = record.content as import('../core/model').EmbeddedLayer['content'];
           if (!content || !['embedded', 'linked'].includes(content.mode) || !['image', 'svg', 'pdf', 'project'].includes(content.mediaType)
