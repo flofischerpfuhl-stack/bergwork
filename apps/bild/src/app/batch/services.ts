@@ -8,9 +8,10 @@ import { newLayer, type CanvasDocument } from '../../core/document';
 import { makeTransform } from '../../core/geometry';
 import { uuid } from '../../core/ids';
 import { EditorSession } from '../../core/session';
-import { decodeImageAsset, fileBaseName } from '../../io/imageImport';
+import { fileBaseName } from '../../io/imageImport';
 import { readArchive } from '../../io/project';
 import { readPsdDocumentManaged } from '../../io/psd';
+import { decodeImageAssetInBackground } from '../../workers/imageDecodeClient';
 import { flattenTarget, type BatchDestination, type BatchServices } from '../../io/batch';
 import type { EditorController } from '../../ui/controller';
 
@@ -19,7 +20,7 @@ export async function openBatchFile(controller: EditorController, name: string, 
   if (/\.ps[db]$/i.test(name)) return (await readPsdDocumentManaged(new Uint8Array(await blob.arrayBuffer()))).document;
   if (/\.(fwimg|zip)$/i.test(name)) {
     const limits = controller.limits;
-    return (await readArchive(blob, (data) => decodeImageAsset(data, limits.maxPixels,
+    return (await readArchive(blob, (data) => decodeImageAssetInBackground(data, limits.maxPixels,
       { host: controller.capabilities.codecs, maxSide: limits.maxSide }), limits)).document;
   }
   const raster = await controller.decodeImage(new Uint8Array(await blob.arrayBuffer()), controller.limits.maxPixels);

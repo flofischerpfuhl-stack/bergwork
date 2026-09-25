@@ -25,14 +25,25 @@ export class Zip64StreamWriter {
   private offset = 0n;
   private pending = Promise.resolve();
   private sinkError: unknown = null;
+  private emittedChunks = 0;
+  private copiedBytes = 0;
 
   constructor(private readonly emitChunk?: (chunk: Uint8Array) => void | Promise<void>) {}
 
+  /** Allocation/transfer counters used by the I/O performance audit and regression tests. */
+  get metrics(): { readonly emittedChunks: number; readonly emittedBytes: number; readonly copiedBytes: number } {
+    return { emittedChunks: this.emittedChunks, emittedBytes: Number(this.offset), copiedBytes: this.copiedBytes };
+  }
+
   private emit(chunk: Uint8Array): void {
-    const copy = chunk.slice();
-    if (this.emitChunk) this.pending = this.pending.then(() => this.emitChunk!(copy)).catch((error: unknown) => { this.sinkError = error; });
-    else this.chunks.push(copy as BlobPart);
-    this.offset += BigInt(copy.byteLength);
+    // Every producer passes immutable/owned chunks. A streaming host consumes them before drain()
+    // returns, so copying here only doubled peak memory for a retained full-size JPEG/TIFF. Blob
+    // mode still takes a defensive snapshot because chunks outlive the writer call.
+    const output = this.emitChunk ? chunk : chunk.slice();
+    if (this.emitChunk) this.pending = this.pending.then(() => this.emitChunk!(output)).catch((error: unknown) => { this.sinkError = error; });
+    else { this.chunks.push(output as BlobPart); this.copiedBytes += output.byteLength; }
+    this.emittedChunks++;
+    this.offset += BigInt(output.byteLength);
   }
 
   async add(name: string, produce: (stream: ZipPassThrough) => Promise<void> | void): Promise<void> {

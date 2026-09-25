@@ -405,7 +405,8 @@ type SerializedHistoryDocumentV2 = Pick<V2DocumentSource,
  */
 export async function writeArchiveStreaming(document: CanvasDocument, name: string, activeLayerId: string | null,
   residency?: RasterResidency, history?: PersistedHistoryState,
-  emitChunk?: (chunk: Uint8Array) => void | Promise<void>): Promise<{ blob: Blob; manifest: ProjectManifestV2 }> {
+  emitChunk?: (chunk: Uint8Array) => void | Promise<void>): Promise<{ blob: Blob; manifest: ProjectManifestV2;
+    metrics: { readonly emittedChunks: number; readonly emittedBytes: number; readonly copiedBytes: number } }> {
   const context: V2BuildContext = { assets: new Map(), rasters: new Map(), binaryAssets: new Map(), deferEncoding: true };
   const manifest = manifestV2WithContext(document, name, activeLayerId, context);
   const extraFiles = new Map<string, Uint8Array>();
@@ -438,7 +439,7 @@ export async function writeArchiveStreaming(document: CanvasDocument, name: stri
   await zip.add('manifest.json', (input) => { input.push(json, true); });
   const blob = zip.finish();
   await zip.drain();
-  return { blob, manifest };
+  return { blob, manifest, metrics: zip.metrics };
 }
 
 function writeHistoryStreaming(state: PersistedHistoryState, name: string, context: V2BuildContext,
