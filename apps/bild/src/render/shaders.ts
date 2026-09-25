@@ -687,6 +687,7 @@ export const PRESENT_FRAGMENT = /* glsl */ `${COMMON}
 in vec2 vPos;
 out vec4 finalColor;
 uniform sampler2D uComposite;
+uniform sampler2D uProofLut;
 uniform vec4 uCanvasRect;   // device px: x, y, width, height
 uniform float uPointScale;  // device px per point
 uniform int uGrid;
@@ -694,6 +695,19 @@ uniform float uPixelSize;   // device px per document px
 uniform int uHasComposite;
 uniform vec2 uCompositeOrigin;
 uniform vec2 uCompositeSize;
+uniform int uProof;
+uniform int uGamutWarning;
+uniform int uProofSize;
+vec4 proofFetch(ivec3 p) { return texelFetch(uProofLut, ivec2(p.x + p.y * uProofSize, p.z), 0); }
+vec4 proofColor(vec3 color) {
+  vec3 q = clamp(color, 0.0, 1.0) * float(uProofSize - 1);
+  ivec3 lo = ivec3(floor(q)); ivec3 hi = min(lo + ivec3(1), ivec3(uProofSize - 1)); vec3 f = fract(q);
+  vec4 a = mix(proofFetch(ivec3(lo.x, lo.y, lo.z)), proofFetch(ivec3(hi.x, lo.y, lo.z)), f.x);
+  vec4 b = mix(proofFetch(ivec3(lo.x, hi.y, lo.z)), proofFetch(ivec3(hi.x, hi.y, lo.z)), f.x);
+  vec4 d = mix(proofFetch(ivec3(lo.x, lo.y, hi.z)), proofFetch(ivec3(hi.x, lo.y, hi.z)), f.x);
+  vec4 e = mix(proofFetch(ivec3(lo.x, hi.y, hi.z)), proofFetch(ivec3(hi.x, hi.y, hi.z)), f.x);
+  return mix(mix(a, b, f.y), mix(d, e, f.y), f.z);
+}
 void main() {
   vec3 workspace = vec3(0.105);
   vec2 p = vPos;
@@ -713,6 +727,15 @@ void main() {
   vec2 cp = p - uCompositeOrigin;
   vec4 c = uHasComposite == 1 && cp.x >= 0.0 && cp.y >= 0.0 && cp.x < uCompositeSize.x && cp.y < uCompositeSize.y
     ? texelFetch(uComposite, ivec2(cp), 0) : vec4(0.0);
+  if (uProof == 1 && c.a > 0.0) {
+    vec4 converted = proofColor(c.rgb / c.a);
+    vec3 proofed = converted.rgb;
+    if (uGamutWarning == 1 && converted.a > 0.15) {
+      float stripe = mod(floor(p.x / 3.0) + floor(p.y / 3.0), 2.0) < 0.5 ? 0.82 : 0.55;
+      proofed = vec3(stripe, 0.0, stripe);
+    }
+    c.rgb = proofed * c.a;
+  }
   vec3 color = c.rgb + vec3(checker) * (1.0 - c.a);
   if (uGrid == 1) {
     vec2 g = rel / uPixelSize;

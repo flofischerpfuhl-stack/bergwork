@@ -28,6 +28,7 @@ import {
   GROUP_FRAGMENT, IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT, STACK_FRAGMENT,
   UNPREMULTIPLY_FRAGMENT, VERTEX,
 } from './shaders';
+import type { CmykLut } from '../core/color/cmyk';
 import { LiveFilterHookAdapter } from './liveFilterPasses';
 
 export { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
@@ -190,6 +191,8 @@ export class GpuCompositor {
   private frame = 0;
   private readonly white: TextureSource;
   private lutSources = new Map<string, TextureSource>();
+  private readonly proofSources = new Map<Uint8Array, TextureSource>();
+  private readonly proofWarnings = new WeakMap<CmykLut, Uint8Array>();
   private brushState: BrushGpuState | null = null;
   private brushCompositeCache: BrushCompositeCache | null = null;
   private renderClip: Rect | null = null;
@@ -254,6 +257,7 @@ export class GpuCompositor {
     for (const rt of this.pool) rt.destroy(true);
     for (const rt of this.inUse) rt.destroy(true);
     for (const lut of this.lutSources.values()) lut.destroy();
+    for (const source of this.proofSources.values()) source.destroy();
     this.destroyBrushState();
     for (const targets of this.brushTargetPool) for (const target of Object.values(targets)) target.destroy(true);
     this.brushTargetPool.length = 0;
@@ -431,7 +435,8 @@ export class GpuCompositor {
         uHasComposite: { value: 0, type: 'i32' },
         uCompositeOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
         uCompositeSize: { value: new Float32Array(2), type: 'vec2<f32>' },
-      }, ['uComposite']],
+        uProof: { value: 0, type: 'i32' }, uGamutWarning: { value: 0, type: 'i32' }, uProofSize: { value: 2, type: 'i32' },
+      }, ['uComposite', 'uProofLut']],
     };
     let spec = sources[name];
     if (!spec && fragment) {
@@ -1505,13 +1510,40 @@ export class GpuCompositor {
 
   /** Draws the workspace, canvas rectangle, checkerboard and composite to the screen canvas. */
   present(composite: RenderTexture | null, width: number, height: number, canvasRect: { x: number; y: number; width: number; height: number },
-    pointScale: number, grid: boolean, pixelSize: number, compositeOrigin: { x: number; y: number } = { x: 0, y: 0 }): void {
+    pointScale: number, grid: boolean, pixelSize: number, compositeOrigin: { x: number; y: number } = { x: 0, y: 0 },
+    proof?: { readonly lut: CmykLut; readonly gamutWarning: boolean }): void {
     this.resize(width, height);
-    this.run(this.pass('present'), null, width, height, { uComposite: composite?.source ?? this.white }, {
+    let proofSource = this.white;
+    if (proof) {
+      let proofPixels = proof.lut.proof;
+      if (proof.gamutWarning) {
+        let warning = this.proofWarnings.get(proof.lut);
+        if (!warning) {
+          warning = proof.lut.proof.slice();
+          for (let at = 0; at < warning.length; at += 4) if (warning[at + 3]! > 38) {
+            warning[at] = 209; warning[at + 1] = 0; warning[at + 2] = 209;
+          }
+          this.proofWarnings.set(proof.lut, warning);
+        }
+        proofPixels = warning;
+      }
+      let uploaded = this.proofSources.get(proofPixels);
+      if (!uploaded) {
+        uploaded = new TextureSource({ width: proof.lut.size * proof.lut.size, height: proof.lut.size, format: 'rgba8unorm' });
+        this.renderer.texture.bindSource(uploaded, 0);
+        this.gl.pixelStorei(this.gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        this.gl.texSubImage2D(this.gl.TEXTURE_2D, 0, 0, 0, proof.lut.size * proof.lut.size, proof.lut.size,
+          this.gl.RGBA, this.gl.UNSIGNED_BYTE, proofPixels);
+        this.restoreUnpack(); this.proofSources.set(proofPixels, uploaded);
+      }
+      proofSource = uploaded;
+    }
+    this.run(this.pass('present'), null, width, height, { uComposite: composite?.source ?? this.white, uProofLut: proofSource }, {
       uCanvasRect: new Float32Array([canvasRect.x, canvasRect.y, canvasRect.width, canvasRect.height]),
       uPointScale: pointScale, uGrid: grid ? 1 : 0, uPixelSize: pixelSize, uHasComposite: composite ? 1 : 0,
       uCompositeOrigin: new Float32Array([compositeOrigin.x, compositeOrigin.y]),
       uCompositeSize: new Float32Array([composite?.width ?? 0, composite?.height ?? 0]),
+      uProof: proof ? 1 : 0, uGamutWarning: 0, uProofSize: proof?.lut.size ?? 2,
     });
   }
 
