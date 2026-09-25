@@ -70,6 +70,11 @@ export interface LayerTransformV2 {
   sampling: 'Nearest' | 'Smooth' | 'High quality';
 }
 
+export type LayerWarpV2 =
+  | { kind: 'quad'; schemaVersion: 1; corners: readonly [PointV2, PointV2, PointV2, PointV2] }
+  | { kind: 'mesh'; schemaVersion: 1; splits: Readonly<{ x: number; y: number }>; points: readonly PointV2[];
+      preset?: 'custom' | 'arc' | 'flag' | 'bulge' | 'wave' | 'fish' | 'rise' | 'inflate' | 'squeeze' };
+
 export interface LayerCommonV2 {
   id: LayerIdV2;
   parentId: LayerIdV2 | null;
@@ -81,7 +86,7 @@ export interface LayerCommonV2 {
   locks: { transparency: boolean; pixels: boolean; position: boolean; all: boolean };
   colorLabel: 'none' | 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'violet' | 'gray';
   transform: LayerTransformV2;
-  warp: { kind: 'quad'; schemaVersion: 1; corners: readonly [PointV2, PointV2, PointV2, PointV2] } | null;
+  warp: LayerWarpV2 | null;
   crop: { rect: RectV2; feather: number } | null;
   mask: { assetId: AssetIdV2; transform: LayerTransformV2 | null; linked: boolean; enabled: boolean } | null;
   vectorMask: VectorMaskRecordV2 | null;

@@ -830,7 +830,17 @@ export async function benchmark16(page: Page): Promise<void> {
   await createCanvas(page);
   await importPng(page, 'package-face.png', solidPng(60, 60, [210, 180, 50, 255]));
   expect((await manifest(page)).layers.at(-1)?.transform).toEqual([1, 0, 0, 1, 20, 20]);
-  missing('mesh-warp editing controls', task(16));
+  await page.getByTestId('menu-Edit').click();
+  await page.getByRole('menuitem', { name: /^Transform/ }).click();
+  await page.getByRole('menuitem', { name: 'Warp', exact: true }).click();
+  await page.getByTestId('warp-preset').selectOption('bulge');
+  const state = await page.evaluate(() => {
+    const layer = (window as any).__editorForTests.session.activeLayer;
+    return { kind: layer.warp?.kind, points: layer.warp?.points?.length, undo: (window as any).__editorForTests.session.history.undoName };
+  });
+  expect(state).toEqual({ kind: 'mesh', points: 16, undo: 'Warp' });
+  const pixels = await exportedPixels(page);
+  expect(rgbaAt(pixels, 50, 50)).toEqual([210, 180, 50, 255]);
 }
 
 export async function benchmark17(page: Page): Promise<void> {

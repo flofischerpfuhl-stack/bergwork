@@ -59,7 +59,8 @@ export function commitRetouch(session: EditorSession): boolean {
   const layer = session.layer(active.layerId);
   if (!layer || active.mask !== session.isMaskSelected) { active.stroke.cancel(); return false; }
   const raster = active.stroke.finish();
-  const name = active.mode[0]!.toUpperCase() + active.mode.slice(1);
+  const name = ['liquify', 'push', 'bloat', 'pucker', 'reconstruct'].includes(active.mode)
+    ? 'Liquify' : active.mode[0]!.toUpperCase() + active.mode.slice(1);
   if (active.mask) session.replaceMaskPixels(active.layerId, raster, name);
   else session.replaceLayerPixels(active.layerId, raster, name, active.transform);
   return true;

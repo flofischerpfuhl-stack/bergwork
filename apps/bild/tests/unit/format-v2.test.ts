@@ -8,6 +8,7 @@ import { EditorSession } from '../../src/core/session';
 import { Raster } from '../../src/core/raster';
 import { buildManifest, readArchive, writeArchive } from '../../src/io/project';
 import { decodePng } from '../../src/io/png';
+import { createMeshWarp } from '../../src/core/meshWarp';
 
 const decoder = async (bytes: Uint8Array) => {
   const png = decodePng(bytes);
@@ -16,6 +17,7 @@ const decoder = async (bytes: Uint8Array) => {
 const transform = makeTransform({ x: 0, y: 0 }, { width: 4, height: 3 });
 
 function fixture(): CanvasDocument {
+  const mesh = createMeshWarp(transform);
   const common = (id: string, name: string) => ({ id, name, transform, fillOpacity: 0.8,
     locks: { transparency: false, pixels: false, position: false, all: false }, colorLabel: 'none' as const });
   return { id: 'document-v2', width: 40, height: 30, resolution: 144, selection: null,
@@ -23,7 +25,7 @@ function fixture(): CanvasDocument {
     artboards: [{ id: 'artboard-1', name: 'Banner', rect: { x: 1, y: 2, width: 20, height: 10 },
       background: { red: 1, green: 1, blue: 1, alpha: 0 }, colorLabel: 'green' }],
     layers: [
-      newLayer({ ...common('pixel', 'Pixel'), kind: 'pixel', raster: Raster.fromPixels(1, 1, 4, new Uint8Array([7, 8, 9, 255])),
+      newLayer({ ...common('pixel', 'Pixel'), kind: 'pixel', warp: mesh, raster: Raster.fromPixels(1, 1, 4, new Uint8Array([7, 8, 9, 255])),
         effects: [{ kind: 'stroke', schemaVersion: 1, enabled: true, width: 2, position: 'inside', color: { red: 1, green: 0, blue: 0 } }],
         filters: [{ kind: 'gaussianBlur', schemaVersion: 1, enabled: true, radius: 3 }] }),
       newLayer({ ...common('group', 'Group'), kind: 'group' }),
@@ -31,11 +33,11 @@ function fixture(): CanvasDocument {
         parameters: { channel: 'RGB', ranges: Array.from({ length: 4 }, () => ({ black: 0, gamma: 1, white: 255, outputBlack: 0, outputWhite: 255 })) } } }),
       newLayer({ ...common('fill', 'Fill'), kind: 'fill', fill: { kind: 'gradient', schemaVersion: 1, angle: 45,
         stops: [{ offset: 0, color: { red: 0, green: 0, blue: 0 }, opacity: 1 }, { offset: 1, color: { red: 1, green: 1, blue: 1 }, opacity: 1 }] } }),
-      newLayer({ ...common('vector', 'Vector'), kind: 'vector', paths: [{ closed: true, points: [{ anchor: { x: 0, y: 0 }, in: { x: 0, y: 0 }, out: { x: 1, y: 0 } }] }],
+      newLayer({ ...common('vector', 'Vector'), kind: 'vector', warp: mesh, paths: [{ closed: true, points: [{ anchor: { x: 0, y: 0 }, in: { x: 0, y: 0 }, out: { x: 1, y: 0 } }] }],
         style: { fill: { kind: 'solid', schemaVersion: 1, color: { red: 0, green: 0.5, blue: 1 } }, stroke: null } }),
-      newLayer({ ...common('text', 'Text'), kind: 'text', text: 'Hello', runs: [{ from: 0, to: 5, fontFamily: 'Inter', fontSize: 18,
+      newLayer({ ...common('text', 'Text'), kind: 'text', warp: mesh, text: 'Hello', runs: [{ from: 0, to: 5, fontFamily: 'Inter', fontSize: 18,
         color: { red: 0, green: 0, blue: 0 } }], box: { width: 100, height: 30 }, alignment: 'center' }),
-      newLayer({ ...common('embedded', 'SVG'), kind: 'embedded', content: { mode: 'embedded', mediaType: 'svg', assetId: 'embedded-svg', sourceName: 'logo.svg' } }),
+      newLayer({ ...common('embedded', 'SVG'), kind: 'embedded', warp: mesh, content: { mode: 'embedded', mediaType: 'svg', assetId: 'embedded-svg', sourceName: 'logo.svg' } }),
     ] };
 }
 
@@ -57,6 +59,7 @@ describe('format v2 (PRODUCT-PLAN A2/P7/P8)', () => {
     expect((loaded.document.layers[6] as import('../../src/core/model').EmbeddedLayer).content.assetId).toBe('embedded-svg');
     expect(new TextDecoder().decode(loaded.document.resources?.[0]?.bytes)).toBe('<svg/>');
     expect(loaded.document.artboards?.[0]?.name).toBe('Banner');
+    for (const index of [0, 4, 5, 6]) expect(loaded.document.layers[index]!.warp).toEqual(createMeshWarp(transform));
   });
 
   it('migrates a v1 fernwork-compositor manifest losslessly', async () => {

@@ -220,10 +220,29 @@ vec4 bilinear(sampler2D t, vec2 p, ivec2 size) {
   vec4 d = fetchClamped(t, i + ivec2(1, 1), size);
   return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
+float cubicWeight(float value) {
+  float x = abs(value);
+  if (x <= 1.0) return 1.5*x*x*x - 2.5*x*x + 1.0;
+  if (x < 2.0) return -0.5*x*x*x + 2.5*x*x - 4.0*x + 2.0;
+  return 0.0;
+}
+vec4 bicubic(sampler2D t, vec2 p, ivec2 size) {
+  vec2 q = p - vec2(0.5), base = floor(q);
+  vec4 result = vec4(0.0); float total = 0.0;
+  for (int y = -1; y <= 2; y++) for (int x = -1; x <= 2; x++) {
+    float weight = cubicWeight(q.x - (base.x + float(x))) * cubicWeight(q.y - (base.y + float(y)));
+    result += fetchClamped(t, ivec2(base) + ivec2(x, y), size) * weight;
+    total += weight;
+  }
+  result = clamp(result / max(abs(total), 0.000001), 0.0, 1.0);
+  result.rgb = min(result.rgb, result.aaa);
+  return result;
+}
 /** sampling: 0 nearest, 1 exact bilinear, 2 one sharp mip level followed by hardware bilinear. */
 vec4 sampleGrid(sampler2D t, vec2 p, ivec2 size, int sampling, int mipLevel) {
   if (sampling == 0) return fetchClamped(t, ivec2(floor(p)), size);
   if (sampling == 1) return bilinear(t, p, size);
+  if (sampling == 3) return bicubic(t, p, size);
   return textureLod(t, p / vec2(size), float(mipLevel));
 }
 /** Coverage of the unit-grid rectangle [0,size] around p, antialiased over edgeScale target px per grid px. */
@@ -297,6 +316,54 @@ void main() {
     coverage *= texelFetch(uMask, ivec2(vPos), 0).r;
   }
   if (uHasClip == 1) coverage *= texelFetch(uClip, ivec2(vPos), 0).r;
+  vec4 src = sampled * (coverage * uOpacity * uFillOpacity);
+  finalColor = uReplace == 1 ? src
+    : compositeFill(uMode, dst, sampled, coverage, uOpacity, uFillOpacity, ivec2(floor(doc)), uDissolveSeed);
+}
+`;
+
+/** A forward-tessellated bicubic warp. Mesh UVs remain source-unit coordinates. */
+export const WARP_MESH_FRAGMENT = /* glsl */ `${COMMON}
+in vec2 vPos;
+in vec2 vUV;
+out vec4 finalColor;
+uniform sampler2D uBackdrop;
+uniform sampler2D uLayer;
+uniform sampler2D uMask;
+uniform sampler2D uClip;
+uniform mat3 uViewToDoc;
+uniform vec2 uLayerSize;
+uniform vec2 uLayerEdge;
+uniform vec2 uChunkOrigin;
+uniform vec2 uChunkSize;
+uniform vec2 uTextureSize;
+uniform float uApron;
+uniform int uSampling;
+uniform int uMipLevel;
+uniform float uOpacity;
+uniform float uFillOpacity;
+uniform int uMode;
+uniform int uDissolveSeed;
+uniform int uHasMask;
+uniform int uHasClip;
+uniform int uSnap;
+uniform int uReplace;
+
+void main() {
+  ivec2 targetPixel = ivec2(floor(vPos));
+  vec4 dst = texelFetch(uBackdrop, targetPixel, 0);
+  vec2 lp = vUV * uLayerSize;
+  vec2 chunkMax = uChunkOrigin + uChunkSize;
+  if (lp.x < uChunkOrigin.x || lp.y < uChunkOrigin.y || lp.x >= chunkMax.x || lp.y >= chunkMax.y) discard;
+  float cover = edgeCoverage(lp, uLayerSize, uLayerEdge);
+  if (cover <= 0.0) discard;
+  vec2 chunkPixel = lp - uChunkOrigin + vec2(uApron);
+  vec4 sampled = sampleGrid(uLayer, chunkPixel, ivec2(uTextureSize), uSampling, uMipLevel);
+  float coverage = cover;
+  if (uHasMask == 1) coverage *= texelFetch(uMask, targetPixel, 0).r;
+  if (uHasClip == 1) coverage *= texelFetch(uClip, targetPixel, 0).r;
+  vec2 doc = (uViewToDoc * vec3(vPos, 1.0)).xy;
+  if (uSnap == 1) doc = floor(doc) + 0.5;
   vec4 src = sampled * (coverage * uOpacity * uFillOpacity);
   finalColor = uReplace == 1 ? src
     : compositeFill(uMode, dst, sampled, coverage, uOpacity, uFillOpacity, ivec2(floor(doc)), uDissolveSeed);

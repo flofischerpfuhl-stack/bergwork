@@ -162,6 +162,16 @@ export interface VectorMask {
 }
 export interface CropParameters { readonly rect: Rect; readonly feather: number }
 export interface WarpQuad { readonly kind: 'quad'; readonly schemaVersion: 1; readonly corners: readonly [Point, Point, Point, Point] }
+/** Cubic Bezier patch grid. Each patch contributes three new controls in each direction. */
+export interface WarpMesh {
+  readonly kind: 'mesh';
+  readonly schemaVersion: 1;
+  readonly splits: Readonly<{ x: number; y: number }>;
+  /** Row-major document-space controls; dimensions are (3*y+1) by (3*x+1). */
+  readonly points: readonly Point[];
+  readonly preset?: 'custom' | 'arc' | 'flag' | 'bulge' | 'wave' | 'fish' | 'rise' | 'inflate' | 'squeeze';
+}
+export type LayerWarp = WarpQuad | WarpMesh;
 
 export type LayerEffect =
   | { readonly kind: 'dropShadow'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number;
@@ -206,7 +216,7 @@ export interface LayerCommon {
   readonly locks: LayerLocks;
   readonly colorLabel: ColorLabel;
   readonly transform: LayerTransform;
-  readonly warp: WarpQuad | null;
+  readonly warp: LayerWarp | null;
   readonly crop: CropParameters | null;
   readonly mask: LayerMask | null;
   readonly vectorMask: VectorMask | null;

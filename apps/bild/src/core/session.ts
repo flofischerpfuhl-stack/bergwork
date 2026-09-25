@@ -34,6 +34,7 @@ import { cancelShape, redrawShapeLayer } from './shape';
 import { vectorLayerWithTransform } from './vector/transform';
 import { cancelGradient, hasPendingGradient, refreshGradientPalette, resolveGradient } from './gradient';
 import { distortLayer, groupDistortTarget, maskBackground, warpMask } from './distort';
+import { meshPoint } from './meshWarp';
 import {
   effectiveLayerLocks, layerLockBlocker, preserveLayerTransparency,
   type LayerEditKind, type LayerLockBlocker,
@@ -46,7 +47,7 @@ import { isValidLayerEffect } from './effects/validate';
 export type Tool =
   | 'move' | 'artboard' | 'marquee' | 'lasso' | 'wand' | 'objectSelect' | 'crop' | 'brush' | 'spotHealing' | 'cloneStamp' | 'blur'
   | 'gradient' | 'shape' | 'eyedropper' | 'hand' | 'zoom' | 'idle'
-  | 'text' | 'pen' | 'directSelect';
+  | 'text' | 'pen' | 'directSelect' | 'warp' | 'straighten' | 'liquify';
 
 export const TOOLS: readonly Tool[] = ['move', 'artboard', 'marquee', 'lasso', 'wand', 'objectSelect', 'crop', 'brush', 'spotHealing', 'cloneStamp',
   'blur', 'gradient', 'text', 'pen', 'directSelect', 'shape', 'eyedropper', 'hand', 'zoom'];
@@ -60,6 +61,7 @@ export const TOOL_LABELS: Record<Tool, string> = {
   idle: 'No tool',
   text: 'Horizontal Type (T)',
   pen: 'Pen (P)', directSelect: 'Direct Selection (A) · Shift-A switches Path Selection',
+  warp: 'Warp', straighten: 'Straighten', liquify: 'Liquify',
 };
 
 export function isBrushTool(tool: Tool): boolean { return tool === 'brush' || tool === 'spotHealing' || tool === 'cloneStamp' || tool === 'blur'; }
@@ -151,6 +153,8 @@ export class EditorSession {
   snapGuides: { xs: number[]; ys: number[] } = { xs: [], ys: [] };
   locksTransformRatio = true;
   transformAutoSelect = false;
+  /** Edit › Transform › Perspective constrains paired quad corners until apply/cancel. */
+  perspectiveConstrained = false;
   showsTransformControls = true;
   showsPixelGrid = true;
   blendPreview: { layerId: string; mode: BlendMode } | null = null;
@@ -386,6 +390,24 @@ export class EditorSession {
     const layers = this.document.layers.slice();
     layers[index] = update(layers[index]!);
     this.setLayers(layers);
+  }
+
+  /** Live mesh-handle preview; the feature restores `original` before creating the single history item. */
+  previewLayerWarp(id: string, warp: Layer['warp']): boolean {
+    const layer = this.layer(id);
+    if (!layer || layer.kind === 'group' || this.editBlocker(id, 'position')) return false;
+    this.updateLayer(id, (value) => ({ ...value, warp }));
+    this.notify('document');
+    return true;
+  }
+
+  commitLayerWarp(id: string, original: Layer['warp'], warp: Layer['warp'], name = 'Warp'): boolean {
+    const layer = this.layer(id);
+    if (!layer || layer.kind === 'group' || this.editBlocker(id, 'position')) return false;
+    this.updateLayer(id, (value) => ({ ...value, warp: original }));
+    this.edit(name, () => this.updateLayer(id, (value) => ({ ...value, warp })));
+    this.notify('document');
+    return true;
   }
 
   setActiveLayer(id: string | null): void {
@@ -1294,8 +1316,11 @@ export class EditorSession {
     const edit = this.transformEdit;
     if (!edit || edit.corners || !isValidTransform(edit.draft)) return;
     const layer = this.layer(edit.layerId);
+    const liveCorners = layer?.warp?.kind === 'quad' ? layer.warp.corners
+      : layer?.warp?.kind === 'mesh' ? [meshPoint(layer.warp, { x: 0, y: 0 }), meshPoint(layer.warp, { x: 1, y: 0 }),
+        meshPoint(layer.warp, { x: 1, y: 1 }), meshPoint(layer.warp, { x: 0, y: 1 })] : null;
     this.transformEdit = { ...edit, persistent: true,
-      corners: !edit.group && layer?.warp ? layer.warp.corners.map((point) => ({ ...point })) : transformCorners(edit.draft) };
+      corners: !edit.group && liveCorners ? liveCorners.map((point) => ({ ...point })) : transformCorners(edit.draft) };
     this.notify('document');
   }
 
@@ -1441,6 +1466,7 @@ export class EditorSession {
     this.blendPreview = null;
     this.finishOpacityEdit();
     const edit = this.transformEdit;
+    this.perspectiveConstrained = false;
     if (!edit) return;
     this.transformEdit = null;
     try {
@@ -1486,6 +1512,7 @@ export class EditorSession {
   cancelTransform(): void {
     this.snapGuides = { xs: [], ys: [] };
     const edit = this.transformEdit;
+    this.perspectiveConstrained = false;
     if (!edit) return;
     this.transformEdit = null;
     if (this.transformDuplicate) {

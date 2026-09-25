@@ -70,7 +70,7 @@ function TransformInspector({ controller, session }: { controller: EditorControl
   const canvas = controller.canvasView;
   return (
     <>
-      <span className={styles.headerTitle}>{session.transformTargetsMask ? t('Transform Mask') : t('Transform')}</span>
+      <span className={styles.headerTitle}>{session.transformTargetsMask ? t('Transform Mask') : session.perspectiveConstrained ? t('Perspective') : t('Transform')}</span>
       <label className={styles.check} title={t('Select layers by clicking the canvas. When off, hold ⌘ to select a layer.')}>
         <input type="checkbox" checked={session.transformAutoSelect} onChange={(e) => { session.transformAutoSelect = e.target.checked; session.notify('ui'); }} />
         {t('Auto Select')}

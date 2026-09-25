@@ -8,7 +8,8 @@ import {
   type LayerLocks, type VectorMask, type VectorPath, type VectorStyle,
   DEFAULT_TEXT_STYLE, defaultTextParagraphStyle, MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
 } from '../../core/document';
-import { makeTransform, samePlacement, type LayerTransform } from '../../core/geometry';
+import { apply, makeTransform, samePlacement, unitToDocument, type LayerTransform } from '../../core/geometry';
+import { MAX_MESH_SPLITS, meshPreset } from '../../core/meshWarp';
 import { Raster } from '../../core/raster';
 import {
   defaultChannelMixer, defaultColour, defaultCurves, defaultHueSaturation, defaultLevels,
@@ -298,7 +299,41 @@ function placedMedia(file: LinkedFile | undefined): 'image' | 'svg' | 'pdf' | 'p
   return 'image';
 }
 
-function placedTransform(source: AgLayer, fallback: LayerTransform): { transform: LayerTransform; warp: import('../../core/model').WarpQuad | null } {
+function meshDimensions(count: number, rowsHint?: number, columnsHint?: number): { x: number; y: number } | null {
+  let best: { x: number; y: number; score: number } | null = null;
+  for (let y = 1; y <= MAX_MESH_SPLITS; y++) for (let x = 1; x <= MAX_MESH_SPLITS; x++) {
+    if ((x * 3 + 1) * (y * 3 + 1) !== count) continue;
+    const score = Math.abs((columnsHint ?? x) - x) + Math.abs((rowsHint ?? y) - y);
+    if (!best || score < best.score) best = { x, y, score };
+  }
+  return best ? { x: best.x, y: best.y } : null;
+}
+
+/** ag-psd PlLd/SoLd `warp`/`quiltWarp`; mesh coordinates are in placed-content space. */
+function placedWarp(source: AgLayer, transform: LayerTransform,
+  quad: import('../../core/model').WarpQuad | null): import('../../core/model').LayerWarp | null {
+  const warp = source.placedLayer?.warp;
+  if (!warp || warp.style === 'none') return quad;
+  const envelope = warp.customEnvelopeWarp, dimensions = envelope
+    ? meshDimensions(envelope.meshPoints.length, warp.deformNumRows, warp.deformNumCols) : null;
+  if (envelope && dimensions) {
+    const width = source.placedLayer?.width ?? transform.size.width, height = source.placedLayer?.height ?? transform.size.height;
+    const left = warp.bounds?.left?.value ?? 0, top = warp.bounds?.top?.value ?? 0;
+    const right = warp.bounds?.right?.value ?? width, bottom = warp.bounds?.bottom?.value ?? height;
+    const rangeX = Math.abs(right - left) > 1e-9 ? right - left : width;
+    const rangeY = Math.abs(bottom - top) > 1e-9 ? bottom - top : height;
+    const map = unitToDocument(transform);
+    const points = envelope.meshPoints.map((point) => apply(map,
+      { x: (point.x - left) / rangeX, y: (point.y - top) / rangeY }));
+    return { kind: 'mesh', schemaVersion: 1, splits: dimensions, points, preset: 'custom' };
+  }
+  const preset = warp.style === 'arc' || warp.style === 'flag' || warp.style === 'bulge' || warp.style === 'wave'
+    || warp.style === 'fish' || warp.style === 'rise' || warp.style === 'inflate' || warp.style === 'squeeze'
+    ? warp.style : null;
+  return preset ? meshPreset(transform, preset, (warp.value ?? 0) / 100) : quad;
+}
+
+function placedTransform(source: AgLayer, fallback: LayerTransform): { transform: LayerTransform; warp: import('../../core/model').LayerWarp | null } {
   const values = source.placedLayer?.transform;
   if (!values || values.length < 8 || !values.slice(0, 8).every(Number.isFinite)) return { transform: fallback, warp: null };
   const corners = [0, 1, 2, 3].map((index) => ({ x: values[index * 2]!, y: values[index * 2 + 1]! })) as
@@ -311,10 +346,12 @@ function placedTransform(source: AgLayer, fallback: LayerTransform): { transform
     - (corners[1].y - corners[0].y) * (corners[3].x - corners[0].x);
   const affineX = corners[1].x + corners[3].x - corners[0].x, affineY = corners[1].y + corners[3].y - corners[0].y;
   const nonAffine = Math.hypot(corners[2].x - affineX, corners[2].y - affineY) > 0.01;
-  return { transform: makeTransform({ x: centre.x - width / 2, y: centre.y - height / 2 }, { width, height }, {
+  const transform = makeTransform({ x: centre.x - width / 2, y: centre.y - height / 2 }, { width, height }, {
     rotation: Math.atan2(corners[1].y - corners[0].y, corners[1].x - corners[0].x) * 180 / Math.PI,
     flipY: cross < 0, sampling: 'High quality',
-  }), warp: nonAffine ? { kind: 'quad', schemaVersion: 1, corners } : null };
+  });
+  const quad = nonAffine ? { kind: 'quad' as const, schemaVersion: 1 as const, corners } : null;
+  return { transform, warp: placedWarp(source, transform, quad) };
 }
 
 function placedContent(source: AgLayer, state: ImportState): import('../../core/model').EmbeddedLayer['content'] | null {

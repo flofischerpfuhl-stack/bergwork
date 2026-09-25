@@ -38,6 +38,7 @@ import { prepareStreamingSha256, sha256Hex } from './sha256';
 import { normalizeArtboards } from '../core/artboards';
 import { normalizeSwatchGroups, validSwatchGroups } from '../core/color/swatches';
 import { parseCubeLut } from '../core/adjust/cube';
+import { isValidMeshWarp } from '../core/meshWarp';
 import { pngNeedsColorConversion } from './imageImport';
 import type { RasterResidency } from '../core/storage';
 import { convertStreamedPng, PngTileStreamDecoder, restoreStreamedPng, type StreamedPngRaster } from './pngStream';
@@ -932,7 +933,7 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
       if (!record || typeof record.id !== 'string' || !record.id || ids.has(record.id) || typeof record.name !== 'string'
         || !record.name.trim() || !num(record.opacity) || record.opacity < 0 || record.opacity > 1
         || !num(record.fillOpacity) || record.fillOpacity < 0 || record.fillOpacity > 1
-        || !BLEND_MODE_SET.has(record.blendMode) || !isLayerTransform(record.transform)
+        || !BLEND_MODE_SET.has(record.blendMode) || !isLayerTransform(record.transform) || !validWarp(record.warp)
         || !validLocks(record.locks) || !['none', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray'].includes(record.colorLabel)
         || !Array.isArray(record.effects) || !record.effects.every(validEffect)
         || !Array.isArray(record.filters) || !record.filters.every(validLiveFilter)
@@ -1100,6 +1101,14 @@ function validVectorPath(value: import('../../contracts-v2').VectorPathRecordV2)
     && Array.isArray(value.points) && value.points.length <= 1_000_000
     && value.points.every((point) => (point.kind === undefined || point.kind === 'corner' || point.kind === 'smooth')
       && [point?.anchor, point?.in, point?.out].every((part) => num(part?.x) && num(part?.y)));
+}
+
+function validWarp(value: import('../../contracts-v2').LayerWarpV2 | null): boolean {
+  if (value === null) return true;
+  if (value.kind === 'mesh') return isValidMeshWarp(value);
+  return value.kind === 'quad' && value.schemaVersion === 1 && Array.isArray(value.corners) && value.corners.length === 4
+    && value.corners.every((point) => num(point?.x) && num(point?.y)
+      && Math.abs(point.x) <= 1_000_000 && Math.abs(point.y) <= 1_000_000);
 }
 
 function normalizeVectorPath(value: import('../../contracts-v2').VectorPathRecordV2): import('../core/model').VectorPath {
