@@ -103,3 +103,100 @@ Observed summary (host locale `de_DE.UTF-8`):
 ```
 
 All 18 failures end at `benchmark-helpers.ts:missing` with the capability listed above; tasks 8 and 20 pass.
+
+## Phase 2 re-run — 2026-09-25
+
+Observed 2026-09-25 against the integrated Phase 2 browser UI (`integration` at `c29d606`). The Phase 0 and Phase 1 sections above are left as recorded.
+
+### Unchanged Phase 1 suite, run as-is
+
+18 failed, 2 passed (tasks 8 and 20). 14 failures ended at their `missing()` line. Four failed earlier:
+
+- **Task 9 — product regression.** *Layer › Align* is disabled for the vector shape the task draws. Phase 1 shapes were raster-backed; Phase 2 shapes are vector layers without a raster, and `alignUnits` (`src/core/align.ts`) only counts layers with a raster. The click waited for the disabled item until the test timed out.
+- **Task 13 — behaviour change, then a harness fix.** Since A4c the browser build defaults to the Lite profile (100 MP). *Create canvas* at 20,000 × 10,000 now does nothing, and no message appears (see bugs). A 200-MP poster is a Pro task, so the benchmark now mounts the Pro profile.
+- **Task 14 — harness timing.** Levels now applies asynchronously: the panel shows “Applying…” after OK. The benchmark read the export before the commit finished. It now waits for the panel to close, as `applyGaussianBlur` already did. The product is not at fault.
+- **Task 15 — capability landed.** The Phase 0/1 step asserted that no Type tool exists. The step was replaced by real text steps (below).
+
+### Benchmarks extended with Phase 2 capabilities
+
+Every step goes through the real UI (menus, tools on the canvas, panels, dialogs, file choosers) and is followed by pixel or document assertions. No earlier step was removed and no earlier assertion weakened. When a Phase 2 capability exists but gives a wrong result, the failing assertion names the expectation and the bug is listed below with a reproduction. The later steps of that task stay in the scenario and run once the bug is fixed.
+
+New inputs are generated at run time. The PSDs of tasks 4 and 5 are written in Node with `ag-psd`. The SlimSAM model for task 7 is served from local files through `page.route` (`FERNWORK_SLIMSAM_DIR`, else `/tmp/slimsam.*`; here `/tmp/slimsam.batbap`). Without those files the step would be reported as skipped, never as passed.
+
+- **1 (green):** Cutout, then *Layer Style › Drop Shadow* (distance 8, size 3) with pixel-checked shadow. Three artboards come from presets: Instagram Post, then Duplicate Artboard + preset for Story and Facebook Cover. *Export As* writes a ZIP of `Post.png` 1080², `Story.png` 1080×1920 and `Cover.png` 851×315, each checked for product, shadow and white background.
+- **2 (green):** Headline via the Type tool (24 pt), checked for ink. Logo SVG via *File › Place Embedded…*, moved with the X/Y fields + Apply, checked for green. Four artboards: one drawn around the layout, three duplicates. *Export As* WebP and then PNG: four files each, every one checked for photo, colour field, logo and headline.
+- **3 (red, product bug):** Gradient background (Gradient tool). Person gets Stroke + Outer Glow through the Layer Style dialog, both pixel-checked. Bold 24 pt magenta text gets a Stroke → **fails**: the 2 px stroke adds 2 black pixels (expected > 100). JPEG export follows.
+- **4 (red, product bug):** The mockup PSD (grey background + Smart Object “Screen” in perspective, embedded PNG) opens through *File › Open Project…* as an embedded layer with its warp quad. *Layer › Replace Contents…* keeps the transform and warp. *Export As* PNG shows the artwork in the screen and the background untouched. **Fails** at the perspective check: the quad is drawn as a rotated rectangle.
+- **5 (red, product bug, then missing):** The client PSD opens with “Summer Sale” as an editable text layer. Double-clicking the T thumbnail and typing makes it “Winter Sale”, rendered. *Export As* has no PSD format. **Fails** at the missing-font check (NotoSans-Regular), before `missing('PSD write')`.
+- **6 (green):** Spot healing (unchanged). *Dodge* brush mode (midtones, exposure 80) across both eyes brightens the iris. A *Basic* adjustment layer (exposure +0.5) brightens the skin. A *Color Lookup* layer loads a red/blue-swap `.cube` through the file picker; the swap is checked in pixels.
+- **7 (red, product bug):** *Object Selection* (Shift-W, model download on click) with one click in the sky: IoU ≥ 0.9 against the generated horizon. *Refine Edge* (feather 1.5) gives a soft horizon, still IoU ≥ 0.9. New-sky import, then *Add layer mask* → **fails**: the mask hides the selected sky. With a debug-only *Select › Inverse* before the mask (not committed), the rest passes: a *Photo Filter* (Warming 85) adjustment layer warms the hill while the new sky stays unchanged.
+- **9 (red, product bugs):** **Fails** at the Phase 1 Align step (disabled for the vector shape). The Phase 2 steps are written: five preset artboards (Web 1280, Post, Story, Cover, LinkedIn), photo resized to each artboard with W/H/X/Y + Apply, shape centred with Align, five-file export. A debug-only raster stand-in for the shape (not committed) passed the artboard and photo steps. It then failed at the second bug: in an artboard, Align centres on the whole canvas.
+- **10 (green):** Rectangle + ellipse → *Layer › Combine Shapes › Subtract Front Shape*: one vector layer with a hole, pixel-checked, one undo step. *Export As* with *Selected layers* only, @1x and @2x: two PNGs, the @2x exactly twice as large, hole and solid corner checked in both.
+- **13 (red, missing):** Pro profile, 200-MP canvas, *Edit › Fill with Foreground Color* on the full-size layer (pixels checked at three corners/centre). Then `missing()`: the Pro (Tauri) 200-MP path for 30 full-size layers with save and reopen is not accepted (A4c: WebKitGTK killed the Tauri run at 16 GB). The full run is not attempted here: it needs about 25 GB of scratch and archive disk (30 GB free on this machine).
+- **15 (red, missing):** 90 pt “ffi” with the Type tool. Variable Noto Sans: Thin (wght 100) and Black (wght 900) are stored as the axis and change coverage by > 2×. The Character panel's Ligatures switch is on by default and stored per run. It cannot change a pixel with the bundled font: Noto Sans builds f_f_i/fi/fl as composites of the plain glyphs (checked with fontTools). OpenType reaching the shaper is shown with Small Caps (> 500 pixels change). Then `missing('text on a path')`.
+- **17 (red, quality):** The Image Size upscale is unchanged. The generated photo now has heavy grain (±30) over a dark/light split. *Filter › Reduce Noise…* (smart filter) at luminance and colour 100 % → **fails**: grain σ drops only from 15.4 to 13.0 (the benchmark asks for −40 %).
+- **18 (red, product bug):** Blur is unchanged. The frame is a rectangle with *Fill: None* and a solid 3 px red stroke → **fails**: nothing is drawn. The rest is written and passed with a debug-only Center-aligned stroke (not committed): a Line with an arrow end marker (head wider than the shaft, checked geometrically) and a PNG export with frame, arrow and blur.
+- **19 (green):** Cutout, *Layer Style › Stroke* 4 px: black contour on four sides, transparent beyond, via *Export As* PNG. Re-edited from the fx row to 8 px, and the contour re-renders.
+- **11, 12, 16:** Unchanged; still no soft-proof/CMYK, RAW or mesh warp in the UI.
+
+### Status per task
+
+| # | Core task | Phase 0 | Phase 1 | Phase 2 | First missing capability or blocker (Phase 2) | What turns it green |
+|---:|---|---|---|---|---|---|
+| 1 | Product photo / social formats | Red | Red | **Green** | — | — |
+| 2 | Campaign key visual | Red | Red | **Green** | — | — |
+| 3 | YouTube thumbnail | Red | Red | Red — product bug | Stroke (any size-based effect) on a text layer is applied in the 4× text raster | Bug fix; no Phase 3 item needed |
+| 4 | Smart Object mockup | Red | Red | Red — product bug | PSD Smart Object in perspective: warp quad imported, never rendered | Bug fix (A7 fidelity); Phase 3 “Perspektive/Mesh-Warp” would also need to render `layer.warp` |
+| 5 | Editable client PSD | Red | Red | Red — product bug, then missing | PSD font names (PostScript) not matched to bundled fonts; then **PSD write** | Bug fix + Phase 3 *PSD schreiben* |
+| 6 | Portrait retouch | Red | Red | **Green** | — | — |
+| 7 | Sky replacement | Red | Red | Red — product bug | *Add layer mask* with a selection hides the selection (inverted polarity) | Bug fix; no Phase 3 item needed |
+| 8 | Object removal | Green | Green | **Green** | — | — |
+| 9 | Banner set | Red | Red | Red — product bugs | Align disabled for vector layers (regression); single-layer Align on an artboard targets the canvas | Both bug fixes; no Phase 3 item needed |
+| 10 | Vector icon | Red | Red | **Green** | — | — |
+| 11 | Print / soft-proof | Red | Red | Red | CMYK soft-proof controls | Phase 3 *CMYK-Softproof/-Export* |
+| 12 | RAW workflow | Red | Red | Red | RAW/DNG decoding (Tauri) | Phase 3 *RAW (Tauri)*; 16-bit TIFF export already exists |
+| 13 | 200 MP poster | Red | Red | Red | Pro (Tauri) 200-MP path with 30 layers, save, reopen | Not a Phase 3 item: A4c acceptance (WebKitGTK working set, Phase 1 exit “200-MP-Test in Pro”) |
+| 14 | Batch recipe | Red | Red | Red | Recipes applied to a 50-image queue | Phase 3 *Rezepte* + *Stapel-Export* |
+| 15 | Typo poster | Red | Red | Red | Text on path | Phase 3 *Text auf Pfad* |
+| 16 | Packaging mockup | Red | Red | Red | Mesh-warp controls | Phase 3 *Mesh-Warp* |
+| 17 | Upscale / denoise | Red | Red | Red — quality | Reduce Noise too weak for heavy grain (−15 % σ at 100 %) | Stronger denoise (still no plan item, M12); Phase 3 AI *Hochskalieren* does not address it |
+| 18 | Screenshot instructions | Red | Red | Red — product bug | Fill None + Inside stroke renders nothing | Bug fix; arrowheads exist now (M12 gap closed) |
+| 19 | Raster logo | Red | Red | **Green** | — | — |
+| 20 | Crash recovery | Red | Green | **Green** | — | — |
+
+Summary: **Phase 0: 1 green / 19 red → Phase 1: 2 / 18 → Phase 2: 7 green / 13 red** (1, 2, 6, 8, 10, 19, 20).
+
+Six red tasks (3, 4, 7, 9, 17, 18) have every Phase 2 capability they need but fail on a product bug or on quality. Fixing those bugs would give 12 green without Phase 3. Task 5 additionally needs PSD write (M12). Of the Phase 2 exit set “1–10”, 1, 2, 6, 8 and 10 are green.
+
+### Product bugs found (no product code changed)
+
+Each is a failing benchmark step unless noted.
+
+1. **Align ignores vector layers (Phase 2 regression, task 9).** `alignUnits` in `src/core/align.ts` keeps only members with `l.raster`. Shape layers are now `vector` layers without a raster, so *Layer › Align/Distribute* is disabled. Repro: new 160 × 90 canvas, Shape tool, drag a rectangle → *Layer › Align* is greyed out. `session.canAlign()` returns false while the shape is selected.
+2. **Align on an artboard targets the whole canvas (task 9).** `alignLayers` uses the selection bounds or the document, never the artboard. Repro: two preset artboards (Web 1280 at x 0 and its duplicate at x 1380); a 40 px square at x 1500 on the second; *Align › Horizontal Centers* → x 1310, straddling both artboards (Photoshop: centred on its artboard, x 2000).
+3. **Size-based layer effects on text are 4× too small (task 3).** A text layer's displayed raster is oversampled 4× (105 × 54.5 pt text → 420 × 218 raster). The Stroke width is applied in raster pixels. Repro: white 200 × 100 canvas, magenta 40 pt “WOW”, *Layer Style › Stroke* 3 px outside → a grey ~0.75 px fringe; the export has 1 near-black pixel. The same stroke on a pixel layer is a solid 3 px black contour (task 19 green). Distance/size of shadows and glows on text are presumably affected the same way (not measured).
+4. **Add layer mask from a selection hides the selection (task 7).** `addMaskFromSelection` (`src/core/selectionCommands.ts:238`) writes `base = revealing ? 255 : 0` outside and the opposite inside. The Layers-panel button calls it with `revealing = true` and gets a mask that is 0 inside the selection. Repro: 100 × 100 canvas, blue then red full-size layers, marquee 10–50, *Add layer mask* → blue inside the marquee, red outside. The unit test `selection.test.ts` pins this as “upstream polarity”; Photoshop's rule (reveal the selection) needs a decision.
+5. **Fill None + Inside stroke renders nothing (task 18).** Repro: Shape tool rectangle, *Fill: None*, *Stroke: Color*, width 3 → the displayed raster has 0 opaque pixels in either order of the two changes. Center or Outside alignment draws the stroke; Inside is the default.
+6. **PSD Smart Object perspective is dropped silently (task 4).** The reader stores a non-affine `placedLayer.transform` as `layer.warp` (a quad), but no renderer reads `layer.warp`. The layer is drawn as a rotated rectangle and the import reports no approximation. Repro: the generated `mockup.psd` in `scenarios.ts` (corners 30,20 · 90,24 · 90,66 · 30,70) → pixel (88, 22) is screen, not background.
+7. **PSD fonts by PostScript name show as missing (task 5).** A PSD text run in `NotoSans-Regular` (Photoshop stores PostScript names) raises *Missing Fonts* (“NotoSans-Regular … shown as Noto Sans”) although that exact face is bundled. Repro: `clientPsd()` in `scenarios.ts`, open through *Open Project…*.
+8. **Reduce Noise is too weak for real grain (task 17, quality).** `denoise` in `src/core/filters/sharpen.ts` is a 3 × 3 bilateral filter with a fixed range weight `exp(−20·ΔY)`. Grain above about ±15 levels counts as edges, and the strength slider only blends the result. Measured: σ 15.4 → 13.0 at 100 % after a 2× upscale. Simulated on uncorrelated noise: σ 17 → 13 (±30 uniform), σ 8 → 4.
+9. **Lite silently refuses canvases over 100 MP (not a benchmark step).** The New Canvas dialog accepts up to 30,000 px per side. In the browser's Lite profile, 20,000 × 10,000 then does nothing: no document, no message, `reportError` not called (`session.createDocument` returns early at `maxPixels`). Repro: default mount, enter 20000 × 10000, *Create canvas*.
+10. **Minor, not failing:** adding a layer style to one layer re-rounds unrelated semi-transparent export pixels by up to 2 levels (gradient pixel with alpha 126: 30,79,190 → 32,81,192), seen in task 3.
+11. **Minor, not failing:** a PSD point-text layer without text bounds (`left/top` absent in the TySh data, as the ag-psd writer produces) imports with a NaN origin and is invisible. Photoshop always writes the bounds; the fixture now sets them.
+
+### Last benchmark run (Phase 2)
+
+Command:
+
+```sh
+PLAYWRIGHT_BROWSERS_PATH=/home/oem/.local/share/fernwork-compositor-lab/browser-cache E2E_PORT=5931 E2E_BENCHMARKS=1 npx playwright test --project=benchmarks --output=/tmp/pw-out-bench2
+```
+
+Observed summary (host locale `de_DE.UTF-8`, 8.4 min):
+
+```text
+13 failed
+7 passed
+```
+
+Six failures end at `benchmark-helpers.ts:missing` (11, 12, 13, 14, 15, 16). Seven end at a named assertion: 3, 4, 5, 7, 9 and 18 at a product bug, 17 at the quality threshold. The SlimSAM model was present, so no step was environment-skipped.

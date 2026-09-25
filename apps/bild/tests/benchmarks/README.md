@@ -25,7 +25,9 @@ There is one `.spec.ts` file per plan task. `scenarios.ts` holds the workflows, 
 
 ## Inputs and network policy
 
-The committed suite generates all raster inputs procedurally at run time. This includes the Adobe RGB TIFF: its pixels and embedded ICC profile are generated locally. No benchmark makes a network request for an input or model.
+The committed suite generates all raster inputs procedurally at run time. This includes the Adobe RGB TIFF: its pixels and embedded ICC profile are generated locally, and the PSDs of tasks 4 and 5, which are written in Node with the `ag-psd` writer (a Smart Object with an embedded PNG, a point-text layer). No benchmark makes a network request for an input or model.
+
+Task 7 needs the pinned SlimSAM object-selection model. The editor downloads it from huggingface.co only after the user clicks *Download model*; the benchmark answers those requests with local files through `page.route` (from `FERNWORK_SLIMSAM_DIR`, else the first `/tmp/slimsam.*` folder holding `encoder.onnx` and `decoder.onnx`). Without the files the object-selection step is reported as **skipped** (`ENVIRONMENT-SKIPPED` in the skip reason), never as passed.
 
 Future photographic cases may use only the upstream project's own official-site examples in:
 
@@ -40,5 +42,7 @@ If those files are used, the spec must fail clearly when the pinned reference ch
 - `green`: the whole core task currently completes and its final output is asserted.
 - `red — expected missing capability`: completed UI steps passed and `missing()` identified the first unavailable step.
 - `red — regression`: the test failed before its documented `missing()` line. This is not an expected skeleton failure and must be investigated.
+- `red — product bug`: a capability the task needs exists in the UI but produces a wrong result; the failing assertion carries a message naming the expectation, and the bug is written down with a reproduction in `artifacts/benchmarks.md`. Steps after it stay in the scenario so the task continues once the bug is fixed.
+- `skipped — environment`: a step needs a local file that is absent (the SlimSAM model for task 7). Not a pass.
 
 The maintained per-task inventory and last observed run are in `artifacts/benchmarks.md`.
