@@ -68,6 +68,8 @@ describe('scratch tile storage', () => {
       if (descriptor) Object.defineProperty(globalThis, 'navigator', descriptor);
       else Reflect.deleteProperty(globalThis, 'navigator');
     }
+  });
+
   it('coalesces concurrent persistence of one immutable tile', async () => {
     let writes = 0, unblock!: () => void;
     const gate = new Promise<void>((resolve) => { unblock = resolve; });
