@@ -221,6 +221,7 @@ def image_slab(c, accent=None):
 # ---------------------------------------------------------------------------
 # File list
 # ---------------------------------------------------------------------------
+import builder_alt
 import flat
 import rim
 
@@ -246,7 +247,8 @@ GR_RAMP = [GR[k] for k in ("g0", "g1", "g2", "g3", "g4", "g5", "g6", "g7", "g8",
 LOGOS = [
     # (file, title, group id, artwork, light-background treatment)
     ("himmelcad", "Himmel:CAD", "Cloud-Low-Poly", cloud(), "tone"),
-    ("himmelcad-builder", "Himmel:CAD Builder – Hard Hat", "Hard-Hat-Low-Poly", flat.hard_hat_min(AZ), "tone"),
+    ("himmelcad-builder", "Himmel:CAD Builder – Hard Hat", "Hard-Hat-Low-Poly",
+     builder_alt.helmet_traced(AZ, sample=os.path.join(os.path.dirname(os.path.abspath(__file__)), "reference-hard-hat.png")), "tone"),
     ("himmelcad-photolab", "Himmel:CAD PhotoLab – Crystal", "Crystal-Low-Poly", prism_crystal(AZ, None), "tone"),
     ("himmelcad-cap", "Himmel:CAD Cap – Aperture", "Aperture-Low-Poly", aperture(AZ), "tone"),
     ("himmelcad-weltview", "Himmel:CAD WeltView – Globe", "Globe-Low-Poly",
