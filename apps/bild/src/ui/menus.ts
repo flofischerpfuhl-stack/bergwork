@@ -57,6 +57,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         // The one export path (P4): Photoshop's Export As shortcut, plus this editor's earlier export shortcuts.
         { label: t('Export As…'), shortcut: 'mod+alt+shift+w', aliases: ['mod+shift+e', 'mod+alt+shift+s'], enabled: !!document && canStart,
           run: () => controller.showDialog({ kind: 'export' }), testId: 'menu-export' },
+        { ...feature('batch', t('Batch…')), testId: 'menu-batch' },
         'separator',
         { label: t('Close Project'), shortcut: 'mod+alt+w', aliases: ['mod+w'], enabled: canStart, run: () => void controller.closeTab(controller.workspace.selectedId) },
       ],
@@ -164,6 +165,8 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
           ? { label: t('Layer Style'), enabled: !!layer && controller.layerStyles.styleable(layer.id), testId: 'menu-layer-style',
             submenu: layer ? controller.layerStyles.menu(layer.id) : [] }
           : { label: t('Layer Style'), enabled: false, note: pending },
+        { ...feature('saveRecipe', t('Save Recipe…')), testId: 'menu-save-recipe' },
+        { label: t('Apply Recipe'), enabled: !!controller.recipeMenu, submenu: controller.recipeMenu?.() ?? [], testId: 'menu-apply-recipe' },
         { label: t('Layer Mask'), enabled: !!layer && session.canEditMask && !layer.mask, testId: 'menu-layer-mask', submenu: [
           { label: t('Reveal All'), enabled: !session.selection, run: () => controller.addMask(true) },
           { label: t('Hide All'), enabled: !session.selection, run: () => controller.addMask(false) },

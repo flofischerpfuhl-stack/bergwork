@@ -150,6 +150,8 @@ export class EditorController {
   layerSubRows: ((session: EditorSession, entry: import('../core/document').HierarchyEntry) => ReactNode)[] = [];
   /** Extra layer context-menu entries (Apply Smart Filters…), provided by feature modules. */
   layerMenuItems: ((session: EditorSession, layerId: string) => MenuEntry[])[] = [];
+  /** Layer › Apply Recipe entries (the saved recipes), provided by the batch/recipes module. */
+  recipeMenu: (() => MenuEntry[]) | null = null;
   /** Layer › New Adjustment Layer entries, when a module lists more kinds than the legacy six. */
   adjustmentLayerItems: ((withEllipsis: boolean) => MenuEntry[]) | null = null;
   /** Lazily loaded renderers (text) that must finish shaping before pixels are read for export or merges. */
@@ -1003,7 +1005,7 @@ export class EditorController {
   // MARK: Export (one pipeline: src/io/exportPipeline.ts)
 
   /** The canvas compositor as export renderer (GPU where available, the same pixels as the canvas). */
-  private async exportRenderer(): Promise<ExportRenderer> {
+  async exportRenderer(): Promise<ExportRenderer> {
     const canvas = await this.readyCanvas();
     await this.prepareRender();
     if (canvas.readView) {

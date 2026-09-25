@@ -10,13 +10,16 @@ export interface HostFileReference {
 }
 
 export interface FileSaveTarget { readonly name: string }
-/** `zip` holds several exported files (one export request with several targets or sizes). */
-export type FileSaveKind = 'project' | 'png' | 'jpeg' | 'webp' | 'avif' | 'tiff' | 'zip';
+/** A folder the user chose to write several files into (batch export). Opaque besides its display name. */
+export interface FolderTarget { readonly name: string }
+/** `zip` holds several exported files (one export request with several targets or sizes); `recipe` a `.fwrecipe`. */
+export type FileSaveKind = 'project' | 'png' | 'jpeg' | 'webp' | 'avif' | 'tiff' | 'zip' | 'recipe';
 
 /** Fallback: HostAdapter pickers/downloads remain usable when this capability is absent. */
 export interface FileSystemHost extends VersionedCapability {
   readonly version: 1;
-  chooseFiles(kind: 'images' | 'project' | 'content'): Promise<readonly HostFileReference[]>;
+  /** `batch`: several images, PSDs and `.fwimg` projects for File › Batch… (read later, one at a time, with `readFile`). */
+  chooseFiles(kind: 'images' | 'project' | 'content' | 'batch'): Promise<readonly HostFileReference[]>;
   chooseSaveTarget(suggestedName: string, kind: FileSaveKind): Promise<FileSaveTarget | null>;
   writeFile(target: FileSaveTarget, blob: Blob): Promise<void>;
   recentFiles(): Promise<readonly HostFileReference[]>;
@@ -24,6 +27,10 @@ export interface FileSystemHost extends VersionedCapability {
   onOpenFiles(listener: (files: readonly HostFileReference[]) => void): () => void;
   readFile?(file: HostFileReference): Promise<Blob>;
   saveTargetFor?(file: HostFileReference): FileSaveTarget | null;
+  /** Optional (batch export): asks for a folder to write into; null when the user cancels. */
+  chooseFolder?(): Promise<FolderTarget | null>;
+  /** Writes one file into a chosen folder without overwriting: returns the name used (`a 2.png` when `a.png` exists). */
+  writeFileInFolder?(folder: FolderTarget, name: string, blob: Blob): Promise<string>;
 }
 
 export interface SystemFont {

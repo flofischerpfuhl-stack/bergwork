@@ -10,10 +10,23 @@ interface NativeTarget extends SaveTarget { readonly path: string }
 const IMAGE_FILTER = { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff', 'heic', 'heif', 'psd', 'psb'] };
 const CONTENT_FILTER = { name: 'Placeable content', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff', 'heic', 'heif', 'svg', 'pdf', 'fwimg'] };
 const PROJECT_FILTER = { name: 'Fernwork image project or PSD', extensions: ['fwimg', 'zip', 'psd', 'psb'] };
-const SAVE_FILTERS: Record<'png' | 'jpeg' | 'webp' | 'avif' | 'tiff' | 'zip', { name: string; extensions: string[] }> = {
+const BATCH_FILTER = { name: 'Images and projects', extensions: ['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff', 'heic', 'heif', 'psd', 'psb', 'fwimg'] };
+interface NativeFolder { readonly name: string; readonly path: string }
+
+async function nativeFileExists(path: string): Promise<boolean> {
+  try { await window.__TAURI__.core.invoke<number>('file_size', { path }); return true; } catch { return false; }
+}
+
+/** Joins a folder chosen in the native dialog and a file name with the folder's own separator. */
+function inFolder(folder: string, name: string): string {
+  const separator = folder.includes('\\') && !folder.includes('/') ? '\\' : '/';
+  return folder.endsWith(separator) ? `${folder}${name}` : `${folder}${separator}${name}`;
+}
+const SAVE_FILTERS: Record<'png' | 'jpeg' | 'webp' | 'avif' | 'tiff' | 'zip' | 'recipe', { name: string; extensions: string[] }> = {
   png: { name: 'PNG image', extensions: ['png'] }, jpeg: { name: 'JPEG image', extensions: ['jpg', 'jpeg'] },
   webp: { name: 'WebP image', extensions: ['webp'] }, avif: { name: 'AVIF image', extensions: ['avif'] },
   tiff: { name: 'TIFF image', extensions: ['tif', 'tiff'] }, zip: { name: 'Exported images (ZIP)', extensions: ['zip'] },
+  recipe: { name: 'Fernwork recipe', extensions: ['fwrecipe'] },
 };
 const baseName = (path: string) => path.split(/[\\/]/).at(-1) || path;
 const ownedBytes = (bytes: Uint8Array): Uint8Array<ArrayBuffer> => new Uint8Array(bytes);
@@ -142,8 +155,8 @@ function nativeFiles(acceptanceProjectPath?: string): FileSystemHost {
   const files: FileSystemHost = {
     version: 1,
     async chooseFiles(kind) {
-      const selected = await window.__TAURI__.dialog.open({ multiple: kind === 'images', directory: false,
-        filters: kind === 'project' ? [PROJECT_FILTER] : kind === 'content' ? [CONTENT_FILTER] : [IMAGE_FILTER] });
+      const selected = await window.__TAURI__.dialog.open({ multiple: kind === 'images' || kind === 'batch', directory: false,
+        filters: kind === 'project' ? [PROJECT_FILTER] : kind === 'content' ? [CONTENT_FILTER] : kind === 'batch' ? [BATCH_FILTER] : [IMAGE_FILTER] });
       const paths = typeof selected === 'string' ? [selected] : selected ?? [];
       return paths.map((id) => ({ id, name: baseName(id) }));
     },
@@ -156,6 +169,20 @@ function nativeFiles(acceptanceProjectPath?: string): FileSystemHost {
       return path ? { name: baseName(path), path } as NativeTarget : null;
     },
     async writeFile(target, blob) { await write((target as NativeTarget).path, blob); },
+    // Batch export into a real folder: files are written by path (save_file_chunk), never over an existing file.
+    async chooseFolder() {
+      const selected = await window.__TAURI__.dialog.open({ multiple: false, directory: true, filters: [] });
+      return typeof selected === 'string' ? { name: baseName(selected), path: selected } as NativeFolder : null;
+    },
+    async writeFileInFolder(folder, name, blob) {
+      const directory = (folder as NativeFolder).path;
+      const dot = name.lastIndexOf('.');
+      const stem = dot > 0 ? name.slice(0, dot) : name, extension = dot > 0 ? name.slice(dot) : '';
+      let candidate = name;
+      for (let n = 2; await nativeFileExists(inFolder(directory, candidate)); n++) candidate = `${stem} ${n}${extension}`;
+      await write(inFolder(directory, candidate), blob);
+      return candidate;
+    },
     recentFiles: () => window.__TAURI__.core.invoke<HostFileReference[]>('recent_files'),
     recordRecentFile: (file) => window.__TAURI__.core.invoke<void>('record_recent_file', { file }),
     async readFile(file) { return nativeProjectBlob(file.id); },

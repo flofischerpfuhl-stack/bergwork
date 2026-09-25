@@ -18,6 +18,7 @@ import { installVector } from './vectorFeature';
 import { installEmbedded } from './embeddedFeature';
 import { installColor } from './color/colorFeature';
 import { installObjectSelection } from './objsel/install';
+import { installBatch } from './batch/install';
 import type { EditorProfile } from './profiles';
 
 export function installFeatures(controller: EditorController, profile: EditorProfile = controller.profile): void {
@@ -35,6 +36,7 @@ export function installFeatures(controller: EditorController, profile: EditorPro
   if (enabled.has('text')) installText(controller);
   if (enabled.has('vector')) installVector(controller);
   if (enabled.has('color')) installColor(controller);
+  if (enabled.has('automation')) installBatch(controller);
   // Last: it extends the Brush header while Quick Mask is on.
   if (enabled.has('selection')) installObjectSelection(controller);
   const tools = new Set(profile.tools);

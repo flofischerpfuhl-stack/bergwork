@@ -90,20 +90,15 @@ function selectedLayerTargets(session: EditorSession): ExportTarget[] {
   return [...(session.document?.layers ?? [])].reverse().filter((layer) => session.selectedLayerIds.has(layer.id)).map((layer) => ({ kind: 'layer', id: layer.id }));
 }
 
-export function exportRequestFor(controller: EditorController, session: EditorSession, settings: ExportSettings): ExportRequest | null {
-  const document = session.document;
-  if (!document) return null;
-  const targets: ExportTarget[] = [];
-  if (settings.document) targets.push({ kind: 'document' });
-  for (const artboard of document.artboards ?? []) if (settings.artboards.includes(artboard.id)) targets.push({ kind: 'artboard', id: artboard.id });
-  if (settings.layers) targets.push(...selectedLayerTargets(session));
+/** The request fields the file settings stand for (format, quality, sizes, metadata), without targets; null when a size is invalid. */
+export function exportSettingsRequest(settings: ExportSettings): Omit<ExportRequest, 'targets' | 'baseName'> | null {
   const sizes = settings.sizes.map(sizeOf);
   if (sizes.some((size) => size === null)) return null;
   const format = settings.format;
   const lossless = format === 'webp' && settings.lossless;
   const quality = format === 'jpeg' || format === 'avif' || (format === 'webp' && !lossless) ? settings.quality[format] : undefined;
-  return controller.exportRequest(format, {
-    targets, sizes: sizes as ExportSize[], quality, lossless: format === 'webp' ? lossless : undefined,
+  return {
+    format, sizes: sizes as ExportSize[], quality, lossless: format === 'webp' ? lossless : undefined,
     bitDepth: formatSupports16Bit(format) ? settings.bitDepth : 8,
     transparent: formatHasAlpha(format) ? settings.transparent : false,
     matte: rgb(settings.matte),
@@ -111,7 +106,41 @@ export function exportRequestFor(controller: EditorController, session: EditorSe
       colorProfile: settings.colorProfile ? 'embed' : 'strip', resolution: settings.resolution,
       info: settings.info === 'none' ? null : { copyright: settings.copyright.trim() || undefined, artist: settings.artist.trim() || undefined },
     },
-  }, session);
+  };
+}
+
+/** File settings from request fields (a recipe's export preset), over `base` for everything the request leaves out. */
+export function exportSettingsFrom(request: Partial<Omit<ExportRequest, 'targets' | 'baseName'>>, base: ExportSettings): ExportSettings {
+  const format = request.format ?? base.format;
+  const hex = (value: number) => Math.round(Math.min(1, Math.max(0, value)) * 255).toString(16).padStart(2, '0');
+  const sizes = request.sizes?.length ? request.sizes.map((size): SizeRow => ('scale' in size ? { id: nextRowId++, mode: 'scale', scale: size.scale }
+    : size.width !== undefined ? { id: nextRowId++, mode: 'width', value: String(size.width) } : { id: nextRowId++, mode: 'height', value: String(size.height) }))
+    : base.sizes;
+  const info = request.metadata?.info;
+  return {
+    ...base, format, sizes,
+    quality: request.quality !== undefined && format !== 'png' && format !== 'tiff' ? { ...base.quality, [format]: request.quality } : base.quality,
+    lossless: request.lossless ?? base.lossless, bitDepth: request.bitDepth ?? base.bitDepth, transparent: request.transparent ?? base.transparent,
+    matte: request.matte ? `#${hex(request.matte.red)}${hex(request.matte.green)}${hex(request.matte.blue)}` : base.matte,
+    colorProfile: request.metadata?.colorProfile ? request.metadata.colorProfile === 'embed' : base.colorProfile,
+    resolution: request.metadata?.resolution ?? base.resolution,
+    ...(info === undefined ? {} : info === null ? { info: 'none' as const } : { info: 'copyright' as const, copyright: info.copyright ?? '', artist: info.artist ?? '' }),
+  };
+}
+
+/** The Export As settings last used for a document tab (or the defaults): where Batch… and Save Recipe… start. */
+export function currentExportSettings(session: EditorSession): ExportSettings { return initialSettings(session); }
+
+export function exportRequestFor(controller: EditorController, session: EditorSession, settings: ExportSettings): ExportRequest | null {
+  const document = session.document;
+  if (!document) return null;
+  const targets: ExportTarget[] = [];
+  if (settings.document) targets.push({ kind: 'document' });
+  for (const artboard of document.artboards ?? []) if (settings.artboards.includes(artboard.id)) targets.push({ kind: 'artboard', id: artboard.id });
+  if (settings.layers) targets.push(...selectedLayerTargets(session));
+  const options = exportSettingsRequest(settings);
+  if (!options) return null;
+  return controller.exportRequest(options.format, { targets, ...options }, session);
 }
 
 /** ExportError messages in the UI language. */
@@ -214,7 +243,6 @@ export function ExportDialog({ controller, close }: { controller: EditorControll
   const format = settings.format;
   const artboards = document.artboards ?? [];
   const selectedLayers = session.selectedLayerIds.size;
-  const lossy = format === 'jpeg' || format === 'avif' || (format === 'webp' && !settings.lossless);
   const flattened = !formatHasAlpha(format) || !settings.transparent;
   const warnings: string[] = [];
   if (format === 'avif' && settings.info !== 'none') warnings.push(t('AVIF export does not write EXIF creator fields.'));
@@ -234,13 +262,6 @@ export function ExportDialog({ controller, close }: { controller: EditorControll
     const exporting = controller.exportWith(request);
     void exporting.then((exported) => { if (exported) close(); else setBusy(false); });
   };
-
-  const addSize = () => {
-    const used = new Set(settings.sizes.flatMap((row) => (row.mode === 'scale' ? [row.scale] : [])));
-    const scale = [2, 3, 4, 1.5, 0.5, 0.75, 1].find((s) => !used.has(s)) ?? 2;
-    setSettings({ sizes: [...settings.sizes, { id: nextRowId++, mode: 'scale', scale }] });
-  };
-  const updateRow = (id: number, row: SizeRow) => setSettings({ sizes: settings.sizes.map((r) => (r.id === id ? row : r)) });
 
   return (
     <div ref={root} tabIndex={-1} className={`${styles.dialog} ${styles.exportDialog}`} role="dialog" aria-modal aria-labelledby="cmp-export-title" data-testid="export-dialog">
@@ -299,132 +320,7 @@ export function ExportDialog({ controller, close }: { controller: EditorControll
             </label>
           </section>
 
-          <section className={styles.exportSection} aria-label={t('File Settings')}>
-            <h3 className={styles.exportSectionTitle}>{t('Format')}</h3>
-            <div className={`${styles.segmented} ${styles.exportSegmented}`} role="radiogroup" aria-label={t('Format')}>
-              {EXPORT_FORMATS.map((f) => (
-                <button key={f} type="button" role="radio" aria-checked={format === f} data-testid={`export-format-${f}`}
-                  className={`${styles.segment} ${format === f ? styles.segmentOn : ''}`} onClick={() => setSettings({ format: f })}>{FORMAT_LABELS[f]}</button>
-              ))}
-            </div>
-            {format === 'webp' ? (
-              <label className={styles.check}>
-                <input type="checkbox" checked={settings.lossless} data-testid="export-lossless" onChange={(e) => setSettings({ lossless: e.target.checked })} />
-                {t('Lossless')}
-              </label>
-            ) : null}
-            {lossy ? (
-              <label className={styles.exportRow}>
-                <span className={styles.exportLabel}>{t('Quality')}</span>
-                <input className={styles.slider} type="range" min={0} max={100} step={1} data-testid="export-quality" aria-label={t('Quality')}
-                  value={Math.round(settings.quality[format as 'jpeg' | 'webp' | 'avif'] * 100)}
-                  onKeyDown={(event) => event.stopPropagation()}
-                  onChange={(e) => setSettings({ quality: { ...settings.quality, [format]: Number(e.target.value) / 100 } })} />
-                <span className={styles.exportValue}>{Math.round(settings.quality[format as 'jpeg' | 'webp' | 'avif'] * 100)} %</span>
-              </label>
-            ) : null}
-            {formatSupports16Bit(format) ? (
-              <div className={styles.exportRow}>
-                <span className={styles.exportLabel}>{t('Bit depth')}</span>
-                <div className={styles.segmented} role="radiogroup" aria-label={t('Bit depth')}>
-                  {([8, 16] as const).map((depth) => (
-                    <button key={depth} type="button" role="radio" aria-checked={settings.bitDepth === depth} data-testid={`export-depth-${depth}`}
-                      className={`${styles.segment} ${settings.bitDepth === depth ? styles.segmentOn : ''}`} onClick={() => setSettings({ bitDepth: depth })}>
-                      {t2('{n}-bit', { n: depth })}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {formatHasAlpha(format) ? (
-              <label className={styles.check}>
-                <input type="checkbox" checked={settings.transparent} data-testid="export-transparency" onChange={(e) => setSettings({ transparent: e.target.checked })} />
-                {t('Transparency')}
-              </label>
-            ) : null}
-            {flattened ? (
-              <label className={styles.exportRow}>
-                <span className={styles.exportLabel}>{t('Background for transparency')}</span>
-                <input type="color" className={styles.colorWell} value={settings.matte} data-testid="export-matte" aria-label={t('Background for transparency')}
-                  onChange={(e) => setSettings({ matte: e.target.value })} />
-              </label>
-            ) : null}
-          </section>
-
-          <section className={styles.exportSection} aria-label={t('Size')}>
-            <div className={styles.exportSectionHeader}>
-              <h3 className={styles.exportSectionTitle}>{t('Size')}</h3>
-              <button type="button" className={styles.exportMini} aria-label={t('Add size')} title={t('Add size')} data-testid="export-add-size" onClick={addSize}>
-                <Icon name="plus" size={14} />
-              </button>
-            </div>
-            {settings.sizes.map((row, index) => {
-              const item = rowResult(index);
-              const invalid = row.mode !== 'scale' && sizeOf(row) === null;
-              return (
-                <div key={row.id} className={styles.exportSizeRow} data-testid="export-size-row">
-                  <select className={styles.select} aria-label={t('Scale')} data-testid="export-size-mode"
-                    value={row.mode === 'scale' ? String(row.scale) : row.mode}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      if (value === 'width' || value === 'height') {
-                        const reference = rowResult(index);
-                        updateRow(row.id, { id: row.id, mode: value, value: String(reference ? (value === 'width' ? reference.width : reference.height) : 1000) });
-                      } else updateRow(row.id, { id: row.id, mode: 'scale', scale: Number(value) });
-                    }}>
-                    {EXPORT_SCALES.map((scale) => <option key={scale} value={String(scale)}>{scale.toLocaleString(locale)}x</option>)}
-                    <option value="width">{t('Width')}</option>
-                    <option value="height">{t('Height')}</option>
-                  </select>
-                  {row.mode !== 'scale' ? (
-                    <label className={styles.field}>
-                      <input inputMode="numeric" value={row.value} aria-label={t(row.mode === 'width' ? 'Width' : 'Height')} data-testid="export-size-value"
-                        aria-invalid={invalid} style={invalid ? { borderColor: 'var(--cmp-danger)' } : undefined}
-                        onKeyDown={(event) => event.stopPropagation()}
-                        onChange={(e) => updateRow(row.id, { ...row, value: e.target.value })} />
-                      <span>px</span>
-                    </label>
-                  ) : null}
-                  <span className={styles.exportSizeResult} data-testid="export-size-result">{item && !invalid ? `${px(item.width, item.height)} px` : '—'}</span>
-                  <button type="button" className={styles.exportMini} aria-label={t('Remove size')} title={t('Remove size')} data-testid="export-remove-size"
-                    disabled={settings.sizes.length === 1} onClick={() => setSettings({ sizes: settings.sizes.filter((r) => r.id !== row.id) })}>
-                    <Icon name="minus" size={14} />
-                  </button>
-                </div>
-              );
-            })}
-          </section>
-
-          <section className={styles.exportSection} aria-label={t('Metadata')}>
-            <h3 className={styles.exportSectionTitle}>{t('Metadata')}</h3>
-            <select className={`${styles.select} ${styles.exportSelect}`} value={settings.info} aria-label={t('Metadata')} data-testid="export-info"
-              onChange={(e) => setSettings({ info: e.target.value as ExportSettings['info'] })}>
-              <option value="none">{t('None')}</option>
-              <option value="copyright">{t('Copyright and Contact Info')}</option>
-            </select>
-            {settings.info === 'copyright' ? (
-              <>
-                <label className={styles.exportRow}>
-                  <span className={`${styles.exportLabel} ${styles.exportLabelFixed}`}>{t('Copyright')}</span>
-                  <input className={styles.exportText} value={settings.copyright} placeholder="© 2026 …" data-testid="export-copyright"
-                    onKeyDown={(event) => event.stopPropagation()} onChange={(e) => setSettings({ copyright: e.target.value })} />
-                </label>
-                <label className={styles.exportRow}>
-                  <span className={`${styles.exportLabel} ${styles.exportLabelFixed}`}>{t('Author')}</span>
-                  <input className={styles.exportText} value={settings.artist} data-testid="export-artist"
-                    onKeyDown={(event) => event.stopPropagation()} onChange={(e) => setSettings({ artist: e.target.value })} />
-                </label>
-              </>
-            ) : null}
-            <label className={styles.check}>
-              <input type="checkbox" checked={settings.colorProfile} data-testid="export-icc" onChange={(e) => setSettings({ colorProfile: e.target.checked })} />
-              {t('Embed color profile')} (sRGB)
-            </label>
-            <label className={styles.check}>
-              <input type="checkbox" checked={settings.resolution} data-testid="export-resolution" onChange={(e) => setSettings({ resolution: e.target.checked })} />
-              {t('Resolution')} ({document.resolution.toLocaleString(locale)} ppi)
-            </label>
-          </section>
+          <ExportFileSettings controller={controller} settings={settings} setSettings={setSettings} rowResult={rowResult} resolution={document.resolution} />
         </div>
       </div>
       <div className={styles.dialogButtons}>
@@ -439,5 +335,158 @@ export function ExportDialog({ controller, close }: { controller: EditorControll
           onClick={onExport}>{t('Export')}</button>
       </div>
     </div>
+  );
+}
+
+/**
+ * The file settings of Export As — format and its options, sizes, metadata — shared with File › Batch…, which
+ * exports with the same settings (one set of export options, P4). `rowResult` gives a size row's pixel result when
+ * it is known (the batch dialog has no single target to measure).
+ */
+export function ExportFileSettings({ controller, settings, setSettings, rowResult, resolution }: {
+  controller: EditorController; settings: ExportSettings; setSettings: (update: Partial<ExportSettings>) => void;
+  rowResult: (index: number) => { readonly width: number; readonly height: number } | undefined; resolution: number | null;
+}) {
+  const t = controller.t, locale = controller.locale;
+  const t2 = (text: string, values: Record<string, string | number>) => Object.entries(values).reduce((s, [k, v]) => s.replace(`{${k}}`, String(v)), t(text));
+  const px = (width: number, height: number) => `${width.toLocaleString(locale)} × ${height.toLocaleString(locale)}`;
+  const format = settings.format;
+  const lossy = format === 'jpeg' || format === 'avif' || (format === 'webp' && !settings.lossless);
+  const flattened = !formatHasAlpha(format) || !settings.transparent;
+  const addSize = () => {
+    const used = new Set(settings.sizes.flatMap((row) => (row.mode === 'scale' ? [row.scale] : [])));
+    const scale = [2, 3, 4, 1.5, 0.5, 0.75, 1].find((s) => !used.has(s)) ?? 2;
+    setSettings({ sizes: [...settings.sizes, { id: nextRowId++, mode: 'scale', scale }] });
+  };
+  const updateRow = (id: number, row: SizeRow) => setSettings({ sizes: settings.sizes.map((r) => (r.id === id ? row : r)) });
+  return (
+    <>
+      <section className={styles.exportSection} aria-label={t('File Settings')}>
+        <h3 className={styles.exportSectionTitle}>{t('Format')}</h3>
+        <div className={`${styles.segmented} ${styles.exportSegmented}`} role="radiogroup" aria-label={t('Format')}>
+          {EXPORT_FORMATS.map((f) => (
+            <button key={f} type="button" role="radio" aria-checked={format === f} data-testid={`export-format-${f}`}
+              className={`${styles.segment} ${format === f ? styles.segmentOn : ''}`} onClick={() => setSettings({ format: f })}>{FORMAT_LABELS[f]}</button>
+          ))}
+        </div>
+        {format === 'webp' ? (
+          <label className={styles.check}>
+            <input type="checkbox" checked={settings.lossless} data-testid="export-lossless" onChange={(e) => setSettings({ lossless: e.target.checked })} />
+            {t('Lossless')}
+          </label>
+        ) : null}
+        {lossy ? (
+          <label className={styles.exportRow}>
+            <span className={styles.exportLabel}>{t('Quality')}</span>
+            <input className={styles.slider} type="range" min={0} max={100} step={1} data-testid="export-quality" aria-label={t('Quality')}
+              value={Math.round(settings.quality[format as 'jpeg' | 'webp' | 'avif'] * 100)}
+              onKeyDown={(event) => event.stopPropagation()}
+              onChange={(e) => setSettings({ quality: { ...settings.quality, [format]: Number(e.target.value) / 100 } })} />
+            <span className={styles.exportValue}>{Math.round(settings.quality[format as 'jpeg' | 'webp' | 'avif'] * 100)} %</span>
+          </label>
+        ) : null}
+        {formatSupports16Bit(format) ? (
+          <div className={styles.exportRow}>
+            <span className={styles.exportLabel}>{t('Bit depth')}</span>
+            <div className={styles.segmented} role="radiogroup" aria-label={t('Bit depth')}>
+              {([8, 16] as const).map((depth) => (
+                <button key={depth} type="button" role="radio" aria-checked={settings.bitDepth === depth} data-testid={`export-depth-${depth}`}
+                  className={`${styles.segment} ${settings.bitDepth === depth ? styles.segmentOn : ''}`} onClick={() => setSettings({ bitDepth: depth })}>
+                  {t2('{n}-bit', { n: depth })}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {formatHasAlpha(format) ? (
+          <label className={styles.check}>
+            <input type="checkbox" checked={settings.transparent} data-testid="export-transparency" onChange={(e) => setSettings({ transparent: e.target.checked })} />
+            {t('Transparency')}
+          </label>
+        ) : null}
+        {flattened ? (
+          <label className={styles.exportRow}>
+            <span className={styles.exportLabel}>{t('Background for transparency')}</span>
+            <input type="color" className={styles.colorWell} value={settings.matte} data-testid="export-matte" aria-label={t('Background for transparency')}
+              onChange={(e) => setSettings({ matte: e.target.value })} />
+          </label>
+        ) : null}
+      </section>
+
+      <section className={styles.exportSection} aria-label={t('Size')}>
+        <div className={styles.exportSectionHeader}>
+          <h3 className={styles.exportSectionTitle}>{t('Size')}</h3>
+          <button type="button" className={styles.exportMini} aria-label={t('Add size')} title={t('Add size')} data-testid="export-add-size" onClick={addSize}>
+            <Icon name="plus" size={14} />
+          </button>
+        </div>
+        {settings.sizes.map((row, index) => {
+          const item = rowResult(index);
+          const invalid = row.mode !== 'scale' && sizeOf(row) === null;
+          return (
+            <div key={row.id} className={styles.exportSizeRow} data-testid="export-size-row">
+              <select className={styles.select} aria-label={t('Scale')} data-testid="export-size-mode"
+                value={row.mode === 'scale' ? String(row.scale) : row.mode}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === 'width' || value === 'height') {
+                    const reference = rowResult(index);
+                    updateRow(row.id, { id: row.id, mode: value, value: String(reference ? (value === 'width' ? reference.width : reference.height) : 1000) });
+                  } else updateRow(row.id, { id: row.id, mode: 'scale', scale: Number(value) });
+                }}>
+                {EXPORT_SCALES.map((scale) => <option key={scale} value={String(scale)}>{scale.toLocaleString(locale)}x</option>)}
+                <option value="width">{t('Width')}</option>
+                <option value="height">{t('Height')}</option>
+              </select>
+              {row.mode !== 'scale' ? (
+                <label className={styles.field}>
+                  <input inputMode="numeric" value={row.value} aria-label={t(row.mode === 'width' ? 'Width' : 'Height')} data-testid="export-size-value"
+                    aria-invalid={invalid} style={invalid ? { borderColor: 'var(--cmp-danger)' } : undefined}
+                    onKeyDown={(event) => event.stopPropagation()}
+                    onChange={(e) => updateRow(row.id, { ...row, value: e.target.value })} />
+                  <span>px</span>
+                </label>
+              ) : null}
+              <span className={styles.exportSizeResult} data-testid="export-size-result">{item && !invalid ? `${px(item.width, item.height)} px` : '—'}</span>
+              <button type="button" className={styles.exportMini} aria-label={t('Remove size')} title={t('Remove size')} data-testid="export-remove-size"
+                disabled={settings.sizes.length === 1} onClick={() => setSettings({ sizes: settings.sizes.filter((r) => r.id !== row.id) })}>
+                <Icon name="minus" size={14} />
+              </button>
+            </div>
+          );
+        })}
+      </section>
+
+      <section className={styles.exportSection} aria-label={t('Metadata')}>
+        <h3 className={styles.exportSectionTitle}>{t('Metadata')}</h3>
+        <select className={`${styles.select} ${styles.exportSelect}`} value={settings.info} aria-label={t('Metadata')} data-testid="export-info"
+          onChange={(e) => setSettings({ info: e.target.value as ExportSettings['info'] })}>
+          <option value="none">{t('None')}</option>
+          <option value="copyright">{t('Copyright and Contact Info')}</option>
+        </select>
+        {settings.info === 'copyright' ? (
+          <>
+            <label className={styles.exportRow}>
+              <span className={`${styles.exportLabel} ${styles.exportLabelFixed}`}>{t('Copyright')}</span>
+              <input className={styles.exportText} value={settings.copyright} placeholder="© 2026 …" data-testid="export-copyright"
+                onKeyDown={(event) => event.stopPropagation()} onChange={(e) => setSettings({ copyright: e.target.value })} />
+            </label>
+            <label className={styles.exportRow}>
+              <span className={`${styles.exportLabel} ${styles.exportLabelFixed}`}>{t('Author')}</span>
+              <input className={styles.exportText} value={settings.artist} data-testid="export-artist"
+                onKeyDown={(event) => event.stopPropagation()} onChange={(e) => setSettings({ artist: e.target.value })} />
+            </label>
+          </>
+        ) : null}
+        <label className={styles.check}>
+          <input type="checkbox" checked={settings.colorProfile} data-testid="export-icc" onChange={(e) => setSettings({ colorProfile: e.target.checked })} />
+          {t('Embed color profile')} (sRGB)
+        </label>
+        <label className={styles.check}>
+          <input type="checkbox" checked={settings.resolution} data-testid="export-resolution" onChange={(e) => setSettings({ resolution: e.target.checked })} />
+          {t('Resolution')}{resolution === null ? '' : ` (${resolution.toLocaleString(locale)} ppi)`}
+        </label>
+      </section>
+    </>
   );
 }

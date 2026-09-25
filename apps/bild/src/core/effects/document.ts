@@ -130,7 +130,12 @@ export function documentWithLayerEffects(document: CanvasDocument, hooks: Effect
   if (cachedDocument) return cachedDocument;
 
   const layers: Layer[] = [];
+  // Passes drawn above a layer go above its clipping stack: inserted between the base and the layers clipped to it,
+  // they would break the stack and the clipped layers (adjustments) would stop applying.
+  let pending: { readonly base: Layer; readonly passes: Layer[] } | null = null;
+  const flush = () => { if (pending) layers.push(...pending.passes); pending = null; };
   for (const layer of document.layers) {
+    if (pending && (layer.maskSourceId !== pending.base.id || layer.parentId !== pending.base.parentId)) flush();
     const source = resolved.get(layer);
     if (!source) { layers.push(layer); continue; }
     const { raster, transform } = source;
@@ -152,9 +157,12 @@ export function documentWithLayerEffects(document: CanvasDocument, hooks: Effect
     for (let i = 0; i < behind.length; i++) layers.push(synthetic(layer, behind[i]!, i,
       passTransform(transform, raster.width, raster.height, behind[i]!), raster.width, raster.height));
     layers.push({ ...layer, effects: [] });
-    for (let i = 0; i < above.length; i++) layers.push(synthetic(layer, above[i]!, i,
-      passTransform(transform, raster.width, raster.height, above[i]!), raster.width, raster.height));
+    const abovePasses = above.map((pass, i) => synthetic(layer, pass, i, passTransform(transform, raster.width, raster.height, pass),
+      raster.width, raster.height));
+    if (layer.maskSourceId) layers.push(...abovePasses);
+    else { flush(); pending = { base: layer, passes: abovePasses }; }
   }
+  flush();
   const expanded = { ...document, layers };
   const variants = cachedDocuments ?? new Map<string, CanvasDocument>();
   if (variants.size >= 8) variants.delete(variants.keys().next().value as string);
