@@ -4,6 +4,7 @@ import {
   apply, invert, pixelToDocument, type Affine, type LayerTransform, type Point, type Rect,
 } from '../geometry';
 import type { Raster } from '../raster';
+import type { DocumentSelection } from '../selection';
 import {
   beginStroke, brushSegment, continuousBrushCurve, type BeginStrokeOptions, type BrushSegment,
   type Stroke, type StrokeResult, type StrokeUpdate,
@@ -32,6 +33,8 @@ export interface GpuBrushPreview {
   readonly transform: LayerTransform;
   readonly sourceRect: Rect;
   readonly source: Raster | null;
+  /** Immutable selection sampled by both the GPU preview and the exact worker replay. */
+  readonly selection: DocumentSelection | null;
   readonly settled: readonly BrushSegment[];
   readonly tail: readonly BrushSegment[];
   readonly revision: number;
@@ -79,6 +82,7 @@ export class RecordedBrushStroke implements Stroke {
       layerId: options.layer.id, layer: options.layer, target: options.target === 'mask' ? 'mask' : 'pixels', settings: options.settings,
       canvas: options.canvas, width: target.width, height: target.height, mapping: target.mapping,
       transform: target.transform, sourceRect: target.sourceRect, source: target.source,
+      selection: options.selection ?? null,
       settled, tail, revision: 0,
       ...(this.placer ? { dabs: [] as BrushDab[], tailDabs: [] as BrushDab[], reach: this.reach } : {}),
     };

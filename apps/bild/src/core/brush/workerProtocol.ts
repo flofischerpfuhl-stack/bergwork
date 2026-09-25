@@ -1,4 +1,4 @@
-import type { LayerTransfer } from '../transfer';
+import type { LayerTransfer, RasterTransfer } from '../transfer';
 import type { Channels } from '../raster';
 import type { RasterFormat } from '../pixel/format';
 import type { LayerTransform, Rect, Size } from '../geometry';
@@ -13,6 +13,8 @@ export interface BrushWorkerOptions {
   readonly pixelLimit: number;
   readonly patchable: boolean;
   readonly partition: { readonly index: number; readonly count: number };
+  readonly selection: { readonly mask: RasterTransfer; readonly x: number; readonly y: number;
+    readonly antialiased: boolean } | null;
 }
 
 export type BrushWorkerRequest =

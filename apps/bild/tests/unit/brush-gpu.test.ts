@@ -5,7 +5,7 @@ import { Raster } from '../../src/core/raster';
 import { EditorSession } from '../../src/core/session';
 import {
   DEFAULT_BRUSH_SETTINGS, beginBrushStroke, beginStroke, cancelBrushStroke, currentBrushPreview,
-  currentGpuBrushPreview, extendBrushStroke, finishBrushStroke,
+  currentCpuBrushPreview, currentGpuBrushPreview, extendBrushStroke, finishBrushStroke,
 } from '../../src/core/brush';
 
 function sessionWithLayer(mask = false): EditorSession {
@@ -56,19 +56,20 @@ describe('geometry-only GPU brush preview (MetalBrushCoverage.swift)', () => {
     expect(oldTile).toEqual(snapshot.raster.tiles.find((tile) => tile !== null));
   });
 
-  it('uses GPU geometry for attached masks but retains the CPU path for selections', () => {
+  it('uses GPU geometry for attached masks and caches immutable selections in the preview', () => {
     const maskSession = sessionWithLayer(true);
     beginBrushStroke(maskSession, { x: 100, y: 100 });
     expect(currentGpuBrushPreview(maskSession)?.target).toBe('mask');
     cancelBrushStroke(maskSession);
 
     const selected = sessionWithLayer();
-    selected.replaceDocument({ ...selected.document!, selection: {
+    const selection = {
       mask: Raster.fromPixels(2, 2, 1, new Uint8Array(4).fill(255)), x: 0, y: 0, antialiased: false,
-    } });
+    } as const;
+    selected.replaceDocument({ ...selected.document!, selection });
     beginBrushStroke(selected, { x: 1, y: 1 });
-    expect(currentGpuBrushPreview(selected)).toBeNull();
-    expect(currentBrushPreview(selected)).not.toBeNull();
+    expect(currentGpuBrushPreview(selected)?.selection).toBe(selection);
+    expect(currentCpuBrushPreview(selected)).toBeNull();
     cancelBrushStroke(selected);
   });
 });

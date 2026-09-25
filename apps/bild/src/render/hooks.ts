@@ -15,7 +15,7 @@ export interface CompositeHooks {
   /** Pixels to draw instead of the stored raster (brush stroke in progress, previews). */
   raster(layer: Layer): Raster | null | undefined;
   maskRaster(layer: Layer): Raster | null | undefined;
-  /** Geometry-only ordinary Brush/Eraser preview; clone and selection strokes use `raster`. */
+  /** Geometry-only Brush/Eraser preview; its immutable selection is sampled on the GPU. */
   readonly brush?: GpuBrushPreview | null;
 }
 

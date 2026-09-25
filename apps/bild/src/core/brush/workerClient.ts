@@ -97,11 +97,12 @@ export class BrushRasterWorker {
   private failure: Error | null = null;
 
   static create(options: BeginStrokeOptions, geometry: WorkerGeometry): BrushRasterWorker | null {
-    if (typeof Worker === 'undefined' || options.clone || options.selection) return null;
+    if (typeof Worker === 'undefined' || options.clone) return null;
     try { return new BrushRasterWorker(options, geometry); } catch { return null; }
   }
 
   private constructor(options: BeginStrokeOptions, geometry: WorkerGeometry) {
+    lastBrushWorkerTiming = [];
     const target = options.target === 'mask' ? 'mask' : 'pixels';
     const source = geometry.source;
     const patchable = !source || (geometry.sourceRect.x === 0 && geometry.sourceRect.y === 0
@@ -119,7 +120,9 @@ export class BrushRasterWorker {
       worker.onerror = (event) => { workerTips.delete(worker); this.fail(new Error(event.message || 'Brush worker failed')); };
       worker.postMessage({ type: 'init', options: { layer: layerTransfer(options.layer, target, !patchable), canvas: options.canvas,
         settings: settingsFor(worker, options.settings), target, pixelLimit: options.pixelLimit ?? 100_000_000, patchable,
-        partition: { index, count } } } satisfies BrushWorkerRequest);
+        partition: { index, count }, selection: options.selection ? {
+          ...options.selection, mask: rasterTransfer(options.selection.mask),
+        } : null } } satisfies BrushWorkerRequest);
       this.workers.push(worker);
     }
   }

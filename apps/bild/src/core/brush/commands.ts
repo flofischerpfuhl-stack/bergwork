@@ -145,8 +145,9 @@ export function beginBrushStroke(session: EditorSession, point: Point, options: 
     // Repainting replaces this raster; other layers do not consume its per-raster allocation ceiling.
     pixelLimit: session.limits.maxPixels };
   // MetalBrushCoverage.swift keeps ordinary Brush/Eraser geometry on the GPU during the gesture.
-  // Clone and selection-limited strokes need source/selection sampling and retain the CPU preview.
-  const recorded = session.tool === 'brush' && !document!.selection && !clone ? new RecordedBrushStroke(strokeOptions) : null;
+  // The selection is immutable during a stroke, so the GPU and worker can cache it; Clone still
+  // needs an arbitrary source sampler and retains the CPU preview.
+  const recorded = session.tool === 'brush' && !clone ? new RecordedBrushStroke(strokeOptions) : null;
   const stroke = recorded ?? beginStroke(strokeOptions);
   const name = mask ? 'Paint Mask' : settings.mode === 'erase' ? 'Erase'
     : settings.mode === 'dodge' ? 'Dodge' : settings.mode === 'burn' ? 'Burn' : settings.mode === 'sponge' ? 'Sponge'

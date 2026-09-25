@@ -26,7 +26,7 @@ import { documentWithLayerEffects } from '../core/effects';
 import { inverseHomographyMatrix } from '../core/distort';
 import { tessellateMesh } from '../core/meshWarp';
 import {
-  adjustFragment, BLEND_INDEX, BRUSH_COVERAGE_FRAGMENT, BRUSH_DAB_FRAGMENT, BRUSH_MASK_FRAGMENT, BRUSH_MAX_FRAGMENT, BRUSH_PAINT_FRAGMENT, COVERAGE_FRAGMENT,
+  adjustFragment, BLEND_INDEX, BRUSH_COVERAGE_FRAGMENT, BRUSH_DAB_FRAGMENT, BRUSH_MASK_FRAGMENT, BRUSH_MAX_FRAGMENT, BRUSH_PAINT_FRAGMENT, BRUSH_SELECTION_FRAGMENT, COVERAGE_FRAGMENT,
   GROUP_FRAGMENT, IDENTITY_ADJUST, LAYER_FRAGMENT, MASK_FRAGMENT, OPAQUE_FRAGMENT, PRESENT_FRAGMENT, STACK_FRAGMENT,
   UNPREMULTIPLY_FRAGMENT, VERTEX, WARP_MESH_FRAGMENT,
 } from './shaders';
@@ -133,6 +133,7 @@ interface BrushChunk {
   readonly scratch: RenderTexture;
   readonly tail: RenderTexture;
   readonly painted: RenderTexture;
+  selection: RenderTexture | null;
   bounds: Rect | null;
 }
 
@@ -427,8 +428,18 @@ export class GpuCompositor {
         uRange: { value: 1, type: 'i32' }, uExposure: { value: 0.5, type: 'f32' },
         uSpongeDirection: { value: 1, type: 'i32' }, uFlow: { value: 0.5, type: 'f32' }, uVibrance: { value: 0, type: 'i32' },
         uColor: { value: new Float32Array(3), type: 'vec3<f32>' }, uOpacity: { value: 1, type: 'f32' },
-      }, ['uBase', 'uPermanent', 'uTail']],
+        uHasSelection: { value: 0, type: 'i32' },
+      }, ['uBase', 'uPermanent', 'uTail', 'uSelection']],
       brushMax: [BRUSH_MAX_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uFirst', 'uSecond']],
+      brushSelection: [BRUSH_SELECTION_FRAGMENT, {
+        uGridToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+        uGridOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uSelectionOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uSelectionSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uChunkOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uChunkSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uApron: { value: CHUNK_APRON, type: 'f32' },
+      }, ['uSelection']],
       brushDab: [BRUSH_DAB_FRAGMENT, {
         uPixelToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
         uGridOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
@@ -754,7 +765,7 @@ export class GpuCompositor {
 
   /** Compile/link at compositor startup and retain one cleared native-grid tile for the first sample. */
   private async prepareBrushPipeline(): Promise<void> {
-    const programs = ['brushCoverage', 'brushPaint', 'brushMax', 'brushMask', 'brushDab'].map((name) =>
+    const programs = ['brushCoverage', 'brushPaint', 'brushMax', 'brushMask', 'brushDab', 'brushSelection'].map((name) =>
       this.renderer.shader._getProgramData(this.pass(name).shader.glProgram).program);
     const parallel = this.gl.getExtension('KHR_parallel_shader_compile') as { COMPLETION_STATUS_KHR: number } | null;
     if (parallel) {
@@ -783,7 +794,8 @@ export class GpuCompositor {
     if (!this.brushState) return;
     const sources = new Set<TextureSource>();
     for (const chunk of this.brushState.chunks.values()) {
-      for (const target of [chunk.permanent, chunk.alternate, chunk.scratch, chunk.tail, chunk.painted]) {
+      for (const target of [chunk.permanent, chunk.alternate, chunk.scratch, chunk.tail, chunk.painted, chunk.selection]) {
+        if (!target) continue;
         sources.add(target.source);
       }
     }
@@ -794,6 +806,7 @@ export class GpuCompositor {
     for (const chunk of this.brushState.chunks.values()) {
       const targets = { permanent: chunk.permanent, alternate: chunk.alternate, scratch: chunk.scratch,
         tail: chunk.tail, painted: chunk.painted };
+      chunk.selection?.destroy(true);
       if (this.brushTargetPool.length < 2 && chunk.permanent.width === BRUSH_CHUNK_SIZE + BRUSH_APRON * 2
         && chunk.permanent.height === BRUSH_CHUNK_SIZE + BRUSH_APRON * 2) this.brushTargetPool.push(targets);
       else for (const target of Object.values(targets)) target.destroy(true);
@@ -825,10 +838,32 @@ export class GpuCompositor {
     const pooled = textureWidth === BRUSH_CHUNK_SIZE + BRUSH_APRON * 2
       && textureHeight === BRUSH_CHUNK_SIZE + BRUSH_APRON * 2 ? this.brushTargetPool.pop() : undefined;
     const { permanent, alternate, scratch, tail, painted } = pooled ?? this.createBrushTargets(textureWidth, textureHeight);
-    const chunk = { col, row, x, y, width, height, permanent, alternate, scratch, tail, painted, bounds: null };
+    const chunk: BrushChunk = { col, row, x, y, width, height, permanent, alternate, scratch, tail, painted,
+      selection: null, bounds: null };
     state.chunks.set(key, chunk);
     this.clear(permanent); this.clear(alternate); this.clear(scratch); this.clear(tail); this.clear(painted);
+    if (state.preview.selection) chunk.selection = this.brushSelectionMask(state.preview, chunk);
     return chunk;
+  }
+
+  /** Builds selection coverage once per touched brush chunk, not once per pointer sample/dab. */
+  private brushSelectionMask(preview: GpuBrushPreview, chunk: BrushChunk): RenderTexture {
+    const selection = preview.selection!;
+    const target = RenderTexture.create({ width: chunk.painted.width, height: chunk.painted.height,
+      format: 'r8unorm', antialias: false, resolution: 1 });
+    this.clear(target);
+    const slot = this.texture(`selection:${selection.mask.id}`, selection.mask);
+    for (const source of slot.chunks.values()) {
+      this.run(this.pass('brushSelection'), target, target.width, target.height, { uSelection: source.source }, {
+        uGridToDoc: mat3(preview.mapping),
+        uGridOrigin: new Float32Array([chunk.x - BRUSH_APRON, chunk.y - BRUSH_APRON]),
+        uSelectionOrigin: new Float32Array([selection.x, selection.y]),
+        uSelectionSize: new Float32Array([selection.mask.width, selection.mask.height]),
+        uChunkOrigin: new Float32Array([source.x, source.y]),
+        uChunkSize: new Float32Array([source.width, source.height]), uApron: CHUNK_APRON,
+      });
+    }
+    return target;
   }
 
   private brushKeys(preview: GpuBrushPreview, segment: BrushSegment): string[] {
@@ -1072,6 +1107,7 @@ export class GpuCompositor {
     this.mesh.state.blend = false;
     this.run(this.pass('brushPaint'), chunk.painted, chunk.painted.width, chunk.painted.height, {
       uBase: baseSource, uPermanent: chunk.permanent.source, uTail: chunk.tail.source,
+      uSelection: chunk.selection?.source ?? this.white,
     }, {
       uGridOrigin: new Float32Array([chunk.x - BRUSH_APRON, chunk.y - BRUSH_APRON]),
       uGridSize: new Float32Array([preview.width, preview.height]),
@@ -1087,7 +1123,7 @@ export class GpuCompositor {
       uExposure: preview.settings.exposure ?? 0.5, uSpongeDirection: preview.settings.spongeMode === 'desaturate' ? -1 : 1,
       uFlow: preview.settings.flow ?? 0.5, uVibrance: preview.settings.vibrance ? 1 : 0,
       uColor: new Float32Array([preview.settings.red, preview.settings.green, preview.settings.blue]),
-      uOpacity: preview.settings.opacity,
+      uOpacity: preview.settings.opacity, uHasSelection: chunk.selection ? 1 : 0,
     });
     this.renderer.texture.bindSource(chunk.painted.source, 0);
     this.gl.generateMipmap(this.gl.TEXTURE_2D);

@@ -1,4 +1,4 @@
-import { layerFromTransfer as transferredLayer } from '../transfer';
+import { layerFromTransfer as transferredLayer, rasterFromTransfer } from '../transfer';
 import type { Layer } from '../document';
 import type { Raster } from '../raster';
 import type { PixelArray, RasterFormat } from '../pixel/format';
@@ -91,7 +91,9 @@ scope.addEventListener('message', (event: MessageEvent<BrushWorkerRequest>) => {
       sourceFormat = source?.format ?? (options.target === 'mask' ? 'gray8' : 'rgba8');
       sourceTiles = options.patchable && source ? source.tiles as (PixelArray | null)[] : null;
       stroke = beginSettledStroke({ layer: layerFromTransfer(options.layer), canvas: options.canvas,
-        settings: withTip(options.settings), target: options.target, pixelLimit: options.pixelLimit, tilePartition: options.partition });
+        settings: withTip(options.settings), target: options.target, pixelLimit: options.pixelLimit,
+        selection: options.selection ? { ...options.selection, mask: rasterFromTransfer(options.selection.mask) } : null,
+        tilePartition: options.partition });
       previous = stroke.currentRaster();
       patchable = options.patchable;
       timing = { init: performance.now() - started, settled: 0, finish: 0 };

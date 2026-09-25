@@ -468,6 +468,7 @@ out vec4 finalColor;
 uniform sampler2D uBase;
 uniform sampler2D uPermanent;
 uniform sampler2D uTail;
+uniform sampler2D uSelection;
 uniform vec2 uGridOrigin;
 uniform vec2 uGridSize;
 uniform vec4 uSourceRect;
@@ -487,6 +488,7 @@ uniform float uFlow;
 uniform int uVibrance;
 uniform vec3 uColor;
 uniform float uOpacity;
+uniform int uHasSelection;
 
 vec4 basePixel(vec2 grid) {
   if (uHasBase == 0) return uMask == 1 ? vec4(1.0) : vec4(0.0);
@@ -502,7 +504,8 @@ void main() {
   ivec2 p = ivec2(vPos);
   float permanent = texelFetch(uPermanent, p, 0).r;
   float tail = texelFetch(uTail, p, 0).r;
-  float coverage = (uHard == 1 ? max(permanent, tail) : 1.0 - (1.0 - permanent) * (1.0 - tail)) * uOpacity;
+  float selection = uHasSelection == 1 ? texelFetch(uSelection, p, 0).r : 1.0;
+  float coverage = (uHard == 1 ? max(permanent, tail) : 1.0 - (1.0 - permanent) * (1.0 - tail)) * uOpacity * selection;
   vec4 base = basePixel(grid);
   vec3 straightBase = base.a > 0.0 ? clamp(base.rgb / base.a, 0.0, 1.0) : vec3(0.0);
   vec3 paint = floor(uColor * 255.0 + 0.5) / 255.0;
@@ -543,6 +546,33 @@ uniform sampler2D uSecond;
 void main() {
   ivec2 p = ivec2(vPos);
   finalColor = max(texelFetch(uFirst, p, 0), texelFetch(uSecond, p, 0));
+}
+`;
+
+/** Caches document selection coverage in one native brush-grid chunk. */
+export const BRUSH_SELECTION_FRAGMENT = /* glsl */ `#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 vPos;
+out vec4 finalColor;
+uniform sampler2D uSelection;
+uniform mat3 uGridToDoc;
+uniform vec2 uGridOrigin;
+uniform vec2 uSelectionOrigin;
+uniform vec2 uSelectionSize;
+uniform vec2 uChunkOrigin;
+uniform vec2 uChunkSize;
+uniform float uApron;
+void main() {
+  vec2 doc = (uGridToDoc * vec3(uGridOrigin + vPos, 1.0)).xy;
+  vec2 selectionPixel = floor(doc - uSelectionOrigin);
+  if (any(lessThan(selectionPixel, vec2(0.0))) || any(greaterThanEqual(selectionPixel, uSelectionSize))) discard;
+  vec2 chunkMax = uChunkOrigin + uChunkSize;
+  if (selectionPixel.x < uChunkOrigin.x || selectionPixel.y < uChunkOrigin.y
+      || selectionPixel.x >= chunkMax.x || selectionPixel.y >= chunkMax.y) discard;
+  ivec2 source = ivec2(selectionPixel - uChunkOrigin + vec2(uApron));
+  float value = texelFetch(uSelection, source, 0).r;
+  finalColor = vec4(value, value, value, 1.0);
 }
 `;
 
