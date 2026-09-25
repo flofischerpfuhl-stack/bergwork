@@ -3,7 +3,7 @@ import type { CapabilityName, HostCapabilityMap } from '../platform/hosts';
 
 export type EditorProfileId = 'pro' | 'lite';
 export type FeatureModuleId = 'canvas' | 'selection' | 'painting' | 'retouch' | 'adjustments' | 'subject' | 'guides' | 'styles' | 'artboards'
-  | 'text' | 'vector' | 'color';
+  | 'text' | 'vector' | 'color' | 'automation';
 
 export interface EditorProfile {
   readonly id: EditorProfileId;
@@ -23,7 +23,7 @@ const CURRENT_TOOLS: readonly Tool[] = [
   'text', 'pen', 'directSelect',
 ];
 const CURRENT_MODULES: readonly FeatureModuleId[] = ['canvas', 'selection', 'painting', 'retouch', 'adjustments', 'subject', 'guides', 'styles', 'artboards',
-  'text', 'vector', 'color'];
+  'text', 'vector', 'color', 'automation'];
 
 /** PRODUCT-PLAN sections 5, 6 and A10: one configuration per product profile, never an engine fork. */
 export const EDITOR_PROFILES: Readonly<Record<EditorProfileId, EditorProfile>> = {
