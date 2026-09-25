@@ -47,7 +47,9 @@ export function translated(layer: Layer, dx: number, dy: number): Layer {
   const placement = layer.mask?.placement;
   const mask = layer.mask && placement ? { ...layer.mask,
     placement: { ...placement, origin: { x: placement.origin.x + dx, y: placement.origin.y + dy } } } : layer.mask;
-  return { ...layer, transform, mask };
+  const warp = layer.warp ? { ...layer.warp, corners: layer.warp.corners.map((point) =>
+    ({ x: point.x + dx, y: point.y + dy })) as [Point, Point, Point, Point] } : null;
+  return { ...layer, transform, mask, warp };
 }
 
 export interface CanvasExtensionColor { readonly red: number; readonly green: number; readonly blue: number }

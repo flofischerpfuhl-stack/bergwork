@@ -245,6 +245,8 @@ uniform sampler2D uClip;
 uniform vec2 uTarget;
 uniform mat3 uViewToDoc;
 uniform mat3 uDocToLayer;
+uniform mat3 uDocToWarp;
+uniform int uHasWarp;
 uniform vec2 uLayerSize;
 uniform vec2 uLayerEdge;
 uniform vec2 uChunkOrigin;
@@ -276,7 +278,9 @@ void main() {
   vec4 dst = texelFetch(uBackdrop, ivec2(vPos), 0);
   vec2 doc = (uViewToDoc * vec3(vPos, 1.0)).xy;
   if (uSnap == 1) doc = floor(doc) + 0.5;
-  vec2 lp = (uDocToLayer * vec3(doc, 1.0)).xy;
+  vec3 projective = uDocToWarp * vec3(doc, 1.0);
+  vec2 lp = uHasWarp == 1 ? projective.xy / projective.z * uLayerSize
+    : (uDocToLayer * vec3(doc, 1.0)).xy;
   if (uRestrictBounds == 1 && (lp.x < uDrawOrigin.x || lp.y < uDrawOrigin.y
     || lp.x >= uDrawOrigin.x + uDrawSize.x || lp.y >= uDrawOrigin.y + uDrawSize.y)) discard;
   float cover = edgeCoverage(lp, uLayerSize, uLayerEdge);

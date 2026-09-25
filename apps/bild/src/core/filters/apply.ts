@@ -104,7 +104,7 @@ export function applyFilter(kind: FilterKind, source: Raster, transform: LayerTr
   else if (kind === 'Unsharp Mask') result = unsharpMask(room.raster, settings.amount, settings.radius, settings.threshold);
   else if (kind === 'Smart Sharpen') result = smartSharpen(room.raster, settings.amount, settings.radius, settings.threshold, settings.reduceNoise);
   else if (kind === 'High Pass') result = highPass(room.raster, settings.radius);
-  else result = denoise(room.raster, settings.luminance, settings.colour);
+  else result = denoise(room.raster, settings.luminance, settings.colour, settings.detail);
   if (!colorAdjustment) result = blendSelection(room.raster, result, room.transform, options.selection ?? null);
   if ((kind === 'Gaussian Blur' || kind === 'Motion Blur') && options.expand !== false) {
     const bounds = alphaBounds(result);

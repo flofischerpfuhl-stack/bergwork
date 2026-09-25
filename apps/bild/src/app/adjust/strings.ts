@@ -35,6 +35,7 @@ export const ADJUST_P2_DE: Readonly<Record<string, string>> = {
   // Filters and smart filters
   'Unsharp Mask': 'Unscharf maskieren', 'Smart Sharpen': 'Selektiver Scharfzeichner', 'High Pass': 'Hochpass', 'Denoise': 'Rauschen reduzieren',
   'Reduce Noise': 'Rauschen reduzieren', 'Luminance': 'Luminanz', 'Color Noise': 'Farbrauschen',
+  'Preserve Details': 'Details erhalten',
   'Smart Filter': 'Smartfilter', 'Smart Filters': 'Smartfilter', 'Apply Smart Filters': 'Smartfilter anwenden',
   'Clear Smart Filters': 'Alle Smartfilter löschen', 'Edit Smart Filter': 'Smartfilter bearbeiten', 'Hide Smart Filter': 'Smartfilter ausblenden',
   'Show Smart Filter': 'Smartfilter einblenden', 'Delete Smart Filter': 'Smartfilter löschen', 'Hide Smart Filters': 'Alle Smartfilter ausblenden',

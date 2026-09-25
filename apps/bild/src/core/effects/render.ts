@@ -17,6 +17,8 @@ export interface EffectPass {
 
 export interface RenderEffectOptions {
   readonly globalLightAngle?: number;
+  /** Cache pixels per document pixel; keeps effect padding aligned with sharp mip levels. */
+  readonly rasterScale?: number;
 }
 
 function clamp01(value: number): number { return Math.min(1, Math.max(0, value)); }
@@ -203,6 +205,8 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
     else if (effect.kind === 'stroke' && effect.position !== 'inside') margin = Math.max(margin, Math.ceil(effect.width) + 1);
   }
   if (enabled.some((effect) => effect.kind === 'stroke' && effect.position !== 'outside')) margin = Math.max(margin, 1);
+  const alignment = Math.max(1, Math.round(finite(options.rasterScale, 1)));
+  margin = Math.ceil(margin / alignment) * alignment;
   const outWidth = width + margin * 2, outHeight = height + margin * 2;
   const source = expandedAlpha(alpha, width, height, margin);
   const solid = new Uint8Array(source.length);

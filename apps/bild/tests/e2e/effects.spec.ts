@@ -64,3 +64,31 @@ test('layer effects render identically through WebGL2 and the software reference
   expect(result.mismatches).toBe(0);
   expect(result.changedOutsideSource).toBe(true);
 });
+
+test('adding a layer style does not re-round the layer own translucent pixels', async ({ page }) => {
+  await page.goto('/?harness=gpu');
+  const result = await page.evaluate(async () => {
+    const load = (path: string): Promise<any> => import(/* @vite-ignore */ path);
+    const { GpuCompositor } = await load('/src/render/gpuCompositor.ts');
+    const { Raster } = await load('/src/core/raster.ts');
+    const { newLayer } = await load('/src/core/document.ts');
+    const { makeTransform } = await load('/src/core/geometry.ts');
+    const bytes = new Uint8Array(3 * 3 * 4);
+    for (let i = 0; i < 9; i++) bytes.set([31, 79, 191, 126], i * 4);
+    const raster = Raster.fromPixels(3, 3, 4, bytes);
+    const transform = makeTransform({ x: 1, y: 1 }, { width: 3, height: 3 }, { sampling: 'Nearest' });
+    const plain = newLayer({ id: 'pixel', name: 'Pixel', raster, transform });
+    const styled = { ...plain, effects: [{ kind: 'dropShadow', schemaVersion: 1, enabled: true,
+      opacity: 1, angle: 0, distance: 10, blur: 0, size: 0, color: { red: 0, green: 0, blue: 0 },
+      knockout: true }] };
+    const base = { id: 'rounding', width: 20, height: 20, resolution: 72, selection: null };
+    const canvas = globalThis.document.createElement('canvas'); globalThis.document.body.append(canvas);
+    const gpu = await GpuCompositor.create(canvas, 20, 20);
+    const before = gpu.readRegion({ ...base, layers: [plain] }, 2, 2, 1, 1);
+    const after = gpu.readRegion({ ...base, layers: [styled] }, 2, 2, 1, 1);
+    gpu.destroy();
+    return { before: Array.from(before), after: Array.from(after) };
+  }) as { before: number[]; after: number[] };
+  expect(result.before[3]).toBe(126);
+  expect(result.after).toEqual(result.before);
+});

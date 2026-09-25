@@ -38,6 +38,26 @@ describe('P2 sharpen, denoise and live filter stack', () => {
     expect(after[3]).toBe(255);
   });
 
+  it('reduces ±30 luminance grain by at least half while preserving a hard edge', () => {
+    const width = 80, height = 48, pixels = new Uint8Array(width * height * 4);
+    let seed = 3;
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      const value = Math.max(0, Math.min(255, (x < width / 2 ? 80 : 170) + seed % 61 - 30));
+      pixels.set([value, value, value, 255], (y * width + x) * 4);
+    }
+    const source = Raster.fromPixels(width, height, 4, pixels), result = denoise(source, 100, 100);
+    const stats = (raster: Raster, x0: number) => {
+      const values: number[] = [];
+      for (let y = 6; y < height - 6; y++) for (let x = x0; x < x0 + 24; x++) values.push(raster.pixel(x, y)[0]!);
+      const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+      return { mean, sigma: Math.sqrt(values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length) };
+    };
+    const darkBefore = stats(source, 5), darkAfter = stats(result, 5), lightAfter = stats(result, 51);
+    expect(darkAfter.sigma).toBeLessThan(darkBefore.sigma * 0.5);
+    expect(lightAfter.mean - darkAfter.mean).toBeGreaterThan(70);
+  });
+
   it('filters remain native rgba16', () => {
     const source = Raster.fromPixels(3, 1, 4, new Uint16Array([
       1000, 1000, 1000, 65535, 30000, 30000, 30000, 65535, 60000, 60000, 60000, 65535,

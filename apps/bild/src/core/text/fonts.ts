@@ -4,7 +4,7 @@ import type { TextEngine } from '../../text/types';
 /** Structural subset of the versioned host capability, kept core-to-platform import free (A0). */
 export interface TextFontHost {
   listSystemFonts(): Promise<readonly { readonly id: string; readonly family: string; readonly style: string;
-    readonly postscriptName?: string }[]>;
+    readonly fullName?: string; readonly postscriptName?: string }[]>;
   loadSystemFont(id: string): Promise<Uint8Array>;
 }
 
@@ -14,13 +14,17 @@ export interface BundledFontDescriptor {
   readonly style: string;
   readonly weight: number;
   readonly url: string;
+  readonly fullName?: string;
+  readonly postscriptName?: string;
 }
 
 export const BUNDLED_TEXT_FONTS: readonly BundledFontDescriptor[] = [
-  { id: 'noto-sans-variable', family: 'Noto Sans', style: 'Variable', weight: 400, url: '/fonts/NotoSans-Variable.ttf' },
-  { id: 'noto-sans-arabic-variable', family: 'Noto Sans Arabic', style: 'Variable', weight: 400, url: '/fonts/NotoSansArabic-Variable.ttf' },
+  { id: 'noto-sans-variable', family: 'Noto Sans', fullName: 'Noto Sans Regular', postscriptName: 'NotoSans-Regular',
+    style: 'Variable', weight: 400, url: '/fonts/NotoSans-Variable.ttf' },
+  { id: 'noto-sans-arabic-variable', family: 'Noto Sans Arabic', fullName: 'Noto Sans Arabic Regular', postscriptName: 'NotoSansArabic-Regular',
+    style: 'Variable', weight: 400, url: '/fonts/NotoSansArabic-Variable.ttf' },
   { id: 'noto-sans-devanagari-variable', family: 'Noto Sans Devanagari', style: 'Variable', weight: 400,
-    url: '/fonts/NotoSansDevanagari-Variable.ttf' },
+    fullName: 'Noto Sans Devanagari Regular', postscriptName: 'NotoSansDevanagari-Regular', url: '/fonts/NotoSansDevanagari-Variable.ttf' },
 ] as const;
 
 export interface MissingFont {
@@ -73,13 +77,23 @@ export function listMissingFonts(document: CanvasDocument, availableFamilies: Re
  */
 export class TextFontRegistry {
   private readonly families = new Map<string, string>();
+  private readonly names = new Map<string, string>();
   private readonly registeredIds = new Set<string>();
   private systemFonts: Awaited<ReturnType<TextFontHost['listSystemFonts']>> | null = null;
 
   constructor(private readonly engine: TextEngine, private readonly host: TextFontHost | null = null,
     private readonly bundledLoader: BundledFontLoader = defaultBundledLoader) {}
 
-  get availableFamilies(): ReadonlySet<string> { return new Set(this.families.values()); }
+  get availableFamilies(): ReadonlySet<string> { return new Set(this.names.values()); }
+
+  private addNames(family: string, aliases: readonly (string | undefined)[]): void {
+    this.families.set(family.toLocaleLowerCase(), family);
+    this.names.set(family.toLocaleLowerCase(), family);
+    for (const alias of aliases) if (alias?.trim()) {
+      this.families.set(alias.toLocaleLowerCase(), family);
+      this.names.set(alias.toLocaleLowerCase(), alias);
+    }
+  }
 
   async loadBundledFallbacks(): Promise<void> {
     for (const font of BUNDLED_TEXT_FONTS) {
@@ -87,7 +101,7 @@ export class TextFontRegistry {
       const bytes = await this.bundledLoader(font);
       this.engine.registerFont({ id: font.id, family: font.family, bytes, source: font.url });
       this.registeredIds.add(font.id);
-      this.families.set(font.family.toLocaleLowerCase(), font.family);
+      this.addNames(font.family, [font.fullName, font.postscriptName]);
     }
   }
 
@@ -99,7 +113,7 @@ export class TextFontRegistry {
       if (resource) {
         this.engine.registerFont({ id: font.id, family: font.family, bytes: resource.bytes, source: `embedded:${resource.id}` });
         this.registeredIds.add(font.id);
-        this.families.set(font.family.toLocaleLowerCase(), font.family);
+        this.addNames(font.family, [`${font.family} ${font.style}`.trim(), font.postscriptName]);
       }
     }
     if (userInitiatedSystemAccess && this.host) {
@@ -107,14 +121,16 @@ export class TextFontRegistry {
       const wanted = requestedFonts(document);
       for (const [family] of wanted) {
         if (this.families.has(family.toLocaleLowerCase())) continue;
-        const matches = this.systemFonts.filter((value) => value.family.toLocaleLowerCase() === family.toLocaleLowerCase());
+        const wantedName = family.toLocaleLowerCase();
+        const matches = this.systemFonts.filter((value) => [value.family, value.fullName, value.postscriptName]
+          .some((name) => name?.toLocaleLowerCase() === wantedName));
         for (const system of matches) {
           const id = `system:${system.id}`;
           if (this.registeredIds.has(id)) continue;
           const bytes = await this.host.loadSystemFont(system.id);
           this.engine.registerFont({ id, family: system.family, bytes, source: 'system' });
           this.registeredIds.add(id);
-          this.families.set(system.family.toLocaleLowerCase(), system.family);
+          this.addNames(system.family, [system.fullName, system.postscriptName]);
         }
       }
     }

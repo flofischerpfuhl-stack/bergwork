@@ -15,7 +15,7 @@ export function defaultLiveFilter(kind: LiveFilterKind): LiveFilter {
     case 'unsharpMask': return { kind, schemaVersion: 1, enabled: true, amount: 100, radius: 1, threshold: 0 };
     case 'smartSharpen': return { kind, schemaVersion: 1, enabled: true, amount: 100, radius: 1, threshold: 0, reduceNoise: 10 };
     case 'highPass': return { kind, schemaVersion: 1, enabled: true, radius: 10 };
-    case 'denoise': return { kind, schemaVersion: 1, enabled: true, luminance: 25, colour: 25 };
+    case 'denoise': return { kind, schemaVersion: 1, enabled: true, luminance: 25, colour: 25, detail: 50 };
   }
 }
 
@@ -32,7 +32,8 @@ function filterSettings(filter: LiveFilter): { kind: FilterKind; settings: Retur
     case 'smartSharpen': return { kind: 'Smart Sharpen', settings: { ...base, amount: filter.amount,
       radius: filter.radius, threshold: filter.threshold, reduceNoise: filter.reduceNoise } };
     case 'highPass': return { kind: 'High Pass', settings: { ...base, radius: filter.radius } };
-    case 'denoise': return { kind: 'Denoise', settings: { ...base, luminance: filter.luminance, colour: filter.colour } };
+    case 'denoise': return { kind: 'Denoise', settings: { ...base, luminance: filter.luminance,
+      colour: filter.colour, detail: filter.detail ?? 50 } };
   }
 }
 

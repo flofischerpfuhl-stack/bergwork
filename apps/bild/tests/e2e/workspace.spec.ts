@@ -3,6 +3,17 @@ import { importThroughMenu, manifest, mountForTest, solidPng } from './helpers';
 
 test.use({ viewport: { width: 1440, height: 900 } });
 
+test('Lite explains the 100 MP new-canvas limit and does not create an oversized canvas', async ({ page }) => {
+  await mountForTest(page);
+  await page.getByTestId('widthInput').fill('20000');
+  await page.getByTestId('heightInput').fill('10000');
+  await expect(page.getByText('Lite supports canvases up to 100 megapixels. Fernwork Bildeditor Pro supports up to 300 megapixels.'))
+    .toBeVisible();
+  await expect(page.getByTestId('createCanvas')).toBeDisabled();
+  await page.getByTestId('heightInput').press('Enter');
+  expect(await page.evaluate(() => (window as any).__editorForTests.session.document)).toBeNull();
+});
+
 test('dragging a layer onto another tab copies it there as one undo step', async ({ page }) => {
   await mountForTest(page);
   await page.getByTestId('createCanvas').click();

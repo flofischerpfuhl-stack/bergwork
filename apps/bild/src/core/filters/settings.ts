@@ -15,11 +15,12 @@ export interface FilterSettings {
   readonly distortion: number; readonly curves: CurvesSettings; readonly exposure: ExposureSettings;
   readonly gradientMap: GradientMapSettings; readonly grain: GrainSettings;
   readonly threshold: number; readonly reduceNoise: number; readonly luminance: number; readonly colour: number;
+  readonly detail: number;
 }
 export function defaultFilterSettings(): FilterSettings {
   return { radius: 1, angle: 0, distance: 10, amount: 10, gaussian: false, monochromatic: false,
     distortion: 0, curves: defaultCurves(), exposure: defaultExposure(), gradientMap: defaultGradientMap(), grain: defaultGrain(),
-    threshold: 0, reduceNoise: 0, luminance: 25, colour: 25 };
+    threshold: 0, reduceNoise: 0, luminance: 25, colour: 25, detail: 50 };
 }
 function clamp(value: number, lo: number, hi: number, fallback: number): number {
   return Number.isFinite(value) ? Math.min(hi, Math.max(lo, value)) : fallback;
@@ -30,6 +31,7 @@ export function normalizeFilterSettings(value: FilterSettings): FilterSettings {
     distortion: clamp(value.distortion, -100, 100, 0),
     threshold: clamp(value.threshold, 0, 255, 0), reduceNoise: clamp(value.reduceNoise, 0, 100, 0),
     luminance: clamp(value.luminance, 0, 100, 25), colour: clamp(value.colour, 0, 100, 25),
+    detail: clamp(value.detail, 0, 100, 50),
     exposure: { exposure: clamp(value.exposure.exposure, -20, 20, 0), offset: clamp(value.exposure.offset, -0.5, 0.5, 0),
       gamma: clamp(value.exposure.gamma, 0.01, 9.99, 1) },
     gradientMap: { ...value.gradientMap,

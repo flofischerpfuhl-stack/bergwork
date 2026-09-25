@@ -119,8 +119,10 @@ export function renderVector(engine: TextEngine, paths: readonly VectorPath[], s
       miterLimit: style.stroke!.miterLimit } : undefined;
     return remember(engine.rasterizePath({ width: outWidth, height: outHeight, svgPath: svg, fill, stroke: strokePaint }).raster);
   }
-  const fillAlpha = style.fill && style.fill.kind !== 'pattern'
+  const needsInteriorClip = style.stroke?.alignment === 'inside';
+  const pathAlpha = (style.fill && style.fill.kind !== 'pattern') || needsInteriorClip
     ? pathFillCoverage(engine, outWidth, outHeight, paths, pixelsPerDocumentPixel) : null;
+  const fillAlpha = style.fill && style.fill.kind !== 'pattern' ? pathAlpha : null;
   const stroke = style.stroke;
   let strokeAlpha: Uint8Array | null = null, markerFill: Uint8Array | null = null;
   if (stroke && stroke.width > 0) {
@@ -146,7 +148,7 @@ export function renderVector(engine: TextEngine, paths: readonly VectorPath[], s
   for (let y = 0, i = 0; y < outHeight; y++) for (let x = 0; x < outWidth; x++, i++) {
     const fa = fillAlpha?.[i] ?? 0;
     let sa = Math.max(strokeAlpha?.[i] ?? 0, markerFill?.[i] ?? 0);
-    if (stroke?.alignment === 'inside') sa = Math.round(sa * fa / 255);
+    if (stroke?.alignment === 'inside') sa = Math.round(sa * (pathAlpha?.[i] ?? 0) / 255);
     else if (stroke?.alignment === 'outside') sa = Math.round(sa * (255 - fa) / 255);
     const fill = style.fill ? fillColor(style.fill, x, y, outWidth, outHeight) : [0, 0, 0, 0] as const;
     const line = strokePaint ? fillColor(strokePaint, x, y, outWidth, outHeight) : [0, 0, 0, 0] as const;

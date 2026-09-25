@@ -100,7 +100,7 @@ describe('selection pixel edits (SelectionEditTests.swift)', () => {
     expect(session.activeLayer!.raster!.pixel(8, 2)[3]).toBe(255);
   });
 
-  it('maps selection through a scaled layer transform and creates masks with upstream polarity', () => {
+  it('maps selection through a scaled layer transform and reveals the selection like Photoshop', () => {
     const session = sessionWith(solid(4, 4, [255, 0, 0, 255]), 8, 8);
     session.replaceDocument({ ...session.document!, layers: session.document!.layers.map((l) => ({ ...l,
       transform: makeTransform({ x: 0, y: 0 }, { width: 8, height: 8 }) })) });
@@ -111,8 +111,8 @@ describe('selection pixel edits (SelectionEditTests.swift)', () => {
     expect(session.activeLayer!.raster!.pixel(3, 2)).toEqual([255, 0, 0, 255]);
     expect(addMaskFromSelection(session, true)).toBe(true);
     expect(session.selection).toBeNull();
-    expect(session.activeLayer!.mask!.raster.pixel(0, 2)[0]).toBe(0);
-    expect(session.activeLayer!.mask!.raster.pixel(3, 2)[0]).toBe(255);
+    expect(session.activeLayer!.mask!.raster.pixel(0, 2)[0]).toBe(255);
+    expect(session.activeLayer!.mask!.raster.pixel(3, 2)[0]).toBe(0);
     expect(session.history.undoName).toBe('Add Mask from Selection');
   });
 

@@ -50,3 +50,32 @@ test('PSD isolated knockout groups match on the GPU and CPU compositors', async 
   expect(result.cpu).toEqual([128, 128, 255, 255]);
   result.gpu.forEach((value, index) => expect(Math.abs(value - result.cpu[index]!), `channel ${index}`).toBeLessThanOrEqual(1));
 });
+
+test('PSD Smart Object perspective quads match in GPU and CPU rendering', async ({ page }) => {
+  await page.goto('/?harness=gpu');
+  const result = await page.evaluate(async () => {
+    const load = (module: string): Promise<any> => import(/* @vite-ignore */ module);
+    const { GpuCompositor } = await load('/src/render/gpuCompositor.ts');
+    const { compositeRegion } = await load('/src/core/composite.ts');
+    const { newLayer } = await load('/src/core/document.ts');
+    const { makeTransform } = await load('/src/core/geometry.ts');
+    const { Raster } = await load('/src/core/raster.ts');
+    const bytes = new Uint8Array(4 * 4 * 4);
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) bytes.set([x * 70, y * 70, 180, 255], (y * 4 + x) * 4);
+    const layer = newLayer({ id: 'smart', name: 'Smart Object', kind: 'embedded',
+      content: { mode: 'embedded', mediaType: 'image', sourceName: 'smart.png', width: 4, height: 4 },
+      raster: Raster.fromPixels(4, 4, 4, bytes),
+      transform: makeTransform({ x: 0, y: 0 }, { width: 8, height: 8 }, { sampling: 'Nearest' }),
+      warp: { kind: 'quad', schemaVersion: 1,
+        corners: [{ x: 1, y: 1 }, { x: 7, y: 0 }, { x: 5, y: 7 }, { x: 1, y: 6 }] } });
+    const document = { id: 'warp', width: 8, height: 8, resolution: 72, layers: [layer], selection: null };
+    const cpu = compositeRegion(document, { x: 0, y: 0, width: 8, height: 8 }).rgba;
+    const canvas = globalThis.document.createElement('canvas'); globalThis.document.body.append(canvas);
+    const gpu = await GpuCompositor.create(canvas, 8, 8), gpuPixels = gpu.readRegion(document, 0, 0, 8, 8);
+    gpu.destroy();
+    return { cpu: Array.from(cpu), gpu: Array.from(gpuPixels) };
+  }) as { cpu: number[]; gpu: number[] };
+  expect(result.cpu[(3 * 8 + 3) * 4 + 3]).toBe(255);
+  expect(result.cpu[(7 * 8 + 7) * 4 + 3]).toBe(0);
+  result.gpu.forEach((value, index) => expect(Math.abs(value - result.cpu[index]!), `channel ${index}`).toBeLessThanOrEqual(1));
+});

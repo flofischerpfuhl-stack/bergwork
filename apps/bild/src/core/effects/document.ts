@@ -3,6 +3,7 @@ import { apply, concat, pixelToDocument, placing, samePlacement, scaling, transl
 import { mapPlacement, maskBackground, preparePlacement, prepareSampler, sampleMask } from '../resample';
 import { TILE, type Raster } from '../raster';
 import { renderEffectPasses, type EffectPass } from './render';
+import { homography } from '../distort';
 
 export interface EffectSourceHooks {
   transform(layer: Layer): LayerTransform;
@@ -12,6 +13,23 @@ export interface EffectSourceHooks {
 }
 
 const cache = new WeakMap<Raster, Map<string, readonly EffectPass[]>>();
+
+function effectRasterScale(raster: Raster, transform: LayerTransform): number {
+  const sx = raster.width / Math.max(1e-9, transform.size.width);
+  const sy = raster.height / Math.max(1e-9, transform.size.height);
+  return Math.sqrt(sx * sy);
+}
+
+function rasterEffects(layer: Layer, scale: number): readonly import('../model').LayerEffect[] {
+  if (Math.abs(scale - 1) < 1e-6) return layer.effects;
+  // Effect records are document pixels. Text/vector/embedded caches can be oversampled, so their
+  // distance fields must be converted to the cache grid before the pass is mapped back to the document.
+  return layer.effects.map((effect) => effect.kind === 'stroke' ? { ...effect, width: effect.width * scale }
+    : effect.kind === 'outerGlow' ? { ...effect, size: effect.size * scale }
+      : effect.kind === 'dropShadow' ? { ...effect, distance: effect.distance * scale,
+        blur: effect.blur * scale, ...(effect.size === undefined ? {} : { size: effect.size * scale }) }
+        : effect);
+}
 
 function effectAlpha(layer: Layer, hooks: EffectSourceHooks, raster: Raster): Uint8Array {
   const alpha = new Uint8Array(raster.width * raster.height);
@@ -47,11 +65,23 @@ function passTransform(source: LayerTransform, sourceWidth: number, sourceHeight
   return placing(source, concat(unitToEffect, sourceMap));
 }
 
-function synthetic(source: Layer, effect: EffectPass, index: number, transform: LayerTransform): Layer {
+function effectWarp(source: Layer, effect: EffectPass, sourceWidth: number, sourceHeight: number): Layer['warp'] {
+  if (!source.warp) return null;
+  const map = homography(source.warp.corners);
+  const left = effect.sourceX / sourceWidth, top = effect.sourceY / sourceHeight;
+  const right = (effect.sourceX + effect.raster.width) / sourceWidth;
+  const bottom = (effect.sourceY + effect.raster.height) / sourceHeight;
+  return { kind: 'quad', schemaVersion: 1, corners: [map({ x: left, y: top }), map({ x: right, y: top }),
+    map({ x: right, y: bottom }), map({ x: left, y: bottom })] };
+}
+
+function synthetic(source: Layer, effect: EffectPass, index: number, transform: LayerTransform,
+  sourceWidth: number, sourceHeight: number): Layer {
   return newLayer({
     id: `${source.id}:effect:${effect.placement}:${index}`, name: `${source.name} effect`, kind: 'pixel',
     parentId: source.parentId, transform, raster: effect.raster, opacity: source.opacity * effect.opacity,
     fillOpacity: effect.scalesWithFillOpacity ? source.fillOpacity : 1, blendMode: effect.blendMode,
+    warp: effectWarp(source, effect, sourceWidth, sourceHeight),
   });
 }
 
@@ -62,25 +92,26 @@ export function documentWithLayerEffects(document: CanvasDocument, hooks: Effect
   for (const layer of document.layers) {
     const raster = hooks.raster(layer);
     if (!layer.visible || !raster || raster.channels !== 4 || !layer.effects.some((effect) => effect.enabled)) { layers.push(layer); continue; }
-    const key = `${JSON.stringify(layer.effects)}|${document.globalLightAngle ?? 120}|${layer.mask?.enabled ? hooks.maskRaster(layer)?.serial ?? 0 : 0}`
-      + `|${JSON.stringify(hooks.transform(layer))}|${JSON.stringify(hooks.maskPlacement(layer))}`;
+    const transform = hooks.transform(layer), scale = effectRasterScale(raster, transform);
+    const effects = rasterEffects(layer, scale);
+    const key = `${JSON.stringify(effects)}|${document.globalLightAngle ?? 120}|${layer.mask?.enabled ? hooks.maskRaster(layer)?.serial ?? 0 : 0}`
+      + `|${JSON.stringify(transform)}|${JSON.stringify(hooks.maskPlacement(layer))}`;
     let variants = cache.get(raster);
     if (!variants) { variants = new Map(); cache.set(raster, variants); }
     let passes = variants.get(key);
     if (!passes) {
-      passes = renderEffectPasses(effectAlpha(layer, hooks, raster), raster.width, raster.height, layer.effects,
-        { globalLightAngle: document.globalLightAngle });
+      passes = renderEffectPasses(effectAlpha(layer, hooks, raster), raster.width, raster.height, effects,
+        { globalLightAngle: document.globalLightAngle, rasterScale: scale });
       if (variants.size >= 8) variants.delete(variants.keys().next().value as string);
       variants.set(key, passes);
     }
-    const transform = hooks.transform(layer);
     const behind = passes.filter((value) => value.placement === 'behind');
     const above = passes.filter((value) => value.placement === 'above');
     for (let i = 0; i < behind.length; i++) layers.push(synthetic(layer, behind[i]!, i,
-      passTransform(transform, raster.width, raster.height, behind[i]!)));
+      passTransform(transform, raster.width, raster.height, behind[i]!), raster.width, raster.height));
     layers.push({ ...layer, effects: [] });
     for (let i = 0; i < above.length; i++) layers.push(synthetic(layer, above[i]!, i,
-      passTransform(transform, raster.width, raster.height, above[i]!)));
+      passTransform(transform, raster.width, raster.height, above[i]!), raster.width, raster.height));
   }
   return { ...document, layers };
 }

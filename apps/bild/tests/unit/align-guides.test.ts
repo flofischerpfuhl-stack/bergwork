@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { EditorSession } from '../../src/core/session';
 import { Raster } from '../../src/core/raster';
-import { boundingBox } from '../../src/core/geometry';
+import { boundingBox, makeTransform } from '../../src/core/geometry';
+import { newLayer } from '../../src/core/document';
 import { readArchive, writeArchive } from '../../src/io/project';
 
 const solid = (w: number, h: number) => Raster.fromPixels(w, h, 4, new Uint8Array(w * h * 4).fill(255));
@@ -38,6 +39,19 @@ describe('align and distribute (Photoshop rules)', () => {
     expect(box(session, b).x + box(session, b).width / 2).toBe(150);
     session.alignLayers('right');
     expect(box(session, b).x + box(session, b).width).toBe(300);
+  });
+  it('aligns rasterless vector/text/embedded layers and targets a single layer\'s artboard', () => {
+    const session = new EditorSession();
+    const shape = newLayer({ id: 'shape', name: 'Shape', kind: 'vector', paths: [],
+      style: { schemaVersion: 1, fill: null, stroke: null }, transform: makeTransform({ x: 230, y: 20 }, { width: 20, height: 10 }) });
+    session.installProject({ id: 'd', width: 400, height: 100, resolution: 72, selection: null, layers: [shape],
+      artboards: [{ id: 'right', name: 'Right', rect: { x: 200, y: 0, width: 200, height: 100 },
+        background: { red: 1, green: 1, blue: 1, alpha: 1 }, colorLabel: 'none' }] }, shape.id, null);
+    expect(session.canAlign()).toBe(true);
+    session.alignLayers('hcenter');
+    expect(session.layer(shape.id)!.transform.origin.x).toBe(290);
+    session.alignLayers('vcenter');
+    expect(session.layer(shape.id)!.transform.origin.y).toBe(45);
   });
   it('distributes centres and spacing between the outermost layers', () => {
     const { session, a, b, c } = sessionWithThree();

@@ -191,7 +191,7 @@ export type LiveFilter =
       readonly amount: number; readonly radius: number; readonly threshold: number; readonly reduceNoise: number }
   | { readonly kind: 'highPass'; readonly schemaVersion: 1; readonly enabled: boolean; readonly radius: number }
   | { readonly kind: 'denoise'; readonly schemaVersion: 1; readonly enabled: boolean;
-      readonly luminance: number; readonly colour: number };
+      readonly luminance: number; readonly colour: number; readonly detail?: number };
 
 export interface LayerCommon {
   readonly id: string;
