@@ -4,7 +4,7 @@
  * `derivedLayerSources`. Loaded lazily with the Text tool or the first document that contains text.
  */
 
-import { loadTextEngine, type TextEngine } from '../../text';
+import { loadSharedTextEngine, type TextEngine } from '../../text';
 import {
   BUNDLED_TEXT_FONTS, listMissingFonts, TextFontRegistry, type MissingFont, type TextFontHost, type TextLayerLayout,
 } from '../../core/text';
@@ -93,7 +93,7 @@ export class TextRuntime {
 
   private async start(): Promise<void> {
     try {
-      const engine = await loadTextEngine();
+      const engine = await loadSharedTextEngine();
       const registry = new TextFontRegistry(engine, this.fontHost());
       await registry.loadBundledFallbacks();
       this.engine = engine;

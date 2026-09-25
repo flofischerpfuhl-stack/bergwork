@@ -7,7 +7,7 @@ import { mountForTest } from './helpers';
  * Measured and asserted canvas performance on this machine's GPU, following STACK.md targets:
  * desktop 4096×4096 with 10 raster layers, pan/zoom p95 frame ≤ 33 ms after warm-up, brush
  * feedback ≤ 16 ms. Results go to artifacts/performance/browser.json with the renderer string.
- * The project `perf-gpu` launches Chromium on the real GPU; under SwiftShader numbers are software.
+ * The project `perf-gpu` requests host GPU providers and records the renderer; software renderers are identified explicitly.
  */
 test('canvas pan, zoom and brush feedback on 4096² × 10 layers', async ({ page }, info) => {
   test.setTimeout(300_000);
@@ -146,13 +146,14 @@ test('canvas pan, zoom and brush feedback on 4096² × 10 layers', async ({ page
   // The targets are about real GPUs: a software rasterizer (e.g. SwiftShader in a sandbox without /dev/dri) only records.
   const softwareRenderer = /swiftshader|llvmpipe|softpipe|software/i.test(String(result.renderer));
   if (softwareRenderer) console.log(`Software renderer (${result.renderer}): targets recorded, not asserted.`);
+  // Commit is CPU worker + document hydration work, so guard its regression even when headless WebGL is software.
+  expect(result.brushCommitMs.even).toBeLessThanOrEqual(400);
+  expect(result.brushCommitMs.irregular).toBeLessThanOrEqual(400);
   if (info.project.name === 'perf-gpu' && !softwareRenderer) {
     expect(result.brushFirstSampleMs).toBeLessThanOrEqual(50);
     expect(result.brushFinishMs.even).toBeLessThanOrEqual(16);
     expect(result.brushFinishMs.irregular).toBeLessThanOrEqual(16);
     // The committed raster replaces the GPU preview in the background; measured ≈ 0.25–0.30 s, guarded against regressions.
-    expect(result.brushCommitMs.even).toBeLessThanOrEqual(400);
-    expect(result.brushCommitMs.irregular).toBeLessThanOrEqual(400);
     expect(result.brushFeedbackMs.p95).toBeLessThanOrEqual(16);
     expect(result.brushFeedbackIrregularMs.p95).toBeLessThanOrEqual(16);
   }

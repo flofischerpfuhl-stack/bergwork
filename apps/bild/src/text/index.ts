@@ -15,3 +15,14 @@ export async function loadTextEngine(options: LoadTextEngineOptions = {}): Promi
   const { createCanvasKitTextEngine } = await import('./engine');
   return createCanvasKitTextEngine(options);
 }
+
+let sharedEngine: Promise<TextEngine> | null = null;
+
+/** One process-wide lazy CanvasKit instance for the editor's text and vector runtimes. */
+export function loadSharedTextEngine(options: LoadTextEngineOptions = {}): Promise<TextEngine> {
+  sharedEngine ??= loadTextEngine(options).catch((error: unknown) => {
+    sharedEngine = null;
+    throw error;
+  });
+  return sharedEngine;
+}

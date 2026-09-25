@@ -8,6 +8,7 @@ import {
   changeBrushSize, cloneSamplePoint, currentBrushRaster, extendBrushStroke, falloff, finishBrushStroke,
   getBrushSettings, setBrushSettings, setCloneSettings, setCloneSource, beginBrushStroke, cancelBrushStroke,
 } from '../../src/core/brush';
+import { recommendedBrushWorkerCount } from '../../src/core/brush/workerClient';
 
 function layer(width: number, height: number, raster: Raster | null = null): Layer {
   return newLayer({ id: 'paint', name: 'Paint', raster,
@@ -229,6 +230,10 @@ describe('brush cursor geometry (BrushCursorOverlay.swift)', () => {
 });
 
 describe('brush performance (BrushPerformanceTests.swift)', () => {
+  it('caps tile workers at the reference machine physical-core count', () => {
+    expect([1, 2, 4, 8, 16].map(recommendedBrushWorkerCount)).toEqual([1, 2, 4, 4, 4]);
+  });
+
   it('measures a 300 px soft brush on a 4096² blank layer', () => {
     const stroke = beginStroke({ layer: layer(4096, 4096), canvas: { width: 4096, height: 4096 },
       settings: settings({ diameter: 300, hardness: 0 }) });

@@ -94,6 +94,14 @@ Browser inference uses `onnxruntime-web` 1.30.0, copyright Microsoft
 Corporation, under the MIT License. Source and license:
 https://github.com/microsoft/onnxruntime
 
+## SlimSAM-77 Uniform model weights
+
+Optional object selection uses the Apache-2.0-licensed SlimSAM-77 Uniform
+model and the FP16 ONNX export by skillsafe-ai. The two pinned artifacts are
+downloaded only after a user action and cached by the host; they are not
+bundled. Full provenance, immutable URLs, sizes, checksums, and rationale are
+recorded in `MODEL_LICENSES.md`.
+
 ## Little CMS
 
 ICC color conversion uses Little CMS 2.19.1, copyright (c) 2023 Marti Maria

@@ -39,6 +39,9 @@ test('A5 CPU sheet is identical, lazy, fast, and worker-compatible', async ({ pa
 
     const workerSource = `
       self.onmessage = async () => {
+        if (!self.crossOriginIsolated || typeof SharedArrayBuffer !== 'function') {
+          throw new Error('Blob worker is not cross-origin isolated');
+        }
         const text = await import(${JSON.stringify(new URL('/src/text/index.ts', location.href).href)});
         const engine = await text.loadTextEngine();
         const response = await fetch(${JSON.stringify(new URL('/fonts/NotoSans-Variable.ttf', location.href).href)});
@@ -107,6 +110,7 @@ test('A5 CPU sheet is identical, lazy, fast, and worker-compatible', async ({ pa
       unresolvedCodepoints: sheet.unresolvedCodepoints,
       paragraphMetrics: sheet.paragraphMetrics,
       performance: performanceResult, resources, memory, workerHash, mainWorkerHash,
+      crossOriginIsolated, sharedArrayBuffer: typeof SharedArrayBuffer === 'function',
     };
   });
 
@@ -139,6 +143,8 @@ test('A5 CPU sheet is identical, lazy, fast, and worker-compatible', async ({ pa
   console.log(JSON.stringify(record, null, 2));
 
   expect(result.lazyBeforeImport).toBe(false);
+  expect(result.crossOriginIsolated).toBe(true);
+  expect(result.sharedArrayBuffer).toBe(true);
   expect(result.unresolvedCodepoints).toEqual([]);
   expect(result.hash).toBe(EXPECTED_SHEET_SHA256);
   expect(result.performance.characterCount).toBe(500);

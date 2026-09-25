@@ -5,7 +5,7 @@
  * so the rendered grid is padded; the layer's model placement stays the shape's box.
  */
 
-import { loadTextEngine, type TextEngine } from '../../text';
+import { loadSharedTextEngine, type TextEngine } from '../../text';
 import { derivedLayerSources, derivedMaskSources, derivedPlacements, type EditorSession } from '../../core/session';
 import type { Layer, VectorMask, VectorPath, VectorStyle } from '../../core/model';
 import { renderVector, renderVectorMask } from '../../core/vector';
@@ -86,7 +86,7 @@ export class VectorRuntime {
 
   /** Loads CanvasKit once; resolves null when it cannot load (the failure is reported). */
   load(): Promise<TextEngine | null> {
-    this.loading ??= loadTextEngine().then((engine) => {
+    this.loading ??= loadSharedTextEngine().then((engine) => {
       this.engine = engine;
       this.changed();
       return engine;
