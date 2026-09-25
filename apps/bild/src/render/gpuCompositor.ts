@@ -1567,8 +1567,9 @@ export class GpuCompositor {
       const placement = hooks.maskPlacement(layer);
       const maskPlace = placement ?? hooks.transform(layer);
       const drawnMask = this.residentLod(maskRaster, maskPlace, view);
+      const psdDefault = (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault;
       maskTarget = this.renderMask(null, maskRaster, `mask:${layer.id}`, maskPlace, view,
-        placement ? maskBackground(drawnMask) : 0);
+        psdDefault !== undefined ? psdDefault / 255 : placement ? maskBackground(drawnMask) : 0);
     }
     if (brush?.target === 'mask' && brushState && maskTarget) {
       const paintedMask = this.overlayBrushMask(maskTarget, brush, brushState, view);

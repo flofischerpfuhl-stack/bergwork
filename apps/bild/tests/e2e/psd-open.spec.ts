@@ -6,6 +6,8 @@ const PSD = path.resolve('tests/fixtures/psd/corpus/1layer.psd');
 const PROFILE_ADJUSTMENTS = ['invert_grayscale.psd', 'invert_cmyk.psd', 'brightnesscontrast_cmyk.psd',
   'curves_cmyk.psd', 'levels_cmyk.psd', 'threshold_cmyk.psd'].map((name) =>
   path.resolve('tests/fixtures/psd/corpus/adjustments', name));
+const PSD8_GPU_FIXTURES = ['mask-density-layermask.psd', 'effects/stroke-composite.psd'].map((name) =>
+  path.resolve('tests/fixtures/psd/corpus', name));
 
 test('opens a corpus PSD through Open as a layered document', async ({ page }) => {
   // The psd-tools corpus is fetched by scripts/fetch-psd-corpus.sh and not committed (E5); without it there is nothing to open.
@@ -72,6 +74,43 @@ test('PSD knockout groups and ordinary layers match on the GPU and CPU composito
   expect(result.ordinary.cpu).toEqual([0, 0, 255, 255]);
   for (const pair of [result.deep, result.shallow, result.ordinary]) pair.gpu.forEach((value, index) =>
     expect(Math.abs(value - pair.cpu[index]!), `channel ${index}`).toBeLessThanOrEqual(1));
+});
+
+test('PSD mask density and clipped effects match on GPU and CPU within one byte', async ({ page }) => {
+  test.skip(PSD8_GPU_FIXTURES.some((fixture) => !fs.existsSync(fixture)), 'PSD corpus not fetched');
+  await page.goto('/?harness=gpu');
+  for (const fixture of PSD8_GPU_FIXTURES) {
+    const bytes = Array.from(fs.readFileSync(fixture));
+    const result = await page.evaluate(async (source) => {
+      const load = (module: string): Promise<any> => import(/* @vite-ignore */ module);
+      const [{ GpuCompositor }, { cpuCompositeRegion }, { readPsdDocument }] = await Promise.all([
+        load('/src/render/gpuCompositor.ts'), load('/src/render/cpuRender.ts'), load('/src/io/psd/reader.ts'),
+      ]);
+      const imported = readPsdDocument(new Uint8Array(source));
+      const cpu = cpuCompositeRegion(imported.document,
+        { x: 0, y: 0, width: imported.document.width, height: imported.document.height });
+      const canvas = globalThis.document.createElement('canvas'); globalThis.document.body.append(canvas);
+      const gpu = await GpuCompositor.create(canvas, imported.document.width, imported.document.height);
+      const pixels = gpu.readRegion(imported.document, 0, 0, imported.document.width, imported.document.height);
+      let maximum = 0, changed = 0, maximumIndex = 0;
+      for (let index = 0; index < pixels.length; index++) {
+        const pixel = index - index % 4;
+        const gpuValue = index % 4 === 3 ? pixels[index]! : Math.round(pixels[index]! * pixels[pixel + 3]! / 255);
+        const cpuValue = index % 4 === 3 ? cpu[index]! : Math.round(cpu[index]! * cpu[pixel + 3]! / 255);
+        const difference = Math.abs(gpuValue - cpuValue);
+        if (difference > maximum) { maximum = difference; maximumIndex = index; }
+        if (difference) changed++;
+      }
+      gpu.destroy(); canvas.remove();
+      const pixel = maximumIndex - maximumIndex % 4;
+      return { maximum, changed, pixels: pixels.length, layers: imported.document.layers.length,
+        maximumPixel: pixel / 4, gpu: Array.from(pixels.slice(pixel, pixel + 4)), cpu: Array.from(cpu.slice(pixel, pixel + 4)) };
+    }, bytes);
+    console.log('PSD8 GPU vs CPU', path.basename(fixture), JSON.stringify(result));
+    expect(result.pixels, path.basename(fixture)).toBeGreaterThan(0);
+    expect(result.layers, path.basename(fixture)).toBeGreaterThan(1);
+    expect(result.maximum, `${path.basename(fixture)} ${JSON.stringify(result)}`).toBeLessThanOrEqual(1);
+  }
 });
 
 test('PSD profile-space adjustments agree between GPU and CPU within one byte', async ({ page }) => {

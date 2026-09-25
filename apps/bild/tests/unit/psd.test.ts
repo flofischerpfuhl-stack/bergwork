@@ -281,6 +281,22 @@ describe('PSD colour modes and product wiring', () => {
     expect(imported.unsupported.some((issue) => issue.code === 'real-mask')).toBe(false);
   });
 
+  it('applies PSD mask density to both channel pixels and the outside-mask value', () => {
+    const layer: AgLayer = { name: 'Dense outside', top: 0, left: 0, bottom: 1, right: 2,
+      imageData: image([255, 0, 0, 255, 255, 0, 0, 255]),
+      mask: { top: 0, left: 1, bottom: 1, right: 2, defaultColor: 0, userMaskDensity: 0.25,
+        imageData: { width: 1, height: 1, data: new Uint8ClampedArray([255, 255, 255, 255]) } } };
+    const imported = readPsdDocument(writePsdUint8Array({ width: 2, height: 1, children: [layer],
+      imageData: image([255, 0, 0, 191, 255, 0, 0, 255]) }, { generateThumbnail: false }));
+    const densityLayer = imported.document.layers[0] as typeof imported.document.layers[number]
+      & { readonly psdMaskDefault?: number };
+    expect(densityLayer.mask?.raster.toPixels()).toEqual(new Uint8Array([255]));
+    expect(densityLayer.psdMaskDefault).toBe(191);
+    expect(imported.unsupported).toContainEqual(expect.objectContaining({
+      code: 'mask-density', impact: 'editability-only',
+    }));
+  });
+
   it('uses the Little CMS default CMYK profile on the product-open path', async () => {
     const bytes = rawPsd(4, [new Uint8Array([255]), new Uint8Array([128]), new Uint8Array([64]), new Uint8Array([200])]);
     const lcms = await loadLittleCms();
