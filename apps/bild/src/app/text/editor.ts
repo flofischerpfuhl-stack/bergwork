@@ -10,12 +10,16 @@ import {
   defaultTextParagraphStyle, DEFAULT_TEXT_STYLE, effectiveVisibleIds, renderLayers,
   type CanvasDocument, type TextLayer, type TextParagraphStyle, type TextRunStyle,
 } from '../../core/document';
-import { styleAt, type ParagraphStylePatch, type TextStylePatch } from '../../core/text';
+import { PathMeasure, PathTextMapping, styleAt, type ParagraphStylePatch, type TextStylePatch } from '../../core/text';
 import { noteColorUsed } from '../../core/color/recent';
 import { apply, containsPoint, invert, radians, unitPoint, type LayerTransform, type Point, type Rect, type Size } from '../../core/geometry';
+import type { TextOnPath, TextWarp, VectorPath } from '../../core/model';
 import type { EditorController } from '../../ui/controller';
 import type { ToolContext, ToolHandler } from '../../ui/canvas/tools';
 import type { TextGeometry, TextRuntime } from './runtime';
+import {
+  frameToDocument, nearPathText, PATH_TEXT_CURSOR, pathUnderPointer, textPathFraction, textPathFrame, textPathMarkers, textPathPolyline,
+} from './pathTool';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 /** Noto Sans ascender and line height in em: a new point text puts its first baseline where the click was. */
@@ -80,7 +84,10 @@ export function resizedPlacement(layer: TextLayer, shaped: Size): LayerTransform
   return { ...t, size, origin: { x: t.origin.x + fixed.x - moved.x, y: t.origin.y + fixed.y - moved.y } };
 }
 
-/** The topmost visible text layer under a document point (with a small margin for thin, empty lines). */
+/**
+ * The topmost visible text layer under a document point (with a small margin for thin, empty lines). Text on a path
+ * is hit on its band of glyphs along the path, not anywhere in its box (a circle's middle stays free for new text).
+ */
 export function textLayerAt(session: EditorSession, pixel: Point, margin = 0): TextLayer | null {
   const document = session.document;
   if (!document) return null;
@@ -90,7 +97,7 @@ export function textLayerAt(session: EditorSession, pixel: Point, margin = 0): T
     const t = session.displayedTransform(layer);
     const padded = { ...t, origin: { x: t.origin.x - margin, y: t.origin.y - margin },
       size: { width: t.size.width + margin * 2, height: t.size.height + margin * 2 } };
-    if (containsPoint(padded, pixel)) return layer;
+    if (containsPoint(padded, pixel) && nearPathText(session, layer, pixel, margin)) return layer;
   }
   return null;
 }
@@ -143,6 +150,10 @@ export class TextEditor {
   private input: HTMLTextAreaElement | null = null;
   private draft: { session: EditorSession; start: Point; startView: Point; current: Point; moved: boolean } | null = null;
   private selecting = false;
+  /** A start or end marker of text on a path being dragged along its path. */
+  private marker: { e: EditState; which: 'start' | 'end' } | null = null;
+  /** An open Warp Text popover: its layer before the popover opened, and whether it opened its own undo step. */
+  private warping: { session: EditorSession; layerId: string; before: TextLayer; own: boolean } | null = null;
   private clicks = { time: 0, point: { x: 0, y: 0 }, count: 0 };
   readonly tool: ToolHandler;
   /** Open popovers of the controls: Escape in the text closes the newest one before it would commit. */
@@ -153,7 +164,7 @@ export class TextEditor {
     editBlockers.push((session) => this.editing?.session === session);
     this.tool = {
       down: (c) => this.down(c), move: (c) => this.move(c), up: (c) => this.up(c), cancel: (s) => this.cancelGesture(s),
-      hover: () => 'text', overlayOnly: () => true,
+      hover: (c) => this.hover(c), overlayOnly: () => true,
     };
   }
 
@@ -192,6 +203,42 @@ export class TextEditor {
     session.notify('ui');
     return true;
   }
+  /**
+   * Starts text on a path (Photoshop's type on a path): the text layer gets its own copy of the path, in a frame at the
+   * path's bounds; the text starts where the path was clicked and runs to its end (around a closed path).
+   */
+  startOnPath(session: EditorSession, documentPath: VectorPath, fraction: number): boolean {
+    if (this.editing) this.commit();
+    const document = session.document;
+    if (!document || !session.canEditLayers) return false;
+    const settings = textDefaults(session);
+    const style: TextRunStyle = { ...settings.style, color: { ...session.foregroundColor, alpha: 1 } };
+    noteColorUsed(session, session.foregroundColor);
+    const active = session.activeLayerId;
+    const frame = textPathFrame(documentPath);
+    session.beginEdit('Edit Text');
+    let id: string | null = null;
+    try {
+      id = session.createPointText(frame.transform.origin, '', style);
+      const created = id ? session.layer(id) : null;
+      if (id && created?.kind === 'text' && session.document) {
+        const start = Math.max(0, Math.min(1, fraction));
+        const textPath: TextOnPath = { schemaVersion: 1, path: frame.path, start, end: frame.path.closed ? start : 1, flipped: false,
+          baselineOffset: 0 };
+        session.replaceDocument(replaceLayer(session.document, { ...created, transform: frame.transform, textPath, raster: null,
+          renderedTransform: null }));
+        const { alignment, direction } = settings.paragraph;
+        if (alignment !== 'left' || direction !== 'auto') session.changeParagraphSettings(id, 0, 0, { alignment, direction });
+      }
+    } catch { id = null; }
+    if (!id) { session.endEdit(); return false; }
+    this.editing = { session, layerId: id, created: true, before: { document, active },
+      anchor: 0, focus: 0, typing: style, preferredX: null, composition: null, undo: [], redo: [], autoName: true };
+    this.attachInput();
+    session.notify('ui');
+    return true;
+  }
+
   /** Edits an existing text layer: caret at an index, or everything selected (double-click on its thumbnail). */
   startExisting(session: EditorSession, layerId: string, selection: number | 'all'): boolean {
     const current = this.editing;
@@ -285,7 +332,7 @@ export class TextEditor {
     if (!layer || !document) return;
     const shaped = this.runtime.shapedSize(session, e.layerId);
     let next = layer;
-    if (shaped && !layer.box && layer.text.length) {
+    if (shaped && !layer.box && !layer.textPath && layer.text.length) {
       const transform = resizedPlacement(layer, shaped);
       if (transform !== layer.transform) next = { ...next, transform };
     }
@@ -372,7 +419,7 @@ export class TextEditor {
       const caret = g.caretRect(e.focus);
       const x = e.preferredX ?? caret.x;
       const y = direction < 0 ? caret.y - caret.height * 0.5 : caret.y + caret.height * 1.5;
-      target = y < 0 ? 0 : y > g.height ? length : g.caretIndex({ x, y });
+      target = y < 0 ? 0 : y > g.height ? length : g.layoutIndex({ x, y });
       this.select(e, extend ? e.anchor : target, target, true);
       e.preferredX = x;
       return;
@@ -387,7 +434,7 @@ export class TextEditor {
     let target: number;
     if (g && layer.text.length) {
       const caret = g.caretRect(e.focus);
-      target = g.caretIndex({ x: direction < 0 ? -1e6 : 1e6, y: caret.y + caret.height / 2 });
+      target = g.layoutIndex({ x: direction < 0 ? -1e6 : 1e6, y: caret.y + caret.height / 2 });
     } else {
       const [start, end] = paragraphAt(layer.text, e.focus);
       target = direction < 0 ? start : end;
@@ -640,10 +687,91 @@ export class TextEditor {
   private fitPointText(session: EditorSession, layerId: string): void {
     const next = session.layer(layerId), document = session.document;
     const shaped = this.runtime.shapedSize(session, layerId);
-    if (next?.kind !== 'text' || next.box || !shaped || !document || !next.text.length) return;
+    if (next?.kind !== 'text' || next.box || next.textPath || !shaped || !document || !next.text.length) return;
     const transform = resizedPlacement(next, shaped);
     if (transform !== next.transform) session.replaceDocument(replaceLayer(document, { ...next, transform }));
   }
+
+  /** A whole-layer change of the edited or active text layer: part of the editing session, or its own undo step. */
+  private changeLayer(session: EditorSession, name: string, change: (layer: TextLayer) => TextLayer): void {
+    const e = this.editing;
+    if (e && e.session === session) {
+      this.mutate(e, () => {
+        const layer = this.layer(e), document = session.document;
+        if (layer && document) session.replaceDocument(replaceLayer(document, change(layer)));
+      });
+      this.refocusLater();
+      return;
+    }
+    const layer = session.activeLayer;
+    if (layer?.kind !== 'text' || !session.canEditLayers || session.refuseLayerEdit(layer.id, 'pixels')) return;
+    session.edit(name, () => {
+      const document = session.document;
+      if (document) session.replaceDocument(replaceLayer(document, change(layer)));
+    });
+    session.notify('document');
+  }
+
+  /** The text layer the controls act on: the one being edited, else the active one. */
+  targetLayer(session: EditorSession): TextLayer | null {
+    const e = this.editing;
+    if (e && e.session === session) return this.layer(e);
+    const layer = session.activeLayer;
+    return layer?.kind === 'text' ? layer : null;
+  }
+
+  /** Changes text-on-path settings (start, end, flip, baseline offset) of the edited or active text layer. */
+  setPathOptions(session: EditorSession, patch: Partial<Omit<TextOnPath, 'schemaVersion' | 'path'>>): void {
+    this.changeLayer(session, 'Change Path Text', (layer) => {
+      const current = layer.textPath;
+      if (!current) return layer;
+      let next: TextOnPath = { ...current, ...patch, schemaVersion: 1 };
+      next = { ...next, start: Math.max(0, Math.min(1, next.start)), end: Math.max(0, Math.min(1, next.end)) };
+      // An open path's range runs forward; the other marker gives way.
+      if (!next.path.closed && next.end < next.start) next = 'start' in patch ? { ...next, end: next.start } : { ...next, start: next.end };
+      return { ...layer, textPath: next, raster: null, renderedTransform: null };
+    });
+  }
+
+  /** Opens a Warp Text session: the popover previews live and ends it with OK (one undo step) or Cancel. */
+  beginWarp(session: EditorSession): boolean {
+    const layer = this.targetLayer(session);
+    if (!layer || layer.textPath || this.warping) return false;
+    const e = this.editing;
+    const inEdit = !!e && e.session === session;
+    if (!inEdit && (!session.canEditLayers || session.refuseLayerEdit(layer.id, 'pixels'))) return false;
+    if (inEdit) { e.undo.push({ layer, anchor: e.anchor, focus: e.focus }); e.redo = []; } else session.beginEdit('Warp Text');
+    this.warping = { session, layerId: layer.id, before: layer, own: !inEdit };
+    return true;
+  }
+
+  /** Shows a warp (or none) on the layer of the open Warp Text session. */
+  previewWarp(warp: TextWarp | null): void {
+    const w = this.warping, document = w?.session.document;
+    const layer = w ? w.session.layer(w.layerId) : null;
+    if (!w || !document || layer?.kind !== 'text') return;
+    w.session.replaceDocument(replaceLayer(document, { ...layer, textWarp: warp, raster: null, renderedTransform: null }));
+    w.session.notify('document');
+  }
+
+  endWarp(commit: boolean): void {
+    const w = this.warping;
+    if (!w) return;
+    this.warping = null;
+    const document = w.session.document;
+    if (!commit && document && w.session.layer(w.layerId)?.kind === 'text') {
+      // Cancel restores the layer as it was, including an imported preview the preview had to drop.
+      w.session.replaceDocument(replaceLayer(document, w.before));
+      w.session.notify('document');
+      const e = this.editing;
+      if (e && e.session === w.session) e.undo.pop();
+    }
+    if (w.own && w.session.history.isInTransaction) w.session.endEdit();
+    w.session.notify('ui');
+    if (this.editing) this.refocusLater();
+  }
+
+  get warpOpen(): boolean { return this.warping !== null; }
 
   /** P11: replaces a missing family everywhere in the document as one undo step. */
   async replaceFont(session: EditorSession, family: string, replacement: string): Promise<void> {
@@ -703,12 +831,43 @@ export class TextEditor {
     return this.clicks.count;
   }
 
+  /** The start or end marker of the edited text on a path within reach of a document point. */
+  private markerAt(e: EditState | null, pixel: Point, reach: number): 'start' | 'end' | null {
+    const layer = e && this.layer(e);
+    const markers = layer?.textPath ? textPathMarkers(layer) : null;
+    if (!markers) return null;
+    const ds = Math.hypot(markers.start.point.x - pixel.x, markers.start.point.y - pixel.y);
+    const de = Math.hypot(markers.end.point.x - pixel.x, markers.end.point.y - pixel.y);
+    if (Math.min(ds, de) > reach) return null;
+    return ds <= de ? 'start' : 'end';
+  }
+
+  /** The I-beam, the type-on-a-path cursor over a shape's path, or a resize cursor over a path text marker. */
+  private hover(c: ToolContext): string {
+    const session = c.session;
+    if (!session.document) return 'text';
+    const reach = 6 / Math.max(session.viewport.pointsPerPixel, 1e-4);
+    const e = this.editing?.session === session ? this.editing : null;
+    if (this.markerAt(e, c.pixel, reach)) return 'ew-resize';
+    if (textLayerAt(session, c.pixel, 4 / Math.max(session.viewport.pointsPerPixel, 1e-4))) return 'text';
+    return session.canEditLayers && pathUnderPointer(session, c.pixel, reach) ? PATH_TEXT_CURSOR : 'text';
+  }
+
   private down(c: ToolContext): void {
     const session = c.session;
     if (!session.document) return;
     const margin = 4 / Math.max(session.viewport.pointsPerPixel, 1e-4);
+    const reach = 6 / Math.max(session.viewport.pointsPerPixel, 1e-4);
     const clicks = this.countClick(c);
     const e = this.editing?.session === session ? this.editing : null;
+    const which = this.markerAt(e, c.pixel, reach);
+    if (e && which) {
+      // Dragging a marker moves where the text starts or ends along its path (Photoshop's path selection drag).
+      const layer = this.layer(e);
+      if (layer) { e.undo.push({ layer, anchor: e.anchor, focus: e.focus }); e.redo = []; }
+      this.marker = { e, which };
+      return;
+    }
     const hit = textLayerAt(session, c.pixel, margin);
     if (e && hit?.id === e.layerId) {
       const layer = this.layer(e)!, g = this.geometry(e);
@@ -733,10 +892,24 @@ export class TextEditor {
       return;
     }
     if (!session.canEditLayers) return;
+    const path = pathUnderPointer(session, c.pixel, reach);
+    if (path) { this.startOnPath(session, path.path, path.fraction); return; }
     this.draft = { session, start: c.pixel, startView: c.point, current: c.pixel, moved: false };
   }
 
   private move(c: ToolContext): void {
+    const marker = this.marker;
+    if (marker && marker.e === this.editing && marker.e.session === c.session) {
+      const layer = this.layer(marker.e), document = c.session.document;
+      if (layer?.textPath && document) {
+        const fraction = textPathFraction(layer, c.pixel), current = layer.textPath;
+        let next: TextOnPath = { ...current, [marker.which]: fraction };
+        if (!current.path.closed) next = marker.which === 'start' ? { ...next, start: Math.min(fraction, current.end) } : { ...next, end: Math.max(fraction, current.start) };
+        c.session.replaceDocument(replaceLayer(document, { ...layer, textPath: next, raster: null, renderedTransform: null }));
+        c.session.notify('document');
+      }
+      return;
+    }
     const e = this.editing;
     if (this.selecting && e && e.session === c.session) {
       const g = this.geometry(e);
@@ -751,6 +924,7 @@ export class TextEditor {
   }
 
   private up(c: ToolContext): void {
+    if (this.marker) { this.marker = null; this.focusInput(); return; }
     const draft = this.draft;
     this.draft = null;
     this.selecting = false;
@@ -766,6 +940,7 @@ export class TextEditor {
 
   private cancelGesture(session: EditorSession): void {
     this.draft = null;
+    this.marker = null;
     this.selecting = false;
     session.notify('overlay');
   }
@@ -791,6 +966,15 @@ export class TextEditor {
     const layer = this.layer(e);
     if (!layer) return null;
     const document = e.session.document!;
+    if (!layer.text.length && layer.textPath) {
+      // An empty text on a path: the caret stands on the path where the text will start, turned with it.
+      const pixels = e.typing.fontSize * document.resolution / 72, settings = layer.textPath;
+      const mapping = new PathTextMapping(new PathMeasure(settings.path), { start: settings.start, end: settings.end, flipped: settings.flipped,
+        baselineOffset: settings.baselineOffset * document.resolution / 72 },
+      [{ top: -pixels * ASCENT, bottom: pixels * (LINE - ASCENT), baseline: 0, left: 0, right: 0, alignment: layer.paragraphs[0]?.style.alignment ?? 'left' }]);
+      const map = frameToDocument(layer.transform);
+      return [apply(map, mapping.map({ x: 0, y: -pixels * ASCENT })), apply(map, mapping.map({ x: 0, y: pixels * (LINE - ASCENT) }))];
+    }
     if (!layer.text.length) {
       const alignment = layer.paragraphs[0]?.style.alignment ?? 'left';
       const t = layer.box ? layer.transform : e.session.displayedTransform(layer);
@@ -801,7 +985,7 @@ export class TextEditor {
     const g = this.geometry(e);
     if (!g) return null;
     const caret = g.caretRect(e.focus);
-    return [apply(g.toDocument, { x: caret.x, y: caret.y }), apply(g.toDocument, { x: caret.x, y: caret.y + caret.height })];
+    return [apply(g.toDocument, g.toRaster({ x: caret.x, y: caret.y })), apply(g.toDocument, g.toRaster({ x: caret.x, y: caret.y + caret.height }))];
   }
 
   paint(context: CanvasRenderingContext2D, session: EditorSession, accent: string): void {
@@ -822,23 +1006,26 @@ export class TextEditor {
     if (!e || e.session !== session) return;
     const layer = this.layer(e);
     if (!layer) return;
-    // Frame: the area text's box, or the point text's extent.
-    const t = layer.box ? layer.transform : session.displayedTransform(layer);
-    const corners = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }].map((u) => view(unitPoint(t, u)));
-    context.beginPath();
-    corners.forEach((p, i) => (i ? context.lineTo(p.x, p.y) : context.moveTo(p.x, p.y)));
-    context.closePath();
-    context.strokeStyle = accent; context.globalAlpha = 0.75; context.lineWidth = 1;
-    if (!layer.box) context.setLineDash([3, 3]);
-    context.stroke();
-    context.setLineDash([]);
-    context.globalAlpha = 1;
+    if (layer.textPath) this.paintPath(context, layer, view, accent);
+    else {
+      // Frame: the area text's box, or the point text's extent.
+      const t = layer.box ? layer.transform : session.displayedTransform(layer);
+      const corners = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }].map((u) => view(unitPoint(t, u)));
+      context.beginPath();
+      corners.forEach((p, i) => (i ? context.lineTo(p.x, p.y) : context.moveTo(p.x, p.y)));
+      context.closePath();
+      context.strokeStyle = accent; context.globalAlpha = 0.75; context.lineWidth = 1;
+      if (!layer.box) context.setLineDash([3, 3]);
+      context.stroke();
+      context.setLineDash([]);
+      context.globalAlpha = 1;
+    }
     const g = layer.text.length ? this.geometry(e) : null;
     const [from, to] = this.range(e);
     const polygon = (rect: Rect) => {
       if (!g) return;
-      const points = [{ x: rect.x, y: rect.y }, { x: rect.x + rect.width, y: rect.y }, { x: rect.x + rect.width, y: rect.y + rect.height },
-        { x: rect.x, y: rect.y + rect.height }].map((p) => view(apply(g.toDocument, p)));
+      // Layout rectangles bend with text on a path or a warp.
+      const points = g.polygon(rect).map((p) => view(apply(g.toDocument, p)));
       context.beginPath();
       points.forEach((p, i) => (i ? context.lineTo(p.x, p.y) : context.moveTo(p.x, p.y)));
       context.closePath();
@@ -867,6 +1054,29 @@ export class TextEditor {
       }
     }
     this.positionOnly();
+  }
+
+  /** Text on a path: the path itself and its start (circle) and end (bar) markers, as Photoshop shows them. */
+  private paintPath(context: CanvasRenderingContext2D, layer: TextLayer, view: (p: Point) => Point, accent: string): void {
+    const points = textPathPolyline(layer).map(view);
+    context.beginPath();
+    points.forEach((p, i) => (i ? context.lineTo(p.x, p.y) : context.moveTo(p.x, p.y)));
+    context.strokeStyle = 'rgba(255,255,255,0.85)'; context.lineWidth = 3; context.stroke();
+    context.strokeStyle = accent; context.lineWidth = 1.25; context.stroke();
+    const markers = textPathMarkers(layer);
+    if (!markers) return;
+    for (const [which, marker] of [['start', markers.start], ['end', markers.end]] as const) {
+      const p = view(marker.point), n = marker.normal;
+      context.beginPath();
+      context.moveTo(p.x - n.x * 9, p.y - n.y * 9); context.lineTo(p.x + n.x * 9, p.y + n.y * 9);
+      context.strokeStyle = 'rgba(255,255,255,0.9)'; context.lineWidth = 3.5; context.stroke();
+      context.strokeStyle = accent; context.lineWidth = 1.5; context.stroke();
+      context.beginPath();
+      if (which === 'start') context.arc(p.x, p.y, 4, 0, Math.PI * 2);
+      else context.rect(p.x - 3.5, p.y - 3.5, 7, 7);
+      context.fillStyle = '#fff'; context.fill();
+      context.strokeStyle = accent; context.lineWidth = 1.5; context.stroke();
+    }
   }
 
   private positionOnly(): void {

@@ -12,6 +12,10 @@ describe('editor profiles (PRODUCT-PLAN sections 1, 5, 6 and A10)', () => {
     expect(EDITOR_PROFILES.lite.aiModels).toEqual(['fast', 'best']);
     expect(EDITOR_PROFILES.pro.aiModels).toEqual(['fast', 'best']);
     expect(profileHasFeature(EDITOR_PROFILES.lite, 'raw', { codecs: { version: 1 } })).toBe(false);
+    expect(profileHasFeature(EDITOR_PROFILES.lite, 'softproof')).toBe(false);
+    expect(profileHasFeature(EDITOR_PROFILES.lite, 'cmyk-export')).toBe(false);
+    expect(profileHasFeature(EDITOR_PROFILES.pro, 'softproof')).toBe(true);
+    expect(profileHasFeature(EDITOR_PROFILES.pro, 'cmyk-export')).toBe(true);
   });
 
   it('gates host-dependent Pro features by capability version', () => {

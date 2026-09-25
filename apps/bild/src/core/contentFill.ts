@@ -31,12 +31,19 @@ interface InternalState extends ContentFillState {
   readonly coverage: Uint8Array;
   readonly sourceRect: Rect;
   readonly kernels: KernelClient;
+  readonly inference: ContentFillInference | null;
   generation: number;
   job: KernelJob<Uint8Array> | null;
+  abort: AbortController | null;
   pending: Promise<Raster | null> | null;
 }
 
-export interface ContentFillOptions { readonly kernels?: KernelClient }
+export interface ContentFillInference {
+  run(rgba: Uint8Array, mask: Uint8Array, width: number, height: number, signal?: AbortSignal): Promise<Uint8Array>;
+}
+
+export interface ContentFillOptions { readonly kernels?: KernelClient; readonly inference?: ContentFillInference }
+export interface ContentFillApplyOptions { readonly newLayer?: boolean }
 
 export interface RetouchCommand {
   enabled(): boolean;
@@ -86,8 +93,10 @@ export function beginContentAwareFill(session: EditorSession, options: ContentFi
       coverage,
       sourceRect: grown.sourceRect,
       kernels: options.kernels ?? clientFor(session),
+      inference: options.inference ?? null,
       generation: 0,
       job: null,
+      abort: null,
       pending: null,
     };
     states.set(session, state);
@@ -106,25 +115,32 @@ export function previewContentAwareFill(session: EditorSession): Promise<Raster 
   const state = states.get(session);
   if (!state || state.phase === 'cancelled' || state.phase === 'applied' || state.phase === 'applying') return Promise.resolve(null);
   if (state.job) state.kernels.cancel(state.job.id);
+  state.abort?.abort(); state.abort = null;
   const generation = ++state.generation;
   state.phase = 'preparing'; state.error = null;
   const width = state.grownRaster.width, height = state.grownRaster.height;
-  const source = premultiplyRgba8InPlace(state.grownRaster.toPixels());
-  const job = state.kernels.contentFill(source, width * 4, state.coverage, width, width, height);
-  state.job = job;
-  const pending = job.then((filled) => {
+  const original = state.grownRaster.toPixels(), source = premultiplyRgba8InPlace(original.slice());
+  const abort = state.inference ? new AbortController() : null;
+  state.abort = abort;
+  const operation: Promise<Uint8Array> = state.inference
+    ? state.inference.run(original.slice(), state.coverage.slice(), width, height, abort?.signal)
+    : (state.job = state.kernels.contentFill(source, width * 4, state.coverage, width, width, height));
+  const pending = operation.then((filled) => {
     if (!isCurrent(session, state, generation)) { discardStale(session, state, generation); return null; }
-    const pixels = state.grownRaster.format === 'rgba16'
-      ? blendSelection16(state.grownRaster.toPixels16(), filled, state.coverage)
-      : unpremultiplyRgba8InPlace(blendSelection(source, filled, state.coverage));
+    if (filled.length !== width * height * 4) throw new Error('The fill engine returned the wrong image size.');
+    const pixels = state.inference
+      ? (state.grownRaster.format === 'rgba16' ? blendSelection16Straight(state.grownRaster.toPixels16(), filled, state.coverage)
+        : blendSelectionStraight(original, filled, state.coverage))
+      : (state.grownRaster.format === 'rgba16' ? blendSelection16(state.grownRaster.toPixels16(), filled, state.coverage)
+        : unpremultiplyRgba8InPlace(blendSelection(source, filled, state.coverage)));
     const raster = Raster.fromPixels(width, height, 4, pixels, { format: state.grownRaster.format });
-    state.previewRaster = raster; state.phase = 'ready'; state.error = null; state.job = null; state.pending = null;
+    state.previewRaster = raster; state.phase = 'ready'; state.error = null; state.job = null; state.abort = null; state.pending = null;
     session.rasterOverrides.set(state.layerId, raster);
     session.notify('document');
     return raster;
   }, (error: unknown) => {
     if (!isCurrent(session, state, generation)) { discardStale(session, state, generation); return null; }
-    state.job = null; state.pending = null;
+    state.job = null; state.abort = null; state.pending = null;
     if (!(error instanceof KernelCancelledError)) {
       state.phase = 'error'; state.error = contentFillError(error); session.rasterOverrides.delete(state.layerId);
       session.notify('document');
@@ -137,7 +153,7 @@ export function previewContentAwareFill(session: EditorSession): Promise<Raster 
 }
 
 /** Commits the prepared preview as one undo step. An errored edit remains open, matching FilterEdit. */
-export async function applyContentAwareFill(session: EditorSession): Promise<boolean> {
+export async function applyContentAwareFill(session: EditorSession, options: ContentFillApplyOptions = {}): Promise<boolean> {
   const state = states.get(session);
   if (!state || state.phase === 'cancelled' || state.phase === 'applied' || state.phase === 'applying') return false;
   if (state.pending) await state.pending;
@@ -151,6 +167,16 @@ export async function applyContentAwareFill(session: EditorSession): Promise<boo
   }
   state.phase = 'applying'; session.isProjectBusy = true; session.notify('ui');
   try {
+    if (options.newLayer) {
+      const patch = selectedPatch(state.previewRaster, state.coverage);
+      session.rasterOverrides.delete(state.layerId);
+      session.adjustmentEditingId = null;
+      const added = session.addPixelLayer(patch, state.grownTransform.origin, session.label('Removed'), 'Remove', true,
+        state.grownTransform);
+      if (!added) return false;
+      state.phase = 'applied'; states.delete(session);
+      return true;
+    }
     const constrained = session.constrainLayerPixels(current.id, state.previewRaster, state.grownTransform);
     if (!constrained) return false;
     let mask = current.mask;
@@ -178,6 +204,7 @@ export function cancelContentAwareFill(session: EditorSession): boolean {
   if (!state || state.phase === 'applying') return false;
   state.generation++;
   if (state.job) state.kernels.cancel(state.job.id);
+  state.abort?.abort(); state.abort = null;
   state.job = null; state.pending = null; state.phase = 'cancelled';
   session.rasterOverrides.delete(state.layerId);
   if (session.adjustmentEditingId === state.layerId) session.adjustmentEditingId = null;
@@ -208,7 +235,7 @@ function isCurrent(session: EditorSession, state: InternalState, generation: num
 
 function discardStale(session: EditorSession, state: InternalState, generation: number): void {
   if (states.get(session) !== state || state.generation !== generation) return;
-  state.phase = 'cancelled'; state.job = null; state.pending = null;
+  state.phase = 'cancelled'; state.job = null; state.abort?.abort(); state.abort = null; state.pending = null;
   session.rasterOverrides.delete(state.layerId);
   if (session.adjustmentEditingId === state.layerId) session.adjustmentEditingId = null;
   states.delete(session); session.notify('document');
@@ -277,6 +304,35 @@ function blendSelection(original: Uint8Array, filled: Uint8Array, coverage: Uint
     for (let c = 0; c < 4; c++) output[p + c] = Math.round(filled[p + c]! * amount + original[p + c]! * inverse);
   }
   return output;
+}
+
+function blendSelectionStraight(original: Uint8Array, filled: Uint8Array, coverage: Uint8Array): Uint8Array {
+  const output = original.slice();
+  for (let i = 0; i < coverage.length; i++) {
+    const amount = coverage[i]! / 255, inverse = 1 - amount, p = i * 4;
+    for (let c = 0; c < 4; c++) output[p + c] = Math.round(filled[p + c]! * amount + original[p + c]! * inverse);
+  }
+  return output;
+}
+
+function blendSelection16Straight(original: Uint16Array, filled: Uint8Array, coverage: Uint8Array): Uint16Array {
+  const output = original.slice();
+  for (let i = 0; i < coverage.length; i++) {
+    const amount = coverage[i]! / 255, inverse = 1 - amount, p = i * 4;
+    for (let c = 0; c < 4; c++) output[p + c] = Math.round(filled[p + c]! * 257 * amount + original[p + c]! * inverse);
+  }
+  return output;
+}
+
+function selectedPatch(raster: Raster, coverage: Uint8Array): Raster {
+  if (raster.format === 'rgba16') {
+    const pixels = raster.toPixels16();
+    for (let i = 0; i < coverage.length; i++) pixels[i * 4 + 3] = Math.round(pixels[i * 4 + 3]! * coverage[i]! / 255);
+    return Raster.fromPixels(raster.width, raster.height, 4, pixels, { format: 'rgba16' });
+  }
+  const pixels = raster.toPixels();
+  for (let i = 0; i < coverage.length; i++) pixels[i * 4 + 3] = Math.round(pixels[i * 4 + 3]! * coverage[i]! / 255);
+  return Raster.fromPixels(raster.width, raster.height, 4, pixels);
 }
 
 /** Keep untouched RGBA16 samples exact while blending the upstream RGBA8 synthesis in premultiplied space. */

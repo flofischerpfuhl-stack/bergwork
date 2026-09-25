@@ -1,3 +1,5 @@
+import { validBrushDynamics, validBrushTip, type BrushDynamics, type BrushTip } from './tip';
+
 export type BrushMode = 'paint' | 'erase' | 'dodge' | 'burn' | 'sponge';
 export type BrushRange = 'shadows' | 'midtones' | 'highlights';
 export type SpongeMode = 'saturate' | 'desaturate';
@@ -16,6 +18,10 @@ export interface BrushSettings {
   readonly spongeMode?: SpongeMode;
   readonly flow?: number;
   readonly vibrance?: boolean;
+  /** Tip shape (PRODUCT-PLAN 6.3); absent is the round tip of `diameter`/`hardness`. */
+  readonly tip?: BrushTip;
+  /** Spacing, flow, jitter and scatter; absent is the continuous stroke. */
+  readonly dynamics?: BrushDynamics;
 }
 
 export const DEFAULT_BRUSH_SETTINGS: BrushSettings = {
@@ -52,7 +58,9 @@ export function validateBrushSettings(settings: BrushSettings): void {
     || !['saturate', 'desaturate'].includes(settings.spongeMode ?? 'saturate')
     || !Number.isFinite(settings.flow ?? 0.5) || (settings.flow ?? 0.5) < 0.01 || (settings.flow ?? 0.5) > 1
     || (settings.vibrance !== undefined && typeof settings.vibrance !== 'boolean')
-    || colour.some((value) => !Number.isFinite(value) || value < 0 || value > 1)) {
+    || colour.some((value) => !Number.isFinite(value) || value < 0 || value > 1)
+    || (settings.tip !== undefined && !validBrushTip(settings.tip))
+    || (settings.dynamics !== undefined && !validBrushDynamics(settings.dynamics))) {
     throw new RangeError('Invalid brush settings');
   }
 }

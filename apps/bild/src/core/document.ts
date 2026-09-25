@@ -20,6 +20,7 @@ export type {
   LayerShape, LegacyTextRun, LiveFilter, PixelLayer, TextLayer, TextParagraph, TextParagraphStyle, TextRun, TextRunStyle,
   TextKerning, TextOpenTypeFeature, VectorLayer, VectorMask, VectorPath, VectorStyle, LayerWarp, WarpMesh, WarpQuad,
 } from './model';
+export type { TextOnPath, TextWarp, TextWarpStyle } from './model';
 
 /** Compatibility type for the legacy UI icon registry; engine records use `LayerAdjustmentKind`. */
 export type AdjustmentKind = string;
@@ -158,6 +159,8 @@ export interface NewLayerFields {
   box?: { readonly width: number; readonly height: number } | null;
   alignment?: 'left' | 'center' | 'right' | 'justify';
   renderedTransform?: LayerTransform | null;
+  textPath?: import('./model').TextOnPath | null;
+  textWarp?: import('./model').TextWarp | null;
   content?: EmbeddedLayer['content'];
 }
 
@@ -231,7 +234,8 @@ export function newLayer(fields: NewLayerFields): import('./model').ModelLayer {
       const alignment = fields.alignment ?? 'left';
       return { ...base, kind, raster: fields.raster ?? null, text, runs: normalizeTextRuns(text, fields.runs ?? []),
         paragraphs: fields.paragraphs ?? defaultTextParagraphs(text, alignment), box: fields.box ?? null, alignment,
-        renderedTransform: fields.renderedTransform ?? null };
+        renderedTransform: fields.renderedTransform ?? null,
+        ...(fields.textPath ? { textPath: fields.textPath } : {}), ...(fields.textWarp ? { textWarp: fields.textWarp } : {}) };
     }
     case 'embedded': return { ...base, kind, raster: fields.raster ?? null,
       content: fields.content ?? { mode: 'embedded', mediaType: 'image', sourceName: '' } };
@@ -274,7 +278,8 @@ function kindPayload(layer: Layer): unknown {
     case 'vector': { const value = model as import('./model').VectorLayer;
       return { paths: value.paths, style: value.style, sourceShape: value.sourceShape }; }
     case 'text': { const value = model as import('./model').TextLayer; return { text: value.text, runs: value.runs,
-      paragraphs: value.paragraphs, box: value.box, alignment: value.alignment, renderedTransform: value.renderedTransform }; }
+      paragraphs: value.paragraphs, box: value.box, alignment: value.alignment, renderedTransform: value.renderedTransform,
+      textPath: value.textPath ?? null, textWarp: value.textWarp ?? null }; }
     case 'embedded': return (model as import('./model').EmbeddedLayer).content;
     default: return null;
   }

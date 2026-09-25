@@ -30,6 +30,7 @@ import { translated } from './canvasOps';
 import { selectionBounds } from './selectionOps';
 import { Raster } from './raster';
 import { CanvasViewport } from './viewport';
+import type { CmykLut, CmykProfile, ProofOptions } from './color/cmyk';
 import { defaultAdjustment } from './adjustments';
 import { cancelShape, redrawShapeLayer } from './shape';
 import { vectorLayerWithTransform } from './vector/transform';
@@ -158,6 +159,12 @@ export class EditorSession {
   perspectiveConstrained = false;
   showsTransformControls = true;
   showsPixelGrid = true;
+  /** Display-only CMYK proof state. It is deliberately not serialized into the RGB document. */
+  proofProfile: CmykProfile | null = null;
+  proofOptions: ProofOptions = { intent: 'perceptual', blackPointCompensation: true, simulatePaperWhite: false };
+  proofLut: CmykLut | null = null;
+  proofColors = false;
+  gamutWarning = false;
   blendPreview: { layerId: string; mode: BlendMode } | null = null;
   opacityEditLayerId: string | null = null;
   fillOpacityEditLayerIds: readonly string[] | null = null;
@@ -1419,7 +1426,8 @@ export class EditorSession {
     return this.derivedPixels(layer)?.transform ?? layer.transform;
   }
   private derivedPlacement(layer: Layer, transform: LayerTransform): LayerTransform {
-    if (layer.kind !== 'vector') return transform;
+    // Vector strokes, and text on a path or warped text, draw beyond the box the layer is placed by.
+    if (layer.kind !== 'vector' && !(layer.kind === 'text' && (layer.textPath || layer.textWarp))) return transform;
     for (const place of derivedPlacements) {
       const placed = place(this, layer, transform);
       if (placed) return placed;
@@ -2119,12 +2127,13 @@ export class EditorSession {
     this.edit(name, () => this.updateLayer(id, (l) => ({ ...l, mask: { ...l.mask!, raster } })));
   }
   /** Inserts pixels as a new layer above the active one (addPixelLayer). */
-  addPixelLayer(raster: Raster, origin: Point, name: string, editName: string, dropsSelection = true): string | null {
+  addPixelLayer(raster: Raster, origin: Point, name: string, editName: string, dropsSelection = true,
+    transform?: LayerTransform): string | null {
     const document = this.document;
     if (!document) return null;
     const active = this.activeLayer;
     const layer = newLayer({ id: uuid(), name, raster,
-      transform: makeTransform(origin, { width: raster.width, height: raster.height }),
+      transform: transform ?? makeTransform(origin, { width: raster.width, height: raster.height }),
       parentId: active?.kind === 'group' ? this.activeLayerId : active?.parentId ?? null });
     const index = document.layers.findIndex((l) => l.id === this.activeLayerId);
     this.finishOpacityEdit();

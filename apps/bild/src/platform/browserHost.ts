@@ -48,9 +48,34 @@ const PICKER_TYPES = {
   avif: { description: 'AVIF image', accept: { 'image/avif': ['.avif'] } },
   tiff: { description: 'TIFF image', accept: { 'image/tiff': ['.tif', '.tiff'] } },
   zip: { description: 'Exported images (ZIP)', accept: { 'application/zip': ['.zip'] } },
+  recipe: { description: 'Fernwork recipe', accept: { 'application/json': ['.fwrecipe'] } },
 } as const;
 
 interface HandleTarget extends SaveTarget { readonly handle: FileSystemFileHandle }
+interface DirectoryTarget { readonly name: string; readonly handle: FileSystemDirectoryHandle }
+type ShowDirectoryPicker = (options: { id?: string; mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>;
+
+/** File types File › Batch… accepts: images, PSDs and the editor's own projects. */
+const BATCH_TYPES = [{ description: 'Images and projects', accept: {
+  'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.avif', '.gif', '.tif', '.tiff', '.heic', '.heif'],
+  'image/vnd.adobe.photoshop': ['.psd', '.psb'], 'application/zip': ['.fwimg'],
+} }];
+
+/** Writes a file into a directory handle under `name`, or `name 2`, `name 3`… when that exists (never overwrites). */
+async function writeIntoDirectory(directory: FileSystemDirectoryHandle, name: string, blob: Blob): Promise<string> {
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name, extension = dot > 0 ? name.slice(dot) : '';
+  const exists = async (candidate: string) => {
+    try { await directory.getFileHandle(candidate); return true; } catch (error) {
+      if ((error as DOMException).name === 'NotFoundError') return false;
+      throw error;
+    }
+  };
+  let candidate = name;
+  for (let n = 2; await exists(candidate); n++) candidate = `${stem} ${n}${extension}`;
+  await writeHandle(await directory.getFileHandle(candidate, { create: true }), blob);
+  return candidate;
+}
 
 interface LocalFontData { readonly family: string; readonly fullName: string; readonly postscriptName: string; blob(): Promise<Blob> }
 type QueryLocalFonts = () => Promise<readonly LocalFontData[]>;
@@ -157,6 +182,7 @@ export function createBrowserHost(): FileTargetHost {
   const pickerFunction = (globalThis as { showSaveFilePicker?: (options: unknown) => Promise<FileSystemFileHandle> }).showSaveFilePicker;
   const picker = pickerFunction?.bind(globalThis);
   const openFunction = (globalThis as { showOpenFilePicker?: (options: unknown) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker?.bind(globalThis);
+  const directoryFunction = (globalThis as { showDirectoryPicker?: ShowDirectoryPicker }).showDirectoryPicker?.bind(globalThis);
   const listeners = new Set<(files: readonly { name: string; id: string }[]) => void>();
   const recent: { name: string; id: string }[] = [];
   const openHandles = new Map<string, FileSystemFileHandle>();
@@ -177,7 +203,9 @@ export function createBrowserHost(): FileTargetHost {
     async chooseFiles(kind) {
       let handles: FileSystemFileHandle[];
       try {
-        handles = await openFunction({ multiple: kind === 'images', types: kind === 'project' ? [PICKER_TYPES.project]
+        handles = await openFunction({ multiple: kind === 'images' || kind === 'batch', types: kind === 'batch' ? BATCH_TYPES
+          : kind === 'project' ? [PICKER_TYPES.project]
+          : kind === 'brushes' ? [{ description: 'Photoshop brushes', accept: { 'application/octet-stream': ['.abr'] } }]
           : kind === 'content' ? [{ description: 'Placeable content', accept: {
             'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.avif', '.gif', '.tif', '.tiff', '.heic', '.heif', '.svg'],
             'application/pdf': ['.pdf'], 'application/zip': ['.fwimg'],
@@ -193,6 +221,15 @@ export function createBrowserHost(): FileTargetHost {
     onOpenFiles(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     async readFile(file) { const handle = openHandles.get(file.id); if (!handle) throw new Error('The browser file handle has expired.'); return handle.getFile(); },
     saveTargetFor(file) { const handle = openHandles.get(file.id); return handle ? { name: file.name, handle } as HandleTarget : null; },
+    ...(directoryFunction ? {
+      async chooseFolder() {
+        try {
+          const handle = await directoryFunction({ id: 'fernwork-batch', mode: 'readwrite' });
+          return { name: handle.name, handle } as DirectoryTarget;
+        } catch (error) { if ((error as DOMException).name === 'AbortError') return null; throw error; }
+      },
+      writeFileInFolder: (folder, name, blob) => writeIntoDirectory((folder as DirectoryTarget).handle, name, blob),
+    } satisfies Pick<FileSystemHost, 'chooseFolder' | 'writeFileInFolder'> : {}),
   } : undefined;
   const codecs: CodecHost = { version: 1 };
   const capabilities: HostCapabilityMap = {

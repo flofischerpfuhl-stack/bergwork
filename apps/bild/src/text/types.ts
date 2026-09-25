@@ -93,13 +93,56 @@ export interface ParagraphMetrics {
   readonly unresolvedCodepoints: readonly number[];
 }
 
+/** One shaped glyph run of a line: glyph ids and positions exactly as SkParagraph placed them (kerning, ligatures). */
+export interface ShapedGlyphRun {
+  readonly size: number;
+  readonly glyphs: Uint16Array;
+  /** Layout coordinates, x/y per glyph plus one more pair for the position after the last glyph. */
+  readonly positions: Float32Array;
+  /** UTF-16 offsets per glyph plus the end offset; glyphs of one cluster share their offset. */
+  readonly offsets: Uint32Array;
+  /** Ink bounds per glyph relative to its origin: left, top, right, bottom. */
+  readonly bounds: Float32Array;
+}
+
+export interface ShapedTextLine {
+  /** UTF-16 range of the line's text. */
+  readonly from: number;
+  readonly to: number;
+  readonly top: number;
+  readonly bottom: number;
+  readonly baseline: number;
+  readonly runs: readonly ShapedGlyphRun[];
+}
+
 /** A layout owns a small CanvasKit paragraph allocation until `dispose()` is called. */
 export interface ParagraphLayout extends ParagraphMetrics {
   readonly request: ParagraphRequest;
   caretIndexAt(x: number, y: number): number;
   selectionRects(from: number, to: number): readonly TextRect[];
   caretRect(index: number): TextRect;
+  /** Shaped lines in layout coordinates (text on a path and warped text place these glyphs themselves). */
+  shapedLines(): readonly ShapedTextLine[];
   dispose(): void;
+}
+
+/** Glyphs `from…to` of one shaped run, drawn through an affine placement (text on a path, warp mesh). */
+export interface GlyphDraw {
+  readonly line: number;
+  readonly run: number;
+  readonly from: number;
+  readonly to: number;
+  /** Affine `[a, b, c, d, tx, ty]` from layout coordinates to raster pixels: x' = a·x + c·y + tx, y' = b·x + d·y + ty. */
+  readonly matrix: readonly [number, number, number, number, number, number];
+  readonly color: RgbaColor;
+  /** Optional clip polygon in raster pixels (x, y pairs), applied without antialiasing so adjacent pieces tile exactly. */
+  readonly clip?: readonly number[];
+}
+
+export interface GlyphRasterRequest {
+  readonly width: number;
+  readonly height: number;
+  readonly draws: readonly GlyphDraw[];
 }
 
 export interface RasterizedOutput {
@@ -157,6 +200,8 @@ export interface TextEngine {
   registerFont(registration: FontRegistration): RegisteredFont;
   layoutParagraph(request: ParagraphRequest): ParagraphLayout;
   rasterizeParagraph(layout: ParagraphLayout, padding?: number): RasterizedOutput;
+  /** Draws shaped glyphs of `layout` with per-piece placements, from their outlines at the raster's resolution. */
+  rasterizeGlyphs(layout: ParagraphLayout, request: GlyphRasterRequest): RasterizedOutput;
   combinePaths(firstSvg: string, secondSvg: string, operation: PathOperation): string;
   rasterizePath(request: PathRasterRequest): RasterizedOutput;
   memoryUsage(): TextEngineMemory;

@@ -1,7 +1,7 @@
 /**
- * Baseline TIFF writer for exports: chunky RGB/RGBA, 8 or 16 bits per sample, unassociated alpha
- * (ExtraSamples = 2, matching the straight-alpha pipeline), Adobe Deflate (8) with the horizontal
- * predictor or uncompressed, resolution tags, an optional ICC profile (tag 34675) and creator tags.
+ * Baseline TIFF writer for exports: chunky RGB/RGBA or CMYK, 8 or 16 bits per sample, unassociated
+ * alpha (ExtraSamples = 2, matching the straight-alpha pipeline), LZW/Adobe Deflate/uncompressed,
+ * resolution tags, an optional ICC profile (tag 34675) and creator tags.
  * Little-endian ("II"), one IFD, strips of about 256 KB of raw samples.
  */
 
@@ -11,7 +11,8 @@ import { infoTags, type ExportInfo } from './exportMetadata';
 export interface TiffEncodeOptions {
   /** Write the alpha channel (RGBA) or drop it (RGB; the caller has flattened onto a matte). */
   readonly alpha: boolean;
-  readonly compression?: 'deflate' | 'none';
+  readonly colorModel?: 'rgb' | 'cmyk';
+  readonly compression?: 'lzw' | 'deflate' | 'none';
   readonly level?: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
   readonly dpi?: number | null;
   readonly iccProfile?: Uint8Array | null;
@@ -26,10 +27,13 @@ export function encodeTiff(data: Uint8Array | Uint16Array, width: number, height
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new RangeError('Invalid TIFF size');
   if (data.length !== width * height * 4) throw new RangeError('TIFF pixels must be RGBA');
   const bits = data instanceof Uint16Array ? 16 : 8;
-  const samples = options.alpha ? 4 : 3;
+  const cmyk = options.colorModel === 'cmyk';
+  if (cmyk && options.alpha) throw new RangeError('CMYK TIFF does not support an alpha channel.');
+  const samples = cmyk || options.alpha ? 4 : 3;
   const bytesPerSample = bits / 8;
   const rowBytes = width * samples * bytesPerSample;
-  const deflate = (options.compression ?? 'deflate') === 'deflate';
+  const compression = options.compression ?? 'deflate';
+  const deflate = compression === 'deflate', lzw = compression === 'lzw';
   const rowsPerStrip = Math.max(1, Math.min(height, Math.floor((256 * 1024) / rowBytes)));
   const strips: Uint8Array[] = [];
   for (let y = 0; y < height; y += rowsPerStrip) {
@@ -41,13 +45,13 @@ export function encodeTiff(data: Uint8Array | Uint16Array, width: number, height
       for (let x = 0; x < width; x++) {
         for (let s = 0; s < samples; s++) {
           let value = data[source + x * 4 + s]!;
-          if (deflate && x > 0) value -= data[source + (x - 1) * 4 + s]!;
+          if ((deflate || lzw) && x > 0) value -= data[source + (x - 1) * 4 + s]!;
           const at = target + (x * samples + s) * bytesPerSample;
           if (bits === 16) view.setUint16(at, value & 0xffff, true); else raw[at] = value & 255;
         }
       }
     }
-    strips.push(deflate ? zlibSync(raw, { level: options.level ?? 6 }) : raw);
+    strips.push(deflate ? zlibSync(raw, { level: options.level ?? 6 }) : lzw ? lzwEncode(raw) : raw);
   }
 
   // Layout: header, strips, IFD, out-of-line tag values.
@@ -64,8 +68,8 @@ export function encodeTiff(data: Uint8Array | Uint16Array, width: number, height
   add(256, LONG, 1, longs([width]));
   add(257, LONG, 1, longs([height]));
   add(258, SHORT, samples, shorts(new Array(samples).fill(bits)));
-  add(259, SHORT, 1, shorts([deflate ? 8 : 1]));
-  add(262, SHORT, 1, shorts([2]));
+  add(259, SHORT, 1, shorts([deflate ? 8 : lzw ? 5 : 1]));
+  add(262, SHORT, 1, shorts([cmyk ? 5 : 2]));
   add(273, LONG, strips.length, longs(stripOffsets));
   add(277, SHORT, 1, shorts([samples]));
   add(278, LONG, 1, longs([rowsPerStrip]));
@@ -76,7 +80,7 @@ export function encodeTiff(data: Uint8Array | Uint16Array, width: number, height
   }
   add(284, SHORT, 1, shorts([1]));
   if (options.info) for (const [tag, value] of infoTags(options.info)) { const b = ascii(value); add(tag, ASCII, b.length, b); }
-  if (deflate) add(317, SHORT, 1, shorts([2]));
+  if (deflate || lzw) add(317, SHORT, 1, shorts([2]));
   if (options.alpha) add(338, SHORT, 1, shorts([2]));
   if (options.iccProfile) add(34675, UNDEFINED, options.iccProfile.length, options.iccProfile);
   tags.sort((a, b) => a.tag - b.tag);
@@ -103,4 +107,30 @@ export function encodeTiff(data: Uint8Array | Uint16Array, width: number, height
   });
   view.setUint32(ifdAt + 2 + tags.length * 12, 0, true);
   return out;
+}
+
+/** A bounded TIFF 6.0 early-change LZW stream. Literal codes are intentional: predictor 2 does
+ * most of the work for continuous-tone rows and this keeps the writer compact and deterministic. */
+function lzwEncode(raw: Uint8Array): Uint8Array {
+  const output: number[] = [];
+  let byte = 0, used = 0, codeSize = 9, nextCode = 258, previous = false;
+  const write = (code: number): void => {
+    for (let bit = codeSize - 1; bit >= 0; bit--) {
+      byte = (byte << 1) | ((code >>> bit) & 1); used++;
+      if (used === 8) { output.push(byte); byte = 0; used = 0; }
+    }
+  };
+  const clear = (): void => { write(256); codeSize = 9; nextCode = 258; previous = false; };
+  clear();
+  for (const value of raw) {
+    write(value);
+    if (previous) {
+      nextCode++;
+      if (nextCode === (1 << codeSize) - 1 && codeSize < 12) codeSize++;
+      if (nextCode === 4096) clear();
+    } else previous = true;
+  }
+  write(257);
+  if (used) output.push(byte << (8 - used));
+  return Uint8Array.from(output);
 }

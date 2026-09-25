@@ -1,7 +1,7 @@
 export type {
-  FillPaint, FontFeature, FontRegistration, FontVariation, LinearGradientPaint, LoadTextEngineOptions,
+  FillPaint, FontFeature, FontRegistration, FontVariation, GlyphDraw, GlyphRasterRequest, LinearGradientPaint, LoadTextEngineOptions,
   ParagraphBlock, ParagraphLayout, ParagraphMetrics, ParagraphRequest, ParagraphSpan, PathOperation, PathRasterRequest, RasterizedOutput,
-  RegisteredFont, RgbaColor, SolidPaint, StrokePaint, TextAlignment, TextDirection, TextEngine, TextEngineMemory,
+  RegisteredFont, RgbaColor, ShapedGlyphRun, ShapedTextLine, SolidPaint, StrokePaint, TextAlignment, TextDirection, TextEngine, TextEngineMemory,
   TextRect,
 } from './types';
 

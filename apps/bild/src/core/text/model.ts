@@ -154,5 +154,10 @@ export function scaleTextWithTransform(layer: Layer, previous: LayerTransform): 
     firstLineIndent: paragraph.style.firstLineIndent * factor, startIndent: paragraph.style.startIndent * factor,
     endIndent: paragraph.style.endIndent * factor, spaceBefore: paragraph.style.spaceBefore * factor, spaceAfter: paragraph.style.spaceAfter * factor } }));
   const box = layer.box ? { width: layer.box.width * sx, height: layer.box.height * sy } : null;
-  return { ...layer, runs, paragraphs, box, raster: null, renderedTransform: null };
+  // Text on a path: its path lives in frame pixels, so it scales with the frame (the glyphs by the type size above).
+  const scalePoint = (point: { x: number; y: number }) => ({ x: point.x * sx, y: point.y * sy });
+  const textPath = layer.textPath ? { ...layer.textPath, baselineOffset: layer.textPath.baselineOffset * factor,
+    path: { ...layer.textPath.path, points: layer.textPath.path.points.map((point) => ({ ...point,
+      anchor: scalePoint(point.anchor), in: scalePoint(point.in), out: scalePoint(point.out) })) } } : layer.textPath;
+  return { ...layer, runs, paragraphs, box, raster: null, renderedTransform: null, ...(textPath ? { textPath } : {}) };
 }

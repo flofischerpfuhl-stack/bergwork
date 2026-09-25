@@ -217,7 +217,8 @@ export class CanvasView implements CanvasHost {
           };
           composite = gpu.composite(document, view, this.hooks(session));
         }
-        gpu.present(composite, width, height, device, dpr, session.showsPixelGrid && viewport.zoom >= 8, dpr * ppp, { x: x0, y: y0 });
+        const proof = session.proofColors && session.proofLut ? { lut: session.proofLut, gamutWarning: session.gamutWarning } : undefined;
+        gpu.present(composite, width, height, device, dpr, session.showsPixelGrid && viewport.zoom >= 8, dpr * ppp, { x: x0, y: y0 }, proof);
         if (composite) gpu.releaseTarget(composite);
       }
     }
@@ -346,6 +347,7 @@ export class CanvasView implements CanvasHost {
     return {
       session, point, pixel, modifiers, pointerType: event.pointerType, distortArmed: this.distortArmed,
       pressure: event.pointerType === 'pen' ? event.pressure : null,
+      tilt: event.pointerType === 'pen' ? penTilt(event) : null,
       redraw: () => this.redraw(),
       setCursor: (cursor) => { this.element.style.cursor = cursor; },
     };
@@ -567,4 +569,11 @@ export class CanvasView implements CanvasHost {
       session.notify('view');
     }
   };
+}
+
+/** Pen altitude as 0 (lying flat)…1 (upright), from altitudeAngle where supported, else tiltX/tiltY. */
+function penTilt(event: PointerEvent): number {
+  const altitude = (event as PointerEvent & { altitudeAngle?: number }).altitudeAngle;
+  if (typeof altitude === 'number' && Number.isFinite(altitude)) return Math.min(1, Math.max(0, altitude / (Math.PI / 2)));
+  return 1 - Math.min(90, Math.hypot(event.tiltX || 0, event.tiltY || 0)) / 90;
 }
