@@ -1,4 +1,4 @@
-# PSD native-fidelity report — fourth round
+# PSD native-fidelity report — fifth round
 
 Corpus: psd-tools commit `30bf79c2a88e0fc63104ee85713e23b04362153d`; 300 PSD/PSB files. ag-psd 31.0.2 plus native non-RGB layer-channel decoding.
 
@@ -7,49 +7,44 @@ alpha (so undefined straight RGB below transparency is ignored): mean over all c
 percentile. A file passes only when both limits for its primary feature folder pass.
 The runner is a measurement baseline: fidelity failures are reported but do not make the command itself fail.
 
-Overall: 300/300 parsed, 300/300 rendered, 208/300 passed (69.3%).
-The Product Plan A7 acceptance target of at least 90% is **not met**.
+Overall: 300/300 parsed, 300/300 rendered, 215/300 passed (71.7%).
+The Product Plan A7 acceptance target of at least 90% is **not met** by this baseline.
 
-Fourth-round input: 201/300 (67.0%). Current native result: 208/300 (69.3%), a net gain of 7 files with no
-regressions. Primary-folder changes are: blend modes 28→28, adjustments 18→24, layers 32→32, effects 11→11,
-path operations 12→12, masks 0→0, group clipping 1→1, transparency 13→14, colour modes 5→5, colour profiles
-1→1, gradients 4→4, descriptors 5→5, and root 71→71. The overlapping 16/32-bit and PSB tags remain 16 and
-27 respectively.
+Fifth-round input: 208/300 (69.3%). Current native result: 215/300 (71.7%), a net gain of 7 files with no
+regressions. Primary-folder changes are: blend modes 28→28, adjustments 24→24, layers 32→32, effects 11→11,
+path operations 12→12, masks 0→0, group clipping 1→1, transparency 14→14, colour modes 5→5, colour profiles
+1→1, gradients 4→4, descriptors 5→5, and root 71→78. The overlapping 16/32-bit and PSB tags changed
+16→18 and 27→30 respectively.
 
 | Newly passing file | Before mean / p99 | After mean / p99 | Native change |
 |---|---:|---:|---|
-| adjustments/brightnesscontrast_grayscale.psd | 30.804 / 117 | 5.220 / 26 | modern Photoshop Brightness/Contrast curve |
-| adjustments/brightnesscontrast_rgb.psd | 29.224 / 149 | 2.279 / 11 | modern Photoshop Brightness/Contrast curve |
-| adjustments/curves_grayscale.psd | 17.020 / 75 | 5.177 / 29 | grayscale adjustment/CMS ordering |
-| adjustments/huesaturation_lightness_rgb.psd | 59.035 / 221 | 0.264 / 2 | channel-wise master lightness |
-| adjustments/huesaturation_rgb.psd | 17.546 / 117 | 2.354 / 34 | Photoshop range ordering and HSV lightness response |
-| adjustments/levels_grayscale.psd | 20.673 / 73 | 6.153 / 41 | grayscale adjustment/CMS ordering |
-| transparency/fill-opacity.psd | 9.542 / 204 | 1.000 / 27 | embedded pattern-overlay pass and mask default |
-
-Still-failing files also improved without crossing their folder thresholds: `brightnesscontrast_cmyk.psd`
-30.046/99→8.143/61, `fill_adjustments.psd` 25.827/200→12.319/127, `layer_effects.psd`
-6.790/103→5.413/69, `layer_mask_data.psd` 20.661/94→18.288/84, and `patterns.psd`
-9.964/105→4.277/95.
+| 0layers.psb | 254.286 / 255 | 0.714 / 0 | opaque zero-layer Photoshop canvas |
+| 0layers.psd | 254.286 / 255 | 0.714 / 0 | opaque zero-layer Photoshop canvas |
+| clipping-mask2.psd | 18.331 / 80 | 1.199 / 5 | composed -2 mask cache and absent-cache default handling |
+| slices.psb | 255.000 / 255 | 0.000 / 0 | opaque zero-layer Photoshop canvas |
+| slices.psd | 255.000 / 255 | 0.000 / 0 | opaque zero-layer Photoshop canvas |
+| transparentbg.psb | 211.124 / 255 | 0.456 / 15 | native Mt32 HDR transparency block |
+| transparentbg.psd | 211.143 / 255 | 0.458 / 15 | native Mt32 HDR transparency block |
 
 ## Thresholds and feature summary
 
 | Feature | Limits (mean / p99) | Files | Parsed | Rendered | Passed | Pass rate | Top failure causes |
 |---|---:|---:|---:|---:|---:|---:|---|
 | blend-modes | ≤ 2 / ≤ 8 | 32 | 32 | 32 | 28 | 87.5% | wrong math/order/colour conversion (4) |
-| adjustments | ≤ 8 / ≤ 64 | 39 | 39 | 39 | 24 | 61.5% | unsupported: ag-psd-parser (13); wrong math/order/colour conversion (2) |
-| layers | ≤ 2 / ≤ 16 | 36 | 36 | 36 | 32 | 88.9% | wrong math/order/colour conversion (4) |
-| effects | ≤ 8 / ≤ 64 | 15 | 15 | 15 | 11 | 73.3% | unsupported: advanced-blending (3); unsupported: ag-psd-parser (1) |
+| adjustments | ≤ 8 / ≤ 64 | 39 | 39 | 39 | 24 | 61.5% | wrong math/order/colour conversion (7); unsupported: bit-depth:16 (3); unsupported: mask-pixels (3) |
+| layers | ≤ 2 / ≤ 16 | 36 | 36 | 36 | 32 | 88.9% | wrong math/order/colour conversion (3); unsupported: text-path (1) |
+| effects | ≤ 8 / ≤ 64 | 15 | 15 | 15 | 11 | 73.3% | wrong math/order/colour conversion (3); unsupported: stroke-pattern (1) |
 | path-operations | ≤ 4 / ≤ 32 | 12 | 12 | 12 | 12 | 100.0% | — |
 | masks | ≤ 3 / ≤ 24 | 1 | 1 | 1 | 0 | 0.0% | wrong math/order/colour conversion (1) |
 | group-clipping | ≤ 3 / ≤ 24 | 1 | 1 | 1 | 1 | 100.0% | — |
-| transparency | ≤ 4 / ≤ 32 | 16 | 16 | 16 | 14 | 87.5% | unsupported: ag-psd-parser (1); unsupported: knockout (1) |
-| colormodes | ≤ 3 / ≤ 24 | 17 | 17 | 17 | 5 | 29.4% | unsupported: bit-depth:16 (4); opened flattened (layers not decoded) (2); unsupported: ag-psd-parser (2) |
+| transparency | ≤ 4 / ≤ 32 | 16 | 16 | 16 | 14 | 87.5% | unsupported: knockout (2) |
+| colormodes | ≤ 3 / ≤ 24 | 17 | 17 | 17 | 5 | 29.4% | unsupported: bit-depth:16 (4); unsupported: bit-depth:1 (3); opened flattened (layers not decoded) (2) |
 | colorprofiles | ≤ 3 / ≤ 24 | 1 | 1 | 1 | 1 | 100.0% | — |
 | gradients | ≤ 4 / ≤ 32 | 4 | 4 | 4 | 4 | 100.0% | — |
 | descriptors | ≤ 2 / ≤ 16 | 6 | 6 | 6 | 5 | 83.3% | wrong math/order/colour conversion (1) |
-| 16/32-bit | ≤ 3 / ≤ 24 | 29 | 29 | 29 | 16 | 55.2% | unsupported: ag-psd-parser (5); unsupported: bit-depth:16 (4); unsupported: bit-depth:32 (3) |
-| PSB | ≤ 2 / ≤ 16 | 37 | 37 | 37 | 27 | 73.0% | wrong math/order/colour conversion (5); unsupported: advanced-blending (2); unsupported: ag-psd-parser (1) |
-| root | ≤ 2 / ≤ 16 | 120 | 120 | 120 | 71 | 59.2% | unsupported: ag-psd-parser (14); wrong math/order/colour conversion (12); unsupported: advanced-blending (9) |
+| 16/32-bit | ≤ 3 / ≤ 24 | 29 | 29 | 29 | 18 | 62.1% | unsupported: bit-depth:16 (7); unsupported: bit-depth:32 (3); opened flattened (layers not decoded) (1) |
+| PSB | ≤ 2 / ≤ 16 | 37 | 37 | 37 | 30 | 81.1% | wrong math/order/colour conversion (5); unsupported: mask-density (1); unsupported: mask-pixels (1) |
+| root | ≤ 2 / ≤ 16 | 120 | 120 | 120 | 78 | 65.0% | wrong math/order/colour conversion (13); unsupported: mask-density (7); unsupported: mask-pixels (6) |
 
 Files in the `16/32-bit` and `PSB` rows are also counted in their feature/root row.
 
@@ -98,38 +93,36 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 
 | Impact and feature | Occurrences |
 |---|---:|
-| editability-only: ag-psd-parser | 170 |
-| editability-only: compatibility-preview | 145 |
-| not-rendered: advanced-blending | 136 |
-| not-rendered: mask-pixels | 104 |
-| approximated: mask-default | 81 |
-| not-rendered: ag-psd-parser | 80 |
+| editability-only: ag-psd-parser | 247 |
+| not-rendered: mask-pixels | 107 |
+| approximated: mask-default | 86 |
 | editability-only: lock-artboards | 72 |
+| editability-only: compatibility-preview | 70 |
 | editability-only: generated-fill-cache | 43 |
+| approximated: text-path | 40 |
+| approximated: mask-density | 23 |
 | editability-only: color-mode:1 | 20 |
 | approximated: bit-depth:32 | 17 |
-| approximated: mask-density | 17 |
 | approximated: knockout | 16 |
-| not-rendered: real-mask | 16 |
 | editability-only: color-mode:4 | 15 |
 | approximated: bit-depth:16 | 12 |
 | approximated: vector-fill:pattern | 10 |
-| not-rendered: bevel | 8 |
+| editability-only: mask-feather | 7 |
 | editability-only: artboards | 6 |
 | editability-only: flattened-composite | 6 |
 | approximated: color-mode:9 | 5 |
 | not-rendered: orphan-clipping | 5 |
 | approximated: embedded-icc | 4 |
-| editability-only: mask-feather | 4 |
+| not-rendered: advanced-blending | 4 |
 | approximated: bit-depth:1 | 3 |
 | approximated: color-mode:0 | 3 |
+| not-rendered: ag-psd-parser | 3 |
 | approximated: gradient-overlay | 2 |
 | not-rendered: adjustment:color lookup | 2 |
 | approximated: color-mode:8 | 1 |
 | editability-only: color-mode:2 | 1 |
 | editability-only: color-mode:3 | 1 |
 | editability-only: color-mode:7 | 1 |
-| not-rendered: satin | 1 |
 | not-rendered: stroke-pattern | 1 |
 
 ### ag-psd parser warnings
@@ -155,10 +148,10 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 
 | File | Primary feature | Parsed | Rendered | Pass | Mean | p99 | Max | Unsupported (non-editability) / error |
 |---|---|---:|---:|---:|---:|---:|---:|---|
-| 0layers_tblocks.psb | root | yes | yes | no | 250.166 | 255 | 255 | — |
-| 0layers_tblocks.psd | root | yes | yes | no | 250.166 | 255 | 255 | — |
-| 0layers.psb | root | yes | yes | no | 254.286 | 255 | 255 | — |
-| 0layers.psd | root | yes | yes | no | 254.286 | 255 | 255 | — |
+| 0layers_tblocks.psb | root | yes | yes | no | 4.834 | 255 | 255 | — |
+| 0layers_tblocks.psd | root | yes | yes | no | 4.834 | 255 | 255 | — |
+| 0layers.psb | root | yes | yes | yes | 0.714 | 0 | 255 | — |
+| 0layers.psd | root | yes | yes | yes | 0.714 | 0 | 255 | — |
 | 16bit5x5.psb | root | yes | yes | yes | 0.000 | 0 | 0 | bit-depth:16 |
 | 16bit5x5.psd | root | yes | yes | yes | 0.000 | 0 | 0 | bit-depth:16 |
 | 1layer.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
@@ -173,52 +166,52 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | 32bit.psd | root | yes | yes | yes | 0.000 | 0 | 0 | bit-depth:32 |
 | 32bit5x5.psb | root | yes | yes | yes | 0.000 | 0 | 0 | bit-depth:32 |
 | 32bit5x5.psd | root | yes | yes | yes | 0.000 | 0 | 0 | bit-depth:32 |
-| adjustment-fillers.psd | root | yes | yes | no | 16.930 | 255 | 255 | mask-pixels, vector-fill:pattern |
+| adjustment-fillers.psd | root | yes | yes | no | 16.930 | 255 | 255 | mask-pixels, vector-fill:pattern, text-path |
 | adjustment-mask.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
-| adjustments/adjustment_backdrop_test.psd | adjustments | yes | yes | yes | 0.921 | 17 | 26 | ag-psd-parser, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels |
-| adjustments/adjustment_clipping.psd | adjustments | yes | yes | no | 22.142 | 33 | 34 | ag-psd-parser, mask-pixels, mask-pixels, mask-pixels, mask-pixels |
-| adjustments/adjustment_nested_composition_1.psd | adjustments | yes | yes | no | 50.727 | 255 | 255 | ag-psd-parser, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels |
-| adjustments/adjustment_nested_composition_2.psd | adjustments | yes | yes | yes | 0.242 | 1 | 3 | ag-psd-parser, mask-pixels, mask-pixels |
-| adjustments/adjustment_nested_composition_3.psd | adjustments | yes | yes | yes | 0.153 | 1 | 2 | ag-psd-parser, mask-pixels |
-| adjustments/adjustment_nested_composition_4.psd | adjustments | yes | yes | yes | 1.483 | 2 | 17 | ag-psd-parser, mask-pixels, mask-default, mask-default, mask-pixels, mask-default, mask-pixels, mask-default, mask-pixels |
-| adjustments/adjustment_nested_composition_5.psd | adjustments | yes | yes | yes | 0.108 | 1 | 2 | ag-psd-parser, mask-pixels, mask-default, mask-default, mask-pixels, mask-default, mask-pixels, mask-default, mask-pixels |
-| adjustments/brightnesscontrast_cmyk.psd | adjustments | yes | yes | no | 8.143 | 61 | 178 | ag-psd-parser, mask-default, mask-default, mask-default, mask-default |
-| adjustments/brightnesscontrast_grayscale.psd | adjustments | yes | yes | yes | 5.220 | 26 | 31 | ag-psd-parser, mask-default, mask-default, mask-default, mask-default |
+| adjustments/adjustment_backdrop_test.psd | adjustments | yes | yes | yes | 0.921 | 17 | 26 | mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels |
+| adjustments/adjustment_clipping.psd | adjustments | yes | yes | no | 22.142 | 33 | 34 | mask-pixels, mask-pixels, mask-pixels, mask-pixels |
+| adjustments/adjustment_nested_composition_1.psd | adjustments | yes | yes | no | 50.727 | 255 | 255 | mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels |
+| adjustments/adjustment_nested_composition_2.psd | adjustments | yes | yes | yes | 0.242 | 1 | 3 | mask-pixels, mask-pixels |
+| adjustments/adjustment_nested_composition_3.psd | adjustments | yes | yes | yes | 0.153 | 1 | 2 | mask-pixels |
+| adjustments/adjustment_nested_composition_4.psd | adjustments | yes | yes | yes | 1.483 | 2 | 17 | mask-pixels, mask-default, mask-default, mask-pixels, mask-default, mask-pixels, mask-default, mask-pixels |
+| adjustments/adjustment_nested_composition_5.psd | adjustments | yes | yes | yes | 0.108 | 1 | 2 | mask-pixels, mask-default, mask-default, mask-pixels, mask-default, mask-pixels, mask-default, mask-pixels |
+| adjustments/brightnesscontrast_cmyk.psd | adjustments | yes | yes | no | 8.143 | 61 | 178 | mask-default, mask-default, mask-default, mask-default |
+| adjustments/brightnesscontrast_grayscale.psd | adjustments | yes | yes | yes | 5.220 | 26 | 31 | mask-default, mask-default, mask-default, mask-default |
 | adjustments/brightnesscontrast_legacy_cmyk.psd | adjustments | yes | yes | yes | 3.960 | 24 | 44 | — |
 | adjustments/brightnesscontrast_legacy_grayscale.psd | adjustments | yes | yes | yes | 1.862 | 8 | 12 | — |
 | adjustments/brightnesscontrast_legacy_rgb.psd | adjustments | yes | yes | yes | 5.667 | 49 | 53 | — |
-| adjustments/brightnesscontrast_rgb.psd | adjustments | yes | yes | yes | 2.279 | 11 | 13 | ag-psd-parser, mask-default, mask-default, mask-default, mask-default |
-| adjustments/curves_cmyk.psd | adjustments | yes | yes | no | 23.136 | 136 | 252 | ag-psd-parser, mask-pixels, mask-default, mask-default, mask-default, mask-default |
-| adjustments/curves_grayscale.psd | adjustments | yes | yes | yes | 5.177 | 29 | 32 | ag-psd-parser, mask-default, mask-default, mask-default, mask-default |
-| adjustments/curves_rgb.psd | adjustments | yes | yes | yes | 0.122 | 1 | 12 | ag-psd-parser, mask-default, mask-default, mask-default, mask-default |
-| adjustments/exposure_grayscale.psd | adjustments | yes | yes | yes | 0.234 | 1 | 7 | ag-psd-parser, mask-default, mask-default, mask-default, mask-default |
-| adjustments/exposure_rgb.psd | adjustments | yes | yes | yes | 1.093 | 7 | 21 | ag-psd-parser, mask-default, mask-default, mask-default, mask-default |
-| adjustments/huesaturation_colorize_rgb.psd | adjustments | yes | yes | yes | 0.374 | 2 | 4 | ag-psd-parser |
-| adjustments/huesaturation_lightness_rgb.psd | adjustments | yes | yes | yes | 0.264 | 2 | 6 | ag-psd-parser |
-| adjustments/huesaturation_rgb.psd | adjustments | yes | yes | yes | 2.354 | 34 | 121 | ag-psd-parser |
-| adjustments/huesaturation_saturation_rgb.psd | adjustments | yes | yes | no | 5.786 | 90 | 111 | ag-psd-parser |
+| adjustments/brightnesscontrast_rgb.psd | adjustments | yes | yes | yes | 2.279 | 11 | 13 | mask-default, mask-default, mask-default, mask-default |
+| adjustments/curves_cmyk.psd | adjustments | yes | yes | no | 23.136 | 136 | 252 | mask-pixels, mask-default, mask-default, mask-default, mask-default |
+| adjustments/curves_grayscale.psd | adjustments | yes | yes | yes | 5.177 | 29 | 32 | mask-default, mask-default, mask-default, mask-default |
+| adjustments/curves_rgb.psd | adjustments | yes | yes | yes | 0.122 | 1 | 12 | mask-default, mask-default, mask-default, mask-default |
+| adjustments/exposure_grayscale.psd | adjustments | yes | yes | yes | 0.234 | 1 | 7 | mask-default, mask-default, mask-default, mask-default |
+| adjustments/exposure_rgb.psd | adjustments | yes | yes | yes | 1.093 | 7 | 21 | mask-default, mask-default, mask-default, mask-default |
+| adjustments/huesaturation_colorize_rgb.psd | adjustments | yes | yes | yes | 0.374 | 2 | 4 | — |
+| adjustments/huesaturation_lightness_rgb.psd | adjustments | yes | yes | yes | 0.264 | 2 | 6 | — |
+| adjustments/huesaturation_rgb.psd | adjustments | yes | yes | yes | 2.354 | 34 | 121 | — |
+| adjustments/huesaturation_saturation_rgb.psd | adjustments | yes | yes | no | 5.786 | 90 | 111 | — |
 | adjustments/invert_cmyk.psd | adjustments | yes | yes | no | 37.293 | 133 | 188 | — |
 | adjustments/invert_grayscale.psd | adjustments | yes | yes | no | 10.375 | 43 | 43 | — |
 | adjustments/invert_rgb.psd | adjustments | yes | yes | yes | 0.000 | 0 | 0 | — |
-| adjustments/levels_cmyk.psd | adjustments | yes | yes | no | 13.904 | 104 | 140 | ag-psd-parser, mask-default, mask-default, mask-default, mask-default |
-| adjustments/levels_grayscale.psd | adjustments | yes | yes | yes | 6.153 | 41 | 74 | ag-psd-parser, mask-default, mask-default, mask-default, mask-default |
-| adjustments/levels_rgb.psd | adjustments | yes | yes | yes | 0.235 | 2 | 6 | ag-psd-parser, mask-default, mask-default, mask-default, mask-default |
-| adjustments/posterize_16bits_cmyk.psd | adjustments | yes | yes | no | 14.106 | 237 | 255 | ag-psd-parser, bit-depth:16 |
-| adjustments/posterize_16bits_grayscale.psd | adjustments | yes | yes | no | 11.817 | 255 | 255 | ag-psd-parser, bit-depth:16 |
-| adjustments/posterize_16bits_rgb.psd | adjustments | yes | yes | yes | 0.060 | 1 | 1 | ag-psd-parser, bit-depth:16 |
-| adjustments/posterize_cmyk.psd | adjustments | yes | yes | no | 9.292 | 85 | 146 | ag-psd-parser |
-| adjustments/posterize_grayscale.psd | adjustments | yes | yes | no | 11.715 | 128 | 128 | ag-psd-parser |
-| adjustments/posterize_rgb.psd | adjustments | yes | yes | yes | 0.819 | 14 | 128 | ag-psd-parser |
-| adjustments/threshold_16bits_grayscale.psd | adjustments | yes | yes | no | 19.221 | 255 | 255 | ag-psd-parser, bit-depth:16 |
-| adjustments/threshold_16bits_rgb.psd | adjustments | yes | yes | yes | 0.139 | 0 | 255 | ag-psd-parser, bit-depth:16 |
-| adjustments/threshold_cmyk.psd | adjustments | yes | yes | no | 26.430 | 255 | 255 | ag-psd-parser |
-| adjustments/threshold_grayscale.psd | adjustments | yes | yes | no | 20.062 | 255 | 255 | ag-psd-parser |
-| adjustments/threshold_rgb.psd | adjustments | yes | yes | yes | 0.454 | 0 | 255 | ag-psd-parser |
-| advanced-blending.psd | root | yes | yes | no | 5.134 | 22 | 255 | advanced-blending |
+| adjustments/levels_cmyk.psd | adjustments | yes | yes | no | 13.904 | 104 | 140 | mask-default, mask-default, mask-default, mask-default |
+| adjustments/levels_grayscale.psd | adjustments | yes | yes | yes | 6.153 | 41 | 74 | mask-default, mask-default, mask-default, mask-default |
+| adjustments/levels_rgb.psd | adjustments | yes | yes | yes | 0.235 | 2 | 6 | mask-default, mask-default, mask-default, mask-default |
+| adjustments/posterize_16bits_cmyk.psd | adjustments | yes | yes | no | 14.106 | 237 | 255 | bit-depth:16 |
+| adjustments/posterize_16bits_grayscale.psd | adjustments | yes | yes | no | 11.817 | 255 | 255 | bit-depth:16 |
+| adjustments/posterize_16bits_rgb.psd | adjustments | yes | yes | yes | 0.060 | 1 | 1 | bit-depth:16 |
+| adjustments/posterize_cmyk.psd | adjustments | yes | yes | no | 9.292 | 85 | 146 | — |
+| adjustments/posterize_grayscale.psd | adjustments | yes | yes | no | 11.715 | 128 | 128 | — |
+| adjustments/posterize_rgb.psd | adjustments | yes | yes | yes | 0.819 | 14 | 128 | — |
+| adjustments/threshold_16bits_grayscale.psd | adjustments | yes | yes | no | 19.221 | 255 | 255 | bit-depth:16 |
+| adjustments/threshold_16bits_rgb.psd | adjustments | yes | yes | yes | 0.139 | 0 | 255 | bit-depth:16 |
+| adjustments/threshold_cmyk.psd | adjustments | yes | yes | no | 26.430 | 255 | 255 | — |
+| adjustments/threshold_grayscale.psd | adjustments | yes | yes | no | 20.062 | 255 | 255 | — |
+| adjustments/threshold_rgb.psd | adjustments | yes | yes | yes | 0.454 | 0 | 255 | — |
+| advanced-blending.psd | root | yes | yes | no | 5.353 | 22 | 255 | advanced-blending |
 | artboard-bgcolor.psd | root | yes | yes | yes | 0.000 | 0 | 1 | — |
-| artboard.psd | root | yes | yes | yes | 0.110 | 0 | 40 | — |
+| artboard.psd | root | yes | yes | yes | 0.110 | 0 | 40 | text-path |
 | background-red-opacity-80.psd | root | yes | yes | yes | 0.000 | 0 | 1 | — |
-| blend-and-clipping.psd | root | yes | yes | no | 34.123 | 255 | 255 | advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending |
+| blend-and-clipping.psd | root | yes | yes | no | 33.787 | 255 | 255 | text-path, advanced-blending, text-path, text-path, advanced-blending, text-path |
 | blend-modes/cmyk-blend-modes.psd | blend-modes | yes | yes | no | 188.197 | 255 | 255 | — |
 | blend-modes/color-burn.psd | blend-modes | yes | yes | yes | 0.129 | 1 | 1 | — |
 | blend-modes/color-dodge.psd | blend-modes | yes | yes | yes | 0.089 | 1 | 2 | — |
@@ -253,24 +246,24 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | blend-modes/vivid-light.psd | blend-modes | yes | yes | yes | 0.088 | 1 | 1 | — |
 | broken-groups.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | broken-groups.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
-| clip-adjustment.psd | root | yes | yes | yes | 0.000 | 0 | 0 | mask-pixels |
+| clip-adjustment.psd | root | yes | yes | yes | 0.000 | 0 | 0 | text-path, mask-pixels |
 | clipping-mask.psb | root | yes | yes | yes | 0.110 | 0 | 60 | — |
 | clipping-mask.psd | root | yes | yes | yes | 0.000 | 0 | 1 | — |
-| clipping-mask2.psd | root | yes | yes | no | 18.331 | 80 | 86 | advanced-blending, mask-pixels, real-mask, mask-pixels, mask-pixels |
+| clipping-mask2.psd | root | yes | yes | yes | 1.199 | 5 | 52 | mask-pixels, mask-pixels, mask-pixels, mask-pixels |
 | clipping-mask3.psd | root | yes | yes | no | 39.221 | 255 | 255 | orphan-clipping |
-| clipping-mask4.psd | root | yes | yes | no | 6.848 | 255 | 255 | ag-psd-parser, orphan-clipping |
-| clipping-mask5.psd | root | yes | yes | no | 24.148 | 255 | 255 | ag-psd-parser, mask-default, orphan-clipping |
+| clipping-mask4.psd | root | yes | yes | no | 6.848 | 255 | 255 | orphan-clipping |
+| clipping-mask5.psd | root | yes | yes | no | 24.148 | 255 | 255 | mask-default, orphan-clipping |
 | cmyk-alpha-spot.psd | root | yes | yes | no | 0.000 | 0 | 0 | embedded-icc |
 | cmyk-gray-ramp.psd | root | yes | yes | no | 0.000 | 0 | 0 | embedded-icc |
 | cmyk-spot.psd | root | yes | yes | no | 0.000 | 0 | 0 | — |
-| colormodes/100x20_1bit_bitmap_rle.psd | colormodes | yes | yes | no | 176.970 | 255 | 255 | ag-psd-parser, bit-depth:1, color-mode:0 |
-| colormodes/20x5_1bit_bitmap.psd | colormodes | yes | yes | no | 182.325 | 255 | 255 | ag-psd-parser, bit-depth:1, color-mode:0 |
+| colormodes/100x20_1bit_bitmap_rle.psd | colormodes | yes | yes | no | 78.030 | 255 | 255 | bit-depth:1, color-mode:0 |
+| colormodes/20x5_1bit_bitmap.psd | colormodes | yes | yes | no | 72.675 | 255 | 255 | bit-depth:1, color-mode:0 |
 | colormodes/4x4_16bit_cmyk.psd | colormodes | yes | yes | no | 26.750 | 123 | 123 | bit-depth:16 |
 | colormodes/4x4_16bit_grayscale.psd | colormodes | yes | yes | no | 16.406 | 48 | 48 | bit-depth:16 |
 | colormodes/4x4_16bit_lab.psd | colormodes | yes | yes | no | 66.281 | 255 | 255 | bit-depth:16, color-mode:9 |
 | colormodes/4x4_16bit_multichannel.psd | colormodes | yes | yes | no | 0.000 | 0 | 0 | bit-depth:16 |
 | colormodes/4x4_16bit_rgb.psd | colormodes | yes | yes | no | 18.000 | 86 | 86 | bit-depth:16 |
-| colormodes/4x4_1bit_bitmap.psd | colormodes | yes | yes | no | 123.516 | 255 | 255 | bit-depth:1, color-mode:0 |
+| colormodes/4x4_1bit_bitmap.psd | colormodes | yes | yes | no | 131.484 | 255 | 255 | bit-depth:1, color-mode:0 |
 | colormodes/4x4_32bit_grayscale.psd | colormodes | yes | yes | no | 9.844 | 30 | 30 | bit-depth:32, mask-pixels |
 | colormodes/4x4_32bit_rgb.psd | colormodes | yes | yes | no | 15.813 | 89 | 89 | bit-depth:32, mask-pixels |
 | colormodes/4x4_8bit_cmyk.psd | colormodes | yes | yes | yes | 0.094 | 1 | 1 | mask-pixels |
@@ -281,40 +274,40 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | colormodes/4x4_8bit_rgb.psd | colormodes | yes | yes | yes | 0.000 | 0 | 0 | mask-pixels |
 | colormodes/4x4_8bit_rgba.psd | colormodes | yes | yes | no | 124.063 | 255 | 255 | mask-pixels |
 | colorprofiles/north_america_newspaper.psd | colorprofiles | yes | yes | yes | 0.141 | 1 | 1 | mask-pixels |
-| descriptors/hsb-color-swatches.psd | descriptors | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser |
-| descriptors/lab-color-swatches.psd | descriptors | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, color-mode:9 |
+| descriptors/hsb-color-swatches.psd | descriptors | yes | yes | yes | 0.000 | 0 | 0 | — |
+| descriptors/lab-color-swatches.psd | descriptors | yes | yes | yes | 0.000 | 0 | 0 | color-mode:9 |
 | descriptors/stroke-color-descriptors-gray.psd | descriptors | yes | yes | no | 0.516 | 20 | 21 | — |
 | descriptors/stroke-color-descriptors-hsb-with-rgb-mode.psd | descriptors | yes | yes | yes | 0.127 | 0 | 88 | — |
 | descriptors/stroke-color-descriptors-lab.psd | descriptors | yes | yes | yes | 0.180 | 5 | 14 | color-mode:9 |
 | descriptors/stroke-color-descriptors-rgb.psd | descriptors | yes | yes | yes | 0.001 | 0 | 1 | — |
-| effect-stroke-gradient.psd | root | yes | yes | no | 11.836 | 187 | 255 | advanced-blending, advanced-blending |
-| effects/antialiased-stroke-edge.psd | effects | yes | yes | yes | 0.663 | 31 | 104 | ag-psd-parser, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending |
-| effects/center-stroke-sizes.psd | effects | yes | yes | yes | 0.026 | 0 | 28 | ag-psd-parser, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending |
-| effects/double-stroke-effects.psd | effects | yes | yes | yes | 0.002 | 0 | 1 | advanced-blending |
-| effects/effects-enabled.psd | effects | yes | yes | no | 14.500 | 49 | 49 | advanced-blending, advanced-blending, advanced-blending |
-| effects/feathered-stroke.psd | effects | yes | yes | yes | 1.980 | 48 | 89 | ag-psd-parser, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending |
-| effects/group-clips-child-stroke.psd | effects | yes | yes | yes | 0.079 | 0 | 19 | ag-psd-parser, advanced-blending, advanced-blending, advanced-blending |
-| effects/group-stroke-off-canvas.psd | effects | yes | yes | no | 18.616 | 255 | 255 | ag-psd-parser, advanced-blending, advanced-blending |
-| effects/inset-stroke-sizes.psd | effects | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending |
-| effects/outside-stroke.psd | effects | yes | yes | yes | 0.117 | 0 | 19 | ag-psd-parser, advanced-blending |
-| effects/shape-fx.psd | effects | yes | yes | yes | 0.000 | 0 | 0 | — |
-| effects/shape-fx2.psd | effects | yes | yes | yes | 2.141 | 28 | 38 | advanced-blending, advanced-blending |
-| effects/stroke-composite.psd | effects | yes | yes | no | 15.394 | 255 | 255 | advanced-blending, advanced-blending, advanced-blending, advanced-blending |
-| effects/stroke-effect-transparent-shape.psd | effects | yes | yes | yes | 0.000 | 0 | 0 | advanced-blending |
-| effects/stroke-effects.psd | effects | yes | yes | no | 20.142 | 255 | 255 | advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, stroke-pattern |
+| effect-stroke-gradient.psd | root | yes | yes | no | 11.836 | 187 | 255 | text-path, text-path |
+| effects/antialiased-stroke-edge.psd | effects | yes | yes | yes | 0.663 | 31 | 104 | — |
+| effects/center-stroke-sizes.psd | effects | yes | yes | yes | 0.026 | 0 | 28 | — |
+| effects/double-stroke-effects.psd | effects | yes | yes | yes | 0.002 | 0 | 1 | — |
+| effects/effects-enabled.psd | effects | yes | yes | no | 14.500 | 49 | 49 | — |
+| effects/feathered-stroke.psd | effects | yes | yes | yes | 1.980 | 48 | 89 | — |
+| effects/group-clips-child-stroke.psd | effects | yes | yes | yes | 0.079 | 0 | 19 | — |
+| effects/group-stroke-off-canvas.psd | effects | yes | yes | no | 18.616 | 255 | 255 | — |
+| effects/inset-stroke-sizes.psd | effects | yes | yes | yes | 0.000 | 0 | 0 | — |
+| effects/outside-stroke.psd | effects | yes | yes | yes | 0.117 | 0 | 19 | — |
+| effects/shape-fx.psd | effects | yes | yes | yes | 0.000 | 0 | 0 | advanced-blending |
+| effects/shape-fx2.psd | effects | yes | yes | yes | 2.141 | 28 | 38 | — |
+| effects/stroke-composite.psd | effects | yes | yes | no | 12.004 | 255 | 255 | — |
+| effects/stroke-effect-transparent-shape.psd | effects | yes | yes | yes | 0.000 | 0 | 0 | — |
+| effects/stroke-effects.psd | effects | yes | yes | no | 20.142 | 255 | 255 | stroke-pattern |
 | effects/stroke-without-vector-mask.psd | effects | yes | yes | yes | 0.000 | 0 | 0 | — |
 | empty-group.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | empty-layer.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | empty-layer.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
-| fill_adjustments.psd | root | yes | yes | no | 12.319 | 127 | 205 | advanced-blending, advanced-blending, advanced-blending, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, adjustment:color lookup, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels |
+| fill_adjustments.psd | root | yes | yes | no | 12.319 | 127 | 205 | mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, adjustment:color lookup, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels, mask-pixels |
 | gradient-fill.psb | root | yes | yes | yes | 0.047 | 1 | 2 | bit-depth:32 |
 | gradient-fill.psd | root | yes | yes | yes | 0.047 | 1 | 2 | bit-depth:32 |
 | gradient-sizes.psd | root | yes | yes | yes | 0.183 | 1 | 1 | — |
 | gradient-styles.psd | root | yes | yes | yes | 0.087 | 1 | 2 | — |
-| gradients/noise-gradient-cmyk.psd | gradients | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser |
-| gradients/noise-gradient-grayscale.psd | gradients | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser |
-| gradients/noise-gradient-lab.psd | gradients | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, color-mode:9 |
-| gradients/noise-gradient-rgb.psd | gradients | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser |
+| gradients/noise-gradient-cmyk.psd | gradients | yes | yes | yes | 0.000 | 0 | 0 | — |
+| gradients/noise-gradient-grayscale.psd | gradients | yes | yes | yes | 0.000 | 0 | 0 | — |
+| gradients/noise-gradient-lab.psd | gradients | yes | yes | yes | 0.000 | 0 | 0 | color-mode:9 |
+| gradients/noise-gradient-rgb.psd | gradients | yes | yes | yes | 0.000 | 0 | 0 | — |
 | gray0.psb | root | yes | yes | no | 1.711 | 46 | 49 | — |
 | gray0.psd | root | yes | yes | no | 1.711 | 46 | 49 | — |
 | gray1.psb | root | yes | yes | yes | 0.038 | 0 | 63 | — |
@@ -326,15 +319,15 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | hidden-groups.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | hidden-layer.psb | root | yes | yes | yes | 0.302 | 0 | 64 | — |
 | hidden-layer.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
-| history.psb | root | yes | yes | no | 81.134 | 255 | 255 | — |
-| history.psd | root | yes | yes | no | 81.134 | 255 | 255 | — |
-| layer_comps.psb | root | yes | yes | no | 10.925 | 66 | 146 | advanced-blending, bevel, advanced-blending, bevel, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending |
-| layer_comps.psd | root | yes | yes | no | 10.856 | 67 | 184 | advanced-blending, bevel, advanced-blending, bevel, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending |
-| layer_effects.psd | root | yes | yes | no | 5.413 | 69 | 156 | ag-psd-parser, advanced-blending, advanced-blending, bevel, advanced-blending, bevel, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, satin |
-| layer_mask_data.psb | root | yes | yes | no | 21.052 | 100 | 148 | mask-density, real-mask, real-mask, real-mask |
-| layer_mask_data.psd | root | yes | yes | no | 18.288 | 84 | 147 | mask-density, mask-density, real-mask |
-| layer_params.psb | root | yes | yes | no | 7.209 | 137 | 240 | advanced-blending, bevel, advanced-blending |
-| layer_params.psd | root | yes | yes | no | 7.209 | 137 | 240 | advanced-blending, bevel, advanced-blending |
+| history.psb | root | yes | yes | no | 173.866 | 255 | 255 | — |
+| history.psd | root | yes | yes | no | 173.866 | 255 | 255 | — |
+| layer_comps.psb | root | yes | yes | no | 8.876 | 66 | 144 | — |
+| layer_comps.psd | root | yes | yes | no | 8.807 | 67 | 183 | — |
+| layer_effects.psd | root | yes | yes | no | 4.845 | 56 | 156 | ag-psd-parser, text-path, text-path, text-path, text-path, text-path, text-path, text-path, text-path, text-path, text-path, text-path |
+| layer_mask_data.psb | root | yes | yes | no | 21.052 | 100 | 148 | mask-density, mask-density, mask-density |
+| layer_mask_data.psd | root | yes | yes | no | 18.288 | 84 | 147 | mask-density, mask-density, mask-density |
+| layer_params.psb | root | yes | yes | no | 6.637 | 130 | 219 | — |
+| layer_params.psd | root | yes | yes | no | 6.637 | 130 | 219 | — |
 | layer-name-emoji.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | layers/black-and-white.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | mask-pixels |
 | layers/brightness-contrast.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | mask-pixels |
@@ -363,7 +356,7 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | layers/smartobject-layer.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | — |
 | layers/solid-color-fill.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | mask-pixels |
 | layers/threshold.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | mask-pixels |
-| layers/type-layer.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | — |
+| layers/type-layer.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | text-path |
 | layers/vibrance.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | mask-pixels |
 | layers-minimal/gradient-fill.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | mask-pixels |
 | layers-minimal/pattern-fill.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | mask-pixels |
@@ -371,21 +364,21 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | layers-minimal/shape-layer.psd | layers | yes | yes | no | 34.268 | 255 | 255 | — |
 | layers-minimal/smartobject-layer.psd | layers | yes | yes | no | 19.549 | 255 | 255 | — |
 | layers-minimal/solid-color-fill.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | mask-pixels |
-| layers-minimal/type-layer.psd | layers | yes | yes | no | 19.549 | 255 | 255 | — |
-| mask_parameters.psd | root | yes | yes | no | 81.640 | 255 | 255 | real-mask, mask-density |
-| mask-density-layermask.psd | root | yes | yes | no | 16.537 | 191 | 223 | ag-psd-parser, mask-density, mask-default, mask-density, mask-default, mask-density, mask-default |
-| mask-density-layervectormask.psd | root | yes | yes | no | 20.030 | 190 | 191 | ag-psd-parser, real-mask, mask-density, mask-default, real-mask, mask-density, real-mask, mask-density, real-mask |
-| mask-density-vectormask.psd | root | yes | yes | no | 22.361 | 191 | 191 | ag-psd-parser, mask-density, mask-default, mask-density, mask-density |
+| layers-minimal/type-layer.psd | layers | yes | yes | no | 19.549 | 255 | 255 | text-path |
+| mask_parameters.psd | root | yes | yes | no | 81.640 | 255 | 255 | mask-density, mask-pixels |
+| mask-density-layermask.psd | root | yes | yes | no | 16.537 | 191 | 223 | mask-density, mask-default, mask-density, mask-default, mask-density, mask-default |
+| mask-density-layervectormask.psd | root | yes | yes | no | 20.030 | 190 | 191 | mask-density, mask-default, mask-density, mask-density, mask-density, mask-density, mask-density |
+| mask-density-vectormask.psd | root | yes | yes | no | 22.361 | 191 | 191 | mask-density, mask-default, mask-density, mask-density |
 | mask-disabled.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | mask-index.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
-| mask-vector-density.psd | root | yes | yes | no | 22.361 | 191 | 191 | ag-psd-parser, real-mask, mask-density, mask-default, mask-density, mask-density |
+| mask-vector-density.psd | root | yes | yes | no | 22.361 | 191 | 191 | mask-density, mask-default, mask-pixels, mask-density, mask-density |
 | mask.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | mask.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | masks/2.psd | masks | yes | yes | no | 48.892 | 192 | 192 | — |
-| masks.psb | root | yes | yes | no | 1.635 | 22 | 59 | mask-pixels, mask-pixels, advanced-blending, gradient-overlay, advanced-blending, advanced-blending, real-mask, advanced-blending |
-| masks.psd | root | yes | yes | no | 1.673 | 22 | 65 | mask-pixels, mask-pixels, advanced-blending, gradient-overlay, advanced-blending, advanced-blending, real-mask, advanced-blending |
-| masks2.psb | root | yes | yes | yes | 0.108 | 0 | 40 | real-mask |
-| masks2.psd | root | yes | yes | yes | 0.108 | 0 | 40 | real-mask |
+| masks.psb | root | yes | yes | no | 1.635 | 22 | 59 | mask-pixels, mask-pixels, text-path, gradient-overlay, text-path, text-path, text-path, text-path, mask-default, text-path |
+| masks.psd | root | yes | yes | no | 1.673 | 22 | 65 | mask-pixels, mask-pixels, text-path, gradient-overlay, text-path, text-path, text-path, text-path, mask-default, text-path |
+| masks2.psb | root | yes | yes | yes | 0.108 | 0 | 40 | mask-default, text-path |
+| masks2.psd | root | yes | yes | yes | 0.108 | 0 | 40 | mask-default, text-path |
 | masks3.psd | root | yes | yes | no | 22.417 | 241 | 249 | — |
 | metadata.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | metadata.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
@@ -393,15 +386,15 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | note.psb | root | yes | yes | yes | 0.254 | 0 | 64 | — |
 | note.psd | root | yes | yes | no | 90.744 | 255 | 255 | — |
 | opacity-fill.psd | root | yes | yes | yes | 0.000 | 0 | 0 | mask-pixels |
-| passthrough_blendmodes1.psd | root | yes | yes | yes | 0.033 | 1 | 1 | ag-psd-parser, mask-pixels, mask-default, mask-default, mask-default, mask-default |
-| passthrough_blendmodes2.psd | root | yes | yes | yes | 0.061 | 1 | 2 | ag-psd-parser, mask-pixels, mask-default, mask-default, mask-default, mask-default |
-| passthrough_blendmodes3.psd | root | yes | yes | yes | 0.156 | 1 | 2 | ag-psd-parser, mask-default, mask-default, mask-default, mask-default |
-| passthrough_clipping_mask_adjustment.psd | root | yes | yes | no | 33.261 | 146 | 171 | ag-psd-parser, mask-pixels, mask-default, mask-pixels, mask-default, mask-pixels, orphan-clipping |
-| passthrough_clipping_mask_blendmode.psd | root | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, mask-pixels, mask-default, mask-default, orphan-clipping |
-| passthrough_fill_adjustment.psd | root | yes | yes | yes | 0.021 | 1 | 1 | ag-psd-parser, mask-default, mask-default, mask-pixels |
-| passthrough_fill_blendmode.psd | root | yes | yes | no | 1.974 | 26 | 33 | ag-psd-parser |
-| passthrough_opacity.psd | root | yes | yes | no | 54.199 | 86 | 86 | ag-psd-parser, mask-default, mask-default, mask-pixels |
-| passthrough_vector_mask.psd | root | yes | yes | no | 10.554 | 67 | 112 | ag-psd-parser, mask-pixels, mask-density, mask-pixels |
+| passthrough_blendmodes1.psd | root | yes | yes | yes | 0.033 | 1 | 1 | mask-pixels, mask-default, mask-default, mask-default, mask-default |
+| passthrough_blendmodes2.psd | root | yes | yes | yes | 0.061 | 1 | 2 | mask-pixels, mask-default, mask-default, mask-default, mask-default |
+| passthrough_blendmodes3.psd | root | yes | yes | yes | 0.156 | 1 | 2 | mask-default, mask-default, mask-default, mask-default |
+| passthrough_clipping_mask_adjustment.psd | root | yes | yes | no | 33.261 | 146 | 171 | mask-pixels, mask-default, mask-pixels, mask-default, mask-pixels, orphan-clipping |
+| passthrough_clipping_mask_blendmode.psd | root | yes | yes | yes | 0.000 | 0 | 0 | mask-pixels, mask-default, mask-default, orphan-clipping |
+| passthrough_fill_adjustment.psd | root | yes | yes | yes | 0.021 | 1 | 1 | mask-default, mask-default, mask-pixels |
+| passthrough_fill_blendmode.psd | root | yes | yes | no | 1.974 | 26 | 33 | — |
+| passthrough_opacity.psd | root | yes | yes | no | 54.199 | 86 | 86 | mask-default, mask-default, mask-pixels |
+| passthrough_vector_mask.psd | root | yes | yes | no | 10.554 | 67 | 112 | mask-pixels, mask-density, mask-pixels |
 | path-operations/combine-group.psd | path-operations | yes | yes | yes | 0.000 | 0 | 0 | — |
 | path-operations/combine.psd | path-operations | yes | yes | yes | 0.000 | 0 | 0 | — |
 | path-operations/exclude-first.psd | path-operations | yes | yes | yes | 0.000 | 0 | 0 | — |
@@ -414,100 +407,47 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | path-operations/subtract-first.psd | path-operations | yes | yes | yes | 0.000 | 0 | 0 | — |
 | path-operations/subtract-group.psd | path-operations | yes | yes | yes | 0.000 | 0 | 0 | — |
 | path-operations/subtract-second.psd | path-operations | yes | yes | yes | 0.000 | 0 | 0 | — |
-| patterns.psd | root | yes | yes | no | 4.277 | 95 | 104 | vector-fill:pattern, vector-fill:pattern, vector-fill:pattern, vector-fill:pattern, vector-fill:pattern, vector-fill:pattern, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending, advanced-blending |
-| pen-text.psb | root | yes | yes | yes | 0.426 | 2 | 252 | bit-depth:32 |
+| patterns.psd | root | yes | yes | no | 4.277 | 95 | 104 | vector-fill:pattern, vector-fill:pattern, vector-fill:pattern, vector-fill:pattern, vector-fill:pattern, vector-fill:pattern |
+| pen-text.psb | root | yes | yes | yes | 0.426 | 2 | 252 | bit-depth:32, text-path, text-path |
 | pen-text.psd | root | yes | yes | yes | 0.408 | 1 | 249 | bit-depth:32 |
 | placedLayer.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | placedLayer.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | semi-transparent-layers.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | semi-transparent-layers.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
-| slices.psb | root | yes | yes | no | 255.000 | 255 | 255 | — |
-| slices.psd | root | yes | yes | no | 255.000 | 255 | 255 | — |
+| slices.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
+| slices.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | smart-object-slice.psb | root | yes | yes | yes | 0.228 | 0 | 56 | — |
 | smart-object-slice.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | stroke.psd | root | yes | yes | yes | 0.001 | 0 | 1 | vector-fill:pattern, vector-fill:pattern, vector-fill:pattern |
-| text.psb | root | yes | yes | yes | 0.069 | 0 | 40 | — |
+| text.psb | root | yes | yes | yes | 0.069 | 0 | 40 | text-path |
 | text.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | transparency/clip-opacity.psd | transparency | yes | yes | yes | 0.085 | 1 | 1 | — |
-| transparency/fill-opacity.psd | transparency | yes | yes | yes | 1.000 | 27 | 74 | advanced-blending, mask-default |
-| transparency/knockout-deep-cyanbg.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, knockout, advanced-blending |
-| transparency/knockout-deep-nested-pt.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, knockout, advanced-blending |
-| transparency/knockout-deep-nested.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, knockout, advanced-blending |
-| transparency/knockout-deep-nobg.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, knockout, advanced-blending |
-| transparency/knockout-deep-normal.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, knockout, advanced-blending |
-| transparency/knockout-deep-passthrough.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, knockout, advanced-blending |
-| transparency/knockout-isolated-groups.psd | transparency | yes | yes | no | 3.162 | 73 | 100 | knockout, advanced-blending, knockout, advanced-blending, knockout, advanced-blending, knockout, advanced-blending, knockout, advanced-blending, knockout, advanced-blending, knockout, advanced-blending, knockout, advanced-blending |
-| transparency/knockout-none-cyanbg.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, advanced-blending |
-| transparency/knockout-none-nested.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, advanced-blending |
-| transparency/knockout-none-normal.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, advanced-blending |
-| transparency/knockout-none-passthrough.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, advanced-blending |
-| transparency/knockout-shallow-nested-pt.psd | transparency | yes | yes | no | 63.500 | 127 | 127 | ag-psd-parser, knockout, advanced-blending |
-| transparency/knockout-shallow-nested.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | ag-psd-parser, knockout, advanced-blending |
+| transparency/fill-opacity.psd | transparency | yes | yes | yes | 1.000 | 27 | 74 | text-path, mask-default |
+| transparency/knockout-deep-cyanbg.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | knockout |
+| transparency/knockout-deep-nested-pt.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | knockout |
+| transparency/knockout-deep-nested.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | knockout |
+| transparency/knockout-deep-nobg.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | knockout |
+| transparency/knockout-deep-normal.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | knockout |
+| transparency/knockout-deep-passthrough.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | knockout |
+| transparency/knockout-isolated-groups.psd | transparency | yes | yes | no | 3.162 | 73 | 100 | knockout, knockout, knockout, knockout, knockout, knockout, knockout, knockout |
+| transparency/knockout-none-cyanbg.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | — |
+| transparency/knockout-none-nested.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | — |
+| transparency/knockout-none-normal.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | — |
+| transparency/knockout-none-passthrough.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | — |
+| transparency/knockout-shallow-nested-pt.psd | transparency | yes | yes | no | 63.500 | 127 | 127 | knockout |
+| transparency/knockout-shallow-nested.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | knockout |
 | transparency/transparency-group.psd | transparency | yes | yes | yes | 0.011 | 1 | 2 | — |
 | transparentbg-gimp.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | transparentbg-gimp.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
-| transparentbg.psb | root | yes | yes | no | 211.124 | 255 | 255 | ag-psd-parser, bit-depth:32 |
-| transparentbg.psd | root | yes | yes | no | 211.143 | 255 | 255 | ag-psd-parser, bit-depth:32 |
+| transparentbg.psb | root | yes | yes | yes | 0.456 | 15 | 69 | bit-depth:32 |
+| transparentbg.psd | root | yes | yes | yes | 0.458 | 15 | 68 | bit-depth:32 |
 | unicode_pathname.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | unicode_pathname.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | vector-mask-disabled.psd | root | yes | yes | yes | 0.000 | 0 | 0 | bit-depth:32 |
 | vector-mask.psb | root | yes | yes | yes | 0.000 | 0 | 0 | bit-depth:32 |
 | vector-mask.psd | root | yes | yes | no | 31.796 | 218 | 218 | bit-depth:32 |
 | vector-mask2.psd | root | yes | yes | no | 0.000 | 0 | 0 | embedded-icc |
-| vector-mask3.psd | root | yes | yes | no | 77.695 | 255 | 255 | real-mask, mask-default, mask-pixels |
-
-## Every remaining failure and its primary cause
-
-The 92 files below are each listed once. Exact mean/p99/max values and secondary detected features are in the
-per-file table above.
-
-- **No native editable layer records, or layer records the parser cannot decode (14):** `0layers_tblocks.psb`,
-  `0layers_tblocks.psd`, `0layers.psb`, `0layers.psd`, `history.psb`, `history.psd`, `slices.psb`, `slices.psd`,
-  `cmyk-alpha-spot.psd`, `cmyk-gray-ramp.psd`, `cmyk-spot.psd`, `colormodes/4x4_16bit_multichannel.psd`,
-  `colormodes/4x4_8bit_index_color.psd`, `vector-mask2.psd`. Their saved composites may decode, but flattened
-  output is deliberately ineligible under M14.
-- **Incomplete/minimal layer-owned records or caches disagree with the saved appearance (6):**
-  `2layer_8ele_tblocks.psd`, `layers-minimal/pixel-layer.psd`, `layers-minimal/shape-layer.psd`,
-  `layers-minimal/smartobject-layer.psd`, `layers-minimal/type-layer.psd`, `note.psd`. Missing mask/cache channels
-  or zero-bounds vector records prevent reconstruction without using the oracle.
-- **Adjustment/fill math, non-RGB ordering, or adjustment masks (17):** `adjustment-fillers.psd`,
-  `adjustments/adjustment_clipping.psd`, `adjustments/adjustment_nested_composition_1.psd`,
-  `adjustments/brightnesscontrast_cmyk.psd`, `adjustments/curves_cmyk.psd`,
-  `adjustments/huesaturation_saturation_rgb.psd`, `adjustments/invert_cmyk.psd`,
-  `adjustments/invert_grayscale.psd`, `adjustments/levels_cmyk.psd`,
-  `adjustments/posterize_16bits_cmyk.psd`, `adjustments/posterize_16bits_grayscale.psd`,
-  `adjustments/posterize_cmyk.psd`, `adjustments/posterize_grayscale.psd`,
-  `adjustments/threshold_16bits_grayscale.psd`, `adjustments/threshold_cmyk.psd`,
-  `adjustments/threshold_grayscale.psd`, `fill_adjustments.psd`. CMYK operations need pre-CMS channel math;
-  grayscale Invert/Posterize/Threshold and positive saturation still differ from Photoshop, while the composition
-  fixtures additionally contain unavailable masks or colour-lookup data.
-- **Blend/colour math (7):** `blend-modes/cmyk-blend-modes.psd`, `blend-modes/gray-blend-modes.psd`,
-  `blend-modes/rgb-blend-modes.psd`, `blend-modes/dissolve.psd`, `gray0.psb`, `gray0.psd`,
-  `descriptors/stroke-color-descriptors-gray.psd`. CMYK/grayscale blending needs native-space ordering; the RGB
-  sheet misses only its strict p99 bound, grayscale edges differ after conversion, and dissolve has no stored random seed.
-- **Bitmap/high-depth/CMS preview conversion (13):** `colormodes/100x20_1bit_bitmap_rle.psd`,
-  `colormodes/20x5_1bit_bitmap.psd`, `colormodes/4x4_1bit_bitmap.psd`,
-  `colormodes/4x4_16bit_cmyk.psd`, `colormodes/4x4_16bit_grayscale.psd`,
-  `colormodes/4x4_16bit_lab.psd`, `colormodes/4x4_16bit_rgb.psd`,
-  `colormodes/4x4_32bit_grayscale.psd`, `colormodes/4x4_32bit_rgb.psd`,
-  `colormodes/4x4_8bit_rgba.psd`, `transparentbg.psb`, `transparentbg.psd`, `vector-mask.psd`.
-  Photoshop's bitmap polarity/RLE, extra-alpha handling, and document-specific 16/32-bit preview transform are not
-  represented by the editor's current RGBA conversion.
-- **Real/vector/group mask composition, density/default, or feather interactions (14):** `clipping-mask2.psd`,
-  `layer_mask_data.psb`, `layer_mask_data.psd`, `mask_parameters.psd`, `mask-density-layermask.psd`,
-  `mask-density-layervectormask.psd`, `mask-density-vectormask.psd`, `mask-vector-density.psd`, `masks/2.psd`,
-  `masks.psb`, `masks.psd`, `masks3.psd`, `passthrough_vector_mask.psd`, `vector-mask3.psd`. Pixel-channel
-  feather/density now render, but combining user masks with real/vector masks and group bounds is incomplete.
-- **Advanced group blending, clipping topology, opacity/fill, or knockout (10):** `advanced-blending.psd`,
-  `blend-and-clipping.psd`, `clipping-mask3.psd`, `clipping-mask4.psd`, `clipping-mask5.psd`,
-  `passthrough_clipping_mask_adjustment.psd`, `passthrough_fill_blendmode.psd`, `passthrough_opacity.psd`,
-  `transparency/knockout-isolated-groups.psd`, `transparency/knockout-shallow-nested-pt.psd`. These require
-  blend-if/transparency-shape semantics, recovery of orphan clipping bases, or Photoshop's missing shallow/deep flag.
-- **Layer-effect/style stacks (11):** `effect-stroke-gradient.psd`, `effects/effects-enabled.psd`,
-  `effects/group-stroke-off-canvas.psd`, `effects/stroke-composite.psd`, `effects/stroke-effects.psd`,
-  `layer_comps.psb`, `layer_comps.psd`, `layer_effects.psd`, `layer_params.psb`, `layer_params.psd`, `patterns.psd`.
-  Native inner shadow/glow and embedded pattern overlays improve these stacks, but bevel, satin, pattern stroke,
-  non-linear gradient stroke/overlay, style-specific advanced-blending flags, and exact pattern phase remain.
+| vector-mask3.psd | root | yes | yes | no | 77.695 | 255 | 255 | mask-default, mask-default, mask-pixels |
 
 ## Known deviations and next work
 
@@ -518,16 +458,14 @@ per-file table above.
   document-specific 32-bit preview/tone-mapping transform, which remains a major corpus failure source.
 - Isolated groups, group opacity/fill, nested group order, and the corpus knockout cases are composited natively on CPU and GPU.
   ag-psd exposes knockout as a boolean but not the shallow/deep selector; the pass-through shallow nested case remains ambiguous.
-- Modern Brightness/Contrast, channel-wise Hue/Saturation lightness/ranges, and grayscale Levels/Curves now use
-  Photoshop-specific native kernels. Remaining adjustment mismatches are positive saturation, CMYK pre-CMS math,
-  grayscale Invert/Posterize/Threshold, and masks/order in compound adjustment fixtures.
-- Embedded pattern-overlay resources and inner shadow/glow now render as editable-stack effect passes on CPU and GPU.
-  Bevel, satin, pattern strokes, exact pattern phase, vector/group masks without pixel channels, blend-if, and native
-  smart-filter descriptor stacks remain unsupported. Smart-object pixel caches remain layer-owned inputs.
+- Remaining adjustment mismatches are listed per file above: modern Brightness/Contrast, curve interpolation, non-colorize
+  Hue/Saturation ranges, non-RGB Levels/Invert, Posterize, and Threshold differ from Photoshop’s proprietary kernels.
+- The PSD -2 mask channel is used as Photoshop’s composed vector/user-mask cache; -3 is decoded as the real-mask fallback
+  when that cache is absent. Vector/group masks without either pixel channel, smart filters, blend-if, and pattern strokes remain unsupported.
   Text, vector, and smart-object layers use their layer-owned saved pixel caches; never the document merged composite.
-- Bounded raster masks retain the PSD outside-mask default. Density and Gaussian feather are baked from the mask channel;
-  their live parameter editability and real/vector-mask combination remain unsupported.
+- Bounded raster masks retain the PSD outside-mask default. Density is baked into mask samples; feather is still unsupported.
 - Dissolve uses a deterministic local dither because the PSD layer data contains neither Photoshop’s process-local random
   table nor a seed. Its probability/opaque-pixel semantics match, but individual saved-composite dots do not.
 
-Run `npm run psd:fidelity` after `scripts/fetch-psd-corpus.sh` to regenerate this report.
+Run `npm run psd:fidelity` after `scripts/fetch-psd-corpus.sh` to regenerate this report. For iteration without
+rewriting the report, set `PSD_FIDELITY_FILE` to a relative-path substring.

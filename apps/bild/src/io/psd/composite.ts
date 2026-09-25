@@ -57,16 +57,34 @@ function mergedTransparency(section: Uint8Array, isPsb: boolean): boolean {
   return length >= 2 && section.length >= lengthBytes + 2 && view.getInt16(lengthBytes) < 0;
 }
 
+function containsAdditionalInfo(section: Uint8Array, key: string): boolean {
+  const expected = new TextEncoder().encode(key);
+  for (let offset = 0; offset + 8 <= section.length; offset++) {
+    if (section[offset] === 0x38 && section[offset + 1] === 0x42
+      && ((section[offset + 2] === 0x49 && section[offset + 3] === 0x4d)
+        || (section[offset + 2] === 0x36 && section[offset + 3] === 0x34))
+      && section[offset + 4] === expected[0] && section[offset + 5] === expected[1]
+      && section[offset + 6] === expected[2] && section[offset + 7] === expected[3]) return true;
+  }
+  return false;
+}
+
 /** Reads only the signed layer-count convention; it never touches merged image pixels. */
 export function psdHasMergedTransparency(bytes: Uint8Array): boolean {
   const reader = new Reader(bytes);
   if (ascii(reader.take(4), 0, 4) !== '8BPS') throw new Error('Invalid PSD signature');
   const version = reader.u16(); if (version !== 1 && version !== 2) throw new Error(`Invalid PSD version ${version}`);
-  reader.skip(20);
+  reader.skip(6);
+  const channels = reader.u16(); reader.skip(8); const bits = reader.u16(), colorMode = reader.u16();
   reader.skip(reader.u32());
   reader.skip(reader.u32());
   const layerBytes = version === 2 ? reader.u64() : reader.u32();
-  return mergedTransparency(reader.take(layerBytes), version === 2);
+  const section = reader.take(layerBytes);
+  // Photoshop HDR documents can advertise the merged alpha through the Mt32 block while
+  // retaining a non-negative legacy layer count. Parse that native declaration; channel count
+  // alone is insufficient because extra channels may instead be spots.
+  return mergedTransparency(section, version === 2)
+    || (bits === 32 && colorMode === 3 && channels > 3 && containsAdditionalInfo(section, 'Mt32'));
 }
 
 function decodePackBits(source: Uint8Array, output: Uint8Array, target: number, expected: number): void {
