@@ -238,6 +238,22 @@ export function documentWithLayerEffects(document: CanvasDocument, hooks: Effect
     const above = passes.filter((value) => value.placement === 'above');
     for (let i = 0; i < behind.length; i++) layers.push(synthetic(layer, behind[i]!, i,
       passTransform(transform, raster.width, raster.height, behind[i]!), raster.width, raster.height));
+    const blendInterior = layer.kind !== 'group'
+      && (layer as Layer & { readonly psdBlendInteriorEffects?: boolean }).psdBlendInteriorEffects === true;
+    if (blendInterior && above.length) {
+      flush();
+      const group = { ...newLayer({ id: layer.id, name: layer.name, kind: 'group', parentId: layer.parentId,
+        visible: layer.visible, opacity: layer.opacity, fillOpacity: layer.fillOpacity, blendMode: layer.blendMode,
+        maskSourceId: layer.maskSourceId, transform: layer.transform }), psdIsolated: true } as Layer
+        & { readonly psdIsolated: true };
+      const sourceLayer = { ...layer, id: `${layer.id}:interior-source`, parentId: layer.id, maskSourceId: null,
+        opacity: 1, fillOpacity: 1, blendMode: 'normal' as const, effects: [] };
+      const interior = above.map((pass, i) => ({ ...synthetic(layer, pass, i,
+        passTransform(transform, raster.width, raster.height, pass), raster.width, raster.height),
+      parentId: layer.id, opacity: pass.opacity, fillOpacity: 1 }));
+      layers.push(group, sourceLayer, ...interior);
+      continue;
+    }
     layers.push({ ...layer, effects: [] });
     const abovePasses = above.map((pass, i) => synthetic(layer, pass, i, passTransform(transform, raster.width, raster.height, pass),
       raster.width, raster.height));

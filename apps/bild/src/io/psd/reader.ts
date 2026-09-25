@@ -18,7 +18,8 @@ import {
 import { parseCubeLut } from '../../core/adjust/cube';
 import { psdHasMergedTransparency, readRawPsdComposite } from './composite';
 import { decodePsdLayerChannels } from './layerChannels';
-import { readPsdLayerKnockouts, type PsdKnockoutMode } from './layerInfo';
+import { readPsdCmykAdjustmentChannels, readPsdLayerKnockouts,
+  type PsdCmykAdjustmentChannels, type PsdKnockoutMode } from './layerInfo';
 import type { LittleCms } from '../../wasm/lcms';
 import { sha256Hex } from '../sha256';
 import { decodePngNativeRGBA } from '../png';
@@ -134,6 +135,7 @@ interface ImportState {
   readonly cmykTransfer: { readonly inverseSize: number; readonly inverse: Uint8Array;
     readonly forwardSize: number; readonly forward: Uint8Array } | null;
   readonly knockoutModes: ReadonlyMap<number, PsdKnockoutMode>;
+  readonly cmykAdjustmentChannels: ReadonlyMap<number, PsdCmykAdjustmentChannels>;
 }
 
 function issue(state: ImportState, code: string, message: string, impact: PsdUnsupportedImpact, layerPath?: string): void {
@@ -218,7 +220,18 @@ function importEffects(source: AgLayer, state: ImportState, layerPath: string): 
   }
   for (const stroke of info.stroke ?? []) if (stroke.present !== false) {
     if (stroke.fillType === 'pattern') {
-      if (stroke.enabled !== false) issue(state, 'stroke-pattern', 'Pattern stroke is not a live Phase-2 effect.', 'not-rendered', layerPath);
+      const pattern = stroke.pattern?.id ? state.patterns.get(stroke.pattern.id) : undefined;
+      if (!pattern || pattern.data.length !== pattern.bounds.w * pattern.bounds.h * 4) {
+        if (stroke.enabled !== false) issue(state, 'stroke-pattern', 'Pattern stroke pixels are absent from the PSD pattern table.', 'not-rendered', layerPath);
+      } else result.push({ kind: 'stroke', schemaVersion: 1, enabled: stroke.enabled !== false,
+        width: units(stroke.size), position: stroke.position ?? 'outside',
+        fill: { kind: 'color', color: { red: 0, green: 0, blue: 0 } }, opacity: stroke.opacity ?? 1,
+        blendMode: effectBlend(stroke.blendMode, 'normal'), psdPattern: { data: pattern.data.slice(),
+          width: pattern.bounds.w, height: pattern.bounds.h, x: pattern.bounds.x, y: pattern.bounds.y,
+          id: pattern.id, name: pattern.name,
+          linked: (stroke.pattern as typeof stroke.pattern & { readonly linked?: boolean } | undefined)?.linked !== false } } as LayerEffect & { readonly psdPattern: {
+            readonly data: Uint8Array; readonly width: number; readonly height: number;
+            readonly x: number; readonly y: number; readonly id: string; readonly name: string; readonly linked: boolean } });
       continue;
     }
     const fill = stroke.fillType === 'gradient'
@@ -318,6 +331,14 @@ function decodedMask(mask: LayerMaskData | undefined, parameters: LayerMaskData 
   layerTransform: LayerTransform, state: ImportState, layerPath: string): ImportedPsdMask | null {
   if (!mask) return null;
   if (!mask.imageData) {
+    const width = Math.max(0, (mask.right ?? 0) - (mask.left ?? 0));
+    const height = Math.max(0, (mask.bottom ?? 0) - (mask.top ?? 0));
+    if (!width || !height) {
+      const defaultColor = mask.defaultColor ?? 0;
+      if (mask.disabled === true || defaultColor === 255) return null;
+      return { raster: Raster.fromPixels(1, 1, 1, new Uint8Array([defaultColor])), enabled: true,
+        placement: transform(0, 0, state.documentWidth, state.documentHeight), linked: false, defaultColor };
+    }
     issue(state, 'mask-pixels', 'Layer mask has no decodable pixel channel.', 'not-rendered', layerPath);
     return null;
   }
@@ -393,8 +414,7 @@ function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportSta
     issue(state, 'blend-if', 'Non-default blend-if channel ranges are not rendered.', 'not-rendered', layerPath);
   }
   const hasClippedChildren = isGroup && source.children?.some((child) => child.clipping) === true;
-  if (source.transparencyShapesLayer === false || (source.effects && source.blendInteriorElements === true)
-    || (hasClippedChildren && source.blendClippendElements === false)) {
+  if (source.transparencyShapesLayer === false || (hasClippedChildren && source.blendClippendElements === false)) {
     issue(state, 'advanced-blending', 'Advanced blending flags are not rendered.', 'not-rendered', layerPath);
   }
   if (source.protected?.artboards) issue(state, 'lock-artboards',
@@ -522,22 +542,74 @@ function rgbColor(value: unknown, fallback: RGB = { red: 1, green: 1, blue: 1 })
   return fallback;
 }
 
+function labDocumentColor(l: number, a: number, b: number): RGB {
+  const inverse = (value: number) => value ** 3 > 216 / 24389 ? value ** 3 : (116 * value - 16) / 903.3;
+  const encode = (value: number) => { const v = Math.max(0, value);
+    return Math.min(1, v <= 0.0031308 ? v * 12.92 : 1.055 * v ** (1 / 2.4) - 0.055); };
+  const fy = (l + 16) / 116, fx = fy + a / 500, fz = fy - b / 200;
+  const x = inverse(fx) * 0.96422, y = inverse(fy), z = inverse(fz) * 0.82521;
+  return { red: encode(3.1338561 * x - 1.6168667 * y - 0.4906146 * z),
+    green: encode(-0.9787684 * x + 1.9161415 * y + 0.033454 * z),
+    blue: encode(0.0719453 * x - 0.2289914 * y + 1.4052427 * z) };
+}
+
+function cmykDocumentColor(state: ImportState, values: readonly number[]): RGB {
+  const transfer = state.cmykTransfer;
+  if (!transfer) return { red: (1 - values[0]!) * (1 - values[3]!),
+    green: (1 - values[1]!) * (1 - values[3]!), blue: (1 - values[2]!) * (1 - values[3]!) };
+  const size = transfer.forwardSize, positions = values.map((value) => Math.min(1, Math.max(0, value)) * (size - 1));
+  const low = positions.map(Math.floor), high = low.map((value) => Math.min(size - 1, value + 1));
+  const fraction = positions.map((value, index) => value - low[index]!);
+  const output = [0, 0, 0];
+  for (let dk = 0; dk < 2; dk++) for (let dy = 0; dy < 2; dy++) for (let dm = 0; dm < 2; dm++) for (let dc = 0; dc < 2; dc++) {
+    const c = dc ? high[0]! : low[0]!, m = dm ? high[1]! : low[1]!, y = dy ? high[2]! : low[2]!, k = dk ? high[3]! : low[3]!;
+    const weight = (dc ? fraction[0]! : 1 - fraction[0]!) * (dm ? fraction[1]! : 1 - fraction[1]!)
+      * (dy ? fraction[2]! : 1 - fraction[2]!) * (dk ? fraction[3]! : 1 - fraction[3]!);
+    const at = (((k * size + y) * size + m) * size + c) * 4;
+    for (let channel = 0; channel < 3; channel++) output[channel] = output[channel]! + transfer.forward[at + channel]! * weight / 255;
+  }
+  return { red: output[0]!, green: output[1]!, blue: output[2]! };
+}
+
+function mixedDocumentColor(left: AgColor, right: AgColor, amount: number, state: ImportState): RGB {
+  const mix = (a: number, b: number) => a + (b - a) * amount;
+  if ('r' in left && 'r' in right) return { red: mix(left.r, right.r) / 255,
+    green: mix(left.g, right.g) / 255, blue: mix(left.b, right.b) / 255 };
+  if ('k' in left && !('c' in left) && 'k' in right && !('c' in right)) {
+    const native = 1 - mix(left.k, right.k) / 100, transfer = state.grayTransfer;
+    if (!transfer?.length) return { red: native, green: native, blue: native };
+    const position = native * (transfer.length - 1), low = Math.floor(position), high = Math.min(transfer.length - 1, low + 1);
+    const value = transfer[low]! + (transfer[high]! - transfer[low]!) * (position - low);
+    return { red: value, green: value, blue: value };
+  }
+  if ('c' in left && 'c' in right) return cmykDocumentColor(state,
+    [mix(left.c, right.c) / 100, mix(left.m, right.m) / 100, mix(left.y, right.y) / 100, mix(left.k, right.k) / 100]);
+  if ('l' in left && 'l' in right) return labDocumentColor(mix(left.l, right.l), mix(left.a, right.a), mix(left.b, right.b));
+  const a = rgbColor(left), b = rgbColor(right);
+  return { red: mix(a.red, b.red), green: mix(a.green, b.green), blue: mix(a.blue, b.blue) };
+}
+
 function importedAdjustment(source: AgLayer, state: ImportState, layerPath: string): LayerAdjustment | null {
   const adjustment = source.adjustment;
   if (!adjustment) return null;
+  const cmyk = source.id === undefined ? undefined : state.cmykAdjustmentChannels.get(source.id);
   switch (adjustment.type) {
     case 'levels': {
       const channels = [adjustment.rgb, adjustment.red, adjustment.green, adjustment.blue];
       const defaults = defaultLevels();
-      return { kind: 'Levels', schemaVersion: 1, parameters: { ...defaults, ranges: channels.map((channel, i) => channel ? {
+      const ranges = channels.map((channel, i) => channel ? {
         black: channel.shadowInput, gamma: channel.midtoneInput, white: channel.highlightInput,
         outputBlack: channel.shadowOutput, outputWhite: channel.highlightOutput,
-      } : defaults.ranges[i]!) } };
+      } : defaults.ranges[i]!);
+      if (cmyk?.levelsBlack) ranges.push(cmyk.levelsBlack);
+      return { kind: 'Levels', schemaVersion: 1, parameters: { ...defaults, ranges } };
     }
     case 'curves': {
       const defaults = defaultCurves(), channels = [adjustment.rgb, adjustment.red, adjustment.green, adjustment.blue];
-      return { kind: 'Curves', schemaVersion: 1, parameters: { ...defaults, channels: channels.map((channel, i) =>
-        channel?.length ? channel.map((point) => ({ x: point.input, y: point.output })) : defaults.channels[i]!) } };
+      const values = channels.map((channel, i) =>
+        channel?.length ? channel.map((point) => ({ x: point.input, y: point.output })) : defaults.channels[i]!);
+      if (cmyk?.curvesBlack?.length) values.push(cmyk.curvesBlack);
+      return { kind: 'Curves', schemaVersion: 1, parameters: { ...defaults, channels: values } };
     }
     case 'exposure': return { kind: 'Exposure', schemaVersion: 1,
       parameters: { exposure: adjustment.exposure ?? 0, offset: adjustment.offset ?? 0, gamma: adjustment.gamma ?? 1 } };
@@ -723,7 +795,7 @@ function pathDistanceSquared(paths: readonly FlatPath[], x: number, y: number): 
 
 /** Layer-owned fallback for PSD generated fills whose high-depth records contain no pixel cache. */
 function generatedVectorRaster(source: AgLayer, paths: readonly VectorPath[], width: number, height: number,
-  patterns: ReadonlyMap<string, PatternInfo>, origin: { readonly x: number; readonly y: number }): Raster | null {
+  patterns: ReadonlyMap<string, PatternInfo>, origin: { readonly x: number; readonly y: number }, state: ImportState): Raster | null {
   const content = source.vectorFill;
   if (!content || (content.type !== 'color' && content.type !== 'solid' && content.type !== 'pattern')
     || width * height > MAX_PIXELS) return null;
@@ -733,7 +805,10 @@ function generatedVectorRaster(source: AgLayer, paths: readonly VectorPath[], wi
   const offsets = samples === 4 ? [0.25, 0.75] as const : [0.5] as const;
   const stops = content.type === 'solid' ? content.colorStops.slice().sort((a, b) => a.location - b.location) : [];
   const opacity = content.type === 'solid' ? content.opacityStops.slice().sort((a, b) => a.location - b.location) : [];
-  const angle = ((content.type === 'solid' ? content.angle ?? 0 : 0) * Math.PI) / 180;
+  // Photoshop's cache-less high-depth reflected fills use the legacy preview
+  // orientation (15 degrees clockwise from the descriptor angle).
+  const angle = ((content.type === 'solid'
+    ? content.style === 'reflected' ? (content.angle ?? 0) + 15 : content.angle ?? 0 : 0) * Math.PI) / 180;
   // PSD gradient angles use the document's upward-positive axis; raster rows grow downward.
   const cos = Math.cos(angle), sin = -Math.sin(angle), scale = content.type === 'solid' ? Math.max(0.01, content.scale ?? 1) : 1;
   const cx = width * (0.5 + (content.type === 'solid' ? content.offset?.x ?? 0 : 0) / 100);
@@ -752,7 +827,7 @@ function generatedVectorRaster(source: AgLayer, paths: readonly VectorPath[], wi
     }
     const mix = right.location === left.location ? 0 : Math.min(1, Math.max(0,
       (location - left.location) / (right.location - left.location)));
-    const a = rgb(left.color), b = rgb(right.color);
+    const color = mixedDocumentColor(left.color, right.color, mix, state);
     let alpha = 1;
     if (opacity.length) {
       let lo = opacity[0]!, hi = opacity.at(-1)!;
@@ -763,8 +838,7 @@ function generatedVectorRaster(source: AgLayer, paths: readonly VectorPath[], wi
         (location - lo.location) / (hi.location - lo.location)));
       alpha = lo.opacity + (hi.opacity - lo.opacity) * amount;
     }
-    return [a.red + (b.red - a.red) * mix, a.green + (b.green - a.green) * mix,
-      a.blue + (b.blue - a.blue) * mix, alpha];
+    return [color.red, color.green, color.blue, alpha];
   };
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     let covered = 0, stroked = 0;
@@ -787,7 +861,8 @@ function generatedVectorRaster(source: AgLayer, paths: readonly VectorPath[], wi
       if (content.reverse) location = 1 - location;
       // Photoshop's classic gradient interpolation eases around the midpoint even when the
       // stop midpoint is 50%; its high-depth generated-fill cache pins this ≈1.3 response.
-      if (!content.interpolationMethod || content.interpolationMethod === 'classic') {
+      if ((content.style !== 'reflected' || state.colorMode === 1)
+        && (!content.interpolationMethod || content.interpolationMethod === 'classic')) {
         location = location < 0.5 ? 0.5 * (location * 2) ** 1.3
           : 1 - 0.5 * ((1 - location) * 2) ** 1.3;
       }
@@ -1028,7 +1103,7 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const vectorPaths = vectorContent ? localPaths(globalVectorPaths, vectorTransform.origin.x, vectorTransform.origin.y) : [];
     const vectorRaster = vectorContent && !image
       ? generatedVectorRaster(source, vectorPaths, Math.round(vectorTransform.size.width), Math.round(vectorTransform.size.height),
-        state.patterns, vectorTransform.origin) : null;
+        state.patterns, vectorTransform.origin, state) : null;
     const vectorStyle = vectorContent ? psdVectorStyle(source, state.resolution, state, layerPath) : null;
     if (vectorRaster) issue(state, 'generated-fill-cache',
       'A cache-less PSD generated fill is rendered from its editable descriptor and path; its paint is retained as PSD metadata.',
@@ -1075,6 +1150,8 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     if (isGroup) imported = { ...imported,
       psdIsolated: sourceMode !== 'pass through', psdKnockout: knockoutMode ?? (source.knockout === true ? 'deep' : false) } as Layer
         & { readonly psdIsolated: boolean; readonly psdKnockout: PsdKnockoutMode | false };
+    else if (knockoutMode || source.knockout === true) imported = { ...imported,
+      psdKnockout: knockoutMode ?? 'deep' } as Layer & { readonly psdKnockout: PsdKnockoutMode };
     if (importedMaskResult.defaultColor !== undefined) imported = { ...imported,
       psdMaskDefault: importedMaskResult.defaultColor } as Layer
       & { readonly psdMaskDefault: number };
@@ -1085,6 +1162,8 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
         & { readonly psdArtboardRect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number } };
     if (vectorRaster) imported = { ...imported, psdGeneratedStyle: vectorStyle } as Layer
       & { readonly psdGeneratedStyle: VectorStyle };
+    if (source.effects && source.blendInteriorElements === true) imported = { ...imported,
+      psdBlendInteriorEffects: true } as Layer & { readonly psdBlendInteriorEffects: true };
     result.push(imported);
     if (isGroup) {
       if (artboard && (artboard.backgroundType ?? 1) !== 3) {
@@ -1284,7 +1363,7 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
     unsupported, resources: [], linkedFiles: new Map((psd.linkedFiles ?? []).map((file) => [file.id, file])),
     patterns: new Map((psd.patterns ?? []).map((pattern) => [pattern.id, pattern])),
     grayTransfer: documentGrayTransfer, cmykTransfer: documentCmykTransfer,
-    knockoutModes: readPsdLayerKnockouts(bytes) };
+    knockoutModes: readPsdLayerKnockouts(bytes), cmykAdjustmentChannels: readPsdCmykAdjustmentChannels(bytes) };
   const layers = importSiblings(psd.children ?? [], null, '', state);
   // PSD's negative layer-count flag is the native declaration that the merged result carries
   // transparency. Otherwise Photoshop composites the editable stack over an opaque white canvas.

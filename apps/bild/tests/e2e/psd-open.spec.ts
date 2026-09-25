@@ -3,7 +3,8 @@ import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
 const PSD = path.resolve('tests/fixtures/psd/corpus/1layer.psd');
-const PROFILE_ADJUSTMENTS = ['invert_grayscale.psd', 'invert_cmyk.psd'].map((name) =>
+const PROFILE_ADJUSTMENTS = ['invert_grayscale.psd', 'invert_cmyk.psd', 'brightnesscontrast_cmyk.psd',
+  'curves_cmyk.psd', 'levels_cmyk.psd', 'threshold_cmyk.psd'].map((name) =>
   path.resolve('tests/fixtures/psd/corpus/adjustments', name));
 
 test('opens a corpus PSD through Open as a layered document', async ({ page }) => {
@@ -25,7 +26,7 @@ test('opens a corpus PSD through Open as a layered document', async ({ page }) =
   expect(opened).toEqual({ width: 101, height: 55, layers: ['Фон'], pixel: [255, 255, 255, 255], projectName: '1layer' });
 });
 
-test('PSD isolated knockout groups match on the GPU and CPU compositors', async ({ page }) => {
+test('PSD knockout groups and ordinary layers match on the GPU and CPU compositors', async ({ page }) => {
   await page.goto('/?harness=gpu');
   const result = await page.evaluate(async () => {
     const load = (module: string): Promise<any> => import(/* @vite-ignore */ module);
@@ -58,11 +59,18 @@ test('PSD isolated knockout groups match on the GPU and CPU compositors', async 
       const gpu = await GpuCompositor.create(canvas, 1, 1), gpuPixels = gpu.readRegion(document, 0, 0, 1, 1);
       gpu.destroy(); canvas.remove(); return { cpu: Array.from(cpu), gpu: Array.from(gpuPixels) };
     };
-    return { deep: await render(deep), shallow: await render(shallow) };
-  }) as Record<'deep' | 'shallow', { cpu: number[]; gpu: number[] }>;
+    const layerGreen = newLayer({ id: 'layer-green', name: 'Green', parentId: outer.id, transform,
+      raster: pixel([0, 255, 0, 255]) });
+    const layerBlue = { ...newLayer({ id: 'layer-blue', name: 'Blue', parentId: outer.id, transform,
+      raster: pixel([0, 0, 255, 255]), blendMode: 'multiply' }), psdKnockout: 'shallow' };
+    const ordinary = { id: 'psd-ordinary-knockout', width: 1, height: 1, resolution: 72,
+      layers: [background, outer, layerGreen, layerBlue], selection: null };
+    return { deep: await render(deep), shallow: await render(shallow), ordinary: await render(ordinary) };
+  }) as Record<'deep' | 'shallow' | 'ordinary', { cpu: number[]; gpu: number[] }>;
   expect(result.deep.cpu).toEqual([128, 128, 255, 255]);
   expect(result.shallow.cpu).toEqual([127, 0, 128, 255]);
-  for (const pair of [result.deep, result.shallow]) pair.gpu.forEach((value, index) =>
+  expect(result.ordinary.cpu).toEqual([0, 0, 255, 255]);
+  for (const pair of [result.deep, result.shallow, result.ordinary]) pair.gpu.forEach((value, index) =>
     expect(Math.abs(value - pair.cpu[index]!), `channel ${index}`).toBeLessThanOrEqual(1));
 });
 
