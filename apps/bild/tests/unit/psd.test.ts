@@ -52,9 +52,9 @@ describe('PSD colour modes and product wiring', () => {
     const pass = renderPsdInnerEffectPasses(alpha, 5, 5, [{ kind: 'innerGlow', opacity: 1,
       blendMode: 'screen', color: { red: 1, green: 0, blue: 0 }, size: 2, choke: 0,
       angle: 0, distance: 0, useGlobalLight: false, source: 'edge' }])[0]!;
-    const glow = pass.raster.toPixels();
-    expect(glow[(2 * 5 + 2) * 4 + 3]).toBeLessThan(glow[(1 * 5 + 2) * 4 + 3]!);
-    expect(glow[3]).toBe(0);
+    expect(pass.raster.pixel(2 - pass.sourceX, 2 - pass.sourceY)[3])
+      .toBeLessThan(pass.raster.pixel(2 - pass.sourceX, 1 - pass.sourceY)[3]!);
+    expect(pass.raster.pixel(-pass.sourceX, -pass.sourceY)[3]).toBe(0);
 
     const transform = makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 });
     const base = newLayer({ id: 'pattern', name: 'pattern', transform,

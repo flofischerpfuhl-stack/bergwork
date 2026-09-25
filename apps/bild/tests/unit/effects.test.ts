@@ -137,6 +137,17 @@ describe('layer effects (PRODUCT-PLAN 6.7)', () => {
     expect(expanded.layers[1]!.raster!.toPixels()).toEqual(new Uint8Array([
       255, 0, 0, 255, 0, 255, 0, 255, 255, 0, 0, 255, 0, 255, 0, 255,
     ]));
+
+    const disabled = { ...effect, enabled: false };
+    const color: LayerEffect = { kind: 'colorOverlay', schemaVersion: 1, enabled: true, opacity: 1,
+      blendMode: 'normal', color: blue };
+    const disabledLayer = { ...layer, effects: [disabled, color] };
+    const withoutPattern = documentWithLayerEffects({ ...document, layers: [disabledLayer] }, {
+      transform: (value) => value.transform, maskPlacement: (value) => value.mask?.placement ?? null,
+      raster: (value) => value.raster, maskRaster: (value) => value.mask?.raster,
+    });
+    expect(withoutPattern.layers).toHaveLength(2);
+    expect(withoutPattern.layers[1]!.raster!.pixel(0, 0)).toEqual([0, 0, 255, 255]);
   });
 
   it('enlarges render bounds and keeps stroke independent from Fill Opacity', () => {

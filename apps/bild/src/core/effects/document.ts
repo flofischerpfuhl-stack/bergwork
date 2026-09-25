@@ -206,7 +206,8 @@ export function documentWithLayerEffects(document: CanvasDocument, hooks: Effect
     if (!source) { layers.push(layer); continue; }
     const { raster, transform } = source;
     const effects = rasterEffects(layer, source.rasterScale);
-    const patterns = effects.filter((effect): effect is Extract<typeof effect, { kind: 'patternOverlay' }> => effect.kind === 'patternOverlay');
+    const patterns = effects.filter((effect): effect is Extract<typeof effect, { kind: 'patternOverlay' }> =>
+      effect.kind === 'patternOverlay' && effect.enabled);
     const resourceKey = patterns.map((effect) => {
       const resource = document.resources?.find((value) => value.id === effect.resourceId);
       return `${effect.resourceId}/${resourceSerial(resource?.bytes)}`;
