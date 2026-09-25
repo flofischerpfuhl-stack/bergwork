@@ -1,0 +1,36 @@
+<svg
+  width="256"
+  height="256"
+  viewBox="0 0 256 256"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <title>berg:work – Schlägel und Eisen (on light, rim)</title>
+
+  <g
+    id="Hammer-Pick-Low-Poly"
+    stroke="none"
+    fill-rule="evenodd"
+  >
+    <polygon fill="#7A7874" points="140.1 86.3 175.5 50.9 171.96 47.36 136.56 82.76"/>
+    <polygon fill="#7A7874" points="18.5 103.2 52.5 66.5 89.2 32.5 127.4 70.7 130.94 67.16 89.33 25.56 48.96 62.96 14.83 99.8"/>
+    <polygon fill="#7A7874" points="42.6 209.3 49.6 216.4 155.7 96.2"/>
+    <polygon fill="#5F5D5A" points="49.6 216.4 162.8 103.2 155.7 96.2"/>
+    <polygon fill="#5F5D5A" points="49.6 216.4 56.7 223.4 162.8 103.2"/>
+    <polygon fill="#474644" points="56.7 223.4 169.8 110.3 162.8 103.2"/>
+    <polygon fill="#B2B0AB" points="175.5 50.9 216.5 91.9 179.7 86.3"/>
+    <polygon fill="#5F5D5A" points="216.5 91.9 237.7 147.1 179.7 86.3"/>
+    <polygon fill="#5F5D5A" points="237.7 147.1 181.2 127.3 179.7 86.3"/>
+    <polygon fill="#96948F" points="181.2 127.3 140.1 86.3 179.7 86.3"/>
+    <polygon fill="#F4F3F0" points="140.1 86.3 175.5 50.9 179.7 86.3"/>
+    <polygon fill="#96948F" points="195.3 223.4 202.4 216.4 82.2 110.3"/>
+    <polygon fill="#7A7874" points="202.4 216.4 89.2 103.2 82.2 110.3"/>
+    <polygon fill="#7A7874" points="202.4 216.4 209.4 209.3 89.2 103.2"/>
+    <polygon fill="#5F5D5A" points="209.4 209.3 96.3 96.2 89.2 103.2"/>
+    <polygon fill="#F4F3F0" points="18.5 103.2 52.5 66.5 73 87"/>
+    <polygon fill="#F4F3F0" points="52.5 66.5 89.2 32.5 73 87"/>
+    <polygon fill="#CDCBC6" points="89.2 32.5 127.4 70.7 73 87"/>
+    <polygon fill="#7A7874" points="127.4 70.7 93.5 107.5 73 87"/>
+    <polygon fill="#5F5D5A" points="93.5 107.5 56.7 141.4 73 87"/>
+    <polygon fill="#B2B0AB" points="56.7 141.4 18.5 103.2 73 87"/>
+  </g>
+</svg>

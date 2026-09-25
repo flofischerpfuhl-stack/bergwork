@@ -1,0 +1,32 @@
+<svg
+  width="256"
+  height="256"
+  viewBox="0 0 256 256"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <title>berg:work PDF – Stone Tablet (on light, rim)</title>
+
+  <g
+    id="Tablet-Low-Poly"
+    stroke="none"
+    fill-rule="evenodd"
+  >
+    <polygon fill="#7A7874" points="58 214 58 30 152 30 152 25 53 25 53 214"/>
+    <polygon fill="#5F5D5A" points="190 68 200 76 200 222 190 214"/>
+    <polygon fill="#474644" points="58 214 190 214 200 222 68 222"/>
+    <polygon fill="#E3E2DE" points="58 30 152 30 190 68 113.4 103.6"/>
+    <polygon fill="#CDCBC6" points="58 30 113.4 103.6 58 214"/>
+    <polygon fill="#B2B0AB" points="113.4 103.6 131.9 144.1 58 214"/>
+    <polygon fill="#B2B0AB" points="190 68 190 214 131.9 144.1 113.4 103.6"/>
+    <polygon fill="#96948F" points="58 214 131.9 144.1 190 214"/>
+    <polygon fill="#F4F3F0" points="152 30 152 68 190 68"/>
+    <polygon fill="#C81E1E" points="80 96 168 96 165 103 83 103"/>
+    <polygon fill="#F4F3F0" points="83 103 165 103 162 106 86 106"/>
+    <polygon fill="#474644" points="80 122 168 122 165 129 83 129"/>
+    <polygon fill="#F4F3F0" points="83 129 165 129 162 132 86 132"/>
+    <polygon fill="#474644" points="80 148 168 148 165 155 83 155"/>
+    <polygon fill="#F4F3F0" points="83 155 165 155 162 158 86 158"/>
+    <polygon fill="#474644" points="80 174 136 174 133 181 83 181"/>
+    <polygon fill="#F4F3F0" points="83 181 133 181 130 184 86 184"/>
+  </g>
+</svg>

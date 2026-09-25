@@ -6,3 +6,5 @@ node_modules/
 .cache/
 apps/*/upstream/
 target/
+__pycache__/
+*.pyc

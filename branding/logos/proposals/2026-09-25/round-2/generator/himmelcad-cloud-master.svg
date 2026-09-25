@@ -1,0 +1,32 @@
+<svg
+  width="256"
+  height="256"
+  viewBox="0 0 256 256"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <title>HimmelCAD Build – Azure Tech</title>
+
+  <g
+    id="Cloud-Low-Poly"
+    stroke="none"
+    fill-rule="evenodd"
+    transform="translate(18 45)"
+  >
+    <polygon fill="#0056A8" points="42 145 85 125 110 165 60 175"/>
+    <polygon fill="#0076D8" points="110 165 85 125 165 125 145 170"/>
+    <polygon fill="#003F7A" points="165 125 208 145 190 175 145 170"/>
+
+    <polygon fill="#1597F2" points="15 105 85 125 42 145"/>
+    <polygon fill="#55B8FF" points="85 125 128 75 165 125"/>
+    <polygon fill="#0084E8" points="165 125 235 105 208 145"/>
+
+    <polygon fill="#E7F7FF" points="50 55 85 125 15 105"/>
+    <polygon fill="#92D5FF" points="50 55 95 65 85 125"/>
+
+    <polygon fill="#F8FDFF" points="128 15 95 65 128 75 160 65"/>
+    <polygon fill="#BDE8FF" points="95 65 85 125 128 75"/>
+
+    <polygon fill="#D8F3FF" points="160 65 200 55 235 105 165 125"/>
+    <polygon fill="#3EACF5" points="128 75 165 125 160 65"/>
+  </g>
+</svg>
