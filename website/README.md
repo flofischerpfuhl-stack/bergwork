@@ -31,7 +31,7 @@ The build writes clean routes and the root `404.html` to `dist/`. The preview de
 node build.mjs --watch
 ```
 
-`site.config.mjs` is the single source for the site name, canonical origin, contact address, colours and product names. `siteUrl` is intentionally empty and marked `CONFIRM`; until it is set the build warns and omits canonical URLs, `og:url` and `sitemap.xml`.
+`site.config.mjs` is the single source for the site name, canonical origin, contact address, colours and product names. `siteUrl` is `https://bergwork.app`; if it is ever emptied, the build warns and omits canonical URLs, `og:url` and `sitemap.xml`.
 
 ## Content evidence
 

@@ -47,7 +47,7 @@ Date: 2026-09-25. No deployment or commit was made.
 
 ## Claims marked `CONFIRM`
 
-- Product names: `berg:work PDF` and `berg:work Image` are working names from the owner brief. The image product plan still records its final Tauri product name as open.
+- Product names: confirmed by the owner on 2026-09-25 (`berg:work PDF`, `berg:work Image`).
 - `siteUrl`: no canonical domain has been chosen. It remains empty; the build omits canonical URLs, `og:url` and `sitemap.xml` and prints a warning.
 
 ## Misleading or false v1 text removed or corrected
@@ -89,5 +89,5 @@ Capture instructions, datasets, dimensions and page destinations are in `MEDIA.m
 
 - No deployment or push.
 - No public release files were added; both live release arrays remain empty.
-- No canonical domain or sitemap was invented while `siteUrl` remains unconfirmed.
+- Canonical domain confirmed by the owner on 2026-09-25: `https://bergwork.app`.
 - No screenshots or videos were fabricated for product UI.

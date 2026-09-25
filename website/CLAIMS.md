@@ -12,7 +12,7 @@ Paths beginning `../17_fernwork` and `~/.local/share/fernwork-compositor-lab/wor
 
 | ID | Published claim | Status | Source |
 | --- | --- | --- | --- |
-| C01 | The working product names are “berg:work PDF” and “berg:work Image”. | CONFIRM | Owner brief `.codex/website-v2-bergwork.md`, “What berg:work is”; image-plan E2 still calls the Tauri product name open at `../17_fernwork/research/compositor-port/PRODUCT-PLAN.md:542`. |
+| C01 | The product names are “berg:work PDF” and “berg:work Image”. | OWNER | Owner decision 2026-09-25 ("wir lassens mal bei bergwork image und bergwork pdf"); `website/site.config.mjs`. |
 | C02 | The canonical site URL is https://bergwork.app. | OWNER | Owner statement 2026-09-25 ("domains sind himmelcad.com und bergwork.app"); `website/site.config.mjs`. |
 | C03 | berg:work covers two planned/working desktop products: a PDF editor and an image editor. | OWNER | Owner brief `.codex/website-v2-bergwork.md`, “What berg:work is”. |
 | C04 | Neither product has a public build. | OWNER | Owner brief `.codex/website-v2-bergwork.md`, download-page instruction; image internal-build status at `~/.local/share/fernwork-compositor-lab/workspaces/claude/artifacts/handoff.md:127-135`. |
