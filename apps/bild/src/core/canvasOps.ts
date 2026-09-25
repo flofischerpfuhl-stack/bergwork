@@ -3,7 +3,7 @@
 import { MAX_LAYERS, MAX_PIXELS, MAX_SIDE, isValidStructure, newLayer, renderLayers,
   type CanvasDocument, type Layer } from './document';
 import { boundingBox, concat, corners, dragUpdated, invert, isValidTransform, makeTransform, placing,
-  roundHalfAway, scaling, translation, unitToDocument, HANDLES,
+  pixelToDocument, rectIntersection, rectUnion, roundHalfAway, scaling, translation, unitToDocument, HANDLES, apply,
   type LayerSampling, type Point, type Rect } from './geometry';
 import { uuid } from './ids';
 import { Raster, TILE } from './raster';
@@ -47,7 +47,11 @@ export interface CanvasResizeOptions {
   /** Name of the filled extension layer, in the UI language. */
   readonly extensionName?: string;
 }
-export interface CropOptions { readonly fill?: CanvasExtensionColor | null }
+export interface CropOptions {
+  readonly fill?: CanvasExtensionColor | null;
+  /** Permanently clears source samples outside the resulting canvas. Off is the P3 default. */
+  readonly deletePixels?: boolean;
+}
 export type CanvasAnchor = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 export function canvasOffset(width: number, height: number, oldWidth: number, oldHeight: number,
@@ -100,11 +104,85 @@ export function resizeCanvas(doc: CanvasDocument, width: number, height: number,
   return { ...doc, width, height, layers, selection: null };
 }
 
+/** Clears a layer's stored RGBA samples whose centres lie outside a document-space rectangle. */
+export function clearLayerPixelsOutsideRect(layer: Layer, rect: Rect): Layer {
+  const raster = layer.raster;
+  if (!raster || raster.channels !== 4) return layer;
+  const pixels = raster.toPixelsNative();
+  const toDocument = pixelToDocument(layer.transform, raster.width, raster.height);
+  let changed = false;
+  for (let y = 0; y < raster.height; y++) for (let x = 0; x < raster.width; x++) {
+    const point = apply(toDocument, { x: x + 0.5, y: y + 0.5 });
+    if (point.x >= rect.x && point.x < rect.x + rect.width && point.y >= rect.y && point.y < rect.y + rect.height) continue;
+    const offset = (y * raster.width + x) * 4;
+    if (pixels[offset] || pixels[offset + 1] || pixels[offset + 2] || pixels[offset + 3]) changed = true;
+    pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = pixels[offset + 3] = 0;
+  }
+  if (!changed) return layer;
+  const next = Raster.fromPixels(raster.width, raster.height, 4, pixels, { format: raster.format });
+  if (layer.kind === 'pixel' || layer.kind === 'vector' || layer.kind === 'text' || layer.kind === 'embedded') {
+    return { ...layer, raster: next };
+  }
+  return layer;
+}
+
 /** Crop is Canvas Size with an explicit negative crop-origin offset (Crop.commitCrop). */
 export function cropDocument(doc: CanvasDocument, rect: Rect, options: CropOptions = {}): CanvasDocument {
   if (!validCropRect(rect)) throw new CanvasOperationError('tooLarge');
-  return resizeCanvas(doc, Math.trunc(rect.width), Math.trunc(rect.height), 4,
+  let result = resizeCanvas(doc, Math.trunc(rect.width), Math.trunc(rect.height), 4,
     { fill: options.fill, contentOffset: { x: -rect.x, y: -rect.y } });
+  if (doc.artboards?.length) result = { ...result, artboards: doc.artboards.map((artboard) => ({ ...artboard,
+    rect: { ...artboard.rect, x: artboard.rect.x - rect.x, y: artboard.rect.y - rect.y } })) };
+  if (options.deletePixels) {
+    const canvas = { x: 0, y: 0, width: result.width, height: result.height };
+    result = { ...result, layers: result.layers.map((layer) => clearLayerPixelsOutsideRect(layer, canvas)) };
+  }
+  return result;
+}
+
+/** Source bounds are deliberately independent of a live layer crop, so Reveal All can recover hidden pixels. */
+export function layerSourceBounds(layer: Layer): Rect | null {
+  if (layer.kind === 'group' || layer.kind === 'adjustment') return null;
+  if (layer.warp) {
+    const points = layer.warp.kind === 'quad' ? layer.warp.corners : layer.warp.points;
+    if (points.length) {
+      const xs = points.map((point) => point.x), ys = points.map((point) => point.y);
+      return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs),
+        height: Math.max(...ys) - Math.min(...ys) };
+    }
+  }
+  return boundingBox(layer.transform);
+}
+
+/** Expands and translates the canvas to the integral union of all source layer bounds. */
+export function revealAllDocument(doc: CanvasDocument): CanvasDocument {
+  let union: Rect | null = null;
+  for (const layer of doc.layers) {
+    const bounds = layerSourceBounds(layer);
+    if (bounds && bounds.width > 0 && bounds.height > 0) union = rectUnion(union, bounds);
+  }
+  if (!union) return doc;
+  const x = Math.floor(union.x), y = Math.floor(union.y);
+  const rect = { x, y, width: Math.max(1, Math.ceil(union.x + union.width) - x),
+    height: Math.max(1, Math.ceil(union.y + union.height) - y) };
+  if (rect.x === 0 && rect.y === 0 && rect.width === doc.width && rect.height === doc.height) return doc;
+  return cropDocument(doc, rect);
+}
+
+/** Converts a document-space selection rectangle to a clipped source-pixel crop parameter. */
+export function layerCropFromDocumentRect(layer: Layer, rect: Rect, feather = 0): import('./model').CropParameters | null {
+  const raster = layer.raster;
+  if (!raster || raster.channels !== 4 || !validCropRect(rect) || !Number.isFinite(feather) || feather < 0) return null;
+  const toLocal = invert(pixelToDocument(layer.transform, raster.width, raster.height));
+  const points = [
+    apply(toLocal, { x: rect.x, y: rect.y }), apply(toLocal, { x: rect.x + rect.width, y: rect.y }),
+    apply(toLocal, { x: rect.x + rect.width, y: rect.y + rect.height }), apply(toLocal, { x: rect.x, y: rect.y + rect.height }),
+  ];
+  const xs = points.map((point) => point.x), ys = points.map((point) => point.y);
+  const local = rectIntersection({ x: Math.min(...xs), y: Math.min(...ys),
+    width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) },
+  { x: 0, y: 0, width: raster.width, height: raster.height });
+  return local ? { rect: local, feather } : null;
 }
 
 // MARK: Crop geometry (Crop.swift)

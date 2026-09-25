@@ -98,7 +98,8 @@ Every entry has a discriminating `kind`: `pixel`, `group`, `adjustment`, `fill`,
 - arrays `effects` and `filters`.
 
 `warp` is currently `{kind:"quad", schemaVersion:1, corners:[TL,TR,BR,BL]}` in document pixels.
-`crop` contains a local rectangle and feather radius and does not destroy source pixels. A pixel mask
+`crop` contains a rectangle in the layer source raster's pixel coordinates and a feather radius in those same
+coordinates; it does not destroy source pixels. A pixel mask
 references a mask asset and stores an optional independent transform, plus `linked` and `enabled`.
 A vector mask stores Bezier paths with anchor/in/out points, `closed`, `enabled`, and `inverted`.
 `clippedTo` is the exact source layer ID; cycles, missing endpoints, groups/adjustments as invalid

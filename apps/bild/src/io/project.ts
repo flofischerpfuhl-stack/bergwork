@@ -932,7 +932,7 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
       if (!record || typeof record.id !== 'string' || !record.id || ids.has(record.id) || typeof record.name !== 'string'
         || !record.name.trim() || !num(record.opacity) || record.opacity < 0 || record.opacity > 1
         || !num(record.fillOpacity) || record.fillOpacity < 0 || record.fillOpacity > 1
-        || !BLEND_MODE_SET.has(record.blendMode) || !isLayerTransform(record.transform) || !validWarp(record.warp)
+        || !BLEND_MODE_SET.has(record.blendMode) || !isLayerTransform(record.transform) || !validWarp(record.warp) || !validCrop(record.crop)
         || !validLocks(record.locks) || !['none', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray'].includes(record.colorLabel)
         || !Array.isArray(record.effects) || !record.effects.every((effect: import('../../contracts-v2').EffectRecordV2) => validEffect(effect, records))
         || !Array.isArray(record.filters) || !record.filters.every(validLiveFilter)
@@ -1113,6 +1113,15 @@ function validWarp(value: import('../../contracts-v2').LayerWarpV2 | null): bool
   return value.kind === 'quad' && value.schemaVersion === 1 && Array.isArray(value.corners) && value.corners.length === 4
     && value.corners.every((point) => num(point?.x) && num(point?.y)
       && Math.abs(point.x) <= 1_000_000 && Math.abs(point.y) <= 1_000_000);
+}
+
+function validCrop(value: import('../../contracts-v2').LayerCommonV2['crop']): boolean {
+  if (value === null) return true;
+  const rect = value?.rect;
+  return !!rect && [rect.x, rect.y, rect.width, rect.height, value.feather].every(num)
+    && rect.width > 0 && rect.height > 0 && rect.width <= 30_000 && rect.height <= 30_000
+    && Math.abs(rect.x) <= 1_000_000 && Math.abs(rect.y) <= 1_000_000
+    && value.feather >= 0 && value.feather <= 30_000;
 }
 
 function normalizeVectorPath(value: import('../../contracts-v2').VectorPathRecordV2): import('../core/model').VectorPath {

@@ -278,6 +278,9 @@ uniform int uRestrictChunk;
 uniform int uRestrictBounds;
 uniform vec2 uDrawOrigin;
 uniform vec2 uDrawSize;
+uniform int uHasCrop;
+uniform vec4 uCropRect;
+uniform float uCropFeather;
 uniform float uOpacity;
 uniform float uFillOpacity;
 uniform int uMode;
@@ -312,6 +315,12 @@ void main() {
   vec2 chunkPixel = lp - uChunkOrigin + vec2(uApron);
   vec4 sampled = sampleGrid(uLayer, chunkPixel, ivec2(uTextureSize), uSampling, uMipLevel);
   float coverage = cover;
+  if (uHasCrop == 1) {
+    vec2 cropEnd = uCropRect.xy + uCropRect.zw;
+    if (lp.x < uCropRect.x || lp.y < uCropRect.y || lp.x >= cropEnd.x || lp.y >= cropEnd.y) coverage = 0.0;
+    else if (uCropFeather > 0.0) coverage *= clamp(min(min(lp.x - uCropRect.x, cropEnd.x - lp.x),
+      min(lp.y - uCropRect.y, cropEnd.y - lp.y)) / uCropFeather, 0.0, 1.0);
+  }
   if (uHasMask == 1) {
     coverage *= texelFetch(uMask, ivec2(vPos), 0).r;
   }
@@ -340,6 +349,9 @@ uniform vec2 uTextureSize;
 uniform float uApron;
 uniform int uSampling;
 uniform int uMipLevel;
+uniform int uHasCrop;
+uniform vec4 uCropRect;
+uniform float uCropFeather;
 uniform float uOpacity;
 uniform float uFillOpacity;
 uniform int uMode;
@@ -360,6 +372,12 @@ void main() {
   vec2 chunkPixel = lp - uChunkOrigin + vec2(uApron);
   vec4 sampled = sampleGrid(uLayer, chunkPixel, ivec2(uTextureSize), uSampling, uMipLevel);
   float coverage = cover;
+  if (uHasCrop == 1) {
+    vec2 cropEnd = uCropRect.xy + uCropRect.zw;
+    if (lp.x < uCropRect.x || lp.y < uCropRect.y || lp.x >= cropEnd.x || lp.y >= cropEnd.y) coverage = 0.0;
+    else if (uCropFeather > 0.0) coverage *= clamp(min(min(lp.x - uCropRect.x, cropEnd.x - lp.x),
+      min(lp.y - uCropRect.y, cropEnd.y - lp.y)) / uCropFeather, 0.0, 1.0);
+  }
   if (uHasMask == 1) coverage *= texelFetch(uMask, targetPixel, 0).r;
   if (uHasClip == 1) coverage *= texelFetch(uClip, targetPixel, 0).r;
   vec2 doc = (uViewToDoc * vec3(vPos, 1.0)).xy;

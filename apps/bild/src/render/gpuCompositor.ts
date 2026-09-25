@@ -346,6 +346,9 @@ export class GpuCompositor {
         uRestrictBounds: { value: 0, type: 'i32' },
         uDrawOrigin: { value: new Float32Array(2), type: 'vec2<f32>' },
         uDrawSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+        uHasCrop: { value: 0, type: 'i32' },
+        uCropRect: { value: new Float32Array(4), type: 'vec4<f32>' },
+        uCropFeather: { value: 0, type: 'f32' },
         uOpacity: { value: 1, type: 'f32' },
         uFillOpacity: { value: 1, type: 'f32' },
         uMode: { value: 0, type: 'i32' },
@@ -370,6 +373,8 @@ export class GpuCompositor {
         uTextureSize: { value: new Float32Array(2), type: 'vec2<f32>' },
         uApron: { value: CHUNK_APRON, type: 'f32' },
         uSampling: { value: 1, type: 'i32' }, uMipLevel: { value: 0, type: 'i32' },
+        uHasCrop: { value: 0, type: 'i32' }, uCropRect: { value: new Float32Array(4), type: 'vec4<f32>' },
+        uCropFeather: { value: 0, type: 'f32' },
         uOpacity: { value: 1, type: 'f32' }, uFillOpacity: { value: 1, type: 'f32' },
         uMode: { value: 0, type: 'i32' }, uDissolveSeed: { value: 0, type: 'i32' },
         uHasMask: { value: 0, type: 'i32' }, uHasClip: { value: 0, type: 'i32' },
@@ -1285,6 +1290,16 @@ export class GpuCompositor {
     };
   }
 
+  private cropUniforms(layer: Layer, source: Pick<Raster, 'width' | 'height'>,
+    drawn: Pick<Raster, 'width' | 'height'>): { uHasCrop: number; uCropRect: Float32Array; uCropFeather: number } {
+    const crop = layer.crop;
+    if (!crop) return { uHasCrop: 0, uCropRect: new Float32Array(4), uCropFeather: 0 };
+    const sx = drawn.width / source.width, sy = drawn.height / source.height;
+    return { uHasCrop: 1, uCropRect: new Float32Array([
+      crop.rect.x * sx, crop.rect.y * sy, crop.rect.width * sx, crop.rect.height * sy,
+    ]), uCropFeather: crop.feather * Math.min(sx, sy) };
+  }
+
   private residentLod(raster: Raster, transform: LayerTransform, view: ViewSpec): Raster {
     if (!raster.hasSwappedTiles) return raster;
     const pixelsPerSourcePixel = transform.size.width / Math.max(1, raster.width) * view.scale;
@@ -1372,6 +1387,7 @@ export class GpuCompositor {
           uTextureSize: new Float32Array([chunk.width + CHUNK_APRON * 2, chunk.height + CHUNK_APRON * 2]), uApron: CHUNK_APRON,
           uMipLevel: u.uMipLevel, uRestrictChunk: restricted ? 1 : 0,
           uRestrictBounds: 0,
+          ...this.cropUniforms(layer, raster, drawnRaster),
           uOpacity: layer.opacity, uFillOpacity: layer.fillOpacity, uMode: BLEND_INDEX[mode] ?? 0,
           uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
           uHasMask: maskTarget ? 1 : 0,
@@ -1405,6 +1421,7 @@ export class GpuCompositor {
             uChunkOrigin: new Float32Array([chunk.x, chunk.y]), uChunkSize: new Float32Array([chunk.width, chunk.height]),
             uTextureSize: new Float32Array([chunk.width + CHUNK_APRON * 2, chunk.height + CHUNK_APRON * 2]), uApron: CHUNK_APRON,
             uMipLevel: sharpUniforms.uMipLevel, uRestrictChunk: 1, uRestrictBounds: 0,
+            ...this.cropUniforms(layer, raster, sharp),
             uOpacity: layer.opacity, uFillOpacity: layer.fillOpacity, uMode: BLEND_INDEX[mode] ?? 0,
             uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
             uHasMask: maskTarget ? 1 : 0, uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0,
@@ -1439,6 +1456,7 @@ export class GpuCompositor {
           uMipLevel: u.uMipLevel, uRestrictChunk: 1,
           uRestrictBounds: 1, uDrawOrigin: new Float32Array([bounds.x, bounds.y]),
           uDrawSize: new Float32Array([bounds.width, bounds.height]),
+          ...this.cropUniforms(layer, raster ?? pixelBrush, pixelBrush),
           uOpacity: layer.opacity, uFillOpacity: layer.fillOpacity, uMode: BLEND_INDEX[mode] ?? 0,
           uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
           uHasMask: maskTarget ? 1 : 0,

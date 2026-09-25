@@ -26,7 +26,7 @@ import { DocumentHistory, type HistorySnapshot, type PersistedHistoryState } fro
 import { uuid } from './ids';
 import { alignOffsets, alignUnits, distributeOffsets, type AlignEdge, type AlignUnit, type DistributeMode } from './align';
 import { artboardMembership } from './artboards';
-import { translated } from './canvasOps';
+import { layerCropFromDocumentRect, translated } from './canvasOps';
 import { selectionBounds } from './selectionOps';
 import { Raster } from './raster';
 import { CanvasViewport } from './viewport';
@@ -137,6 +137,8 @@ export const derivedLayerSources: ((session: EditorSession, layer: Layer) => Der
 export const derivedPlacements: ((session: EditorSession, layer: Layer, transform: LayerTransform) => LayerTransform | null)[] = [];
 /** Masks derived from editable content (vector masks); they cover the layer's displayed grid (placement null). */
 export const derivedMaskSources: ((session: EditorSession, layer: Layer) => Raster | null)[] = [];
+/** UI-owned crop targets such as the currently selected artboard; the document canvas is the fallback. */
+export const cropTargetRects: ((session: EditorSession) => Rect | null)[] = [];
 
 export class EditorSession {
   document: CanvasDocument | null = null;
@@ -151,6 +153,7 @@ export class EditorSession {
   /** The Crop tool's frame (document pixels) and ratio choice (Crop.swift). */
   cropRect: Rect | null = null;
   cropRatioChoice = 'Free';
+  cropDeletePixels = false;
   transformDuplicate: { copy: string; source: string } | null = null;
   snapGuides: { xs: number[]; ys: number[] } = { xs: [], ys: [] };
   locksTransformRatio = true;
@@ -1263,7 +1266,8 @@ export class EditorSession {
     this.tool = value;
     if (value === 'crop' && !this.cropRect && this.document) {
       this.cropRatioChoice = 'Free';
-      this.cropRect = { x: 0, y: 0, width: this.document.width, height: this.document.height };
+      const target = cropTargetRects.map((provide) => provide(this)).find((rect) => rect !== null);
+      this.cropRect = target ? { ...target } : { x: 0, y: 0, width: this.document.width, height: this.document.height };
     }
     this.notify('ui');
   }
@@ -1978,6 +1982,26 @@ export class EditorSession {
   }
 
   // MARK: Live filter stacks (PRODUCT-PLAN 6.4)
+
+  /** Stores the current selection as an editable source-local crop on an embedded layer. */
+  cropEmbeddedLayerToSelection(feather = 0, id = this.activeLayerId): boolean {
+    const document = this.document, layer = id ? this.layer(id) : null;
+    const bounds = document?.selection ? selectionBounds(document.selection) : null;
+    if (!id || !document || layer?.kind !== 'embedded' || !bounds || !this.canEditLayers
+      || this.refuseLayerEdit(id, 'appearance')) return false;
+    const crop = layerCropFromDocumentRect(layer, bounds, feather);
+    if (!crop) return false;
+    this.edit('Crop to Selection', () => this.updateLayer(id, (value) => ({ ...value, crop })));
+    return true;
+  }
+
+  clearEmbeddedLayerCrop(id = this.activeLayerId): boolean {
+    const layer = id ? this.layer(id) : null;
+    if (!id || layer?.kind !== 'embedded' || !layer.crop || !this.canEditLayers
+      || this.refuseLayerEdit(id, 'appearance')) return false;
+    this.edit('Clear Crop', () => this.updateLayer(id, (value) => ({ ...value, crop: null })));
+    return true;
+  }
 
   addLayerLiveFilter(filter: LiveFilter, id = this.activeLayerId): boolean {
     const layer = id ? this.layer(id) : null;

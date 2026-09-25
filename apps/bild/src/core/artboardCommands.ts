@@ -12,7 +12,7 @@ import type { ColorLabel } from './model';
 import type { Rect } from './geometry';
 import type { EditorSession } from './session';
 import { uuid } from './ids';
-import { translated } from './canvasOps';
+import { clearLayerPixelsOutsideRect, translated } from './canvasOps';
 import { artboardPreset } from './artboardPresets';
 import {
   ARTBOARD_GAP, ArtboardError, artboardUnits, DEFAULT_ARTBOARD_BACKGROUND, findArtboard, isValidArtboardRect,
@@ -123,6 +123,25 @@ export function resizeArtboard(session: EditorSession, id: string, rect: Rect): 
   const next = roundedRect(rect);
   if (!isValidArtboardRect(next)) return refuse(new ArtboardError('invalid-rect', 'Artboards need a positive size inside 30,000 pixels.'));
   return commit(session, 'Resize Artboard', (d) => replaceArtboard(d, id, (a) => ({ ...a, rect: next })));
+}
+
+/** Crops one artboard without moving its content; optional deletion clears only that artboard's member pixels. */
+export function cropArtboard(session: EditorSession, id: string, rect: Rect, deletePixels = false): boolean {
+  const document = session.document, artboard = findArtboard(document, id);
+  if (!canEdit(session) || !artboard) return refuse(new ArtboardError('not-found', 'No such artboard.'));
+  const next = roundedRect(rect);
+  if (!isValidArtboardRect(next)) return refuse(new ArtboardError('invalid-rect', 'Artboards need a positive size inside 30,000 pixels.'));
+  const members = memberIds(document!, id);
+  if (deletePixels) {
+    for (const layerId of members) {
+      if (session.refuseLayerEdit(layerId, 'pixels')) return refuse(new ArtboardError('locked', 'A layer on this artboard has locked pixels.'));
+    }
+  }
+  return commit(session, 'Crop Artboard', (value) => ({
+    ...replaceArtboard(value, id, (candidate) => ({ ...candidate, rect: next })),
+    layers: deletePixels ? value.layers.map((layer) => members.has(layer.id)
+      ? clearLayerPixelsOutsideRect(layer, next) : layer) : value.layers,
+  }));
 }
 
 /** Moves the artboard to `index` in the artboard order (panel and export order). */
