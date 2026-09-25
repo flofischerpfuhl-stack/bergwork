@@ -173,6 +173,8 @@ test('a recipe saved from a layer and applied to another renders that layer like
   await page.getByTestId('menu-Layer').click();
   await page.getByTestId('menu-apply-recipe').hover();
   await page.getByRole('menuitem', { name: 'Wedding' }).click();
+  // Applying loads the recipe actions on first use, so wait for its undo step.
+  await expect.poll(() => page.evaluate(() => (window as any).__editorForTests.session.history.undoName)).toBe('Apply Recipe');
   const state = await page.evaluate(() => {
     const session = (window as any).__editorForTests.session;
     return { undo: session.history.undoName, layers: session.document.layers.map((l: any) => [l.name, l.kind, l.maskSourceId]),
