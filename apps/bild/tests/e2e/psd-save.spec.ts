@@ -7,6 +7,7 @@ test('File > Save As writes a layered Photoshop document while Export As remains
   await page.getByTestId('heightInput').fill('2');
   await page.getByTestId('createCanvas').click();
   await importThroughMenu(page, [{ name: 'client.png', mimeType: 'image/png', buffer: solidPng(3, 2, [210, 40, 20, 255]) }]);
+  await expect(page.getByTestId('layerCount')).toHaveText('2');
   await page.evaluate(() => { (window as any).__pickerAnswer = 'Client edit.psd'; });
 
   const editor = page.getByTestId('compositor-editor');

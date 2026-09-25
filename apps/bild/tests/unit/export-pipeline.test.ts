@@ -3,7 +3,8 @@ import { newLayer, type Artboard, type CanvasDocument, type Layer } from '../../
 import { makeTransform } from '../../src/core/geometry';
 import { Raster } from '../../src/core/raster';
 import {
-  cpuExportRenderer, estimateExportSize, ExportError, planExport, runExport, sanitizeFileStem, type ExportRenderer, type ExportRequest,
+  cpuExportRenderer, estimateExportSize, ExportError, planExport, runExport, runPngExportToSink, sanitizeFileStem,
+  type ExportRenderer, type ExportRequest,
 } from '../../src/io/exportPipeline';
 import { adler32, adler32Combine, encodePngBands, encodePngBandsAsync, hasNativeDeflate, type EncodeSpec } from '../../src/io/exportEncode';
 import { lastDeflateBlock, openDeflateEnd } from '../../src/io/deflateJoin';
@@ -15,6 +16,7 @@ import { decodeTiffNative, tiffDimensions } from '../../src/io/tiff';
 import { decodeWebpWasm } from '../../src/wasm/webp';
 import { decodeAvifWasm } from '../../src/wasm/avif';
 import { loadLittleCms } from '../../src/wasm/lcms';
+import { parallelPngBandRows } from '../../src/workers/exportClient';
 
 const renderer = cpuExportRenderer();
 
@@ -262,6 +264,36 @@ describe('band-parallel PNG', () => {
     expect(decodePngNativeRGBA(encodePngBands(deep, width, height, spec, 5)).data).toEqual(deep);
     const rgb = decodePngNativeRGBA(encodePngBands(pixels, width, height, { ...spec, alpha: false }, 11));
     expect(rgbaAt(rgb.data, width, 3, 4).slice(0, 3)).toEqual(rgbaAt(pixels, width, 3, 4).slice(0, 3));
+  });
+
+  it('streams renderer bands to a sink with the exact parallel-worker bytes and no full-frame read', async () => {
+    const width = 37, height = 197;
+    const pixels = Uint8Array.from({ length: width * height * 4 }, (_, index) => (index * 29 + (index >> 6)) & 255);
+    const document: CanvasDocument = { id: 'stream', width, height, resolution: 72, selection: null, artboards: [], layers: [] };
+    let largestRead = 0;
+    const bandRenderer: ExportRenderer = { readView: (_document, w, h, view) => {
+      largestRead = Math.max(largestRead, h);
+      const output = new Uint8Array(w * h * 4);
+      for (let row = 0; row < h; row++) {
+        const source = (view.ty + row) * width * 4;
+        output.set(pixels.subarray(source, source + width * 4), row * width * 4);
+      }
+      return output;
+    } };
+    const request: ExportRequest = { targets: [{ kind: 'document' }], format: 'png',
+      metadata: { colorProfile: 'strip', resolution: false, info: null } };
+    const chunks: Uint8Array[] = [];
+    const result = await runPngExportToSink(document, request, bandRenderer, async (chunk) => { chunks.push(chunk.slice()); });
+    const streamed = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+    let at = 0; for (const chunk of chunks) { streamed.set(chunk, at); at += chunk.length; }
+    const spec: EncodeSpec = { format: 'png', colorModel: 'rgb', alpha: true, quality: 1, lossless: false, speed: 6,
+      level: 6, tiffCompression: 'deflate', dpi: null, icc: null, info: null };
+    const expected = await encodePngBandsAsync(pixels, width, height, spec, parallelPngBandRows(height));
+    expect(streamed).toEqual(expected);
+    expect(decodePng(streamed).data).toEqual(pixels);
+    expect(largestRead).toBeLessThan(height);
+    expect(result.metrics).toMatchObject({ bands: Math.ceil(height / parallelPngBandRows(height)),
+      avoidedOutputBytes: pixels.byteLength, writtenBytes: streamed.byteLength });
   });
 });
 

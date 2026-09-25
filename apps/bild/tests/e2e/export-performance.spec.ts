@@ -41,9 +41,11 @@ test('46 MP PNG export through the export pipeline', async ({ page }) => {
     const renderer = { readView: (d: any, rw: number, rh: number, v: any, s: number) => view.readView(d, rw, rh, v, s) };
     const [item] = pipeline.planExport(controller.session.document, request);
     const runs: { total: number; render: number; encode: number; bytes: number }[] = [];
+    let reference: Uint8Array | null = null;
     for (let run = 0; run < 3; run++) {
       const t0 = performance.now();
       const [file] = await controller.exportFiles(request);
+      reference = file.bytes;
       const total = performance.now() - t0;
       const r0 = performance.now();
       const pixels = pipeline.renderExportItem(controller.session.document, item, request, renderer);
@@ -54,15 +56,28 @@ test('46 MP PNG export through the export pipeline', async ({ page }) => {
       const encode = performance.now() - e0;
       runs.push({ total: Math.round(total), render: Math.round(render), encode: Math.round(encode), bytes: file.bytes.length });
     }
+    let streamedBytes = 0, exact = true, chunks = 0, firstWrite = -1;
+    const streamStart = performance.now();
+    const streamed = await pipeline.runPngExportToSink(controller.session.document, request, renderer, async (chunk: Uint8Array) => {
+      if (firstWrite < 0) firstWrite = performance.now() - streamStart;
+      for (let index = 0; index < chunk.length; index++) if (chunk[index] !== reference![streamedBytes + index]) { exact = false; break; }
+      streamedBytes += chunk.length; chunks++;
+    });
+    const streamTotal = performance.now() - streamStart;
+    if (streamedBytes !== reference!.length) exact = false;
     const pixels = pipeline.renderExportItem(controller.session.document, item, request, renderer);
     const b0 = performance.now();
     const legacy = encodePng(pixels, width, height, 4, { dpi: 72 });
     const legacyEncode = performance.now() - b0;
     const [check] = await controller.exportFiles({ ...request, sizes: [{ scale: 0.05 }] });
-    return { runs, legacyEncode: Math.round(legacyEncode), legacyBytes: legacy.length, threads: navigator.hardwareConcurrency,
+    return { runs, stream: { total: Math.round(streamTotal), firstWrite: Math.round(firstWrite), chunks, bytes: streamedBytes,
+        exact, metrics: streamed.metrics }, legacyEncode: Math.round(legacyEncode), legacyBytes: legacy.length, threads: navigator.hardwareConcurrency,
       renderer: controller.canvasView.rendererKind, checkSize: [check.width, check.height] };
   });
   console.info('46 MP PNG export (ms):', JSON.stringify(result));
   expect(result.checkSize).toEqual([413, 278]);
+  expect(result.stream.exact).toBe(true);
+  expect(result.stream.bytes).toBe(result.runs[0]!.bytes);
+  expect(result.stream.metrics.avoidedOutputBytes).toBe(8256 * 5568 * 4);
   expect(Math.min(...result.runs.map((run) => run.total))).toBeLessThan(60_000);
 });

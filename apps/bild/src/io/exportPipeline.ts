@@ -13,11 +13,11 @@ import { concat as concatAffine, type Rect } from '../core/geometry';
 import type { RGB } from '../core/model';
 import type { EncodeSpec } from './exportEncode';
 import {
-  EXPORT_MIME, exportViewToDocument, layerExportIds, planExport, resolveExportRequest,
+  EXPORT_MIME, ExportError, exportViewToDocument, layerExportIds, planExport, resolveExportRequest,
   type ExportFile, type ExportPlanItem, type ExportRenderer, type ExportRequest, type ExportRunOptions, type ExportTarget,
 } from './exportPlan';
 import { srgbIccProfile } from './iccProfile';
-import { defaultExportEncoder } from '../workers/exportClient';
+import { defaultExportEncoder, PARALLEL_PNG_PIXELS, streamPngBands, type StreamPngMetrics } from '../workers/exportClient';
 import { rgbToCmykPixelsExact } from '../core/color/cmyk';
 
 export * from './exportPlan';
@@ -167,6 +167,49 @@ export async function runExport(document: CanvasDocument | null, request: Export
     options.onProgress?.(index + 1, items.length);
   }
   return files;
+}
+
+export interface StreamedPngExport {
+  readonly name: string;
+  readonly mime: 'image/png';
+  readonly width: number;
+  readonly height: number;
+  readonly bitDepth: 8 | 16;
+  readonly item: ExportPlanItem;
+  readonly warnings: readonly string[];
+  readonly metrics: StreamPngMetrics;
+}
+
+/** True when one large PNG can go straight to a selected host byte sink. */
+export function canStreamPngExport(document: CanvasDocument | null, request: ExportRequest): boolean {
+  if (request.format !== 'png' || request.cmyk) return false;
+  const items = planExport(document, request);
+  return items.length === 1 && items[0]!.width * items[0]!.height >= PARALLEL_PNG_PIXELS;
+}
+
+/**
+ * Renders one large PNG as transferable row bands and writes each deterministic PNG chunk as soon
+ * as its worker result is available. This is the sink counterpart of `runExport`; CPU/GPU pixels and
+ * the parallel encoder remain unchanged, but neither the complete raster nor complete file exists.
+ */
+export async function runPngExportToSink(document: CanvasDocument | null, request: ExportRequest,
+  renderer: ExportRenderer, write: (chunk: Uint8Array) => Promise<void>, options: ExportRunOptions = {}): Promise<StreamedPngExport> {
+  const items = planExport(document, request);
+  if (request.format !== 'png' || request.cmyk || items.length !== 1) {
+    throw new ExportError('option', 'Streaming requires one RGB PNG output.');
+  }
+  const item = items[0]!, resolved = resolveExportRequest(request);
+  const source = documentForTarget(document!, item.target), backdrops = backdropsFor(document!, item.target);
+  const matte = resolved.alpha ? null : resolved.matte, warnings = new Set<string>();
+  throwIfAborted(options.signal);
+  const metrics = await streamPngBands((top, rows) => {
+    throwIfAborted(options.signal);
+    return renderWindow(source, item, renderer, resolved.bitDepth === 16, backdrops, matte,
+      0, top, item.width, rows, warnings);
+  }, item.width, item.height, resolved.bitDepth, encodeSpec(request, item), write, options.signal);
+  options.onProgress?.(1, 1);
+  return { name: item.name, mime: 'image/png', width: item.width, height: item.height,
+    bitDepth: resolved.bitDepth, item, warnings: [...warnings], metrics };
 }
 
 // MARK: File-size preview

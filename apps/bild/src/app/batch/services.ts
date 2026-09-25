@@ -10,14 +10,14 @@ import { uuid } from '../../core/ids';
 import { EditorSession } from '../../core/session';
 import { fileBaseName } from '../../io/imageImport';
 import { readArchive } from '../../io/project';
-import { readPsdDocumentManaged } from '../../io/psd';
 import { decodeImageAssetInBackground } from '../../workers/imageDecodeClient';
+import { readPsdDocumentInBackground } from '../../workers/psdClient';
 import { flattenTarget, type BatchDestination, type BatchServices } from '../../io/batch';
 import type { EditorController } from '../../ui/controller';
 
 /** Decodes one queued file into a document of its own (the image as one layer, like opening it). */
 export async function openBatchFile(controller: EditorController, name: string, blob: Blob): Promise<CanvasDocument> {
-  if (/\.ps[db]$/i.test(name)) return (await readPsdDocumentManaged(new Uint8Array(await blob.arrayBuffer()))).document;
+  if (/\.ps[db]$/i.test(name)) return (await readPsdDocumentInBackground(new Uint8Array(await blob.arrayBuffer()))).document;
   if (/\.(fwimg|zip)$/i.test(name)) {
     const limits = controller.limits;
     return (await readArchive(blob, (data) => decodeImageAssetInBackground(data, limits.maxPixels,
