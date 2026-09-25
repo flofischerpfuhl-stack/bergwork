@@ -159,8 +159,8 @@ export const applyAdjustment: AdjustmentApplier = (adjustment, rgba, width, heig
   const lookup = adjustment.kind === 'Colour Lookup' ? resourceCube(adjustment.parameters.resourceId, resources) : null;
   const psd = adjustment as LayerAdjustment & { readonly psdColorMode?: number; readonly psdBitsPerChannel?: number };
   const nativeGray = psd.psdColorMode === 1 && (adjustment.kind === 'Levels' || adjustment.kind === 'Curves');
-  const decodeGray = (value: number): number => Math.max(0, linearFromSrgb(clamp01(value))) ** (1 / 2.2);
-  const encodeGray = (value: number): number => clamp01(srgbFromLinear(clamp01(value) ** 2.2));
+  const decodeGray = (value: number): number => Math.max(0, srgbToLinear(clamp01(value))) ** (1 / 2.2);
+  const encodeGray = (value: number): number => clamp01(linearToSrgb(clamp01(value) ** 2.2));
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     const i = (y * width + x) * 4;
     if (out[i + 3]! <= 0) continue;
