@@ -21,14 +21,17 @@ import {
   dragInDocument,
   exportedPixels,
   importFile,
+  importThroughMenu,
   importPng,
   manifest,
   missing,
   mountForTest,
+  mountPro,
   patternedPng,
   rgbaAt,
   solidPng,
 } from './benchmark-helpers';
+import { makeDng } from '../helpers/dngFixture';
 
 const task = (number: number): string => `${PLAN}, task ${number}`;
 const productCutout = () => patternedPng(100, 100, (x, y) =>
@@ -731,10 +734,29 @@ export async function benchmark11(page: Page): Promise<void> {
 }
 
 export async function benchmark12(page: Page): Promise<void> {
-  await mountForTest(page);
-  await page.getByTestId('menu-File').click();
-  await expect(page.getByTestId('menu-import')).toBeEnabled();
-  missing('RAW/DNG decoding in the Tauri file-import path', task(12));
+  await mountPro(page);
+  await importThroughMenu(page, [{ name: 'camera-patches.dng', mimeType: 'image/x-adobe-dng',
+    buffer: Buffer.from(makeDng('bayer', 'lossless-jpeg', 18, 10)) }]);
+  await expect(page.getByTestId('raw-import-dialog')).toBeVisible();
+  await page.getByTestId('raw-exposure').fill('0.5');
+  await page.getByTestId('raw-highlight-recovery').check();
+  await page.getByTestId('raw-import-apply').click();
+  await expect.poll(async () => (await manifest(page)).layers.some((layer) => layer.name === 'camera-patches')).toBe(true);
+  expect(await page.evaluate(() => (window as any).__editorForTests.session.activeLayer.raster.format)).toBe('rgba16');
+
+  const [tiff] = await exportAs(page, async () => {
+    await page.getByTestId('export-format-tiff').click();
+    await page.getByTestId('export-depth-16').click();
+  });
+  expect(tiff?.name).toBe('camera-patches.tiff');
+  const bytes = tiff!.bytes, view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const little = bytes[0] === 0x49, ifd = view.getUint32(4, little), count = view.getUint16(ifd, little);
+  let bitDepth = 0;
+  for (let i = 0; i < count; i++) {
+    const at = ifd + 2 + i * 12;
+    if (view.getUint16(at, little) === 258) { bitDepth = view.getUint16(view.getUint32(at + 8, little), little); break; }
+  }
+  expect(bitDepth).toBe(16);
 }
 
 export async function benchmark13(page: Page): Promise<void> {

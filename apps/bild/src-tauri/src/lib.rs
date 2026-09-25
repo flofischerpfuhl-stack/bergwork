@@ -13,6 +13,7 @@ use tauri::{
 };
 
 mod host;
+mod raw_codec;
 mod screen_color;
 mod scratch;
 
@@ -159,6 +160,8 @@ pub fn run() {
             host::run_compute_job,
             host::read_cached_model,
             host::write_cached_model,
+            raw_codec::raw_codec_available,
+            raw_codec::decode_raw,
             host::display_icc_profile,
             screen_color::pick_screen_color,
             screen_color::screen_color_support,

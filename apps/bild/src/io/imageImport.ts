@@ -18,25 +18,26 @@ import { sha256Hex } from './sha256';
 import { decodeTiffNative, TiffError, tiffDimensions } from './tiff';
 import { decodeHeic, HeicError, heicDimensions, isHeic, orientRgba, type HeicDecodeOptions } from './heic';
 import { IccError, loadLittleCms, type Chromaticities } from '../wasm/lcms';
+import { decodeDng, dngDimensions, DngError, isDng, type RawDecodeOptions } from './dng';
 
 export class ImageImportError extends Error {
   readonly code: 'unreadable' | 'unsupported' | 'too-large';
   constructor(code: 'unreadable' | 'unsupported' | 'too-large', message?: string) {
     super(message ?? (code === 'unreadable' ? 'The image could not be read. It may be damaged or unavailable.'
-      : code === 'unsupported' ? 'Choose a JPEG, PNG, HEIC, TIFF, WebP, AVIF, or GIF image.'
+      : code === 'unsupported' ? 'Choose a JPEG, PNG, HEIC, TIFF, WebP, AVIF, GIF, DNG, or supported camera RAW image.'
         : 'This import exceeds the current 100-megapixel document budget or 30,000-pixel side limit.'));
     this.code = code;
     this.name = 'ImageImportError';
   }
 }
 
-export type ImageKind = 'image/png' | 'image/jpeg' | 'image/heic' | 'image/tiff' | 'image/webp' | 'image/avif' | 'image/gif';
+export type ImageKind = 'image/png' | 'image/jpeg' | 'image/heic' | 'image/tiff' | 'image/webp' | 'image/avif' | 'image/gif' | 'image/x-adobe-dng' | 'image/x-camera-raw';
 
 export function sniffImage(bytes: Uint8Array): ImageKind | null {
   const b = bytes;
   if (b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
   if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
-  if (b.length >= 4 && ((b[0] === 0x49 && b[1] === 0x49 && b[2] === 0x2a && b[3] === 0) || (b[0] === 0x4d && b[1] === 0x4d && b[2] === 0 && b[3] === 0x2a))) return 'image/tiff';
+  if (b.length >= 4 && ((b[0] === 0x49 && b[1] === 0x49 && b[2] === 0x2a && b[3] === 0) || (b[0] === 0x4d && b[1] === 0x4d && b[2] === 0 && b[3] === 0x2a))) return isDng(b) ? 'image/x-adobe-dng' : 'image/tiff';
   if (b.length >= 12 && ascii(b, 0) === 'RIFF' && ascii(b, 8) === 'WEBP') return 'image/webp';
   if (b.length >= 16 && ascii(b, 4) === 'ftyp' && hasBrand(b, new Set(['avif', 'avis']))) return 'image/avif';
   if (b.length >= 6 && (ascii6(b) === 'GIF87a' || ascii6(b) === 'GIF89a')) return 'image/gif';
@@ -74,6 +75,9 @@ export interface ImageDecodeOptions extends HeicDecodeOptions {
   /** Replacement/disable hook for the measured native WebP/AVIF/GIF path. */
   readonly nativeDecoder?: ((bytes: Uint8Array, mime: string) => Promise<{ width: number; height: number; data: Uint8Array } | null>) | null;
   readonly maxSide?: number;
+  readonly raw?: RawDecodeOptions;
+  /** A filename hint is used only to decide whether an unknown container should be offered to an OS RAW codec. */
+  readonly fileName?: string;
 }
 
 export interface DecodedImageAsset {
@@ -142,8 +146,19 @@ async function decodeJpeg(bytes: Uint8Array, info: JpegInfo): Promise<{ width: n
 export async function decodeImageAsset(bytes: Uint8Array, remainingPixels: number,
   options: ImageDecodeOptions = {}): Promise<DecodedImageAsset> {
   const kind = sniffImage(bytes);
-  if (!kind) throw new ImageImportError('unsupported');
   const maxSide = options.maxSide ?? MAX_SIDE;
+  if (!kind) {
+    if (!options.host?.decodeRaw) throw new ImageImportError('unsupported');
+    let raw;
+    try { raw = await options.host.decodeRaw(bytes, options.raw ?? {}); }
+    catch (error) { throw new ImageImportError('unsupported', error instanceof Error ? error.message : String(error)); }
+    if (!raw) throw new ImageImportError('unsupported', options.host.rawBackend === 'system-libraw' && !options.host.systemRawEnabled?.()
+      ? 'Camera RAW import is disabled. Enable “Use system LibRaw (LGPL)” in Preferences.'
+      : 'No installed RAW codec could read this camera file. On Linux, install LibRaw and enable it in Preferences.');
+    if (raw.width < 1 || raw.height < 1 || raw.rgba.length !== raw.width * raw.height * 4) throw new ImageImportError('unreadable');
+    if (raw.width > maxSide || raw.height > maxSide || raw.width * raw.height > remainingPixels) throw new ImageImportError('too-large');
+    return { width: raw.width, height: raw.height, channels: 4, data: raw.rgba, bitDepth: 16, mime: 'image/x-camera-raw' };
+  }
   const limits = { maxSide, maxPixels: remainingPixels };
   let width = 0, height = 0;
   let jpegInfo: JpegInfo | null = null;
@@ -154,6 +169,7 @@ export async function decodeImageAsset(bytes: Uint8Array, remainingPixels: numbe
       ({ width, height } = orientedSize(jpegInfo));
     }
     else if (kind === 'image/tiff') ({ width, height } = tiffDimensions(bytes, limits));
+    else if (kind === 'image/x-adobe-dng') ({ width, height } = dngDimensions(bytes));
     else if (kind === 'image/heic') ({ width, height } = heicDimensions(bytes));
     else if (kind === 'image/webp') ({ width, height } = (await import('./webp')).webpDimensions(bytes, limits));
     else if (kind === 'image/avif') ({ width, height } = (await import('./avif')).avifDimensions(bytes, limits));
@@ -188,6 +204,15 @@ export async function decodeImageAsset(bytes: Uint8Array, remainingPixels: numbe
       if (error instanceof TiffError && error.code === 'dimensions') throw new ImageImportError('too-large');
       if (error instanceof TiffError && error.code === 'unsupported') throw new ImageImportError('unsupported', error.message);
       throw new ImageImportError('unreadable');
+    }
+  } else if (kind === 'image/x-adobe-dng') {
+    try {
+      const decoded = decodeDng(bytes, options.raw);
+      pixels = { width: decoded.width, height: decoded.height, data: decoded.rgba, bitDepth: 16 };
+    } catch (error) {
+      if (error instanceof DngError && error.code === 'dimensions') throw new ImageImportError('too-large', error.message);
+      if (error instanceof DngError && error.code === 'unsupported') throw new ImageImportError('unsupported', error.message);
+      throw new ImageImportError('unreadable', error instanceof Error ? error.message : undefined);
     }
   } else if (kind === 'image/heic') {
     try { pixels = { ...await decodeHeic(bytes, options), bitDepth: 8 }; }

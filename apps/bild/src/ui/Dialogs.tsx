@@ -77,6 +77,7 @@ export function dismissDialog(controller: EditorController): void {
   const dialog = controller.ui.getState().dialog;
   if (!dialog) return;
   if (dialog.kind === 'confirm') dialog.resolve(dialog.buttons.find((b) => b.role === 'cancel')?.value ?? 'cancel');
+  else if (dialog.kind === 'custom' && controller.customDialogDismissers[dialog.name]) controller.customDialogDismissers[dialog.name]!();
   else controller.showDialog(null);
 }
 

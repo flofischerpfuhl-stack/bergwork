@@ -82,6 +82,8 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         'separator',
         feature('fillPath', t('Fill Path')),
         feature('strokePath', t('Stroke Path')),
+        ...(controller.dialogs.preferences ? ['separator' as const, { label: t('Preferences…'), enabled: true,
+          run: () => controller.showDialog({ kind: 'custom', name: 'preferences' }), testId: 'menu-preferences' }] : []),
       ],
     },
     {

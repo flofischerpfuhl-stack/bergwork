@@ -19,10 +19,12 @@ import { installEmbedded } from './embeddedFeature';
 import { installColor } from './color/colorFeature';
 import { installObjectSelection } from './objsel/install';
 import { installWarp } from './warpFeature';
+import { installRaw } from './rawFeature';
 import type { EditorProfile } from './profiles';
 
 export function installFeatures(controller: EditorController, profile: EditorProfile = controller.profile): void {
   installEmbedded(controller);
+  installRaw(controller);
   const enabled = new Set(profile.modules);
   if (enabled.has('canvas')) installCanvasOps(controller);
   if (enabled.has('selection')) installSelection(controller);
