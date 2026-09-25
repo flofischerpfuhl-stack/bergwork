@@ -18,7 +18,7 @@ export type PixelWorkerRequest =
       readonly seed: number; readonly expand: boolean }
   | { readonly id: number; readonly operation: 'histogram'; readonly pixels: PixelArray; readonly format: RasterFormat; readonly width: number; readonly height: number;
       readonly transform: LayerTransform; readonly selection: SerializedSelection | null };
-export type PixelWorkerResponse = { readonly id: number; readonly pixels: PixelArray; readonly format: RasterFormat;
+export type PixelWorkerResponse = { readonly id: number; readonly tiles: readonly (ArrayBuffer | null)[]; readonly format: RasterFormat;
   readonly width: number; readonly height: number; readonly transform: LayerTransform }
   | { readonly id: number; readonly bins: Float64Array[] } | { readonly id: number; readonly error: string };
 export interface PixelJob { readonly promise: Promise<FilterResult>; cancel(): void }
@@ -42,8 +42,13 @@ function job(request: PixelWorkerRequest, fallback: () => FilterResult): PixelJo
       if (event.data.id !== request.id) return;
       worker.terminate();
       if ('error' in event.data) reject(new Error(event.data.error));
-      else if ('pixels' in event.data) resolve({ raster: Raster.fromPixels(event.data.width, event.data.height, 4,
-        event.data.pixels, { format: event.data.format }), transform: event.data.transform });
+      else if ('tiles' in event.data) {
+        const response = event.data;
+        resolve({ raster: new Raster(response.width, response.height, 4,
+          response.tiles.map((tile) => tile
+            ? response.format === 'rgba16' ? new Uint16Array(tile) : new Uint8Array(tile) : null),
+        { format: response.format }), transform: response.transform });
+      }
       else reject(new Error('Unexpected pixel worker response'));
     });
     worker.addEventListener('error', (event) => { worker.terminate(); reject(new Error(event.message)); });

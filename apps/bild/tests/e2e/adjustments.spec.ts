@@ -29,8 +29,16 @@ test('Levels changes the layer pixels in one undo step; Escape cancels without a
   // While the panel is open the document is read-only.
   expect(await page.evaluate(() => (window as any).__editorForTests.session.canEditLayers)).toBe(false);
   await page.getByTestId('levelsInputwhite').fill('200');
-  // The live preview is drawn from a raster override, not committed.
-  await expect.poll(() => page.evaluate(() => (window as any).__editorForTests.session.rasterOverrides.size)).toBe(1);
+  // The live preview is a transient clipped GPU adjustment, not copied into the stored document.
+  await expect.poll(() => page.evaluate(async () => {
+    const load = (path: string): Promise<any> => import(/* @vite-ignore */ path);
+    const editing = await load('/src/core/adjust/editing.ts');
+    const session = (window as any).__editorForTests.session;
+    const preview = editing.documentWithPixelAdjustmentPreview(session, session.document);
+    return { overrides: session.rasterOverrides.size,
+      stored: session.document.layers.some((layer: any) => layer.id.startsWith('__fw-adjust-preview:')),
+      preview: preview.layers.some((layer: any) => layer.id.startsWith('__fw-adjust-preview:')) };
+  })).toEqual({ overrides: 0, stored: false, preview: true });
   await page.getByTestId('adjustment-ok').click();
   await expect(panel).toHaveCount(0);
   const pixels = await exportedPixels(page);

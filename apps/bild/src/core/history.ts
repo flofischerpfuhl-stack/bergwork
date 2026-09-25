@@ -6,6 +6,7 @@
 
 import { documentsEqual, type CanvasDocument } from './document';
 import type { PixelArray } from './pixel/format';
+import type { Raster } from './raster';
 
 export interface HistorySnapshot {
   readonly document: CanvasDocument | null;
@@ -22,6 +23,15 @@ export interface PersistedHistoryState {
   readonly future: readonly HistoryCommand[];
 }
 
+export interface HistoryPerformanceCounters {
+  readonly retainedScans: number;
+  readonly scannedDocuments: number;
+  readonly scannedRasters: number;
+  readonly scannedTiles: number;
+  readonly trimmedEntries: number;
+  readonly retainedScanMs: number;
+}
+
 let revisionCounter = 1;
 
 export class DocumentHistory {
@@ -35,6 +45,9 @@ export class DocumentHistory {
   readonly entryLimit: number;
   retainedByteLimit: number;
   private enabledValue: boolean;
+  private performanceValue: HistoryPerformanceCounters = {
+    retainedScans: 0, scannedDocuments: 0, scannedRasters: 0, scannedTiles: 0, trimmedEntries: 0, retainedScanMs: 0,
+  };
 
   constructor(entryLimit = 100, retainedByteLimit = 256 * 1024 * 1024, enabled = true) {
     this.entryLimit = Math.max(0, entryLimit);
@@ -55,6 +68,8 @@ export class DocumentHistory {
   /** Names of the steps that can be redone, next first. */
   get futureNames(): string[] { return this.future.map((c) => c.name).reverse(); }
   get isInTransaction(): boolean { return this.depth > 0; }
+  /** Cumulative diagnostics used by the editing-tools performance audit and regression tests. */
+  get performanceCounters(): HistoryPerformanceCounters { return { ...this.performanceValue }; }
   markSaved(): void { this.savedRevision = this.revision; }
   /** Marks the current state as not matching any saved file. */
   markUnsaved(): void { this.savedRevision = null; }
@@ -149,31 +164,45 @@ export class DocumentHistory {
 
   /** Bytes of raster tiles retained only by history, excluding tiles in the live document. */
   retainedBytes(current: CanvasDocument | null): number {
-    const seen = new Set<PixelArray>();
-    const visit = (document: CanvasDocument | null, count: boolean): number => {
-      let bytes = 0;
-      if (!document) return 0;
-      const rasters = [];
+    const started = performance.now();
+    const currentRasters = new Set<Raster>(), historyRasters = new Set<Raster>(), documents = new Set<CanvasDocument>();
+    const collect = (document: CanvasDocument | null, target: Set<Raster>): void => {
+      if (!document) return;
       for (const layer of document.layers) {
-        if (layer.raster) rasters.push(layer.raster);
-        if (layer.mask) rasters.push(layer.mask.raster);
+        if (layer.raster) target.add(layer.raster);
+        if (layer.mask) target.add(layer.mask.raster);
       }
-      if (document.selection) rasters.push(document.selection.mask);
-      for (const raster of rasters) {
-        for (let index = 0; index < raster.cols * raster.rows; index++) {
-          // Swapped history tiles occupy no RAM and must not be faulted in just to enforce the RAM cap.
-          if (raster.tileResidency(index) === 'swapped') continue;
-          const tile = raster.tiles[index];
-          if (tile && !seen.has(tile)) { seen.add(tile); if (count) bytes += tile.byteLength; }
-        }
+      if (document.selection) target.add(document.selection.mask);
+    };
+    collect(current, currentRasters);
+    const collectHistory = (document: CanvasDocument | null): void => {
+      if (!document || documents.has(document)) return;
+      documents.add(document); collect(document, historyRasters);
+    };
+    for (const entry of this.past) { collectHistory(entry.before.document); collectHistory(entry.after.document); }
+    for (const entry of this.future) { collectHistory(entry.before.document); collectHistory(entry.after.document); }
+
+    const seen = new Set<PixelArray>();
+    let scannedTiles = 0;
+    const visit = (raster: Raster, count: boolean): number => {
+      let bytes = 0;
+      for (let index = 0; index < raster.cols * raster.rows; index++) {
+        scannedTiles++;
+        // Swapped history tiles occupy no RAM and must not be faulted in just to enforce the RAM cap.
+        if (raster.tileResidency(index) === 'swapped') continue;
+        const tile = raster.tiles[index];
+        if (tile && !seen.has(tile)) { seen.add(tile); if (count) bytes += tile.byteLength; }
       }
       return bytes;
     };
-    visit(current, false);
+    for (const raster of currentRasters) visit(raster, false);
     let bytes = 0;
-    for (const entry of [...this.past, ...this.future]) {
-      bytes += visit(entry.before.document, true) + visit(entry.after.document, true);
-    }
+    for (const raster of historyRasters) if (!currentRasters.has(raster)) bytes += visit(raster, true);
+    const old = this.performanceValue;
+    this.performanceValue = { ...old, retainedScans: old.retainedScans + 1,
+      scannedDocuments: old.scannedDocuments + documents.size,
+      scannedRasters: old.scannedRasters + currentRasters.size + historyRasters.size,
+      scannedTiles: old.scannedTiles + scannedTiles, retainedScanMs: old.retainedScanMs + performance.now() - started };
     return bytes;
   }
 
@@ -182,6 +211,7 @@ export class DocumentHistory {
       if (this.past.length) this.past.shift();
       else if (this.future.length) this.future.shift();
       else break;
+      this.performanceValue = { ...this.performanceValue, trimmedEntries: this.performanceValue.trimmedEntries + 1 };
     }
   }
 }

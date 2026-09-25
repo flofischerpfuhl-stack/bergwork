@@ -1,5 +1,6 @@
 /** Framework-free Levels, Hue/Saturation, and live adjustment-layer edit state machines. */
-import type { LayerAdjustment } from '../document';
+import { newLayer, type CanvasDocument, type LayerAdjustment } from '../document';
+import { makeTransform } from '../geometry';
 import type { EditorSession } from '../session';
 import {
   defaultHueSaturation, defaultLevels, isValidAdjustment, resolveAdjustment,
@@ -18,6 +19,8 @@ interface PixelEditBase {
   committing: boolean;
   /** Monotonic latest-request-wins token. */
   request: number;
+  /** View-resolution compositor preview; Apply still runs the exact full-raster worker. */
+  previewAdjustment: LayerAdjustment | null;
 }
 export interface LevelsEditState extends PixelEditBase {
   settings: LevelsSettings;
@@ -42,6 +45,43 @@ export function levelsEditState(session: EditorSession): LevelsEditState | null 
 export function hueSaturationEditState(session: EditorSession): HueSaturationEditState | null { return hueEdits.get(session) ?? null; }
 export function adjustmentLayerEditState(session: EditorSession): AdjustmentLayerEditState | null { return layerEdits.get(session) ?? null; }
 
+function previewAdjustment(session: EditorSession): { readonly layerId: string; readonly value: LayerAdjustment } | null {
+  const levels = levelsEdits.get(session);
+  if (levels?.previewAdjustment) return { layerId: levels.layerId, value: levels.previewAdjustment };
+  const hue = hueEdits.get(session);
+  return hue?.previewAdjustment ? { layerId: hue.layerId, value: hue.previewAdjustment } : null;
+}
+
+/**
+ * Adds a transient clipped adjustment directly above the edited pixel layer. The compositor then
+ * evaluates only the visible view. The stored document and exact Apply path remain unchanged.
+ */
+export function documentWithPixelAdjustmentPreview(session: EditorSession,
+  document: CanvasDocument = session.document!): CanvasDocument {
+  const preview = previewAdjustment(session);
+  if (!preview) return document;
+  const index = document.layers.findIndex((layer) => layer.id === preview.layerId);
+  const target = document.layers[index];
+  // A clipped child cannot itself be the base of another clipping stack in the current renderer.
+  if (!target || target.maskSourceId) return document;
+  const selection = document.selection;
+  const transform = selection
+    ? makeTransform({ x: selection.x, y: selection.y }, { width: selection.mask.width, height: selection.mask.height })
+    : makeTransform({ x: 0, y: 0 }, { width: document.width, height: document.height });
+  const mask = selection ? {
+    raster: selection.mask, enabled: true, linked: false, placement: null,
+  } : null;
+  const layer = newLayer({ id: `__fw-adjust-preview:${target.id}`, name: 'Adjustment Preview',
+    adjustment: preview.value, parentId: target.parentId, maskSourceId: target.id, mask,
+    transform });
+  const layers = document.layers.slice(); layers.splice(index + 1, 0, layer);
+  return { ...document, layers };
+}
+
+function canCompositePreview(session: EditorSession, layerId: string): boolean {
+  return session.layer(layerId)?.maskSourceId === null;
+}
+
 function editableRaster(session: EditorSession) {
   const layer = session.activeLayer;
   return session.canEditLayers && session.selectedLayerIds.size === 1 && layer && layer.kind !== 'group' && !layer.adjustment
@@ -53,7 +93,7 @@ export function beginLevelsEdit(session: EditorSession): LevelsEditState | null 
   const layer = editableRaster(session); if (!layer?.raster) return null;
   const state: LevelsEditState = { layerId: layer.id, originalRaster: layer.raster, originalTransform: layer.transform,
     settings: defaultLevels(), histogram: Array.from({ length: 4 }, () => new Float64Array(256)), histogramReady: false,
-    histogramTask: null, preview: true, committing: false, request: 0 };
+    histogramTask: null, preview: true, committing: false, request: 0, previewAdjustment: null };
   levelsEdits.set(session, state);
   const job = histogramPixelJob(layer.raster, layer.transform, session.selection); histogramJobs.set(session, job);
   state.histogramTask = job.promise.then((bins) => { if (levelsEdits.get(session) === state) { state.histogram = bins; state.histogramReady = true; session.notify('ui'); } })
@@ -65,9 +105,13 @@ export async function updateLevelsEdit(session: EditorSession, settings: LevelsS
   const state = levelsEdits.get(session); if (!state || state.committing) return;
   state.settings = settings; state.preview = preview; const request = ++state.request;
   pixelJobs.get(session)?.cancel(); pixelJobs.delete(session);
-  if (!preview) { session.rasterOverrides.delete(state.layerId); session.notify('document'); return; }
+  if (!preview) { state.previewAdjustment = null; session.rasterOverrides.delete(state.layerId); session.notify('document'); return; }
   const layer = session.layer(state.layerId); if (request !== state.request || !layer || layer.raster !== state.originalRaster) return;
   const value: LayerAdjustment = { kind: 'Levels', schemaVersion: 1, parameters: settings };
+  if (canCompositePreview(session, state.layerId)) {
+    state.previewAdjustment = value; session.rasterOverrides.delete(state.layerId); session.notify('document'); return;
+  }
+  state.previewAdjustment = null;
   const job = adjustmentPixelJob(state.originalRaster, state.originalTransform, value, session.selection); pixelJobs.set(session, job);
   try { const made = await job.promise;
     if (request === state.request && levelsEdits.get(session) === state) { session.rasterOverrides.set(state.layerId, made.raster); session.notify('document'); }
@@ -75,7 +119,7 @@ export async function updateLevelsEdit(session: EditorSession, settings: LevelsS
   finally { if (pixelJobs.get(session) === job) pixelJobs.delete(session); }
 }
 export function cancelLevelsEdit(session: EditorSession): void {
-  const state = levelsEdits.get(session); if (!state) return; state.request++; pixelJobs.get(session)?.cancel(); pixelJobs.delete(session);
+  const state = levelsEdits.get(session); if (!state) return; state.request++; state.previewAdjustment = null; pixelJobs.get(session)?.cancel(); pixelJobs.delete(session);
   histogramJobs.get(session)?.cancel(); histogramJobs.delete(session); session.rasterOverrides.delete(state.layerId);
   levelsEdits.delete(session); session.notify('document');
 }
@@ -87,33 +131,38 @@ export async function applyLevelsEdit(session: EditorSession): Promise<boolean> 
     { kind: 'Levels', schemaVersion: 1, parameters: state.settings }, session.selection);
   pixelJobs.set(session, job); let made;
   try { made = (await job.promise).raster; } catch { cancelLevelsEdit(session); return false; }
-  session.rasterOverrides.delete(state.layerId); levelsEdits.delete(session); session.replaceLayerPixels(state.layerId, made, 'Levels'); return true;
+  state.previewAdjustment = null; session.rasterOverrides.delete(state.layerId); levelsEdits.delete(session);
+  session.replaceLayerPixels(state.layerId, made, 'Levels'); return true;
 }
 
 export function beginHueSaturationEdit(session: EditorSession): HueSaturationEditState | null {
   if (hueEdits.has(session) || levelsEdits.has(session)) return null;
   const layer = editableRaster(session); if (!layer?.raster) return null;
   const state: HueSaturationEditState = { layerId: layer.id, originalRaster: layer.raster, originalTransform: layer.transform,
-    settings: defaultHueSaturation(), preview: true, committing: false, request: 0 };
+    settings: defaultHueSaturation(), preview: true, committing: false, request: 0, previewAdjustment: null };
   hueEdits.set(session, state); session.notify('ui'); return state;
 }
 export async function updateHueSaturationEdit(session: EditorSession, settings: HueSaturationSettings, preview = true): Promise<void> {
   const state = hueEdits.get(session); if (!state || state.committing) return;
   state.settings = settings; state.preview = preview; const request = ++state.request;
   pixelJobs.get(session)?.cancel(); pixelJobs.delete(session);
-  if (!preview) { session.rasterOverrides.delete(state.layerId); session.notify('document'); return; }
+  if (!preview) { state.previewAdjustment = null; session.rasterOverrides.delete(state.layerId); session.notify('document'); return; }
   const layer = session.layer(state.layerId);
   if (request !== state.request || !layer || layer.raster !== state.originalRaster) return;
-  const job = adjustmentPixelJob(state.originalRaster, state.originalTransform,
-    { kind: 'Hue/Saturation', schemaVersion: 1, parameters: { hue: settings.adjustments.Master?.hue ?? 0,
-      saturation: settings.adjustments.Master?.saturation ?? 0, lightness: settings.adjustments.Master?.lightness ?? 0,
-      colorize: settings.colorize, settings } }, session.selection); pixelJobs.set(session, job);
+  const value: LayerAdjustment = { kind: 'Hue/Saturation', schemaVersion: 1, parameters: { hue: settings.adjustments.Master?.hue ?? 0,
+    saturation: settings.adjustments.Master?.saturation ?? 0, lightness: settings.adjustments.Master?.lightness ?? 0,
+    colorize: settings.colorize, settings } };
+  if (canCompositePreview(session, state.layerId)) {
+    state.previewAdjustment = value; session.rasterOverrides.delete(state.layerId); session.notify('document'); return;
+  }
+  state.previewAdjustment = null;
+  const job = adjustmentPixelJob(state.originalRaster, state.originalTransform, value, session.selection); pixelJobs.set(session, job);
   try { const made = await job.promise;
     if (request === state.request && hueEdits.get(session) === state) { session.rasterOverrides.set(state.layerId, made.raster); session.notify('document'); }
   } catch { /* superseded */ } finally { if (pixelJobs.get(session) === job) pixelJobs.delete(session); }
 }
 export function cancelHueSaturationEdit(session: EditorSession): void {
-  const state = hueEdits.get(session); if (!state) return; state.request++; pixelJobs.get(session)?.cancel(); pixelJobs.delete(session); session.rasterOverrides.delete(state.layerId);
+  const state = hueEdits.get(session); if (!state) return; state.request++; state.previewAdjustment = null; pixelJobs.get(session)?.cancel(); pixelJobs.delete(session); session.rasterOverrides.delete(state.layerId);
   hueEdits.delete(session); session.notify('document');
 }
 export async function applyHueSaturationEdit(session: EditorSession): Promise<boolean> {
@@ -125,7 +174,8 @@ export async function applyHueSaturationEdit(session: EditorSession): Promise<bo
       saturation: state.settings.adjustments.Master?.saturation ?? 0, lightness: state.settings.adjustments.Master?.lightness ?? 0,
       colorize: state.settings.colorize, settings: state.settings } }, session.selection); pixelJobs.set(session, job); let made;
   try { made = (await job.promise).raster; } catch { cancelHueSaturationEdit(session); return false; }
-  session.rasterOverrides.delete(state.layerId); hueEdits.delete(session); session.replaceLayerPixels(state.layerId, made, 'Hue/Saturation'); return true;
+  state.previewAdjustment = null; session.rasterOverrides.delete(state.layerId); hueEdits.delete(session);
+  session.replaceLayerPixels(state.layerId, made, 'Hue/Saturation'); return true;
 }
 
 /** Opens the metadata edit as one transaction; previews change only layer settings. */

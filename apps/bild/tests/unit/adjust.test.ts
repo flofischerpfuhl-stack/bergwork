@@ -11,8 +11,9 @@ import { beginHueTarget, dragHueTarget, hueBandWeight, sampleHueRange } from '..
 import { adjustRaster, invertRaster, levelsHistogram } from '../../src/core/adjust/raster';
 import { rectangleSelection } from '../../src/core/selectionOps';
 import { EditorSession } from '../../src/core/session';
+import { cpuCompositeRegion } from '../../src/render/cpuRender';
 import { beginAdjustmentLayerEdit, beginLevelsEdit, finishAdjustmentLayerEdit, updateAdjustmentLayerEdit,
-  updateLevelsEdit, applyLevelsEdit } from '../../src/core/adjust/editing';
+  updateLevelsEdit, applyLevelsEdit, documentWithPixelAdjustmentPreview } from '../../src/core/adjust/editing';
 
 const pixel = (values: number[]) => new Float32Array(values.map((v) => v / 255));
 const bytes = (values: Float32Array) => Array.from(values, (v) => Math.round(v * 255));
@@ -107,13 +108,29 @@ describe('levels, curves, selection and edit state', () => {
     expect(Array.from(invertRaster(raster, transform, selection).toPixels())).toEqual([245, 235, 225, 128, 40, 50, 60, 255]);
   });
 
-  it('LevelsTests.preview commit is one undo step', async () => {
+  it('LevelsTests.preview is composited without copying the raster; commit is one exact undo step', async () => {
     const session = new EditorSession(); session.createDocument(2, 1); session.insertRaster(Raster.fromPixels(2, 1, 4, [64, 64, 64, 255, 128, 128, 128, 255]), 'Ramp');
     const count = session.history.undoCount, edit = beginLevelsEdit(session)!;
     const ranges = edit.settings.ranges.slice(); ranges[0] = { black: 0, gamma: 1, white: 255, outputBlack: 255, outputWhite: 0 };
     await updateLevelsEdit(session, { ...edit.settings, ranges }, true); expect(session.document?.layers[0]?.raster?.pixel(0, 0)[0]).toBe(64);
-    expect(session.rasterOverrides.get(edit.layerId)?.pixel(0, 0)[0]).toBe(191);
+    expect(session.rasterOverrides.has(edit.layerId)).toBe(false);
+    const preview = cpuCompositeRegion(documentWithPixelAdjustmentPreview(session), { x: 0, y: 0, width: 2, height: 1 });
+    expect(Array.from(preview)).toEqual([191, 191, 191, 255, 127, 127, 127, 255]);
     expect(await applyLevelsEdit(session)).toBe(true); expect(session.history.undoCount).toBe(count + 1);
+    expect(Array.from(session.activeLayer!.raster!.toPixels())).toEqual(Array.from(preview));
+  });
+
+  it('LevelsTests.compositor preview and worker commit preserve pixels outside a selection', async () => {
+    const session = new EditorSession(); session.createDocument(2, 1);
+    session.insertRaster(Raster.fromPixels(2, 1, 4, [64, 64, 64, 255, 128, 128, 128, 255]), 'Ramp');
+    session.replaceDocument({ ...session.document!, selection: rectangleSelection({ x: 0, y: 0, width: 1, height: 1 }, session.document!) });
+    const edit = beginLevelsEdit(session)!;
+    const ranges = edit.settings.ranges.slice(); ranges[0] = { black: 0, gamma: 1, white: 255, outputBlack: 255, outputWhite: 0 };
+    await updateLevelsEdit(session, { ...edit.settings, ranges }, true);
+    const preview = cpuCompositeRegion(documentWithPixelAdjustmentPreview(session), { x: 0, y: 0, width: 2, height: 1 });
+    expect(Array.from(preview)).toEqual([191, 191, 191, 255, 128, 128, 128, 255]);
+    expect(await applyLevelsEdit(session)).toBe(true);
+    expect(Array.from(session.activeLayer!.raster!.toPixels())).toEqual(Array.from(preview));
   });
 
   it('new adjustment defaults use palette colors and unique grain seeds', () => {
