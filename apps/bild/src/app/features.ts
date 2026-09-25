@@ -77,6 +77,17 @@ export function installFeatures(controller: EditorController, profile: EditorPro
   const enabled = new Set(profile.modules);
   const promises = new Map<LazyFeature, Promise<void>>();
   const installed = new Set<LazyFeature>();
+  // WebKit rejects in-flight dynamic imports when navigation tears their document down. Those cancelled requests are
+  // not feature failures; genuine failures while this editor is live still reach the host with their feature name.
+  let pageIsUnloading = false;
+  const markPageUnloading = (): void => { pageIsUnloading = true; };
+  globalThis.addEventListener('beforeunload', () => {
+    pageIsUnloading = true;
+    // A browser may cancel beforeunload (for example for an unsaved-document prompt). If the document survives,
+    // resume reporting on the next task; a committed navigation destroys the task with the page.
+    setTimeout(() => { pageIsUnloading = false; }, 0);
+  });
+  globalThis.addEventListener('pagehide', markPageUnloading, { once: true });
 
   const load = (feature: LazyFeature): Promise<void> => {
     let pending = promises.get(feature);
@@ -97,7 +108,8 @@ export function installFeatures(controller: EditorController, profile: EditorPro
       // to composite while staggered warm-up is running (including in the middle of an overlay-only crop drag).
       controller.ui.setState((state) => ({ featureRevision: state.featureRevision + 1 }));
     })().catch((error: unknown) => {
-      controller.reportError('feature-load-failed', error);
+      const detail = error instanceof Error ? error.message : String(error);
+      if (!pageIsUnloading) controller.reportError('feature-load-failed', new Error(`${feature}: ${detail}`, { cause: error }));
       throw error;
     });
     promises.set(feature, pending);

@@ -71,7 +71,10 @@ const PSD_CMYK_GLSL = /* glsl */ `
 vec4 cmykInverseFetch(ivec3 p) { int n=int(uParams[0].x),columns=int(uParams[0].y); return texelFetch(uLut,
   ivec2((p.z%columns)*n+p.x,(p.z/columns)*n+p.y),0); }
 vec4 cmykInverse(vec3 c) {
-  int n=int(uParams[0].x); vec3 p=clamp(c,0.0,1.0)*float(n-1); ivec3 a=ivec3(floor(p)),z=min(a+1,ivec3(n-1)); vec3 f=fract(p);
+  // The PSD profile transform is an 8-bit LUT. WebKit's normalized texture/target path can deliver byte 255 just below 1;
+  // restore the byte grid before the nonlinear RGB→CMYK→RGB round trip so white and saturated bytes stay exact.
+  c=floor(clamp(c,0.0,1.0)*255.0+0.5)/255.0;
+  int n=int(uParams[0].x); vec3 p=c*float(n-1); ivec3 a=ivec3(floor(p)),z=min(a+1,ivec3(n-1)); vec3 f=fract(p);
   vec4 outColor=vec4(0.0); for(int dz=0;dz<2;dz++)for(int dy=0;dy<2;dy++)for(int dx=0;dx<2;dx++) {
     ivec3 q=ivec3(dx==0?a.x:z.x,dy==0?a.y:z.y,dz==0?a.z:z.z);
     float weight=(dx==0?1.0-f.x:f.x)*(dy==0?1.0-f.y:f.y)*(dz==0?1.0-f.z:f.z); outColor+=cmykInverseFetch(q)*weight;
