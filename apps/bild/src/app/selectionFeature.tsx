@@ -211,17 +211,32 @@ function outlineOf(selection: DocumentSelection): SelectionPolyline[] {
   return cached;
 }
 
+/**
+ * The marching-ants path in view coordinates, cached per selection and view mapping: the overlay repaints on every brush
+ * frame, and tracing the outline of a large selection each time cost more than drawing it.
+ */
+const antsPaths = new WeakMap<object, { readonly key: string; readonly path: Path2D }>();
+function antsPath(selection: NonNullable<ReturnType<typeof displayedSelection>>, view: (p: Point) => Point): Path2D {
+  const origin = view({ x: 0, y: 0 }), unit = view({ x: 1, y: 1 });
+  const key = `${origin.x},${origin.y},${unit.x},${unit.y}`;
+  const cached = antsPaths.get(selection);
+  if (cached?.key === key) return cached.path;
+  const path = new Path2D();
+  for (const line of outlineOf(selection)) {
+    line.forEach((p, i) => { const v = view(p); if (i) path.lineTo(v.x, v.y); else path.moveTo(v.x, v.y); });
+    path.closePath();
+  }
+  antsPaths.set(selection, { key, path });
+  return path;
+}
+
 function paintSelection(context: CanvasRenderingContext2D, session: EditorSession, time: number, antsHidden: boolean): void {
   const document = session.document;
   if (!document) return;
   const selection = displayedSelection(session);
   const view = (p: Point) => session.viewport.viewPoint(p, document);
   if (selection && !selectionIsEmpty(selection) && !antsHidden) {
-    const path = new Path2D();
-    for (const line of outlineOf(selection)) {
-      line.forEach((p, i) => { const v = view(p); if (i) path.lineTo(v.x, v.y); else path.moveTo(v.x, v.y); });
-      path.closePath();
-    }
+    const path = antsPath(selection, view);
     context.lineWidth = 1;
     context.strokeStyle = '#fff';
     context.stroke(path);

@@ -711,9 +711,6 @@ export function installPainting(controller: EditorController): void {
     view.tools.eyedropper = new EyedropperTool(controller);
     view.painters.push(paintCursors(view));
   });
-  // Marching ants have their own 120 ms cadence. Repainting their full path on every stroke frame
-  // only adds main-thread canvas work; the unchanged selection is restored immediately on pointer-up.
-  controller.selectionOverlayHidden.push((session) => isBrushStrokeActive(session));
   for (const tool of ['brush', 'cloneStamp', 'blur'] as const) controller.contextBars[tool] = (session) => <BrushBar controller={controller} session={session} />;
   controller.contextBars.gradient = (session) => <GradientBar controller={controller} session={session} />;
   installBrushPresets(controller);

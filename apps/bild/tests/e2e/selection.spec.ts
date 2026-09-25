@@ -176,3 +176,42 @@ test('dragging a marquee past the canvas edge scrolls the view and keeps growing
   });
   expect(selection.right).toBeGreaterThan(edgeBefore + 100);
 });
+
+test('the selection outline stays visible while painting inside it', async ({ page }) => {
+  await mountForTest(page);
+  await page.getByTestId('widthInput').fill('100');
+  await page.getByTestId('heightInput').fill('100');
+  await page.getByTestId('createCanvas').click();
+  await importThroughMenu(page, [{ name: 'white.png', mimeType: 'image/png', buffer: solidPng(100, 100, [255, 255, 255, 255]) }]);
+  const pane = (await page.getByTestId('canvas-pane').boundingBox())!;
+  const zoom = parseFloat((await page.getByTestId('zoomStatus').textContent())!) / 100 / (await page.evaluate(() => devicePixelRatio));
+  const origin = { x: pane.x + pane.width / 2 - 50 * zoom, y: pane.y + pane.height / 2 - 50 * zoom };
+  const at = (x: number, y: number) => ({ x: origin.x + x * zoom, y: origin.y + y * zoom });
+  await page.getByTestId('tool-marquee').click();
+  let p = at(10, 10);
+  await page.mouse.move(p.x, p.y);
+  await page.mouse.down();
+  p = at(80, 80);
+  await page.mouse.move(p.x, p.y, { steps: 5 });
+  await page.mouse.up();
+  await page.getByTestId('tool-brush').click();
+  // Count marching-ants strokes (the 4/4 dash) drawn while the mouse button is held.
+  await page.evaluate(() => {
+    const proto = CanvasRenderingContext2D.prototype, original = proto.setLineDash;
+    (window as any).__ants = 0;
+    proto.setLineDash = function (segments: number[]) {
+      if (segments.length === 2 && segments[0] === 4 && segments[1] === 4) (window as any).__ants++;
+      return original.call(this, segments);
+    };
+  });
+  p = at(30, 30);
+  await page.mouse.move(p.x, p.y);
+  await page.mouse.down();
+  await page.evaluate(() => { (window as any).__ants = 0; });
+  p = at(60, 50);
+  await page.mouse.move(p.x, p.y, { steps: 10 });
+  await page.waitForTimeout(300);
+  const antsWhilePainting = await page.evaluate(() => (window as any).__ants);
+  await page.mouse.up();
+  expect(antsWhilePainting).toBeGreaterThan(0);
+});
