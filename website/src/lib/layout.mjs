@@ -55,6 +55,15 @@ function header(current, home = false) {
   </header>`;
 }
 
+// Pinned on every page until a public build exists: the site describes products that are not released.
+function previewNote() {
+  return `<aside class="preview-note" aria-label="Preview notice">
+    <strong>Preview</strong>
+    <span>In development. Nothing is released yet.</span>
+    <a href="/download/">Release status <span aria-hidden="true">→</span></a>
+  </aside>`;
+}
+
 function footer() {
   return `<footer class="site-footer">
     <div class="footer-grid">
@@ -123,6 +132,7 @@ export function renderLayout(page, assets) {
   ${header(page.current, page.current === 'home')}
   <main id="main">${page.body}</main>
   ${footer()}
+  ${previewNote()}
 </body>
 </html>`;
 }

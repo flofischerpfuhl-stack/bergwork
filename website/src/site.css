@@ -293,7 +293,50 @@ html[data-hero='mine-winter'] .hero {
 .hero-link {
   position: absolute;
   right: 5.5%;
-  bottom: 8%;
+  bottom: calc(8% + 5.5rem);
+}
+
+/* Preview notice: fixed on every page until a public build exists. */
+.preview-note {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.25rem;
+  z-index: 90;
+  display: grid;
+  max-width: 21rem;
+  gap: 0.2rem 0.75rem;
+  grid-template-columns: auto 1fr;
+  padding: 0.7rem 0.9rem;
+  color: var(--cream);
+  background: var(--ink);
+  border: 2px solid var(--cream);
+  box-shadow: 5px 5px 0 var(--red);
+  font-size: 0.74rem;
+  line-height: 1.35;
+  transform: rotate(-1.5deg);
+  transition: transform 170ms ease-out;
+}
+
+.preview-note:hover,
+.preview-note:focus-within {
+  transform: rotate(0);
+}
+
+.preview-note strong {
+  grid-row: span 2;
+  align-self: center;
+  padding: 0.3rem 0.45rem;
+  color: var(--cream);
+  background: var(--red);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.preview-note a {
+  width: fit-content;
+  color: var(--cream);
+  font-weight: 800;
 }
 
 .button {
@@ -1028,14 +1071,44 @@ html[data-os='macos'] .os-primary[data-os='macos'] {
 
 @media (max-width: 980px) {
   .hero-copy {
-    bottom: 17%;
+    bottom: calc(17% + 3.5rem);
     max-width: 82vw;
   }
 
   .hero-link {
     right: auto;
-    bottom: 5%;
+    bottom: calc(5% + 3.5rem);
     left: 5.5%;
+  }
+
+  body {
+    padding-bottom: 4rem;
+  }
+
+  .preview-note {
+    right: 0;
+    bottom: 0;
+    left: 0;
+    max-width: none;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    padding: 0.55rem 0.8rem;
+    border-width: 2px 0 0;
+    box-shadow: none;
+    transform: none;
+  }
+
+  .preview-note:hover,
+  .preview-note:focus-within {
+    transform: none;
+  }
+
+  .preview-note strong {
+    grid-row: auto;
+  }
+
+  .preview-note span {
+    font-size: 0.7rem;
   }
 
   .feature-grid {
@@ -1139,7 +1212,7 @@ html[data-os='macos'] .os-primary[data-os='macos'] {
   }
 
   .hero-copy {
-    bottom: 24%;
+    bottom: calc(24% + 3.5rem);
     left: 5%;
     max-width: 90vw;
     gap: 0.8rem;
@@ -1261,6 +1334,7 @@ html[data-os='macos'] .os-primary[data-os='macos'] {
 
 @media print {
   .site-header,
+  .preview-note,
   .hero,
   .site-footer,
   .button,
