@@ -62,6 +62,11 @@ const POSTERIZE_GLSL = /* glsl */ `vec3 adjustColor(vec3 c, vec2 documentPixel) 
   float levels=max(2.0,uParams[0].x),steps=levels-1.0;
   return min(vec3(steps),floor(clamp(c,0.0,1.0)*levels))/steps;
 }`;
+const PSD_GRAY_GLSL = /* glsl */ `vec3 adjustColor(vec3 c, vec2 documentPixel) {
+  int count=int(uParams[0].x),width=int(uParams[0].y);
+  int index=int(round(clamp((c.r+c.g+c.b)/3.0,0.0,1.0)*float(count-1)));
+  return texelFetch(uLut,ivec2(index%width,index/width),0).rgb;
+}`;
 const LOOKUP_GLSL = /* glsl */ `
 vec3 lookupFetch(ivec3 p) { int columns=int(uParams[0].y); return texelFetch(uLut,
   ivec2((p.z%columns)*int(uParams[0].x)+p.x,(p.z/columns)*int(uParams[0].x)+p.y),0).rgb; }
@@ -163,6 +168,16 @@ function genericTexture(layer: Layer, document?: CanvasDocument): { data: Float3
   return { data, width, height, columns };
 }
 
+function grayTexture(layer: Layer, bits: number, document?: CanvasDocument): { data: Float32Array; width: number; height: number } {
+  const count = bits === 16 ? 65_536 : 256, width = Math.min(256, count), height = Math.ceil(count / width);
+  const input = new Float32Array(count * 4);
+  for (let index = 0; index < count; index++) {
+    const value = index / (count - 1), at = index * 4;
+    input[at] = value; input[at + 1] = value; input[at + 2] = value; input[at + 3] = 1;
+  }
+  return { data: applyAdjustment(layer.adjustment!, input, count, 1, 0, 0, document?.resources), width, height };
+}
+
 function lookupTexture(lut: CubeLut): { data: Float32Array; width: number; height: number; columns: number; oneDRow: number } {
   const n = lut.size3D, columns = n ? Math.ceil(Math.sqrt(n)) : 1, rows = n ? Math.ceil(n / columns) : 0;
   const cubeHeight = n * rows, width = Math.max(1, n * columns, lut.size1D), height = Math.max(1, cubeHeight + (lut.size1D ? 1 : 0));
@@ -191,17 +206,23 @@ function makeProgram(layer: Layer, document?: CanvasDocument): AdjustmentProgram
         ...lut.domainMin, 0, ...lut.domainMax, 0, adjustment.parameters.interpolation === 'tetrahedral' ? 1 : 0]); }, lut: texture };
   }
   const value = resolveAdjustment(layer.adjustment);
-  const psd = layer.adjustment as typeof layer.adjustment & { readonly psdColorMode?: number };
+  const psd = layer.adjustment as typeof layer.adjustment
+    & { readonly psdColorMode?: number; readonly psdBitsPerChannel?: number };
   const generic = (): AdjustmentProgram => {
     const texture = once(() => genericTexture(layer, document));
     return { key: `generic-cube-65:${value.kind}`, glsl: LOOKUP_GLSL,
       params: () => { const t = texture(); return params([65, t.columns, 0, t.height, 0, 0, 0, 0, 1, 1, 1, 0, 1]); }, lut: texture };
   };
+  const gray = (): AdjustmentProgram => {
+    const bits = psd.psdBitsPerChannel === 16 ? 16 : 8, texture = once(() => grayTexture(layer, bits, document));
+    return { key: `psd-gray-${bits}:${value.kind}`, glsl: PSD_GRAY_GLSL,
+      params: () => { const t = texture(); return params([bits === 16 ? 65_536 : 256, t.width]); }, lut: texture };
+  };
   switch (value.kind) {
     case 'Hue/Saturation': return { key: 'hsv-cube-33', glsl: HUE_GLSL, params: () => params(), lut: once(() => hueTexture(value.hsvSettings)) };
-    case 'Levels': return psd.psdColorMode === 1 ? generic()
+    case 'Levels': return psd.psdColorMode === 1 ? gray()
       : { key: 'levels-table', glsl: TABLE_GLSL, params: () => params(), lut: once(() => tableTexture(levelsTables(value.levels))) };
-    case 'Curves': return psd.psdColorMode === 1 ? generic()
+    case 'Curves': return psd.psdColorMode === 1 ? gray()
       : { key: 'curves-table', glsl: TABLE_GLSL, params: () => params(), lut: once(() => tableTexture(curvesTables(value.curves))) };
     case 'Exposure': return { key: 'exposure-linear', glsl: EXPOSURE_GLSL,
       params: () => params([value.exposureSettings.exposure, value.exposureSettings.offset, value.exposureSettings.gamma]) };
@@ -211,10 +232,11 @@ function makeProgram(layer: Layer, document?: CanvasDocument): AdjustmentProgram
         params: () => params([dark.red, dark.green, dark.blue, 0, light.red, light.green, light.blue]) };
     }
     case 'Grain': return { key: 'grain-v1', glsl: GRAIN_GLSL, params: () => grainParams(value.grainSettings) };
-    case 'Invert': return { key: 'invert', glsl: INVERT_GLSL, params: () => params() };
-    case 'Threshold': return { key: 'threshold', glsl: THRESHOLD_GLSL,
+    case 'Invert': return psd.psdColorMode === 1 ? gray() : psd.psdColorMode === 4 ? generic()
+      : { key: 'invert', glsl: INVERT_GLSL, params: () => params() };
+    case 'Threshold': return psd.psdColorMode === 1 ? gray() : psd.psdColorMode === 4 ? generic() : { key: 'threshold', glsl: THRESHOLD_GLSL,
       params: () => params([layer.adjustment.kind === 'Threshold' ? layer.adjustment.parameters.level : 128]) };
-    case 'Posterize': return { key: 'posterize', glsl: POSTERIZE_GLSL,
+    case 'Posterize': return psd.psdColorMode === 1 ? gray() : psd.psdColorMode === 4 ? generic() : { key: 'posterize', glsl: POSTERIZE_GLSL,
       params: () => params([layer.adjustment.kind === 'Posterize' ? layer.adjustment.parameters.levels : 4]) };
     case 'Basic': case 'Colour': case 'Brightness/Contrast': case 'Photo Filter': case 'Channel Mixer': return generic();
     case 'Colour Lookup': return null;

@@ -1,4 +1,4 @@
-# PSD native-fidelity report — fifth round
+# PSD native-fidelity report — sixth round
 
 Corpus: psd-tools commit `30bf79c2a88e0fc63104ee85713e23b04362153d`; 300 PSD/PSB files. ag-psd 31.0.2 plus native non-RGB layer-channel decoding.
 
@@ -7,42 +7,44 @@ alpha (so undefined straight RGB below transparency is ignored): mean over all c
 percentile. A file passes only when both limits for its primary feature folder pass.
 The runner is a measurement baseline: fidelity failures are reported but do not make the command itself fail.
 
-Overall: 300/300 parsed, 300/300 rendered, 215/300 passed (71.7%).
+Overall: 300/300 parsed, 300/300 rendered, 224/300 passed (74.7%).
 The Product Plan A7 acceptance target of at least 90% is **not met** by this baseline.
 
-Fifth-round input: 208/300 (69.3%). Current native result: 215/300 (71.7%), a net gain of 7 files with no
-regressions. Primary-folder changes are: blend modes 28→28, adjustments 24→24, layers 32→32, effects 11→11,
-path operations 12→12, masks 0→0, group clipping 1→1, transparency 14→14, colour modes 5→5, colour profiles
-1→1, gradients 4→4, descriptors 5→5, and root 71→78. The overlapping 16/32-bit and PSB tags changed
-16→18 and 27→30 respectively.
+Sixth-round input: 215/300 (71.7%). Current native result: 224/300 (74.7%), a net gain of 9 files.
+Primary-folder changes are: blend modes 28→28, adjustments 24→32, layers 32→32, effects 11→11,
+path operations 12→12, masks 0→0, group clipping 1→1, transparency 14→15, colour modes 5→5, colour profiles
+1→1, gradients 4→4, descriptors 5→5, and root 78→78. The overlapping 16/32-bit and PSB tags changed
+18→21 and 30→30 respectively. No primary-folder pass count regressed.
 
 | Newly passing file | Before mean / p99 | After mean / p99 | Native change |
 |---|---:|---:|---|
-| 0layers.psb | 254.286 / 255 | 0.714 / 0 | opaque zero-layer Photoshop canvas |
-| 0layers.psd | 254.286 / 255 | 0.714 / 0 | opaque zero-layer Photoshop canvas |
-| clipping-mask2.psd | 18.331 / 80 | 1.199 / 5 | composed -2 mask cache and absent-cache default handling |
-| slices.psb | 255.000 / 255 | 0.000 / 0 | opaque zero-layer Photoshop canvas |
-| slices.psd | 255.000 / 255 | 0.000 / 0 | opaque zero-layer Photoshop canvas |
-| transparentbg.psb | 211.124 / 255 | 0.456 / 15 | native Mt32 HDR transparency block |
-| transparentbg.psd | 211.143 / 255 | 0.458 / 15 | native Mt32 HDR transparency block |
+| adjustments/invert_cmyk.psd | 37.293 / 133 | 0.350 / 3 | ICC CMYK inverse/forward transforms around native-channel inversion |
+| adjustments/invert_grayscale.psd | 10.375 / 43 | 0.030 / 1 | embedded gray-profile transfer around native-channel inversion |
+| adjustments/posterize_16bits_cmyk.psd | 14.106 / 237 | 1.612 / 28 | profile-space CMYK posterization |
+| adjustments/posterize_16bits_grayscale.psd | 11.817 / 255 | 0.065 / 1 | 65,536-sample gray-profile transfer |
+| adjustments/posterize_cmyk.psd | 9.292 / 85 | 1.438 / 21 | profile-space CMYK posterization |
+| adjustments/posterize_grayscale.psd | 11.715 / 128 | 0.816 / 14 | gray-profile-domain posterization |
+| adjustments/threshold_16bits_grayscale.psd | 19.221 / 255 | 0.187 / 0 | 65,536-sample gray-profile threshold |
+| adjustments/threshold_grayscale.psd | 20.062 / 255 | 0.072 / 0 | gray-profile-domain threshold |
+| transparency/knockout-shallow-nested-pt.psd | 63.500 / 127 | 0.000 / 0 | native knko selector and pass-through group-entry backdrop |
 
 ## Thresholds and feature summary
 
 | Feature | Limits (mean / p99) | Files | Parsed | Rendered | Passed | Pass rate | Top failure causes |
 |---|---:|---:|---:|---:|---:|---:|---|
 | blend-modes | ≤ 2 / ≤ 8 | 32 | 32 | 32 | 28 | 87.5% | wrong math/order/colour conversion (4) |
-| adjustments | ≤ 8 / ≤ 64 | 39 | 39 | 39 | 24 | 61.5% | wrong math/order/colour conversion (7); unsupported: bit-depth:16 (3); unsupported: mask-pixels (3) |
+| adjustments | ≤ 8 / ≤ 64 | 39 | 39 | 39 | 32 | 82.1% | unsupported: mask-pixels (3); unsupported: mask-default (2); wrong math/order/colour conversion (2) |
 | layers | ≤ 2 / ≤ 16 | 36 | 36 | 36 | 32 | 88.9% | wrong math/order/colour conversion (3); unsupported: text-path (1) |
 | effects | ≤ 8 / ≤ 64 | 15 | 15 | 15 | 11 | 73.3% | wrong math/order/colour conversion (3); unsupported: stroke-pattern (1) |
 | path-operations | ≤ 4 / ≤ 32 | 12 | 12 | 12 | 12 | 100.0% | — |
 | masks | ≤ 3 / ≤ 24 | 1 | 1 | 1 | 0 | 0.0% | wrong math/order/colour conversion (1) |
 | group-clipping | ≤ 3 / ≤ 24 | 1 | 1 | 1 | 1 | 100.0% | — |
-| transparency | ≤ 4 / ≤ 32 | 16 | 16 | 16 | 14 | 87.5% | unsupported: knockout (2) |
+| transparency | ≤ 4 / ≤ 32 | 16 | 16 | 16 | 15 | 93.8% | unsupported: knockout (1) |
 | colormodes | ≤ 3 / ≤ 24 | 17 | 17 | 17 | 5 | 29.4% | unsupported: bit-depth:16 (4); unsupported: bit-depth:1 (3); opened flattened (layers not decoded) (2) |
 | colorprofiles | ≤ 3 / ≤ 24 | 1 | 1 | 1 | 1 | 100.0% | — |
 | gradients | ≤ 4 / ≤ 32 | 4 | 4 | 4 | 4 | 100.0% | — |
 | descriptors | ≤ 2 / ≤ 16 | 6 | 6 | 6 | 5 | 83.3% | wrong math/order/colour conversion (1) |
-| 16/32-bit | ≤ 3 / ≤ 24 | 29 | 29 | 29 | 18 | 62.1% | unsupported: bit-depth:16 (7); unsupported: bit-depth:32 (3); opened flattened (layers not decoded) (1) |
+| 16/32-bit | ≤ 3 / ≤ 24 | 29 | 29 | 29 | 21 | 72.4% | unsupported: bit-depth:16 (4); unsupported: bit-depth:32 (3); opened flattened (layers not decoded) (1) |
 | PSB | ≤ 2 / ≤ 16 | 37 | 37 | 37 | 30 | 81.1% | wrong math/order/colour conversion (5); unsupported: mask-density (1); unsupported: mask-pixels (1) |
 | root | ≤ 2 / ≤ 16 | 120 | 120 | 120 | 78 | 65.0% | wrong math/order/colour conversion (13); unsupported: mask-density (7); unsupported: mask-pixels (6) |
 
@@ -182,7 +184,7 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | adjustments/brightnesscontrast_legacy_rgb.psd | adjustments | yes | yes | yes | 5.667 | 49 | 53 | — |
 | adjustments/brightnesscontrast_rgb.psd | adjustments | yes | yes | yes | 2.279 | 11 | 13 | mask-default, mask-default, mask-default, mask-default |
 | adjustments/curves_cmyk.psd | adjustments | yes | yes | no | 23.136 | 136 | 252 | mask-pixels, mask-default, mask-default, mask-default, mask-default |
-| adjustments/curves_grayscale.psd | adjustments | yes | yes | yes | 5.177 | 29 | 32 | mask-default, mask-default, mask-default, mask-default |
+| adjustments/curves_grayscale.psd | adjustments | yes | yes | yes | 0.097 | 1 | 13 | mask-default, mask-default, mask-default, mask-default |
 | adjustments/curves_rgb.psd | adjustments | yes | yes | yes | 0.122 | 1 | 12 | mask-default, mask-default, mask-default, mask-default |
 | adjustments/exposure_grayscale.psd | adjustments | yes | yes | yes | 0.234 | 1 | 7 | mask-default, mask-default, mask-default, mask-default |
 | adjustments/exposure_rgb.psd | adjustments | yes | yes | yes | 1.093 | 7 | 21 | mask-default, mask-default, mask-default, mask-default |
@@ -190,22 +192,22 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | adjustments/huesaturation_lightness_rgb.psd | adjustments | yes | yes | yes | 0.264 | 2 | 6 | — |
 | adjustments/huesaturation_rgb.psd | adjustments | yes | yes | yes | 2.354 | 34 | 121 | — |
 | adjustments/huesaturation_saturation_rgb.psd | adjustments | yes | yes | no | 5.786 | 90 | 111 | — |
-| adjustments/invert_cmyk.psd | adjustments | yes | yes | no | 37.293 | 133 | 188 | — |
-| adjustments/invert_grayscale.psd | adjustments | yes | yes | no | 10.375 | 43 | 43 | — |
+| adjustments/invert_cmyk.psd | adjustments | yes | yes | yes | 0.350 | 3 | 26 | — |
+| adjustments/invert_grayscale.psd | adjustments | yes | yes | yes | 0.030 | 1 | 9 | — |
 | adjustments/invert_rgb.psd | adjustments | yes | yes | yes | 0.000 | 0 | 0 | — |
 | adjustments/levels_cmyk.psd | adjustments | yes | yes | no | 13.904 | 104 | 140 | mask-default, mask-default, mask-default, mask-default |
-| adjustments/levels_grayscale.psd | adjustments | yes | yes | yes | 6.153 | 41 | 74 | mask-default, mask-default, mask-default, mask-default |
+| adjustments/levels_grayscale.psd | adjustments | yes | yes | yes | 0.379 | 7 | 18 | mask-default, mask-default, mask-default, mask-default |
 | adjustments/levels_rgb.psd | adjustments | yes | yes | yes | 0.235 | 2 | 6 | mask-default, mask-default, mask-default, mask-default |
-| adjustments/posterize_16bits_cmyk.psd | adjustments | yes | yes | no | 14.106 | 237 | 255 | bit-depth:16 |
-| adjustments/posterize_16bits_grayscale.psd | adjustments | yes | yes | no | 11.817 | 255 | 255 | bit-depth:16 |
+| adjustments/posterize_16bits_cmyk.psd | adjustments | yes | yes | yes | 1.612 | 28 | 255 | bit-depth:16 |
+| adjustments/posterize_16bits_grayscale.psd | adjustments | yes | yes | yes | 0.065 | 1 | 255 | bit-depth:16 |
 | adjustments/posterize_16bits_rgb.psd | adjustments | yes | yes | yes | 0.060 | 1 | 1 | bit-depth:16 |
-| adjustments/posterize_cmyk.psd | adjustments | yes | yes | no | 9.292 | 85 | 146 | — |
-| adjustments/posterize_grayscale.psd | adjustments | yes | yes | no | 11.715 | 128 | 128 | — |
+| adjustments/posterize_cmyk.psd | adjustments | yes | yes | yes | 1.438 | 21 | 154 | — |
+| adjustments/posterize_grayscale.psd | adjustments | yes | yes | yes | 0.816 | 14 | 149 | — |
 | adjustments/posterize_rgb.psd | adjustments | yes | yes | yes | 0.819 | 14 | 128 | — |
-| adjustments/threshold_16bits_grayscale.psd | adjustments | yes | yes | no | 19.221 | 255 | 255 | bit-depth:16 |
+| adjustments/threshold_16bits_grayscale.psd | adjustments | yes | yes | yes | 0.187 | 0 | 255 | bit-depth:16 |
 | adjustments/threshold_16bits_rgb.psd | adjustments | yes | yes | yes | 0.139 | 0 | 255 | bit-depth:16 |
-| adjustments/threshold_cmyk.psd | adjustments | yes | yes | no | 26.430 | 255 | 255 | — |
-| adjustments/threshold_grayscale.psd | adjustments | yes | yes | no | 20.062 | 255 | 255 | — |
+| adjustments/threshold_cmyk.psd | adjustments | yes | yes | no | 18.684 | 224 | 224 | — |
+| adjustments/threshold_grayscale.psd | adjustments | yes | yes | yes | 0.072 | 0 | 255 | — |
 | adjustments/threshold_rgb.psd | adjustments | yes | yes | yes | 0.454 | 0 | 255 | — |
 | advanced-blending.psd | root | yes | yes | no | 5.353 | 22 | 255 | advanced-blending |
 | artboard-bgcolor.psd | root | yes | yes | yes | 0.000 | 0 | 1 | — |
@@ -434,7 +436,7 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | transparency/knockout-none-nested.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | — |
 | transparency/knockout-none-normal.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | — |
 | transparency/knockout-none-passthrough.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | — |
-| transparency/knockout-shallow-nested-pt.psd | transparency | yes | yes | no | 63.500 | 127 | 127 | knockout |
+| transparency/knockout-shallow-nested-pt.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | knockout |
 | transparency/knockout-shallow-nested.psd | transparency | yes | yes | yes | 0.000 | 0 | 0 | knockout |
 | transparency/transparency-group.psd | transparency | yes | yes | yes | 0.011 | 1 | 2 | — |
 | transparentbg-gimp.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
@@ -457,9 +459,11 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 - RGBA16 layer data is retained. The 32-bit path clamps floating samples to display range; it does not reproduce Photoshop’s
   document-specific 32-bit preview/tone-mapping transform, which remains a major corpus failure source.
 - Isolated groups, group opacity/fill, nested group order, and the corpus knockout cases are composited natively on CPU and GPU.
-  ag-psd exposes knockout as a boolean but not the shallow/deep selector; the pass-through shallow nested case remains ambiguous.
-- Remaining adjustment mismatches are listed per file above: modern Brightness/Contrast, curve interpolation, non-colorize
-  Hue/Saturation ranges, non-RGB Levels/Invert, Posterize, and Threshold differ from Photoshop’s proprietary kernels.
+  A bounded native knko parser preserves Photoshop’s shallow/deep selector; shallow knockout restores the containing
+  pass-through group’s entry backdrop. Knockout on ordinary, non-group layers remains approximated.
+- Embedded/default gray and CMYK profiles now provide pre-CMS adjustment transfers for grayscale Invert, Posterize,
+  Threshold, Levels, and Curves and CMYK Invert/Posterize. CMYK Threshold improves but remains outside tolerance;
+  CMYK Levels/Curves/Brightness-Contrast and non-colorize Hue/Saturation ranges remain mismatched.
 - The PSD -2 mask channel is used as Photoshop’s composed vector/user-mask cache; -3 is decoded as the real-mask fallback
   when that cache is absent. Vector/group masks without either pixel channel, smart filters, blend-if, and pattern strokes remain unsupported.
   Text, vector, and smart-object layers use their layer-owned saved pixel caches; never the document merged composite.

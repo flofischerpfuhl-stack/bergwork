@@ -18,6 +18,7 @@ import {
 import { parseCubeLut } from '../../core/adjust/cube';
 import { psdHasMergedTransparency, readRawPsdComposite } from './composite';
 import { decodePsdLayerChannels } from './layerChannels';
+import { readPsdLayerKnockouts, type PsdKnockoutMode } from './layerInfo';
 import type { LittleCms } from '../../wasm/lcms';
 import { sha256Hex } from '../sha256';
 import { decodePngNativeRGBA } from '../png';
@@ -129,6 +130,10 @@ interface ImportState {
   readonly resources: NonNullable<CanvasDocument['resources']>[number][];
   readonly linkedFiles: ReadonlyMap<string, LinkedFile>;
   readonly patterns: ReadonlyMap<string, PatternInfo>;
+  readonly grayTransfer: Float32Array | null;
+  readonly cmykTransfer: { readonly inverseSize: number; readonly inverse: Uint8Array;
+    readonly forwardSize: number; readonly forward: Uint8Array } | null;
+  readonly knockoutModes: ReadonlyMap<number, PsdKnockoutMode>;
 }
 
 function issue(state: ImportState, code: string, message: string, impact: PsdUnsupportedImpact, layerPath?: string): void {
@@ -985,7 +990,9 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const width = Math.max(0, (source.right ?? left) - left), height = Math.max(0, (source.bottom ?? top) - top);
     const nativeAdjustment = importedAdjustment(source, state, layerPath);
     const adjustment = nativeAdjustment ? Object.assign({}, nativeAdjustment, { psdColorMode: state.colorMode,
-      psdBitsPerChannel: state.bitsPerChannel }) as LayerAdjustment : null;
+      psdBitsPerChannel: state.bitsPerChannel,
+      ...(state.grayTransfer ? { psdGrayTransfer: state.grayTransfer } : {}),
+      ...(state.cmykTransfer ? { psdCmykTransfer: state.cmykTransfer } : {}) }) as LayerAdjustment : null;
     const image = source.adjustment ? undefined : source.imageData;
     const adjustmentMask = adjustment && source.mask?.imageData ? source.mask : null;
     const layerTransform = image ? transform(left, top, image.width, image.height)
@@ -1064,9 +1071,10 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
       effects: importEffects(source, state, layerPath),
       ...(adjustment ? { adjustment } : {}),
     });
+    const knockoutMode = source.id === undefined ? undefined : state.knockoutModes.get(source.id);
     if (isGroup) imported = { ...imported,
-      psdIsolated: sourceMode !== 'pass through', psdKnockout: source.knockout === true } as Layer
-        & { readonly psdIsolated: boolean; readonly psdKnockout: boolean };
+      psdIsolated: sourceMode !== 'pass through', psdKnockout: knockoutMode ?? (source.knockout === true ? 'deep' : false) } as Layer
+        & { readonly psdIsolated: boolean; readonly psdKnockout: PsdKnockoutMode | false };
     if (importedMaskResult.defaultColor !== undefined) imported = { ...imported,
       psdMaskDefault: importedMaskResult.defaultColor } as Layer
       & { readonly psdMaskDefault: number };
@@ -1170,6 +1178,44 @@ function colorManagedComposite(raw: ReturnType<typeof readRawPsdComposite>, lcms
   return Raster.fromPixels(raw.width, raw.height, 4, raw.rgba);
 }
 
+function grayTransfer(raw: ReturnType<typeof readRawPsdComposite>, lcms: LittleCms | null): Float32Array | null {
+  if (!lcms || raw.colorMode !== 1 || (raw.bitsPerChannel !== 8 && raw.bitsPerChannel !== 16)) return null;
+  const profile = raw.iccProfile ?? lcms.createGrayProfile([0.3127, 0.329], 2.2);
+  const size = raw.bitsPerChannel === 16 ? 65_536 : 256;
+  const source = raw.bitsPerChannel === 16
+    ? Uint16Array.from({ length: size }, (_, value) => value)
+    : Uint8Array.from({ length: size }, (_, value) => value);
+  const converted = raw.bitsPerChannel === 16
+    ? lcms.transform16(profile, source as Uint16Array, 'gray')
+    : lcms.transform(profile, source, 'gray', 8);
+  const maximum = raw.bitsPerChannel === 16 ? 65_535 : 255;
+  const transfer = new Float32Array(size);
+  for (let value = 0; value < size; value++) transfer[value] = converted[value * 4]! / maximum;
+  return transfer;
+}
+
+function cmykTransfer(raw: ReturnType<typeof readRawPsdComposite>, lcms: LittleCms | null): ImportState['cmykTransfer'] {
+  if (!lcms || raw.colorMode !== 4 || (raw.bitsPerChannel !== 8 && raw.bitsPerChannel !== 16)) return null;
+  const profile = raw.iccProfile ?? lcms.createCmykProfile(), inverseSize = 33;
+  const inverse = new Uint8Array(inverseSize ** 3 * 4);
+  for (let b = 0; b < inverseSize; b++) for (let g = 0; g < inverseSize; g++) for (let r = 0; r < inverseSize; r++) {
+    const at = ((b * inverseSize + g) * inverseSize + r) * 4;
+    inverse[at] = Math.round(r * 255 / (inverseSize - 1));
+    inverse[at + 1] = Math.round(g * 255 / (inverseSize - 1));
+    inverse[at + 2] = Math.round(b * 255 / (inverseSize - 1)); inverse[at + 3] = 255;
+  }
+  lcms.transformRgbToCmykInPlace(profile, inverse, 'perceptual', false);
+  const forwardSize = 17, samples = forwardSize ** 4, source = new Uint8Array(samples * 4);
+  for (let k = 0; k < forwardSize; k++) for (let y = 0; y < forwardSize; y++) {
+    for (let m = 0; m < forwardSize; m++) for (let c = 0; c < forwardSize; c++) {
+      const at = (((k * forwardSize + y) * forwardSize + m) * forwardSize + c) * 4;
+      source[at] = Math.round(c * 255 / (forwardSize - 1)); source[at + 1] = Math.round(m * 255 / (forwardSize - 1));
+      source[at + 2] = Math.round(y * 255 / (forwardSize - 1)); source[at + 3] = Math.round(k * 255 / (forwardSize - 1));
+    }
+  }
+  return { inverseSize, inverse, forwardSize, forward: lcms.transform(profile, source, 'cmyk', 8) };
+}
+
 function readRawLayerPsd(bytes: Uint8Array, raw: ReturnType<typeof readRawPsdComposite>,
   lcms: LittleCms | null, parserWarnings: string[]): Psd {
   // ag-psd rejects CMYK/Lab/duotone/multichannel before reading layer records. RGB here only bypasses that gate;
@@ -1192,12 +1238,16 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
   const parserWarnings: string[] = [];
   let psd: Psd;
   let oracleOverride: Raster | null = null;
+  let documentGrayTransfer: Float32Array | null = null;
+  let documentCmykTransfer: ImportState['cmykTransfer'] = null;
   const originalMode = sourceColorMode(bytes);
   try {
     if ([4, 7, 8, 9].includes(originalMode) || (originalMode === 1 && lcms)) {
       const raw = readRawPsdComposite(bytes);
       psd = readRawLayerPsd(bytes, raw, lcms, parserWarnings);
       oracleOverride = colorManagedComposite(raw, lcms);
+      documentGrayTransfer = grayTransfer(raw, lcms);
+      documentCmykTransfer = cmykTransfer(raw, lcms);
     } else {
       psd = readPsd(bytes, {
         useImageData: true, skipThumbnail: true, skipLinkedFilesData: false, logMissingFeatures: true,
@@ -1232,7 +1282,9 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
   const state: ImportState = { nextId: 1, documentWidth: psd.width, documentHeight: psd.height,
     bitsPerChannel, colorMode, artboards: !!psd.artboards, resolution: documentResolution,
     unsupported, resources: [], linkedFiles: new Map((psd.linkedFiles ?? []).map((file) => [file.id, file])),
-    patterns: new Map((psd.patterns ?? []).map((pattern) => [pattern.id, pattern])) };
+    patterns: new Map((psd.patterns ?? []).map((pattern) => [pattern.id, pattern])),
+    grayTransfer: documentGrayTransfer, cmykTransfer: documentCmykTransfer,
+    knockoutModes: readPsdLayerKnockouts(bytes) };
   const layers = importSiblings(psd.children ?? [], null, '', state);
   // PSD's negative layer-count flag is the native declaration that the merged result carries
   // transparency. Otherwise Photoshop composites the editable stack over an opaque white canvas.
