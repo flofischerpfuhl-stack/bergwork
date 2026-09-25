@@ -594,6 +594,8 @@ const de: Record<string, string> = {
   'Use 1–30,000 pixels per side, up to 100 megapixels, and 1–9,600 pixels/inch.':
     '1–30.000 Pixel pro Seite, höchstens 100 Megapixel und 1–9.600 Pixel/Zoll verwenden.',
   'Choose a JPEG, PNG, HEIC, TIFF, WebP, AVIF, or GIF image.': 'Wähle ein JPEG-, PNG-, HEIC-, TIFF-, WebP-, AVIF- oder GIF-Bild.',
+  'Choose a JPEG, PNG, HEIC, TIFF, WebP, AVIF, GIF, DNG, or supported camera RAW image.':
+    'Wähle ein JPEG-, PNG-, HEIC-, TIFF-, WebP-, AVIF-, GIF- oder DNG-Bild oder ein unterstütztes Kamera-Raw-Bild.',
   'Content-Aware Fill': 'Inhaltsbasierte Füllung',
   // Vector tools (Shape, Pen, Direct/Path Selection; Photoshop German).
   'Shape (U) · Shift-U switches Rectangle/Ellipse/Polygon/Star/Line': 'Form (U) · Umschalt-U wechselt Rechteck/Ellipse/Polygon/Stern/Linie',
