@@ -176,9 +176,12 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
   const rendered = results.filter((result) => result.rendered).length;
   const passed = results.filter((result) => result.passed).length;
   const passRate = results.length ? passed / results.length * 100 : 0;
-  const roundTenChanges: readonly [string, string, string][] = [];
+  const roundElevenChanges: readonly [string, string, string][] = [
+    ['clipping-mask3.psd', '39.221 / 255', 'A following clipped sibling uses the preceding group’s single live paint descendant as its base.'],
+    ['clipping-mask4.psd', '6.848 / 255', 'A following clipped sibling uses the preceding group’s single live paint descendant as its base.'],
+  ];
   const lines = [
-    '# PSD native-fidelity report — tenth round', '',
+    '# PSD native-fidelity report — eleventh round', '',
     `Corpus: psd-tools commit \`${commit}\`; ${results.length} PSD/PSB files. ag-psd 31.0.2 plus native non-RGB layer-channel decoding.`, '',
     'The oracle is each PSD’s embedded Photoshop composite. Metrics are absolute byte deltas over premultiplied RGB plus',
     'alpha (so undefined straight RGB below transparency is ignored): mean over all channels and the nearest-rank 99th',
@@ -186,7 +189,7 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
     'The runner is a measurement baseline: fidelity failures are reported but do not make the command itself fail.', '',
     `Overall: ${parsed}/${results.length} parsed, ${rendered}/${results.length} rendered, ${passed}/${results.length} passed (${passRate.toFixed(1)}%).`,
     `The Product Plan A7 acceptance target of at least 90% is ${passRate >= 90 ? 'met' : '**not met**'} by this baseline.`, '',
-    `Tenth-round input: 240/300 (80.0%). Current native result: ${passed}/${results.length} (${passRate.toFixed(1)}%), a net gain of ${passed - 240} ${passed - 240 === 1 ? 'file' : 'files'}.`,
+    `Eleventh-round input: 240/300 (80.0%). Current native result: ${passed}/${results.length} (${passRate.toFixed(1)}%), a net gain of ${passed - 240} ${passed - 240 === 1 ? 'file' : 'files'}.`,
     `Primary-folder changes are: blend modes 28→${summarize(results, 'blend-modes').passed}, adjustments 36→${summarize(results, 'adjustments').passed}, layers 32→${summarize(results, 'layers').passed}, effects 12→${summarize(results, 'effects').passed},`,
     `path operations 12→${summarize(results, 'path-operations').passed}, masks 0→${summarize(results, 'masks').passed}, group clipping 1→${summarize(results, 'group-clipping').passed}, transparency 16→${summarize(results, 'transparency').passed}, colour modes 10→${summarize(results, 'colormodes').passed}, colour profiles`,
     `1→${summarize(results, 'colorprofiles').passed}, gradients 4→${summarize(results, 'gradients').passed}, descriptors 5→${summarize(results, 'descriptors').passed}, and root 83→${summarize(results, 'root').passed}. The overlapping 16/32-bit and PSB tags changed`,
@@ -194,11 +197,11 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
     '| Newly passing file | Before mean / p99 | After mean / p99 | Native change |',
     '|---|---:|---:|---|',
   ];
-  for (const [file, before, change] of roundTenChanges) {
+  for (const [file, before, change] of roundElevenChanges) {
     const result = results.find((candidate) => candidate.file === file);
     if (result?.passed) lines.push(`| ${file} | ${before} | ${decimal(result.metrics?.mean)} / ${result.metrics?.p99 ?? '—'} | ${change} |`);
   }
-  if (!roundTenChanges.length) lines.push('| — | — | — | Blend If and smart-filter descriptors had no representative corpus fixture; no threshold result changed. |');
+  if (!roundElevenChanges.length) lines.push('| — | — | — | No threshold result changed. |');
   lines.push('', '## Thresholds and feature summary', '',
     '| Feature | Limits (mean / p99) | Files | Parsed | Rendered | Passed | Pass rate | Top failure causes |',
     '|---|---:|---:|---:|---:|---:|---:|---|');
@@ -293,5 +296,12 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
 }
 
 export async function writeFidelityReport(results: readonly FidelityResult[], output: string, commit: string): Promise<void> {
-  await writeFile(output, fidelityMarkdown(results, commit), 'utf8');
+  let markdown = fidelityMarkdown(results, commit);
+  try {
+    const existing = await readFile(output, 'utf8');
+    const triage = existing.match(/## Eleventh-round root-cause triage[\s\S]*?(?=\n## Known deviations and next work)/)?.[0];
+    if (triage && !markdown.includes('## Eleventh-round root-cause triage')) markdown = markdown.replace(
+      '\n## Known deviations and next work', `\n${triage}\n\n## Known deviations and next work`);
+  } catch { /* First corpus run has no hand-audited triage section to preserve. */ }
+  await writeFile(output, markdown, 'utf8');
 }

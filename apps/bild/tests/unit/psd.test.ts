@@ -376,6 +376,25 @@ describe('PSD colour modes and product wiring', () => {
       .toEqual(new Uint8Array(expected.data));
   });
 
+  it('A7: uses a single visible group descendant as the base of a following clipping stack', () => {
+    const background: AgLayer = { name: 'Background', imageData: image([255, 255, 255, 255, 255, 255, 255, 255]) };
+    const base: AgLayer = { name: 'Base group', blendMode: 'pass through', children: [
+      { name: 'Hidden paint', hidden: true, imageData: image([0, 0, 0, 255, 0, 0, 0, 255]) },
+      { name: 'Visible paint', imageData: image([0, 0, 0, 255, 0, 0, 0, 0]) },
+    ] };
+    const clipped: AgLayer = { name: 'Clipped red', clipping: true,
+      imageData: image([255, 0, 0, 255, 255, 0, 0, 255]) };
+    const expected = image([255, 0, 0, 255, 255, 255, 255, 255]);
+    const imported = readPsdDocument(writePsdUint8Array({ width: 2, height: 1,
+      children: [background, base, clipped], imageData: expected }, { generateThumbnail: false }));
+    const visible = imported.document.layers.find((layer) => layer.name === 'Visible paint')!;
+    const importedClip = imported.document.layers.find((layer) => layer.name === 'Clipped red')!;
+    expect(importedClip.maskSourceId).toBe(visible.id);
+    expect(imported.unsupported.some((feature) => feature.code === 'orphan-clipping')).toBe(false);
+    expect(cpuCompositeRegion(imported.document, { x: 0, y: 0, width: 2, height: 1 }))
+      .toEqual(new Uint8Array(expected.data));
+  });
+
   it('A7: renders a custom artboard background and clips children to its independent rectangle', () => {
     const pixels = { width: 3, height: 1, data: new Uint8ClampedArray([
       0, 0, 0, 0, 255, 0, 0, 255, 0, 0, 255, 255,
