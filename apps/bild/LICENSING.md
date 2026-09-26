@@ -1,6 +1,10 @@
 # Licensing in plain language
 
-Fernwork Bildeditor is **source-available** under the
+> **This repository** is the image editor of Fernwork (in the web app) and of berg:work Image (the desktop app). It is part
+> of the Licensed Work "Fernwork" and is licensed under the same terms as Fernwork; berg:work's licence uses the identical
+> terms. `LICENSE` and `CLA.md` are Fernwork's files, unchanged.
+
+Fernwork is **source-available** under the
 [Business Source License 1.1](LICENSE) with an Additional Use Grant. It is not
 an Open Source license today, but every released version automatically becomes
 Open Source (AGPL-3.0-or-later) four years after its release.
@@ -27,8 +31,8 @@ or license key is needed. It works on trust.
 
 - Organizations with **more than 3 people** using it in production. If you
   grow past 3, you have 90 days to get a license.
-- Anyone offering Fernwork Bildeditor or a fork of it to others as a hosted
-  service, SaaS or API.
+- Anyone offering Fernwork or a fork of it to others as a hosted service,
+  SaaS or API.
 
 Contact: fernwork.absolute836@passmail.net
 

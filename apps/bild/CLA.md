@@ -4,8 +4,7 @@ Version 1.0
 
 This Contributor License Agreement ("Agreement") applies to every
 Contribution You submit to a project published by Florian Fischer, including
-Fernwork, Himmel:CAD and Fernwork Bildeditor (each a "Project"). It lets the
-Licensor distribute
+Fernwork and Himmel:CAD (each a "Project"). It lets the Licensor distribute
 the Project under its public source-available license and, at the same time,
 offer commercial licenses, which funds the Project.
 
