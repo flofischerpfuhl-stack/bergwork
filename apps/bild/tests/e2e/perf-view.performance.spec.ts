@@ -87,6 +87,13 @@ test('canvas compositor audit: uploads, unchanged frames, pan and pixels', async
     const lodCanvas = document.createElement('canvas'); document.body.append(lodCanvas);
     const lodGpu = await GpuCompositor.create(lodCanvas, 640, 480);
     const lodBefore = lodGpu.performanceCounters;
+    const heartbeat: number[] = [], prepStarted = performance.now();
+    let lastBeat = prepStarted;
+    const beat = setInterval(() => { const now = performance.now(); heartbeat.push(now - lastBeat); lastBeat = now; }, 5);
+    await lodGpu.prepareResidentLod(lodRaster);
+    clearInterval(beat);
+    const lodWorkerPrepMs = performance.now() - prepStarted;
+    const lodMainGapMs = Math.max(0, ...heartbeat);
     measured = finish(lodGpu, () => lodGpu.composite(lodDocument, lodView));
     const lodColdMs = measured.ms;
     lodGpu.releaseTarget(measured.target);
@@ -108,13 +115,18 @@ test('canvas compositor audit: uploads, unchanged frames, pan and pixels', async
       oraclePixels[at + 3] = 64 + ((x * 17 + y * 19) % 192);
     }
     const oracleRaster = Raster.fromPixels(oracleSize, oracleSize, 4, oraclePixels);
+    const oracleMaskPixels = new Uint8Array(oracleSize * oracleSize);
+    for (let y = 0; y < oracleSize; y++) for (let x = 0; x < oracleSize; x++) oracleMaskPixels[y * oracleSize + x] = (x * 9 + y * 5) & 255;
+    const oracleMask = Raster.fromPixels(oracleSize, oracleSize, 1, oracleMaskPixels);
     const oracleLayer = newLayer({ id: 'oracle', name: 'Oracle', raster: oracleRaster,
-      transform: makeTransform({ x: 0, y: 0 }, { width: oracleSize, height: oracleSize }) });
+      transform: makeTransform({ x: 0, y: 0 }, { width: oracleSize, height: oracleSize }),
+      mask: { raster: oracleMask, enabled: true, linked: true, placement: null } });
     const oracleDocument = { id: 'oracle-document', width: oracleSize, height: oracleSize, resolution: 72,
       layers: [oracleLayer], selection: null };
     const oracleView = { a: 8, b: 0, c: 0, d: 8, tx: 0, ty: 0 };
     const oracleCanvas = document.createElement('canvas'); document.body.append(oracleCanvas);
     const oracleGpu = await GpuCompositor.create(oracleCanvas, 64, 64);
+    await Promise.all([oracleGpu.prepareResidentLod(oracleRaster), oracleGpu.prepareResidentLod(oracleMask)]);
     const lodPixels = oracleGpu.readView(oracleDocument, 64, 64, oracleView, 0.125);
     const cpuPixels = compositeView(oracleDocument, 64, 64, oracleView).rgba as Uint8Array;
     let lodCpuMaxDelta = 0;
@@ -244,7 +256,8 @@ test('canvas compositor audit: uploads, unchanged frames, pan and pixels', async
       upload: { coldMs: uploadColdMs, calls: uploadAfter.textureUploads - uploadBefore.textureUploads,
         textureMiB: uploadPixels / 1048576, movedTextureMiB, sample: uploadSample, movedSample },
       lod: { fullMs: fullLodMs, fullTextureMiB: fullLodTextureMiB,
-        coldMs: lodColdMs, textureMiB: lodTextureMiB, sample: lodSample,
+        coldMs: lodColdMs, workerPrepMs: lodWorkerPrepMs, mainGapMs: lodMainGapMs,
+        textureMiB: lodTextureMiB, sample: lodSample,
         builds: lodAfter.residentLodBuilds - lodBefore.residentLodBuilds,
         sourcePixels: lodAfter.residentLodSourcePixels - lodBefore.residentLodSourcePixels,
         cpuMaxDelta: lodCpuMaxDelta },
@@ -263,6 +276,7 @@ test('canvas compositor audit: uploads, unchanged frames, pan and pixels', async
   expect(result.lod.textureMiB).toBeLessThan(result.lod.fullTextureMiB / 16);
   expect(result.lod.builds).toBe(1);
   expect(result.lod.cpuMaxDelta).toBeLessThanOrEqual(1);
+  expect(result.lod.mainGapMs).toBeLessThan(100);
   expect(result.upload.movedTextureMiB).toBeLessThanOrEqual(100);
   expect(result.changedPixelCount).toBeGreaterThan(0);
   expect(result.fullCompositeOnOverride).toBe(1);

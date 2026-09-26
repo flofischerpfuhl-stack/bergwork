@@ -66,6 +66,13 @@ const artboardRequest = (format: ExportRequest['format'], extra: Partial<ExportR
   ({ targets: [{ kind: 'artboard', id: 'post' }], format, sizes: [{ scale: 1 }, { scale: 2 }], ...extra });
 
 describe('export planning and naming', () => {
+  it('uses fast lossless PNG compression by default and honours explicit levels', async () => {
+    const { resolveExportRequest } = await import('../../src/io/exportPlan');
+    expect(resolveExportRequest({ targets: [{ kind: 'document' }], format: 'png' }).spec.level).toBe(1);
+    expect(resolveExportRequest({ targets: [{ kind: 'document' }], format: 'png', compressionLevel: 7 }).spec.level).toBe(7);
+    expect(resolveExportRequest({ targets: [{ kind: 'document' }], format: 'tiff' }).spec.level).toBe(6);
+  });
+
   it('names files <name>@2x.<ext>, keeps @1x bare, and sizes explicit exports', () => {
     const plan = planExport(fixture(), { targets: [{ kind: 'artboard', id: 'post' }, { kind: 'artboard', id: 'story' }, { kind: 'document' }],
       format: 'png', sizes: [{ scale: 1 }, { scale: 2 }, { scale: 3 }, { scale: 0.5 }, { width: 100 }], baseName: 'Campaign' });
@@ -287,7 +294,7 @@ describe('band-parallel PNG', () => {
     const streamed = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
     let at = 0; for (const chunk of chunks) { streamed.set(chunk, at); at += chunk.length; }
     const spec: EncodeSpec = { format: 'png', colorModel: 'rgb', alpha: true, quality: 1, lossless: false, speed: 6,
-      level: 6, tiffCompression: 'deflate', dpi: null, icc: null, info: null };
+      level: 1, tiffCompression: 'deflate', dpi: null, icc: null, info: null };
     const expected = await encodePngBandsAsync(pixels, width, height, spec, parallelPngBandRows(height));
     expect(streamed).toEqual(expected);
     expect(decodePng(streamed).data).toEqual(pixels);

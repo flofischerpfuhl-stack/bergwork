@@ -48,7 +48,7 @@ export interface ExportRequest {
   readonly lossless?: boolean;
   /** 16 is allowed for PNG and TIFF. Defaults to 8. */
   readonly bitDepth?: 8 | 16;
-  /** PNG/TIFF deflate level. Defaults to 6. */
+  /** PNG/TIFF deflate level. Defaults to 1 for PNG (interactive export) and 6 for TIFF. */
   readonly compressionLevel?: EncodeSpec['level'];
   /** AVIF encoder speed 0…10. Defaults to 6. */
   readonly speed?: number;
@@ -159,7 +159,9 @@ export function resolveExportRequest(request: ExportRequest): Resolved {
   const quality = fraction(request.quality ?? DEFAULT_QUALITY[format], 'Quality');
   const speed = request.speed ?? 6;
   if (!Number.isInteger(speed) || speed < 0 || speed > 10) throw new ExportError('option', 'AVIF speed must be an integer from 0 to 10.');
-  const level = request.compressionLevel ?? 6;
+  // PNG filtering already removes most local redundancy. Fast deflate keeps the 46 MP export
+  // inside the interactive budget while remaining lossless; explicit levels are always honoured.
+  const level = request.compressionLevel ?? (format === 'png' ? 1 : 6);
   if (!Number.isInteger(level) || level < 0 || level > 9) throw new ExportError('option', 'Compression level must be 0…9.');
   if (request.lossless && format !== 'webp') throw new ExportError('option', 'Lossless is a WebP option (PNG and TIFF are always lossless).');
   if (request.cmyk && format !== 'tiff' && format !== 'jpeg') throw new ExportError('option', 'CMYK export is available for TIFF and JPEG only.');

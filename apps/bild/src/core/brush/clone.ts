@@ -53,6 +53,7 @@ export function cloneSample(document: CanvasDocument, active: Layer, offset: { w
   return {
     offset,
     maximum,
+    workerSource: { document, activeLayerId: active.id, allLayers },
     sample(point) {
       let out: [number, number, number, number] = [0, 0, 0, 0];
       for (const sampled of layers) {

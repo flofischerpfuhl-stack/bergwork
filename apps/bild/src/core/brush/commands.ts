@@ -10,6 +10,7 @@ import {
 import { beginStroke, type BeginStrokeOptions, type CloneSample, type Stroke, type StrokeResult, type StrokeUpdate } from './stroke';
 import { RecordedBrushStroke, type GpuBrushPreview } from './gpuPreview';
 import { noteColorUsed } from '../color/recent';
+import { finishCloneInWorker } from './cloneWorkerClient';
 
 interface LastPoint { readonly point: Point; readonly layerId: string; readonly mask: boolean }
 interface DeferredStrokeUpdate {
@@ -43,6 +44,12 @@ class DeferredCloneStroke implements Stroke {
     const exact = beginStroke(this.options);
     for (const update of this.updates) exact.addPoints(update.points, update.options);
     return exact.finish();
+  }
+  finishInBackground(): Promise<StrokeResult> | null {
+    if (this.done) throw new Error('Clone stroke is no longer active');
+    const worker = finishCloneInWorker(this.options, this.updates);
+    if (worker) this.done = true;
+    return worker;
   }
   cancel(): void { this.done = true; }
   get points(): readonly Point[] { return this.pointsValue; }
@@ -277,7 +284,7 @@ export function finishBrushStroke(session: EditorSession): StrokeResult | null {
     return null;
   }
   if (!active) return null;
-  if (active.stroke instanceof RecordedBrushStroke) {
+  if (active.stroke instanceof RecordedBrushStroke || active.stroke instanceof DeferredCloneStroke) {
     const worker = active.stroke.finishInBackground();
     if (worker) {
       value.active = null;

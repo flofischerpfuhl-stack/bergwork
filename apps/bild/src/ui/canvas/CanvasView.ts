@@ -139,6 +139,7 @@ export class CanvasView implements CanvasHost {
   async start(): Promise<void> {
     try {
       this.gpu = await GpuCompositor.create(this.glCanvas, 1, 1);
+      this.gpu.configureResidency({ residentLodReady: () => this.redraw() });
       this.rendererKind = 'webgl2';
     } catch (error) {
       try {

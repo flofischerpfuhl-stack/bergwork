@@ -25,7 +25,7 @@ test('UI interactions keep renders and thumbnail work bounded', async ({ page },
     const controller = runtime.__editorForTests;
     const session = controller.session;
     await runtime.__handle.newProject({ name: 'UI performance', width: 128, height: 128 });
-    const layers = Array.from({ length: 80 }, (_, index) => {
+    const layers = Array.from({ length: 400 }, (_, index) => {
       const pixels = new Uint8Array(64 * 64 * 4);
       for (let at = 0; at < pixels.length; at += 4) {
         pixels[at] = (index * 17) & 255;
@@ -33,11 +33,11 @@ test('UI interactions keep renders and thumbnail work bounded', async ({ page },
         pixels[at + 2] = (index * 43) & 255;
         pixels[at + 3] = 255;
       }
-      return newLayer({ id: `ui-${index}`, name: `UI Layer ${index}`, visible: index === 79, raster: Raster.fromPixels(64, 64, 4, pixels),
+      return newLayer({ id: `ui-${index}`, name: `UI Layer ${index}`, visible: index === 399, raster: Raster.fromPixels(64, 64, 4, pixels),
         transform: makeTransform({ x: (index % 8) * 4, y: (index % 10) * 3 }, { width: 64, height: 64 }) });
     });
     session.replaceDocument({ ...session.document, layers });
-    session.selectLayer('ui-79');
+    session.selectLayer('ui-399');
     session.notify('document');
     // The Lite profile installs two eager and eight idle-loaded panel registrations. Keep that
     // one-time module installation outside steady-state interaction samples.
@@ -96,6 +96,12 @@ test('UI interactions keep renders and thumbnail work bounded', async ({ page },
     const toolSwitch = await measure(1, () => {
       document.querySelector<HTMLElement>('[data-testid="tool-move"]')!.click();
     });
+    // Same-page cold/cached comparison keeps host load and document state controlled.
+    const menuCold = await measure(1, () => {
+      document.querySelector<HTMLElement>('[data-testid="menu-File"]')!.click();
+    });
+    controller.ui.setState({ openMenu: null });
+    await settle();
     const menuOpen = await measure(1, () => {
       document.querySelector<HTMLElement>('[data-testid="menu-File"]')!.click();
     });
@@ -116,18 +122,22 @@ test('UI interactions keep renders and thumbnail work bounded', async ({ page },
     const debug = gl?.getExtension('WEBGL_debug_renderer_info');
     return {
       renderer: gl ? gl.getParameter(debug ? debug.UNMASKED_RENDERER_WEBGL : gl.RENDERER) : controller.canvasView.rendererKind,
+      mountedRows: document.querySelectorAll('[data-testid="layer-row"]').length,
+      activeRowMounted: !!document.querySelector('[data-layer-id="ui-399"]'),
       layerCount: session.document.layers.length,
       activeOpacity: session.activeLayer.opacity,
       strokePixel,
-      pan, slider, stroke, toolSwitch, menuOpen, panelSwitch, tabSwitch, dialogOpen,
+      pan, slider, stroke, toolSwitch, menuCold, menuOpen, panelSwitch, tabSwitch, dialogOpen,
     };
   });
 
   console.log(`PERF_UI ${JSON.stringify({ project: testInfo.project.name, ...result })}`);
   if (process.env.PERF_UI_RECORD) fs.writeFileSync(process.env.PERF_UI_RECORD, JSON.stringify({ project: testInfo.project.name, ...result }, null, 2));
-  expect(result.layerCount).toBe(80);
+  expect(result.layerCount).toBe(400);
+  expect(result.mountedRows).toBeLessThan(60);
+  expect(result.activeRowMounted).toBe(true);
   expect(result.activeOpacity).toBeCloseTo(0.8, 5);
-  expect(result.strokePixel).not.toEqual([(79 * 17) & 255, (79 * 29) & 255, (79 * 43) & 255, 255]);
+  expect(result.strokePixel).not.toEqual([(399 * 17) & 255, (399 * 29) & 255, (399 * 43) & 255, 255]);
   expect(result.pan.snapshot.thumbnails.builds).toBe(0);
   expect(result.pan.snapshot.renders.LayerRow ?? 0).toBe(0);
   expect(result.slider.snapshot.renders.LayerRow ?? 0).toBe(0);
@@ -137,4 +147,7 @@ test('UI interactions keep renders and thumbnail work bounded', async ({ page },
   expect(result.toolSwitch.snapshot.renders.LayerRow ?? 0).toBe(0);
   expect(result.panelSwitch.snapshot.renders.LayerRow ?? 0).toBe(0);
   expect(result.panelSwitch.snapshot.thumbnails.draws).toBe(0);
+  expect(result.menuOpen.snapshot.renders.MenuModel ?? 0).toBe(0);
+  expect(result.menuCold.snapshot.renders.MenuModel ?? 0).toBe(1);
+  expect(result.tabSwitch.snapshot.renders.LayerRow ?? 0).toBeLessThan(60);
 });

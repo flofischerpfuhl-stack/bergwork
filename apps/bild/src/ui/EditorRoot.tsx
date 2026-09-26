@@ -8,7 +8,7 @@ import { ContextBar, StatusBar } from './ContextBar';
 import { CanvasPane } from './CanvasPane';
 import { LayersPanel } from './LayersPanel';
 import { DialogHost, dismissDialog } from './Dialogs';
-import { buildMenus, shortcutMap, shortcutOf } from './menus';
+import { cachedMenus, shortcutMap, shortcutOf } from './menus';
 import { Icon } from './icons';
 import { modifiersOf } from './canvas/CanvasView';
 import { TOOLS, type Tool } from '../core/session';
@@ -191,7 +191,7 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
       // ⌘V goes through the browser's paste event, which carries clipboard images without a prompt.
       if (shortcut === 'mod+v') return;
       // Menu shortcuts first (CompositorApp commands).
-      const item = shortcutMap(buildMenus(controller, controller.features)).get(shortcut);
+      const item = shortcutMap(cachedMenus(controller)).get(shortcut);
       if (item) {
         event.preventDefault();
         if (item.enabled) item.run?.();

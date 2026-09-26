@@ -31,6 +31,7 @@ import {
   UNPREMULTIPLY_FRAGMENT, VERTEX, WARP_MESH_FRAGMENT, FILTERED_LAYER_FRAGMENT,
 } from './shaders';
 import type { CmykLut } from '../core/color/cmyk';
+import { buildResidentLodInBackground } from './residentLodClient';
 import { EffectLiveFilterHookAdapter } from './liveFilterPasses';
 import { defaultFilterSettings } from '../core/filters/settings';
 import { applyLiveFilters } from '../core/filters/live';
@@ -46,6 +47,7 @@ import { cpuCompositeView } from './cpuRender';
 
 const residentViews = new WeakMap<Raster, { signature: string; raster: Raster }>();
 const residentUploadLods = new WeakMap<Raster, Raster>();
+const requestedResidentUploadLods = new WeakSet<Raster>();
 const premultipliedUploadLods = new WeakSet<Raster>();
 const tileUploadLods = new WeakMap<PixelArray, Map<string, PixelArray>>();
 const opaqueTileCache = new WeakMap<PixelArray, boolean>();
@@ -101,6 +103,20 @@ function halvePremultipliedRgba(source: PixelArray, width: number, height: numbe
   return next;
 }
 
+function halveMask(source: PixelArray, width: number, height: number): PixelArray {
+  const nextWidth = Math.ceil(width / 2), nextHeight = Math.ceil(height / 2);
+  const next = new Uint8Array(nextWidth * nextHeight);
+  for (let y = 0; y < nextHeight; y++) for (let x = 0; x < nextWidth; x++) {
+    let sum = 0;
+    for (let oy = 0; oy < 2; oy++) for (let ox = 0; ox < 2; ox++) {
+      const sx = x * 2 + ox, sy = y * 2 + oy;
+      if (sx < width && sy < height) sum += source[sy * width + sx]!;
+    }
+    next[y * nextWidth + x] = Math.round(sum / 4);
+  }
+  return next;
+}
+
 function occupiedChunks(raster: Raster, chunkSize: number): ReadonlySet<string> {
   let sizes = occupiedChunkCache.get(raster);
   const cached = sizes?.get(chunkSize);
@@ -129,7 +145,7 @@ function residentUploadLod(source: Raster): Raster {
     let tile = output[index];
     if (!tile) {
       tile = makePixelArray(source.format,
-        Math.min(TILE, width - col * TILE) * Math.min(TILE, height - row * TILE) * 4);
+        Math.min(TILE, width - col * TILE) * Math.min(TILE, height - row * TILE) * source.channels);
       output[index] = tile;
     }
     return tile;
@@ -144,10 +160,11 @@ function residentUploadLod(source: Raster): Raster {
     let reduced = existing;
     if (!reduced) {
       let current = tile, currentWidth = tileWidth, currentHeight = tileHeight;
-      let premultiplied = opaqueTile(tile, source.maximum);
+      let premultiplied = source.channels === 4 && opaqueTile(tile, source.maximum);
       for (let step = 0; step < level; step++) {
-        current = halvePremultipliedRgba(current, currentWidth, currentHeight,
-          source.format, source.maximum, premultiplied);
+        current = source.channels === 4
+          ? halvePremultipliedRgba(current, currentWidth, currentHeight, source.format, source.maximum, premultiplied)
+          : halveMask(current, currentWidth, currentHeight);
         currentWidth = Math.ceil(currentWidth / 2); currentHeight = Math.ceil(currentHeight / 2); premultiplied = true;
       }
       reduced = current;
@@ -161,13 +178,13 @@ function residentUploadLod(source: Raster): Raster {
       const x = originX, destinationCol = Math.floor(x / TILE), localX = x - destinationCol * TILE;
       const target = destination(destinationCol, destinationRow);
       const targetWidth = Math.min(TILE, width - destinationCol * TILE);
-      target.set(reduced.subarray(row * reducedWidth * 4, (row + 1) * reducedWidth * 4),
-        (localY * targetWidth + localX) * 4);
+      target.set(reduced.subarray(row * reducedWidth * source.channels, (row + 1) * reducedWidth * source.channels),
+        (localY * targetWidth + localX) * source.channels);
     }
   }
-  const raster = new Raster(width, height, 4, output, { format: source.format });
+  const raster = new Raster(width, height, source.channels, output, { format: source.format });
   residentUploadLods.set(source, raster);
-  premultipliedUploadLods.add(raster);
+  if (source.channels === 4) premultipliedUploadLods.add(raster);
   return raster;
 }
 
@@ -427,6 +444,7 @@ export class GpuCompositor {
   private preciseTextures = false;
   private textureByteBudget = 384 * 1024 * 1024;
   private requestHydration: ((raster: Raster, rect: Rect) => void) | null = null;
+  private residentLodReady: (() => void) | null = null;
   adjustmentPrograms: AdjustmentProgramProvider = adjustmentProgram;
   /** Adjustment layers drawn without a GPU implementation in the last composite. */
   skippedAdjustments = 0;
@@ -516,7 +534,7 @@ export class GpuCompositor {
 
   /** Tile RAM and GPU textures have independent caps; hosts may lower this for constrained devices. */
   configureResidency(options: { textureByteBudget?: number; textureChunkSize?: number;
-    requestHydration?: (raster: Raster, rect: Rect) => void }): void {
+    requestHydration?: (raster: Raster, rect: Rect) => void; residentLodReady?: () => void }): void {
     if (options.textureByteBudget !== undefined) {
       if (!Number.isSafeInteger(options.textureByteBudget) || options.textureByteBudget < 0) throw new RangeError('Invalid GPU texture budget');
       this.textureByteBudget = options.textureByteBudget;
@@ -534,7 +552,23 @@ export class GpuCompositor {
       }
     }
     this.requestHydration = options.requestHydration ?? null;
+    this.residentLodReady = options.residentLodReady ?? null;
     this.collectTextures(true);
+  }
+
+  /** Prepares the exact 1/8 upload representation without blocking the caller's task. */
+  async prepareResidentLod(raster: Raster): Promise<Raster> {
+    const existing = residentUploadLods.get(raster);
+    if (existing) return existing;
+    const pending = buildResidentLodInBackground(raster);
+    const reduced = pending ? await pending : residentUploadLod(raster);
+    if (!residentUploadLods.has(raster)) {
+      residentUploadLods.set(raster, reduced);
+      if (raster.channels === 4) premultipliedUploadLods.add(reduced);
+      this.performanceCounterValue.residentLodBuilds++;
+      this.performanceCounterValue.residentLodSourcePixels += raster.width * raster.height;
+    }
+    return residentUploadLods.get(raster)!;
   }
 
   resize(width: number, height: number): void {
@@ -1922,11 +1956,20 @@ export class GpuCompositor {
       if (transform.sampling !== 'Nearest' && pixelsPerSourcePixel <= 1 / 8
         && (raster.width > TILE || raster.height > TILE)) {
         const existing = residentUploadLods.get(raster);
-        const reduced = existing ?? residentUploadLod(raster);
-        if (!existing) {
-          this.performanceCounterValue.residentLodBuilds++;
-          this.performanceCounterValue.residentLodSourcePixels += raster.width * raster.height;
+        if (existing) return existing;
+        if (requestedResidentUploadLods.has(raster)) return raster;
+        if (typeof Worker !== 'undefined') {
+          requestedResidentUploadLods.add(raster);
+          void this.prepareResidentLod(raster).then(() => {
+            this.destroyViewportCompositeCache();
+            this.residentLodReady?.();
+          }).catch(() => requestedResidentUploadLods.delete(raster));
+          // Preserve exact pixels until the worker result is ready. The next frame uses the compact LOD.
+          return raster;
         }
+        const reduced = residentUploadLod(raster);
+        this.performanceCounterValue.residentLodBuilds++;
+        this.performanceCounterValue.residentLodSourcePixels += raster.width * raster.height;
         return reduced;
       }
       return raster;
