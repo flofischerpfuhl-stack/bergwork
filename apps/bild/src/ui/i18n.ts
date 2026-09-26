@@ -628,6 +628,18 @@ const de: Record<string, string> = {
   'Drag Handle': 'Griff ziehen', 'Convert Point': 'Punkt umwandeln', 'Delete Anchor': 'Ankerpunkt löschen', 'Nudge Anchors': 'Ankerpunkte verschieben',
   'Create Line': 'Linie erstellen', 'Pen Path': 'Zeichenstiftpfad', 'Create Rectangle': 'Rechteck erstellen', 'Create Ellipse': 'Ellipse erstellen',
   'Create Star': 'Stern erstellen', 'Boolean Path Operation': 'Pfadvorgang',
+  'Licences': 'Lizenzen', 'Licences…': 'Lizenzen …', 'Search licences': 'Lizenzen durchsuchen',
+  'Bundled': 'Mitgeliefert', 'Optional downloads': 'Optionale Downloads',
+  'Opt-in host components (not bundled)': 'Zuschaltbare Host-Komponenten (nicht mitgeliefert)',
+  'Tauri desktop runtime': 'Tauri-Desktop-Laufzeit', 'Component': 'Komponente', 'Version': 'Version',
+  'Licence': 'Lizenz', 'Back': 'Zurück', 'View full licence text': 'Vollständigen Lizenztext anzeigen',
+  'Loading licences…': 'Lizenzen werden geladen …',
+  'The licence inventory could not be loaded.': 'Die Lizenzliste konnte nicht geladen werden.',
+  'The licence text could not be loaded.': 'Der Lizenztext konnte nicht geladen werden.',
+  'No licences match your search.': 'Keine Lizenzen entsprechen der Suche.',
+  'Business Source License 1.1 with a free tier for personal use, education, and organizations with three or fewer people. Each release changes to AGPL-3.0-or-later after four years.':
+    'Business Source License 1.1 mit kostenloser Nutzung für private Zwecke, Bildung und Organisationen mit höchstens drei Personen. Jede Version wechselt nach vier Jahren zu AGPL-3.0-or-later.',
+  'Business Source License 1.1': 'Business Source License 1.1',
 };
 
 const isApple = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);

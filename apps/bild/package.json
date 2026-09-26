@@ -2,6 +2,7 @@
   "name": "fernwork-compositor-port",
   "version": "0.0.0",
   "private": true,
+  "license": "BUSL-1.1",
   "type": "module",
   "engines": { "node": ">=22.18.0 <23" },
   "scripts": {
@@ -11,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "notices": "node scripts/notices.mjs",
+    "check:licenses": "node scripts/check-licenses.mjs",
     "test:unit": "vitest run tests/unit",
     "psd:fidelity": "vitest run --config tests/psd/vitest.config.ts",
     "test:e2e": "playwright test",

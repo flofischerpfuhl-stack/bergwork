@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Native shell for Fernwork Bildeditor"
 authors = ["Fernwork"]
 edition = "2021"
-license = "MIT"
+license-file = "../LICENSE"
 
 [lib]
 name = "fernwork_bildeditor_lib"

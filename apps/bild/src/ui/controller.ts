@@ -497,12 +497,9 @@ export class EditorController {
 
   /** Origin and licences (the MIT notice of the code base this editor grew from belongs here, not in menus or formats). */
   showAbout(): void {
-    this.alert(this.t('Fernwork Image Editor'), [
-      this.t('Works offline. No account, no telemetry.'),
-      this.t('Parts of this editor are based on Compositor by Wonder Assembly LLC (MIT License).'),
-      this.t('Third-party components and their licences include libwebp (BSD), libavif (BSD), dav1d (BSD), libaom (BSD), libjpeg-turbo (IJG/BSD), lcms / Little CMS (MIT), ONNX Runtime Web (MIT), CanvasKit/Skia (BSD-3-Clause), PixiJS, React, zustand, immer, idb, fflate (MIT/ISC), U²-Netp (Apache-2.0), and the optional downloads BiRefNet (MIT), SlimSAM (Apache-2.0), MI-GAN (MIT) and Real-ESRGAN (BSD-3-Clause). libheif and system LibRaw are opt-in LGPL capabilities and are not loaded by default. See THIRD_PARTY_NOTICES.md for the complete inventory.'),
-    ].join('\n\n'));
+    this.showDialog({ kind: 'about' });
   }
+  showLicenses(): void { this.showDialog({ kind: 'licenses' }); }
   confirm(title: string, message: string, buttons: Extract<Dialog, { kind: 'confirm' }>['buttons']): Promise<string> {
     return new Promise((resolve) => this.showDialog({ kind: 'confirm', title, message, buttons, resolve: (value) => { this.showDialog(null); resolve(value); } }));
   }
