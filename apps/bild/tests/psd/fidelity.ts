@@ -176,14 +176,11 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
   const rendered = results.filter((result) => result.rendered).length;
   const passed = results.filter((result) => result.passed).length;
   const passRate = results.length ? passed / results.length * 100 : 0;
-  const roundEightChanges: readonly [string, string, string][] = [
-    ['effects/stroke-composite.psd', '12.004 / 255', 'PSD Blend Clipped Layers as Group effect clipping'],
-    ['mask-density-layermask.psd', '16.537 / 191', 'density-adjusted outside-mask coverage'],
-    ['mask-density-vectormask.psd', '22.361 / 191', 'density-adjusted outside-mask coverage'],
-    ['mask-vector-density.psd', '22.361 / 191', 'density-adjusted outside-mask coverage'],
+  const roundNineChanges: readonly [string, string, string][] = [
+    ['vector-mask2.psd', '0.000 / 0 (flattened)', 'native empty-cache sentinel parsing and descriptor-derived gradient fill'],
   ];
   const lines = [
-    '# PSD native-fidelity report — eighth round', '',
+    '# PSD native-fidelity report — ninth round', '',
     `Corpus: psd-tools commit \`${commit}\`; ${results.length} PSD/PSB files. ag-psd 31.0.2 plus native non-RGB layer-channel decoding.`, '',
     'The oracle is each PSD’s embedded Photoshop composite. Metrics are absolute byte deltas over premultiplied RGB plus',
     'alpha (so undefined straight RGB below transparency is ignored): mean over all channels and the nearest-rank 99th',
@@ -191,15 +188,15 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
     'The runner is a measurement baseline: fidelity failures are reported but do not make the command itself fail.', '',
     `Overall: ${parsed}/${results.length} parsed, ${rendered}/${results.length} rendered, ${passed}/${results.length} passed (${passRate.toFixed(1)}%).`,
     `The Product Plan A7 acceptance target of at least 90% is ${passRate >= 90 ? 'met' : '**not met**'} by this baseline.`, '',
-    `Eighth-round input: 235/300 (78.3%). Current native result: ${passed}/${results.length} (${passRate.toFixed(1)}%), a net gain of ${passed - 235} files.`,
-    `Primary-folder changes are: blend modes 28→${summarize(results, 'blend-modes').passed}, adjustments 36→${summarize(results, 'adjustments').passed}, layers 32→${summarize(results, 'layers').passed}, effects 11→${summarize(results, 'effects').passed},`,
+    `Ninth-round input: 239/300 (79.7%). Current native result: ${passed}/${results.length} (${passRate.toFixed(1)}%), a net gain of ${passed - 239} ${passed - 239 === 1 ? 'file' : 'files'}.`,
+    `Primary-folder changes are: blend modes 28→${summarize(results, 'blend-modes').passed}, adjustments 36→${summarize(results, 'adjustments').passed}, layers 32→${summarize(results, 'layers').passed}, effects 12→${summarize(results, 'effects').passed},`,
     `path operations 12→${summarize(results, 'path-operations').passed}, masks 0→${summarize(results, 'masks').passed}, group clipping 1→${summarize(results, 'group-clipping').passed}, transparency 16→${summarize(results, 'transparency').passed}, colour modes 10→${summarize(results, 'colormodes').passed}, colour profiles`,
-    `1→${summarize(results, 'colorprofiles').passed}, gradients 4→${summarize(results, 'gradients').passed}, descriptors 5→${summarize(results, 'descriptors').passed}, and root 79→${summarize(results, 'root').passed}. The overlapping 16/32-bit and PSB tags changed`,
+    `1→${summarize(results, 'colorprofiles').passed}, gradients 4→${summarize(results, 'gradients').passed}, descriptors 5→${summarize(results, 'descriptors').passed}, and root 82→${summarize(results, 'root').passed}. The overlapping 16/32-bit and PSB tags changed`,
     `26→${summarize(results, '16/32-bit').passed} and 30→${summarize(results, 'PSB').passed} respectively. No primary-folder pass count regressed.`, '',
     '| Newly passing file | Before mean / p99 | After mean / p99 | Native change |',
     '|---|---:|---:|---|',
   ];
-  for (const [file, before, change] of roundEightChanges) {
+  for (const [file, before, change] of roundNineChanges) {
     const result = results.find((candidate) => candidate.file === file);
     if (result?.passed) lines.push(`| ${file} | ${before} | ${decimal(result.metrics?.mean)} / ${result.metrics?.p99 ?? '—'} | ${change} |`);
   }
@@ -281,6 +278,9 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
     '  when that cache is absent. Zero-area cache-less masks use their document-wide default. Smart filters and blend-if remain unsupported;',
     '  pattern strokes render from the PSD pattern table, while files whose parser omits that table remain reported.',
     '  Text, vector, and smart-object layers use their layer-owned saved pixel caches; never the document merged composite.',
+    '- A bounded native layer-record pre-parser repairs Photoshop’s -1 zero-area generated-fill cache sentinel and recognizes',
+    '  `8ELE` metadata sub-blocks that ag-psd 31 cannot skip safely. The former restores vector-mask2.psd as an editable native',
+    '  gradient-fill stack; the latter exposes both editable layers in 2layer_8ele_tblocks.psd, whose saved composite still differs.',
     '- Bounded raster masks retain the PSD outside-mask default. Density is baked into both stored samples and that outside value;',
     '  feather remains baked into the imported mask cache. Clipped layer effects follow the base layer’s advanced grouping flag.',
     '- Dissolve uses a deterministic local dither because the PSD layer data contains neither Photoshop’s process-local random',

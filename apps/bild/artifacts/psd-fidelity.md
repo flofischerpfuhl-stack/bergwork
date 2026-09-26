@@ -1,4 +1,4 @@
-# PSD native-fidelity report — eighth round
+# PSD native-fidelity report — ninth round
 
 Corpus: psd-tools commit `30bf79c2a88e0fc63104ee85713e23b04362153d`; 300 PSD/PSB files. ag-psd 31.0.2 plus native non-RGB layer-channel decoding.
 
@@ -7,21 +7,18 @@ alpha (so undefined straight RGB below transparency is ignored): mean over all c
 percentile. A file passes only when both limits for its primary feature folder pass.
 The runner is a measurement baseline: fidelity failures are reported but do not make the command itself fail.
 
-Overall: 300/300 parsed, 300/300 rendered, 239/300 passed (79.7%).
+Overall: 300/300 parsed, 300/300 rendered, 240/300 passed (80.0%).
 The Product Plan A7 acceptance target of at least 90% is **not met** by this baseline.
 
-Eighth-round input: 235/300 (78.3%). Current native result: 239/300 (79.7%), a net gain of 4 files.
-Primary-folder changes are: blend modes 28→28, adjustments 36→36, layers 32→32, effects 11→12,
+Ninth-round input: 239/300 (79.7%). Current native result: 240/300 (80.0%), a net gain of 1 file.
+Primary-folder changes are: blend modes 28→28, adjustments 36→36, layers 32→32, effects 12→12,
 path operations 12→12, masks 0→0, group clipping 1→1, transparency 16→16, colour modes 10→10, colour profiles
-1→1, gradients 4→4, descriptors 5→5, and root 79→82. The overlapping 16/32-bit and PSB tags changed
+1→1, gradients 4→4, descriptors 5→5, and root 82→83. The overlapping 16/32-bit and PSB tags changed
 26→26 and 30→30 respectively. No primary-folder pass count regressed.
 
 | Newly passing file | Before mean / p99 | After mean / p99 | Native change |
 |---|---:|---:|---|
-| effects/stroke-composite.psd | 12.004 / 255 | 1.791 / 43 | PSD Blend Clipped Layers as Group effect clipping |
-| mask-density-layermask.psd | 16.537 / 191 | 0.000 / 0 | density-adjusted outside-mask coverage |
-| mask-density-vectormask.psd | 22.361 / 191 | 0.000 / 0 | density-adjusted outside-mask coverage |
-| mask-vector-density.psd | 22.361 / 191 | 0.000 / 0 | density-adjusted outside-mask coverage |
+| vector-mask2.psd | 0.000 / 0 (flattened) | 0.996 / 3 | native empty-cache sentinel parsing and descriptor-derived gradient fill |
 
 ## Thresholds and feature summary
 
@@ -41,7 +38,7 @@ path operations 12→12, masks 0→0, group clipping 1→1, transparency 16→16
 | descriptors | ≤ 2 / ≤ 16 | 6 | 6 | 6 | 5 | 83.3% | wrong math/order/colour conversion (1) |
 | 16/32-bit | ≤ 3 / ≤ 24 | 29 | 29 | 29 | 26 | 89.7% | opened flattened (layers not decoded) (1); unsupported: bit-depth:16 (1); unsupported: bit-depth:32 (1) |
 | PSB | ≤ 2 / ≤ 16 | 37 | 37 | 37 | 30 | 81.1% | wrong math/order/colour conversion (5); unsupported: mask-default (1); unsupported: text-path (1) |
-| root | ≤ 2 / ≤ 16 | 120 | 120 | 120 | 82 | 68.3% | wrong math/order/colour conversion (13); unsupported: mask-default (9); opened flattened (layers not decoded) (4) |
+| root | ≤ 2 / ≤ 16 | 120 | 120 | 120 | 83 | 69.2% | wrong math/order/colour conversion (14); unsupported: mask-default (9); unsupported: text-path (4) |
 
 Files in the `16/32-bit` and `PSB` rows are also counted in their feature/root row.
 
@@ -91,9 +88,9 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | Impact and feature | Occurrences |
 |---|---:|
 | editability-only: ag-psd-parser | 247 |
-| approximated: mask-default | 96 |
+| approximated: mask-default | 97 |
 | editability-only: lock-artboards | 72 |
-| editability-only: generated-fill-cache | 43 |
+| editability-only: generated-fill-cache | 44 |
 | approximated: text-path | 40 |
 | editability-only: mask-density | 23 |
 | editability-only: color-mode:1 | 20 |
@@ -101,22 +98,21 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | approximated: knockout | 16 |
 | editability-only: color-mode:4 | 15 |
 | approximated: bit-depth:16 | 12 |
-| approximated: vector-fill:pattern | 10 |
-| editability-only: compatibility-preview | 10 |
+| approximated: vector-fill:pattern | 11 |
+| editability-only: compatibility-preview | 9 |
 | editability-only: mask-feather | 7 |
 | editability-only: artboards | 6 |
-| editability-only: flattened-composite | 6 |
 | approximated: color-mode:9 | 5 |
+| editability-only: flattened-composite | 5 |
 | not-rendered: orphan-clipping | 5 |
-| approximated: embedded-icc | 4 |
 | approximated: bit-depth:1 | 3 |
 | approximated: color-mode:0 | 3 |
-| not-rendered: ag-psd-parser | 3 |
+| approximated: embedded-icc | 3 |
 | approximated: gradient-overlay | 2 |
 | not-rendered: adjustment:color lookup | 2 |
+| not-rendered: ag-psd-parser | 2 |
 | approximated: color-mode:8 | 1 |
 | editability-only: color-mode:2 | 1 |
-| editability-only: color-mode:3 | 1 |
 | editability-only: color-mode:7 | 1 |
 
 ### ag-psd parser warnings
@@ -131,12 +127,11 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | Unread 2 bytes left for additional info: PtFl | 4 |
 | Unhandled additional info: Mt32 | 2 |
 | Compression not supported: 0 | 1 |
-| Invalid layer size | 1 |
 | Unhandled additional info: extd | 1 |
+| Unhandled additional info: fWSM | 1 |
 | Unread 2 bytes left for additional info: artb | 1 |
 | Unread 4 bytes left for additional info: brst | 1 |
 | Unread 576 bytes left for additional info: Patt | 1 |
-| Unread 88 bytes left for additional info: shmd | 1 |
 
 ## Per-file results
 
@@ -151,7 +146,7 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | 1layer.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | 1layer.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | 1layer2.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
-| 2layer_8ele_tblocks.psd | root | yes | yes | no | 191.250 | 255 | 255 | ag-psd-parser |
+| 2layer_8ele_tblocks.psd | root | yes | yes | no | 191.250 | 255 | 255 | — |
 | 2layers.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | 2layers.psd | root | yes | yes | yes | 0.058 | 1 | 1 | — |
 | 300dpi.psb | root | yes | yes | yes | 0.000 | 0 | 0 | bit-depth:32 |
@@ -440,7 +435,7 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | vector-mask-disabled.psd | root | yes | yes | yes | 0.000 | 0 | 0 | bit-depth:32 |
 | vector-mask.psb | root | yes | yes | yes | 0.000 | 0 | 0 | bit-depth:32 |
 | vector-mask.psd | root | yes | yes | no | 31.796 | 218 | 218 | bit-depth:32 |
-| vector-mask2.psd | root | yes | yes | no | 0.000 | 0 | 0 | embedded-icc |
+| vector-mask2.psd | root | yes | yes | yes | 0.996 | 3 | 4 | vector-fill:pattern, mask-default |
 | vector-mask3.psd | root | yes | yes | no | 77.695 | 255 | 255 | mask-default, mask-default |
 
 ## Known deviations and next work
@@ -460,6 +455,9 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
   when that cache is absent. Zero-area cache-less masks use their document-wide default. Smart filters and blend-if remain unsupported;
   pattern strokes render from the PSD pattern table, while files whose parser omits that table remain reported.
   Text, vector, and smart-object layers use their layer-owned saved pixel caches; never the document merged composite.
+- A bounded native layer-record pre-parser repairs Photoshop’s -1 zero-area generated-fill cache sentinel and recognizes
+  `8ELE` metadata sub-blocks that ag-psd 31 cannot skip safely. The former restores vector-mask2.psd as an editable native
+  gradient-fill stack; the latter exposes both editable layers in 2layer_8ele_tblocks.psd, whose saved composite still differs.
 - Bounded raster masks retain the PSD outside-mask default. Density is baked into both stored samples and that outside value;
   feather remains baked into the imported mask cache. Clipped layer effects follow the base layer’s advanced grouping flag.
 - Dissolve uses a deterministic local dither because the PSD layer data contains neither Photoshop’s process-local random

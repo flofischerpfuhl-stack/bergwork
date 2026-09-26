@@ -10,7 +10,8 @@ import { makeTransform } from '../../src/core/geometry';
 import { Raster } from '../../src/core/raster';
 import { psdHasMergedTransparency, readRawPsdComposite } from '../../src/io/psd/composite';
 import { decodePsdLayerChannels } from '../../src/io/psd/layerChannels';
-import { patchPsdLayerKnockouts, readPsdCmykAdjustmentChannels, readPsdLayerKnockouts } from '../../src/io/psd/layerInfo';
+import { patchPsdLayerKnockouts, preparePsdForAgParser, readPsdCmykAdjustmentChannels,
+  readPsdLayerKnockouts } from '../../src/io/psd/layerInfo';
 import { readPsdDocument, readPsdDocumentManaged } from '../../src/io/psd';
 import { cpuCompositeRegion } from '../../src/render/cpuRender';
 import { adjustmentProgram } from '../../src/render/adjustPrograms';
@@ -143,6 +144,30 @@ describe('PSD colour modes and product wiring', () => {
     const patched = patchPsdLayerKnockouts(bytes, new Map([[17, 'deep'], [29, 'shallow']]));
     expect([...readPsdLayerKnockouts(patched)]).toEqual([[17, 'deep'], [29, 'shallow']]);
     expect([...readPsdLayerKnockouts(bytes)]).toEqual([[17, 'shallow'], [29, 'deep']]);
+  });
+
+  it('bounds native parser repairs to 8ELE metadata and empty-cache sentinels', () => {
+    const header = join([new TextEncoder().encode('8BPS'), u16(1), new Uint8Array(6), u16(4), u32(1), u32(1),
+      u16(8), u16(3), u32(0), u32(0)]);
+    const metadata = join([new TextEncoder().encode('8BIMshmd'), u32(8), new TextEncoder().encode('8ELEnoop')]);
+    const layerId = join([new TextEncoder().encode('8BIMlyid'), u32(4), u32(73)]);
+    const name = new Uint8Array(4);
+    const extra = join([u32(0), u32(0), name, layerId, metadata]);
+    const channel = join([u16(0xffff), u32(2)]);
+    const record = join([u32(0), u32(0), u32(0xffff_ffff), u32(0), u16(1), channel,
+      new TextEncoder().encode('8BIMnorm'), new Uint8Array([255, 0, 0, 0]), u32(extra.length), extra]);
+    const layerInfo = join([u16(1), record, u16(0)]);
+    const layerSection = join([u32(layerInfo.length), layerInfo]);
+    const source = join([header, u32(layerSection.length), layerSection, u16(0), new Uint8Array(4)]);
+    const empty = new Set<number>();
+    const repaired = preparePsdForAgParser(source, empty);
+    expect(repaired).not.toBe(source);
+    expect(new TextDecoder().decode(repaired).includes('8BIMfWSM')).toBe(true);
+    const recordAt = header.length + 4 + 4 + 2;
+    expect(new DataView(repaired.buffer, repaired.byteOffset, repaired.byteLength).getInt32(recordAt + 8)).toBe(0);
+    expect(source).not.toEqual(repaired);
+    expect(new DataView(source.buffer, source.byteOffset, source.byteLength).getInt32(recordAt + 8)).toBe(-1);
+    expect(empty).toEqual(new Set([73]));
   });
 
   it('parses the native CMYK black channel omitted by ag-psd Levels and Curves', () => {

@@ -18,7 +18,7 @@ import {
 import { parseCubeLut } from '../../core/adjust/cube';
 import { psdHasMergedTransparency, readRawPsdComposite } from './composite';
 import { decodePsdLayerChannels } from './layerChannels';
-import { readPsdCmykAdjustmentChannels, readPsdLayerKnockouts,
+import { preparePsdForAgParser, readPsdCmykAdjustmentChannels, readPsdLayerKnockouts,
   type PsdCmykAdjustmentChannels, type PsdKnockoutMode } from './layerInfo';
 import type { LittleCms } from '../../wasm/lcms';
 import { sha256Hex } from '../sha256';
@@ -136,6 +136,7 @@ interface ImportState {
     readonly forwardSize: number; readonly forward: Uint8Array } | null;
   readonly knockoutModes: ReadonlyMap<number, PsdKnockoutMode>;
   readonly cmykAdjustmentChannels: ReadonlyMap<number, PsdCmykAdjustmentChannels>;
+  readonly cachelessFillLayerIds: ReadonlySet<number>;
 }
 
 function issue(state: ImportState, code: string, message: string, impact: PsdUnsupportedImpact, layerPath?: string): void {
@@ -1091,7 +1092,8 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const textBox = textData ? psdTextBox(textData, width, height) : null;
     const editableTransform = textData ? psdTextTransform(textData, layerTransform, textBox, state.resolution) : layerTransform;
     const vectorContent = !isGroup && !textData && !!(source.vectorFill || source.vectorStroke)
-      && (state.bitsPerChannel !== 8 || (!!source.vectorMask?.paths.length && !state.artboards));
+      && (state.bitsPerChannel !== 8 || (source.id !== undefined && state.cachelessFillLayerIds.has(source.id))
+        || (!!source.vectorMask?.paths.length && !state.artboards));
     const fillBounds = source.mask && (source.mask.right ?? 0) > (source.mask.left ?? 0)
       && (source.mask.bottom ?? 0) > (source.mask.top ?? 0)
       ? { left: source.mask.left!, top: source.mask.top!, right: source.mask.right!, bottom: source.mask.bottom! }
@@ -1202,7 +1204,7 @@ function resolution(psd: Psd): number {
 function parserWarningImpact(message: string): PsdUnsupportedImpact {
   // psd-tools writes generator/content-authentication/OCIO bookkeeping on otherwise pixel-identical files.
   // ag-psd also reports descriptor padding as unread bytes; neither participates in compositing.
-  if (/^Unhandled additional info: (?:CAI\s*|GenI|OCIO|Mt32)$/.test(message)
+  if (/^Unhandled additional info: (?:CAI\s*|GenI|OCIO|Mt32|fWSM)$/.test(message)
     || /^Unread (?:2|4) bytes left for additional info: (?:vstk|PtFl|artb|brst)$/.test(message)) {
     return 'editability-only';
   }
@@ -1325,15 +1327,17 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
   let documentGrayTransfer: Float32Array | null = null;
   let documentCmykTransfer: ImportState['cmykTransfer'] = null;
   const originalMode = sourceColorMode(bytes);
+  const cachelessFillLayerIds = new Set<number>();
+  const parserBytes = preparePsdForAgParser(bytes, cachelessFillLayerIds);
   try {
     if ([4, 7, 8, 9].includes(originalMode) || (originalMode === 1 && lcms)) {
       const raw = readRawPsdComposite(bytes);
-      psd = readRawLayerPsd(bytes, raw, lcms, parserWarnings);
+      psd = readRawLayerPsd(parserBytes, raw, lcms, parserWarnings);
       oracleOverride = colorManagedComposite(raw, lcms);
       documentGrayTransfer = grayTransfer(raw, lcms);
       documentCmykTransfer = cmykTransfer(raw, lcms);
     } else {
-      psd = readPsd(bytes, {
+      psd = readPsd(parserBytes, {
         useImageData: true, skipThumbnail: true, skipLinkedFilesData: false, logMissingFeatures: true,
         log: (...values: unknown[]) => parserWarnings.push(values.map(String).join(' ')),
       });
@@ -1368,7 +1372,8 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
     unsupported, resources: [], linkedFiles: new Map((psd.linkedFiles ?? []).map((file) => [file.id, file])),
     patterns: new Map((psd.patterns ?? []).map((pattern) => [pattern.id, pattern])),
     grayTransfer: documentGrayTransfer, cmykTransfer: documentCmykTransfer,
-    knockoutModes: readPsdLayerKnockouts(bytes), cmykAdjustmentChannels: readPsdCmykAdjustmentChannels(bytes) };
+    knockoutModes: readPsdLayerKnockouts(bytes), cmykAdjustmentChannels: readPsdCmykAdjustmentChannels(bytes),
+    cachelessFillLayerIds };
   const layers = importSiblings(psd.children ?? [], null, '', state);
   // PSD's negative layer-count flag is the native declaration that the merged result carries
   // transparency. Otherwise Photoshop composites the editable stack over an opaque white canvas.
