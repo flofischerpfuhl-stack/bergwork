@@ -55,7 +55,9 @@ function RawPreferences({ controller, close }: { controller: EditorController; c
       data-testid="use-system-libraw" onChange={(event) => { setEnabled(event.target.checked); codec.setSystemRawEnabled?.(event.target.checked); }} />
       {t('Use system LibRaw (LGPL)')}</label>
     <p className={styles.dialogMessage}>{t('Off by default. Fernwork does not bundle LibRaw; when enabled, the app loads a compatible library installed by your operating system.')}</p>
-    <div className={styles.dialogButtons}><button type="button" className={`${styles.pill} ${styles.pillPrimary}`} onClick={close}>{t('Done')}</button></div>
+    <div className={styles.dialogButtons}><button type="button" className={styles.pill} data-testid="preferences-licenses"
+      onClick={() => controller.showLicenses()}>{t('Licences…')}</button>
+      <button type="button" className={`${styles.pill} ${styles.pillPrimary}`} onClick={close}>{t('Done')}</button></div>
   </div>;
 }
 

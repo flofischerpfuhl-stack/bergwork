@@ -270,6 +270,7 @@
       ],
       "specs": [
         "tests/e2e/feature-loading.spec.ts",
+        "tests/e2e/licenses.spec.ts",
         "tests/e2e/locale-numbers.spec.ts",
         "tests/e2e/perf-ui.spec.ts",
         "tests/e2e/qa-german.spec.ts",

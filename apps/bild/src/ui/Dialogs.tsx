@@ -13,6 +13,8 @@ import { markUiRender } from './performance';
 const importExportDialog = () => import('./ExportDialog');
 const ExportDialog = lazy(() => importExportDialog().then((module) => ({ default: module.ExportDialog })));
 const ProofSetupDialog = lazy(() => import('./ProofSetupDialog').then((module) => ({ default: module.ProofSetupDialog })));
+const AboutDialog = lazy(() => import('./LicensesView').then((module) => ({ default: module.AboutDialog })));
+const LicensesView = lazy(() => import('./LicensesView').then((module) => ({ default: module.LicensesView })));
 if (typeof window !== 'undefined') {
   const preload = () => { void importExportDialog(); };
   if ('requestIdleCallback' in window) window.requestIdleCallback(preload, { timeout: 1_500 });
@@ -106,6 +108,11 @@ export function DialogHost({ controller }: { controller: EditorController }) {
   else if (dialog.kind === 'proofSetup') content = (
     <Suspense fallback={<div className={styles.dialog} role="dialog"><p className={styles.dialogMessage}>{controller.t('Working…')}</p></div>}>
       <ProofSetupDialog controller={controller} close={close} />
+    </Suspense>
+  );
+  else if (dialog.kind === 'about' || dialog.kind === 'licenses') content = (
+    <Suspense fallback={<div className={styles.dialog} role="dialog"><p className={styles.dialogMessage}>{controller.t('Loading licences…')}</p></div>}>
+      {dialog.kind === 'about' ? <AboutDialog controller={controller} close={close} /> : <LicensesView controller={controller} close={close} />}
     </Suspense>
   );
   else if (dialog.kind === 'alert') {
