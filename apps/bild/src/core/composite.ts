@@ -15,6 +15,7 @@ import {
 import { inverseHomography } from './distort';
 import { inverseMeshPoint } from './meshWarp';
 import { layerCropCoverage } from './crop';
+import { sampleCmykForward, sampleCubeChannels, type PsdCmykTransfer } from './adjust/apply';
 
 export type AdjustmentApplier = (adjustment: LayerAdjustment, rgba: Float32Array,
   width: number, height: number, originX: number, originY: number,
@@ -59,6 +60,7 @@ class BandRenderer {
   private readonly liveSample = new Float32Array(4);
   private readonly blendScratch = new Float64Array(6);
   private readonly blendSeeds = new Map<string, number>();
+  private readonly cmykTransfer: PsdCmykTransfer | null;
   private readonly groupCoverageSurfaces = new Map<string, Float32Array>();
   private readonly documentToOutput: Affine | undefined;
   private readonly order: readonly Layer[];
@@ -70,12 +72,17 @@ class BandRenderer {
   constructor(private readonly document: CanvasDocument, private readonly options: CompositeOptions,
     private readonly outputToDocument?: Affine, private readonly rootKnockout = true) {
     this.documentToOutput = outputToDocument ? invert(outputToDocument) : undefined;
+    this.cmykTransfer = (document as CanvasDocument & { readonly psdCmykTransfer?: PsdCmykTransfer }).psdCmykTransfer ?? null;
     this.byId = new Map(document.layers.map((layer) => [layer.id, layer]));
     const groupClippingBaseIds = new Set(document.layers.map((layer) => layer.maskSourceId)
       .filter((id): id is string => !!id && this.byId.get(id)?.kind === 'group'));
     const isolated = document.layers.filter((layer) => layer.kind === 'group'
       && ((layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === true
-        || layer.opacity !== 1 || layer.fillOpacity !== 1 || layer.blendMode !== 'normal' || !!layer.maskSourceId));
+        || layer.opacity !== 1 || layer.fillOpacity !== 1 || layer.blendMode !== 'normal' || !!layer.maskSourceId
+        || ((layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === false
+          && (layer.mask?.enabled === true || layer.vectorMask?.enabled === true)
+          && document.layers.some((candidate) => !!candidate.adjustment
+            && ancestorIds(document.layers, candidate.id).includes(layer.id)))));
     const isolatedIds = new Set(isolated.map((layer) => layer.id));
     for (const layer of document.layers) {
       if ((layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout !== 'shallow') continue;
@@ -127,6 +134,39 @@ class BandRenderer {
       this.maskPlacements.set(layer.id, this.options.maskPlacement?.(layer) ?? layer.mask?.placement ?? null);
     }
     return this.maskPlacements.get(layer.id) ?? null;
+  }
+
+  /** Photoshop evaluates these separable modes on inverted native CMYK components before profile conversion. */
+  private compositeWithFill(target: Float32Array, offset: number, sr: number, sg: number, sb: number, sa: number,
+    coverage: number, opacity: number, fillOpacity: number, mode: BlendMode, noise = 0): void {
+    const transfer = this.cmykTransfer;
+    if (!transfer || (mode !== 'difference' && mode !== 'exclusion' && mode !== 'subtract')) {
+      compositePremultipliedWithFill(target, offset, sr, sg, sb, sa, coverage, opacity, fillOpacity,
+        mode, this.blendScratch, noise);
+      return;
+    }
+    const factor = clamp01(coverage) * clamp01(opacity) * clamp01(fillOpacity);
+    if (sa <= 0 || factor <= 0) return;
+    const sourceAlpha = sa * factor, backdropAlpha = clamp01(target[offset + 3]!);
+    const source = sampleCubeChannels(transfer.inverse, transfer.inverseSize, 4, sr / sa, sg / sa, sb / sa);
+    const backdrop = backdropAlpha > 0
+      ? sampleCubeChannels(transfer.inverse, transfer.inverseSize, 4, target[offset]! / backdropAlpha,
+        target[offset + 1]! / backdropAlpha, target[offset + 2]! / backdropAlpha)
+      : [0, 0, 0, 0];
+    const alpha = sourceAlpha + backdropAlpha - sourceAlpha * backdropAlpha;
+    const native = new Array<number>(4);
+    for (let channel = 0; channel < 4; channel++) {
+      const cb = 1 - backdrop[channel]!, cs = 1 - source[channel]!;
+      const blended = mode === 'difference' ? Math.abs(cb - cs)
+        : mode === 'exclusion' ? cb + cs - 2 * cb * cs : Math.max(0, cb - cs);
+      const ink = 1 - blended;
+      native[channel] = alpha > 0 ? (source[channel]! * sourceAlpha * (1 - backdropAlpha)
+        + backdrop[channel]! * backdropAlpha * (1 - sourceAlpha)
+        + ink * sourceAlpha * backdropAlpha) / alpha : 0;
+    }
+    const rgb = sampleCmykForward(transfer, native);
+    target[offset] = rgb[0] * alpha; target[offset + 1] = rgb[1] * alpha;
+    target[offset + 2] = rgb[2] * alpha; target[offset + 3] = alpha;
   }
 
   private preparedPlacement(key: string, transform: LayerTransform, width: number, height: number,
@@ -183,8 +223,10 @@ class BandRenderer {
     const legacyDefault = (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault;
     const maskDefault = mask?.defaultColor ?? legacyDefault;
     const psdMask = maskDefault !== undefined;
-    const candidate = adjustment && !psdMask ? layerTransform : this.maskPlacement(layer);
-    const placement = candidate && !samePlacement(candidate, layerTransform) ? candidate : null;
+    const requestedPlacement = this.maskPlacement(layer);
+    const candidate = adjustment && !psdMask ? layerTransform
+      : layer.kind === 'group' ? requestedPlacement ?? layerTransform : requestedPlacement;
+    const placement = candidate && (layer.kind === 'group' || !samePlacement(candidate, layerTransform)) ? candidate : null;
     const transform = { ...(placement ?? layerTransform), sampling: 'High quality' as const };
     const prepared = this.preparedPlacement(`${adjustment ? 'adjustment-mask' : 'mask'}:${layer.id}`,
       transform, raster.width, raster.height, documentToOutput);
@@ -199,7 +241,7 @@ class BandRenderer {
     let background = this.backgrounds.get(raster);
     if (background === undefined) {
       // Upstream reads the <=96 px thumbnail; the browser core has only the full raster.
-      background = maskDefault === undefined ? maskBackground(raster) : maskDefault / 255;
+      background = maskDefault === undefined ? layer.kind === 'group' ? 0 : maskBackground(raster) : maskDefault / 255;
       this.backgrounds.set(raster, background);
     }
     return background + (sampled - background) * this.location[2]!;
@@ -271,8 +313,7 @@ class BandRenderer {
         const ba = target[offset + 3]!;
         const blendIf = blendIfFactorRgb(layer.blendIf, sr / alpha, sg / alpha, sb / alpha,
           ba > 0 ? target[offset]! / ba : 0, ba > 0 ? target[offset + 1]! / ba : 0, ba > 0 ? target[offset + 2]! / ba : 0);
-        compositePremultipliedWithFill(target, offset, sr, sg, sb, alpha, blendIf, opacity, fillOpacity,
-          mode, this.blendScratch,
+        this.compositeWithFill(target, offset, sr, sg, sb, alpha, blendIf, opacity, fillOpacity, mode,
           mode === 'dissolve' ? dissolveNoise(originX + px, originY + py, seed) : 0);
       }
     }
@@ -401,8 +442,8 @@ class BandRenderer {
           for (let channel = 0; channel < 4; channel++) target[offset + channel] = target[offset + channel]! * (1 - cut)
             + (knockoutBase?.[offset + channel] ?? 0) * cut;
         }
-        compositePremultipliedWithFill(target, offset, sample[0]!, sample[1]!, sample[2]!, sample[3]!,
-          coverage, layer.opacity, layer.fillOpacity, mode, this.blendScratch,
+        this.compositeWithFill(target, offset, sample[0]!, sample[1]!, sample[2]!, sample[3]!,
+          coverage, layer.opacity, layer.fillOpacity, mode,
           mode === 'dissolve' ? dissolveNoise(Math.floor(x), Math.floor(y), seed) : 0);
       }
     }
@@ -617,8 +658,16 @@ class BandRenderer {
     const layers = this.document.layers.filter((layer) => ids.has(layer.id)).map((layer) =>
       layer.parentId === groupLayer.id ? { ...layer, parentId: null } : layer);
     if (!layers.length) return;
+    const passThrough = (groupLayer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === false
+      && (groupLayer.opacity !== 1 || groupLayer.mask?.enabled === true || groupLayer.vectorMask?.enabled === true)
+      && layers.some((layer) => !!layer.adjustment);
+    // A pass-through group whose opacity/mask forces a boundary still evaluates
+    // its adjustments against the entry backdrop. The boundary then interpolates
+    // that complete result with the untouched backdrop (Photoshop's
+    // passthrough_opacity.psd), rather than source-over compositing a transparent
+    // child surface that has no pixels for the adjustment to affect.
     const nested = new BandRenderer({ ...this.document, layers }, this.options, this.outputToDocument, false).render(
-      width, height, originX, originY);
+      width, height, originX, originY, passThrough ? target : undefined);
     const mode = this.blendMode(groupLayer), seed = mode === 'dissolve' ? this.blendSeed(groupLayer) : 0;
     const knockout = !!(groupLayer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout;
     for (let py = 0; py < height; py++) for (let px = 0; px < width; px++) {
@@ -638,6 +687,13 @@ class BandRenderer {
         backdropAlpha > 0 ? target[offset + 2]! / backdropAlpha : 0);
       const finalCoverage = coverage * blendIf;
       if (finalCoverage <= 0) continue;
+      if (passThrough) {
+        const amount = clamp01(finalCoverage * groupLayer.opacity * groupLayer.fillOpacity);
+        for (let channel = 0; channel < 4; channel++) {
+          target[offset + channel] = target[offset + channel]! * (1 - amount) + nested[offset + channel]! * amount;
+        }
+        continue;
+      }
       if (knockout) {
         const cut = alpha * finalCoverage;
         for (let channel = 0; channel < 4; channel++) {
@@ -686,7 +742,12 @@ class BandRenderer {
       if (this.stacked.has(layer.id)) continue;
       if (layer.adjustment) {
         // LiveMaskRenderer skips adjustment layers linked outside a clipping stack.
-        if (!layer.maskSourceId) this.adjust(layer, target, width, height, originX, originY, true);
+        // An adjustment used as the clipping base has full-canvas coverage, so
+        // a following clipped adjustment is another backdrop adjustment rather
+        // than an empty pixel clip (adjustment_clipping.psd).
+        if (!layer.maskSourceId || this.byId.get(layer.maskSourceId)?.adjustment) {
+          this.adjust(layer, target, width, height, originX, originY, true);
+        }
       } else {
         const knockout = (layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout;
         const shallowBase = ancestors.map((ancestor) => passThroughBases.get(ancestor.id))

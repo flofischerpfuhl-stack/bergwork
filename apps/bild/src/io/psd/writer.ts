@@ -522,8 +522,9 @@ function psdBlendIf(settings: BlendIfSettings): NonNullable<AgLayer['blendingRan
 function convertLayer(layer: Layer, path: string, children: AgLayer[], state: State): AgLayer {
   if (layer.kind === 'group') {
     const blendMode = state.hooks.blendMode(layer);
-    const isolated = (layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === true
-      || layer.opacity !== 1 || layer.fillOpacity !== 1 || blendMode !== 'normal';
+    const psdIsolated = (layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated;
+    const isolated = psdIsolated === true
+      || (psdIsolated !== false && (layer.opacity !== 1 || layer.fillOpacity !== 1 || blendMode !== 'normal'));
     const output = common(layer, path, state);
     delete output.imageData;
     output.children = children;
@@ -579,8 +580,14 @@ function convertLayer(layer: Layer, path: string, children: AgLayer[], state: St
       ],
     }], transform) };
   } else if (layer.kind === 'embedded') {
-    output.placedLayer = placed(layer, transform, state, path);
-    if (layer.filters.length && layer.filterMask) output.filterEffectsMasks = psdFilterEffectsMask(layer, output.placedLayer.placed ?? output.placedLayer.id, transform);
+    const preferCache = (layer as Layer & { readonly psdPreferLayerCache?: boolean }).psdPreferLayerCache === true;
+    if (!preferCache) {
+      output.placedLayer = placed(layer, transform, state, path);
+      if (layer.filters.length && layer.filterMask) output.filterEffectsMasks = psdFilterEffectsMask(layer,
+        output.placedLayer.placed ?? output.placedLayer.id, transform);
+    } else notice(state, 'non-rgb-smart-object-cache',
+      'The CMYK/Gray document-space Smart Object cache was written as pixels so its blend appearance survives RGB PSD export.',
+      'editability-only', path);
   }
   return output;
 }

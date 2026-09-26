@@ -81,14 +81,14 @@ function cubeColor(cube: Float32Array, r: number, g: number, b: number): [number
   return output;
 }
 
-interface PsdCmykTransfer {
+export interface PsdCmykTransfer {
   readonly inverseSize: number;
   readonly inverse: Uint8Array;
   readonly forwardSize: number;
   readonly forward: Uint8Array;
 }
 
-function sampleCubeChannels(data: Uint8Array, size: number, channels: number,
+export function sampleCubeChannels(data: Uint8Array, size: number, channels: number,
   r: number, g: number, b: number): number[] {
   const values = [clamp01(r), clamp01(g), clamp01(b)].map((value) => value * (size - 1));
   const low = values.map(Math.floor), high = low.map((value) => Math.min(size - 1, value + 1));
@@ -104,7 +104,7 @@ function sampleCubeChannels(data: Uint8Array, size: number, channels: number,
   return output;
 }
 
-function sampleCmykForward(transfer: PsdCmykTransfer, values: readonly number[]): [number, number, number] {
+export function sampleCmykForward(transfer: PsdCmykTransfer, values: readonly number[]): [number, number, number] {
   const size = transfer.forwardSize, positions = values.map((value) => clamp01(value) * (size - 1));
   const low = positions.map(Math.floor), high = low.map((value) => Math.min(size - 1, value + 1));
   const fraction = positions.map((value, index) => value - low[index]!);

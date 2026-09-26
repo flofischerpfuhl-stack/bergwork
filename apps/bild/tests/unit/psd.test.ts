@@ -272,6 +272,16 @@ describe('PSD colour modes and product wiring', () => {
       .toEqual(new Uint8Array([12, 34, 56, 255]));
   });
 
+  it('keeps merged CMYK transparency as coverage instead of inverting it with the inks', () => {
+    const header = join([new TextEncoder().encode('8BPS'), u16(1), new Uint8Array(6), u16(5), u32(1), u32(1),
+      u16(8), u16(4), u32(0), u32(0)]);
+    const layerInfo = u16(0xffff); // Negative layer count declares merged transparency.
+    const layerAndMask = join([u32(layerInfo.length), layerInfo, u32(0)]);
+    const bytes = join([header, u32(layerAndMask.length), layerAndMask, u16(0),
+      new Uint8Array([255, 128, 64, 200, 128])]);
+    expect(readRawPsdComposite(bytes).rgba).toEqual(new Uint8Array([200, 100, 50, 128]));
+  });
+
   it('renders an opaque zero-layer PSD canvas without borrowing its merged oracle', () => {
     const oracle = image([0, 0, 0, 255, 0, 0, 0, 255]);
     const imported = readPsdDocument(writePsdUint8Array({ width: 2, height: 1, children: [], imageData: oracle },

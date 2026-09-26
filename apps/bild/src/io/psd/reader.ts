@@ -1239,9 +1239,14 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     let imported: Layer = newLayer({
       id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : placed ? 'embedded' : textData ? 'text' : vectorContent ? 'vector' : adjustment ? 'adjustment' : 'pixel',
       visible: source.hidden !== true, opacity, fillOpacity, blendMode: mappedMode, blendIf: psdBlendIf(source),
-      locks: importedLocks(source), colorLabel: importedColorLabel(source, state, layerPath), transform: placement.transform,
-      warp: placement.warp,
-      raster: placedPixels ?? (image ? rasterFromPixelData(image) : vectorRaster),
+      locks: importedLocks(source), colorLabel: importedColorLabel(source, state, layerPath),
+      transform: state.colorMode !== 3 && image ? layerTransform : placement.transform,
+      warp: state.colorMode !== 3 && image ? null : placement.warp,
+      // A non-RGB PSD's layer cache is already expressed through the document
+      // colour pipeline. The embedded source (commonly an RGB PNG) is not: using
+      // it here changes Photoshop's CMYK/Gray blend operands before compositing.
+      raster: state.colorMode === 3 ? placedPixels ?? (image ? rasterFromPixelData(image) : vectorRaster)
+        : image ? rasterFromPixelData(image) : placedPixels ?? vectorRaster,
       ...(placed ? { content: placed } : {}),
       ...(textData ? { text: editableText, runs: psdTextRuns(textData, editableText),
         paragraphs: psdParagraphs(textData, editableText), box: textBox,
@@ -1274,6 +1279,8 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
         & { readonly psdArtboardRect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number } };
     if (vectorRaster) imported = { ...imported, psdGeneratedStyle: vectorStyle } as Layer
       & { readonly psdGeneratedStyle: VectorStyle };
+    if (placed && state.colorMode !== 3 && image) imported = { ...imported, psdPreferLayerCache: true } as Layer
+      & { readonly psdPreferLayerCache: true };
     if (source.effects && source.blendInteriorElements === true) imported = { ...imported,
       psdBlendInteriorEffects: true } as Layer & { readonly psdBlendInteriorEffects: true };
     if (source.blendClippendElements !== undefined) imported = { ...imported,
@@ -1514,8 +1521,8 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
   const document = {
     id: 'psd-document', width: psd.width, height: psd.height, resolution: resolution(psd),
     globalLightAngle: psd.imageResources?.globalAngle ?? 120, layers: documentLayers, resources: state.resources, selection: null,
-    psdOpaqueCanvas: opaqueCanvas,
-  } as CanvasDocument & { readonly psdOpaqueCanvas: boolean };
+    psdOpaqueCanvas: opaqueCanvas, ...(documentCmykTransfer ? { psdCmykTransfer: documentCmykTransfer } : {}),
+  } as CanvasDocument & { readonly psdOpaqueCanvas: boolean; readonly psdCmykTransfer?: NonNullable<ImportState['cmykTransfer']> };
   return { document, oracle, unsupported, parserWarnings,
     source: { width: psd.width, height: psd.height, bitsPerChannel, colorMode, isPsb: bytes[5] === 2 } };
 }

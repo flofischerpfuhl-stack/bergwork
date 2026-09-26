@@ -801,12 +801,19 @@ uniform float uOpacity;
 uniform float uFillOpacity;
 uniform int uKnockout;
 uniform int uHasClip;
+uniform int uPassThrough;
 uniform mat3 uViewToDoc;
 void main() {
   ivec2 p = ivec2(vPos);
   vec4 dst = texelFetch(uBackdrop, p, 0);
   vec4 group = texelFetch(uSurface, p, 0);
-  if (uHasClip == 1) group *= texelFetch(uClip, p, 0).r;
+  float boundary = uHasClip == 1 ? texelFetch(uClip, p, 0).r : 1.0;
+  if (uPassThrough == 1) {
+    float amount = boundary * blendIfCoverage(group, dst) * uOpacity * uFillOpacity;
+    finalColor = mix(dst, group, amount);
+    return;
+  }
+  group *= boundary;
   group *= blendIfCoverage(group, dst);
   if (uKnockout == 1) dst = mix(dst, texelFetch(uKnockoutBase, p, 0), group.a);
   vec4 src = group * (uOpacity * uFillOpacity);

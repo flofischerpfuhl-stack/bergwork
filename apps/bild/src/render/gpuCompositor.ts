@@ -42,6 +42,7 @@ import {
 
 export { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
 import { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
+import { cpuCompositeView } from './cpuRender';
 
 const residentViews = new WeakMap<Raster, { signature: string; raster: Raster }>();
 const residentUploadLods = new WeakMap<Raster, Raster>();
@@ -404,6 +405,7 @@ export class GpuCompositor {
   private lutSources = new Map<string, TextureSource>();
   private readonly proofSources = new Map<Uint8Array, TextureSource>();
   private readonly proofWarnings = new WeakMap<CmykLut, Uint8Array>();
+  private nativeCmykSource: TextureSource | null = null;
   private brushState: BrushGpuState | null = null;
   private brushCompositeCache: BrushCompositeCache | null = null;
   private viewportCompositeCache: ViewportCompositeCache | null = null;
@@ -480,6 +482,7 @@ export class GpuCompositor {
     for (const lut of this.lutSources.values()) lut.destroy();
     for (const source of this.proofSources.values()) source.destroy();
     for (const tip of this.tipSources.values()) tip.destroy();
+    this.nativeCmykSource?.destroy();
     this.tipSources.clear();
     this.destroyBrushState();
     for (const targets of this.brushTargetPool) for (const target of Object.values(targets)) target.destroy(true);
@@ -710,6 +713,7 @@ export class GpuCompositor {
         uMode: { value: 0, type: 'i32' }, uDissolveSeed: { value: 0, type: 'i32' },
         uOpacity: { value: 1, type: 'f32' }, uFillOpacity: { value: 1, type: 'f32' },
         uKnockout: { value: 0, type: 'i32' }, uHasClip: { value: 0, type: 'i32' },
+        uPassThrough: { value: 0, type: 'i32' },
         uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
       }, ['uBackdrop', 'uSurface', 'uKnockoutBase', 'uClip']],
       unpremultiply: [UNPREMULTIPLY_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uSource']],
@@ -1528,6 +1532,27 @@ export class GpuCompositor {
     // Live filters change a layer's content; effects are then computed from the filtered alpha (Photoshop order).
     this.performanceCounterValue.compositeRequests++;
     this.activeDocument = document;
+    const nativeCmyk = (document as CanvasDocument & { readonly psdCmykTransfer?: unknown }).psdCmykTransfer
+      && document.layers.some((layer) => {
+        const mode = hooks.blendMode(layer); return mode === 'difference' || mode === 'exclusion' || mode === 'subtract';
+      });
+    if (nativeCmyk) {
+      // The CMYK path carries four process components plus alpha. Until WebGL has
+      // a second process-colour attachment, upload the exact native CPU result;
+      // this keeps canvas/export parity and avoids falling back to RGB blending.
+      const pixels = cpuCompositeView(document, view.width, view.height, view.viewToDoc, hooks);
+      let source = this.nativeCmykSource;
+      if (!source || source.width !== view.width || source.height !== view.height) {
+        source?.destroy();
+        source = new TextureSource({ width: view.width, height: view.height, format: 'rgba8unorm',
+          scaleMode: 'nearest', addressMode: 'clamp-to-edge' });
+        this.nativeCmykSource = source;
+      }
+      this.uploadWhole(source, pixels, view.width, view.height, 4);
+      const target = this.acquire(view.width, view.height);
+      this.run(this.pass('copy'), target, view.width, view.height, { uSource: source }, {});
+      return target;
+    }
     const activeBrush = hooks.brush ?? null;
     const cacheable = view.cache === true && !activeBrush;
     const visualState = cacheable ? this.compositeVisualState(document, hooks) : null;
@@ -1594,7 +1619,11 @@ export class GpuCompositor {
     }
     const isolated = (layer: Layer): boolean => layer.kind === 'group'
       && ((layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === true
-        || layer.opacity !== 1 || layer.fillOpacity !== 1 || layer.blendMode !== 'normal' || !!layer.maskSourceId);
+        || layer.opacity !== 1 || layer.fillOpacity !== 1 || layer.blendMode !== 'normal' || !!layer.maskSourceId
+        || ((layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === false
+          && (layer.mask?.enabled === true || layer.vectorMask?.enabled === true)
+          && document.layers.some((candidate) => !!candidate.adjustment
+            && ancestorIds(document.layers, candidate.id).includes(layer.id))));
     const shallowBoundaryIds = new Set<string>();
     for (const layer of document.layers) {
       if ((layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout !== 'shallow') continue;
@@ -1764,21 +1793,29 @@ export class GpuCompositor {
           surface = next; continue;
         }
         if (layer.kind === 'group') {
-          const groupSurface = renderSequence(sequence(layer.id), false, layer.id);
-          const groupClip = layer.maskSourceId ? coverageOf(layer.maskSourceId, 1) : null;
+          const content = sequence(layer.id);
+          const passThrough = (layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === false
+            && (layer.opacity !== 1 || layer.mask?.enabled === true || layer.vectorMask?.enabled === true)
+            && content.some((candidate) => !!candidate.adjustment);
+          const groupSurface = renderSequence(content, false, layer.id, passThrough ? surface : null);
+          let groupClip = layer.maskSourceId ? coverageOf(layer.maskSourceId, 1) : null;
           if (layer.maskSourceId && !groupClip) { this.release(groupSurface); continue; }
+          const ownMask = hooks.maskRaster(layer);
+          if ((layer.mask?.enabled || layer.vectorMask?.enabled) && ownMask) groupClip = this.multiplyMask(groupClip,
+            ownMask, `isolated-group-mask:${layer.id}`, hooks.maskPlacement(layer) ?? hooks.transform(layer), view, temporaries,
+            (layer.mask?.defaultColor ?? 0) / 255);
           const knockout = (layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout;
           const shallowBase = passThroughAncestors.map((ancestor) => passThroughBases.get(ancestor.id))
             .find((candidate): candidate is RenderTexture => !!candidate);
           const base = knockout === 'deep' ? knockoutBase
             : knockout === 'shallow' && root ? shallowBase ?? surface : null;
           const next = this.drawGroupSurface(surface, groupSurface, base, groupClip,
-            layer, view, hooks.blendMode(layer));
+            layer, view, hooks.blendMode(layer), passThrough);
           this.release(surface); this.release(groupSurface); surface = next; continue;
         }
         const clip = folderClip(layer.id);
         if (layer.adjustment) {
-          if (layer.maskSourceId) continue;
+          if (layer.maskSourceId && !byId.get(layer.maskSourceId)?.adjustment) continue;
           const next = this.adjust(surface, layer, view, hooks, this.adjustmentClip(layer, clip, view, hooks, temporaries));
           this.release(surface); surface = next; continue;
         }
@@ -2583,7 +2620,7 @@ export class GpuCompositor {
   }
 
   private drawGroupSurface(backdrop: RenderTexture, surface: RenderTexture, knockoutBase: RenderTexture | null,
-    clip: RenderTexture | null, group: Layer, view: ViewSpec, mode: BlendMode): RenderTexture {
+    clip: RenderTexture | null, group: Layer, view: ViewSpec, mode: BlendMode, passThrough = false): RenderTexture {
     const out = this.acquire(view.width, view.height);
     this.run(this.pass('group'), out, view.width, view.height, {
       uBackdrop: backdrop.source, uSurface: surface.source,
@@ -2594,6 +2631,7 @@ export class GpuCompositor {
       uOpacity: group.opacity, uFillOpacity: group.fillOpacity,
       uKnockout: (group as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout ? 1 : 0,
       uHasClip: clip ? 1 : 0,
+      uPassThrough: passThrough ? 1 : 0,
       uViewToDoc: mat3(view.viewToDoc) });
     return out;
   }

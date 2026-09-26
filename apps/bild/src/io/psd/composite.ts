@@ -194,7 +194,9 @@ export function readRawPsdComposite(bytes: Uint8Array): RawPsdComposite {
     if (colorMode !== 9) { rgba[target] = r; rgba[target + 1] = g; rgba[target + 2] = b; }
     const alpha = hasMergedAlpha && channels > baseChannels
       ? sample8(channelData, planeBytes, rowBytes, width, bits, baseChannels, pixel, channelView) : 255;
-    rgba[target + 3] = colorMode === 4 && hasMergedAlpha ? 255 - alpha : alpha;
+    // CMYK colour channels are stored inverted, but the merged transparency
+    // channel is ordinary coverage just like a layer's -1 channel.
+    rgba[target + 3] = alpha;
     if (managedSamples) {
       const maximum = bits === 16 ? 65535 : 255;
       for (let channel = 0; channel < managedChannelCount; channel++) {
@@ -203,7 +205,7 @@ export function readRawPsdComposite(bytes: Uint8Array): RawPsdComposite {
       }
       if (managedAlpha) {
         const value = sampleInteger(channelData, planeBytes, rowBytes, width, bits as 8 | 16, baseChannels, pixel);
-        managedAlpha[pixel] = colorMode === 4 ? maximum - value : value;
+        managedAlpha[pixel] = value;
       }
     }
   }

@@ -262,6 +262,23 @@ describe('adjustment surface (AdjustmentLayerTests)', () => {
     expect(Array.from(render(document(2, 1, [folder, base, change]), { adjust: invert })))
       .toEqual([0, 255, 255, 255, 0, 0, 0, 0]);
   });
+
+  it('evaluates pass-through adjustments against the entry backdrop before group opacity', () => {
+    const background = layer('background', rgba(1, 1, [200, 200, 200, 255]), transform(0, 0, 1, 1));
+    const group = { ...layer('group', null, transform(0, 0, 1, 1), { isGroup: true, opacity: 0.5 }),
+      psdIsolated: false };
+    const change = layer('adjust', null, transform(0, 0, 1, 1), { parentId: group.id, adjustment });
+    expect(Array.from(render(document(1, 1, [background, group, change]), { adjust: invert })))
+      .toEqual([128, 128, 128, 255]);
+  });
+
+  it('treats an adjustment clipping base as full-canvas coverage', () => {
+    const base = layer('base', rgba(1, 1, [255, 0, 0, 255]), transform(0, 0, 1, 1));
+    const first = layer('first', null, transform(0, 0, 1, 1), { adjustment });
+    const clipped = layer('clipped', null, transform(0, 0, 1, 1), { adjustment, maskSourceId: first.id });
+    expect(Array.from(render(document(1, 1, [base, first, clipped]), { adjust: invert })))
+      .toEqual([255, 0, 0, 255]);
+  });
 });
 
 describe('sampling, transforms, and output (ExportTests, DownsampleTests)', () => {
