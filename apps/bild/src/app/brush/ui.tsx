@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import editor from '../../ui/editor.module.css';
 import css from './brush.module.css';
 import type { EditorController } from '../../ui/controller';
@@ -16,6 +17,7 @@ import type { MenuEntry } from '../../ui/menus';
 import { FloatingPanel } from '../panels';
 import { Check } from '../adjustmentsFeature';
 import { NumberField } from '../../ui/ContextBar';
+import { useAnchoredPopover } from '../../ui/popovers';
 import { getBrushSettings, isBrushStrokeActive, setBrushSettings } from '../../core/brush/commands';
 import type { BrushSettings } from '../../core/brush/settings';
 import { DEFAULT_BRUSH_DYNAMICS, type BrushDynamics, type BrushTip, type PenControl } from '../../core/brush/tip';
@@ -99,7 +101,7 @@ function BrushPresetPicker({ controller, session, anchor, close }: {
   const t = controller.t;
   const state = useBrushState(controller);
   const panel = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const placement = useAnchoredPopover(true, anchor, 372);
   const [query, setQuery] = useState('');
   const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
@@ -112,10 +114,6 @@ function BrushPresetPicker({ controller, session, anchor, close }: {
   const visible = needle ? presets.filter((preset) => t(preset.name).toLocaleLowerCase().includes(needle)
     || preset.name.toLocaleLowerCase().includes(needle)) : presets;
 
-  useLayoutEffect(() => {
-    const rect = anchor.current?.getBoundingClientRect();
-    if (rect) setPosition({ left: Math.max(8, Math.min(rect.left, globalThis.innerWidth - 372 - 8)), top: rect.bottom + 6 });
-  }, [anchor]);
   useEffect(() => {
     const down = (event: PointerEvent) => {
       const target = event.target as Element;
@@ -205,9 +203,9 @@ function BrushPresetPicker({ controller, session, anchor, close }: {
     );
   });
 
-  if (!position) return null;
-  return (
-    <div ref={panel} className={css.popover} style={position} role="dialog" aria-label={t('Brush Presets')} data-testid="brush-presets"
+  if (!placement) return null;
+  return createPortal(
+    <div ref={panel} className={css.popover} style={placement.style} role="dialog" aria-label={t('Brush Presets')} data-testid="brush-presets"
       onKeyDown={(event) => event.stopPropagation()}>
       <div className={css.popoverHeader}>
         <p className={css.popoverTitle}>{t('Brush Presets')}</p>
@@ -240,7 +238,7 @@ function BrushPresetPicker({ controller, session, anchor, close }: {
           disabled={!editable || !selected} data-testid="brush-preset-delete" onClick={() => selected && remove(selected.id)}><Icon name="trash" size={16} /></button>
       </div>
       {menu ? <MenuPopup controller={controller} anchor={{ x: menu.x, y: menu.y }} items={menu.items} onClose={() => setMenu(null)} /> : null}
-    </div>
+    </div>, placement.target
   );
 }
 

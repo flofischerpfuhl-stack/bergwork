@@ -282,7 +282,8 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
   // The canvas pane is first so the floating chrome paints over the canvas; the chrome follows in reading order.
   return (
     <div ref={root} className={className} tabIndex={-1} lang={controller.locale} data-testid="compositor-editor" data-layout={layout} data-theme={theme}
-      data-chrome={chromeHidden ? 'hidden' : showsPanels ? 'all' : 'no-panels'} style={{ '--cmp-panel-w': `${layersWidth}px` } as CSSProperties}>
+      data-chrome={chromeHidden ? 'hidden' : showsPanels ? 'all' : 'no-panels'} data-bar-width={barWidth}
+      style={{ '--cmp-panel-w': `${layersWidth}px` } as CSSProperties}>
       <CanvasPane controller={controller} />
       <TopBar controller={controller} compact={!desktop} width={barWidth} />
       {!chromeHidden ? <ContextBar controller={controller} /> : null}

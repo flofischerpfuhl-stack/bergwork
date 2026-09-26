@@ -120,7 +120,8 @@
         "tests/e2e/qa-guides.spec.ts",
         "tests/e2e/software-render.spec.ts",
         "tests/e2e/visual-tour.spec.ts",
-        "tests/e2e/floating-chrome.spec.ts"
+        "tests/e2e/floating-chrome.spec.ts",
+        "tests/e2e/popover-layout.spec.ts"
       ]
     },
     "painting": {
@@ -133,7 +134,8 @@
         "tests/e2e/a6b-brush.spec.ts",
         "tests/e2e/brush-presets.spec.ts",
         "tests/e2e/gpu-brush.spec.ts",
-        "tests/e2e/painting.spec.ts"
+        "tests/e2e/painting.spec.ts",
+        "tests/e2e/popover-layout.spec.ts"
       ]
     },
     "retouch": {
@@ -221,7 +223,8 @@
         "tests/e2e/text-tool.spec.ts",
         "tests/e2e/text.spec.ts",
         "tests/e2e/vector-engine.spec.ts",
-        "tests/e2e/vector-tools.spec.ts"
+        "tests/e2e/vector-tools.spec.ts",
+        "tests/e2e/popover-layout.spec.ts"
       ]
     },
     "transform-warp-crop": {
@@ -276,7 +279,8 @@
         "tests/e2e/perf-ui.spec.ts",
         "tests/e2e/qa-german.spec.ts",
         "tests/e2e/visual-tour.spec.ts",
-        "tests/e2e/floating-chrome.spec.ts"
+        "tests/e2e/floating-chrome.spec.ts",
+        "tests/e2e/popover-layout.spec.ts"
       ]
     },
     "performance": {
