@@ -29,20 +29,25 @@ test('view-space filter passes match the independent CPU bake at 1:1', async ({ 
     ];
     const gpu = (window as any).__editorForTests.canvasView.gpu;
     const view = { width, height, viewToDoc: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }, scale: 1, snap: false };
-    const output: { kind: string; maximum: number; mean: number }[] = [];
+    const output: { kind: string; maximum: number; mean: number;
+      worst?: { index: number; actual: number; reference: number; signed: number } }[] = [];
     for (const filter of filters) {
       const layer = newLayer({ id: `filter-${filter.kind}`, name: filter.kind, raster: source, transform,
         filters: [filter] });
       const document = { id: `document-${filter.kind}`, width, height, resolution: 72, selection: null, layers: [layer] };
       const actual = gpu.readView(document, width, height, view.viewToDoc, 1);
       const reference = live.applyLiveFilters(source, [filter]).toPixels();
-      let maximum = 0, total = 0;
+      let maximum = 0, total = 0, worst = { index: 0, actual: 0, reference: 0, signed: 0 };
       for (let index = 0; index < actual.length; index++) {
         const delta = Math.abs(actual[index] - reference[index]);
-        maximum = Math.max(maximum, delta);
+        if (delta > maximum) {
+          maximum = delta;
+          worst = { index, actual: actual[index], reference: reference[index],
+            signed: actual[index] - reference[index] };
+        }
         total += delta;
       }
-      output.push({ kind: filter.kind, maximum, mean: total / actual.length });
+      output.push({ kind: filter.kind, maximum, mean: total / actual.length, worst });
     }
     const stack = [
       { ...live.defaultLiveFilter('gaussianBlur'), radius: 0.8 },

@@ -140,6 +140,11 @@ void main(){ivec2 p=ivec2(vPos);vec4 source=texelFetch(uSource,p,0),blurred=texe
   vec3 blurredValues=floor(clamp(b-vec3(0.05/levels),0.0,1.0)*levels+0.5);
   s=sourceValues/levels;b=blurredValues/levels;vec3 detail=s-b;
   vec3 passesGate=step(vec3(uParams.y/255.0),abs(detail));
+  // Unpremultiplication makes an exact threshold hit at a transparent boundary ambiguous by one
+  // blurred byte across float32 drivers. Use the midpoint of gated/ungated results only there.
+  float edge=step(0.5,uParams.y)*(1.0-step(0.999,blurred.a));
+  vec3 exact=vec3(1.0)-step(vec3(0.5/levels),abs(abs(detail)-vec3(uParams.y/255.0)));
+  passesGate*=mix(vec3(1.0),vec3(0.5),exact*edge);
   vec3 changed=mix(s,clamp(s+detail*uParams.x/100.0,0.0,1.0),passesGate);
   // Avoid WebKit's upward half-tie on the neutral High Pass offset without moving a full source value.
   if(uParams.z>0.5) changed=clamp(vec3(0.5)+detail-vec3(0.00255/levels),0.0,1.0);
