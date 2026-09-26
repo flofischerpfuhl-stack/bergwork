@@ -1,6 +1,6 @@
 /** CPU reference for LiveMaskRenderer, LayerRenderer, FolderMaskClip, AdjustmentSurface and ImageExporter.render. */
 import {
-  blendRgbInto, blendSeed as seedForBlend, clamp01, compositePremultiplied,
+  blendIfFactorRgb, blendRgbInto, blendSeed as seedForBlend, clamp01, compositePremultiplied,
   compositePremultipliedWithFill, dissolveNoise,
 } from './blend';
 import { ancestorIds, descendantIds, hierarchyEntries,
@@ -174,7 +174,9 @@ class BandRenderer {
     if (!(mask?.enabled || layer.vectorMask?.enabled) || !raster || raster.channels !== 1) return 1;
     const layerTransform = this.transform(layer);
     // LiveMaskRenderer.adjust uses FolderMaskClip(mask, layer.transform), not LayerMask.clipImage.
-    const psdMask = (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault !== undefined;
+    const legacyDefault = (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault;
+    const maskDefault = mask?.defaultColor ?? legacyDefault;
+    const psdMask = maskDefault !== undefined;
     const candidate = adjustment && !psdMask ? layerTransform : this.maskPlacement(layer);
     const placement = candidate && !samePlacement(candidate, layerTransform) ? candidate : null;
     const transform = { ...(placement ?? layerTransform), sampling: 'High quality' as const };
@@ -185,14 +187,13 @@ class BandRenderer {
     const sampled = sampleMask(sampler, this.location[0]!, this.location[1]!);
     if (!placement && !adjustment) return sampled;
     if (adjustment) {
-      const background = ((layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault ?? 0) / 255;
+      const background = (maskDefault ?? 0) / 255;
       return background + (sampled - background) * this.location[2]!;
     }
     let background = this.backgrounds.get(raster);
     if (background === undefined) {
       // Upstream reads the <=96 px thumbnail; the browser core has only the full raster.
-      background = (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault === undefined
-        ? maskBackground(raster) : (layer as Layer & { readonly psdMaskDefault: number }).psdMaskDefault / 255;
+      background = maskDefault === undefined ? maskBackground(raster) : maskDefault / 255;
       this.backgrounds.set(raster, background);
     }
     return background + (sampled - background) * this.location[2]!;
@@ -259,7 +260,10 @@ class BandRenderer {
         const offset = (py * width + px) * 4;
         const sr = tile[source]! / maximum * alpha, sg = tile[source + 1]! / maximum * alpha,
           sb = tile[source + 2]! / maximum * alpha;
-        compositePremultipliedWithFill(target, offset, sr, sg, sb, alpha, 1, opacity, fillOpacity,
+        const ba = target[offset + 3]!;
+        const blendIf = blendIfFactorRgb(layer.blendIf, sr / alpha, sg / alpha, sb / alpha,
+          ba > 0 ? target[offset]! / ba : 0, ba > 0 ? target[offset + 1]! / ba : 0, ba > 0 ? target[offset + 2]! / ba : 0);
+        compositePremultipliedWithFill(target, offset, sr, sg, sb, alpha, blendIf, opacity, fillOpacity,
           mode, this.blendScratch,
           mode === 'dissolve' ? dissolveNoise(originX + px, originY + py, seed) : 0);
       }
@@ -341,6 +345,11 @@ class BandRenderer {
           coverage *= this.liveCoverage(layer.maskSourceId, x, y, visiting, this.documentToOutput);
         }
         if (includeFolders) coverage *= this.folderCoverage(layer, x, y);
+        const backdropAlpha = target[(py * width + px) * 4 + 3]!;
+        coverage *= blendIfFactorRgb(layer.blendIf, sample[0]! / sample[3]!, sample[1]! / sample[3]!, sample[2]! / sample[3]!,
+          backdropAlpha > 0 ? target[(py * width + px) * 4]! / backdropAlpha : 0,
+          backdropAlpha > 0 ? target[(py * width + px) * 4 + 1]! / backdropAlpha : 0,
+          backdropAlpha > 0 ? target[(py * width + px) * 4 + 2]! / backdropAlpha : 0);
         if (coverage <= 0) continue;
         const offset = (py * width + px) * 4;
         if (knockout) {
@@ -490,9 +499,15 @@ class BandRenderer {
       const x = map ? map.a * ox + map.c * oy + map.tx : ox;
       const y = map ? map.b * ox + map.d * oy + map.ty : oy;
       const folder = this.folderCoverage(stack.base, x, y);
-      if (folder <= 0) continue;
-      compositePremultiplied(target, offset, group[offset]! * folder, group[offset + 1]! * folder,
-        group[offset + 2]! * folder, group[offset + 3]! * folder, mode, false, this.blendScratch,
+      const sourceAlpha = group[offset + 3]!, backdropAlpha = target[offset + 3]!;
+      const blendIf = sourceAlpha > 0 ? blendIfFactorRgb(stack.base.blendIf, group[offset]! / sourceAlpha,
+        group[offset + 1]! / sourceAlpha, group[offset + 2]! / sourceAlpha,
+        backdropAlpha > 0 ? target[offset]! / backdropAlpha : 0, backdropAlpha > 0 ? target[offset + 1]! / backdropAlpha : 0,
+        backdropAlpha > 0 ? target[offset + 2]! / backdropAlpha : 0) : 0;
+      const coverage = folder * blendIf;
+      if (coverage <= 0) continue;
+      compositePremultiplied(target, offset, group[offset]! * coverage, group[offset + 1]! * coverage,
+        group[offset + 2]! * coverage, sourceAlpha * coverage, mode, false, this.blendScratch,
         mode === 'dissolve' ? dissolveNoise(Math.floor(x), Math.floor(y), seed) : 0);
     }
   }
@@ -517,16 +532,22 @@ class BandRenderer {
         * this.folderCoverage(groupLayer, x, y)
         * (groupLayer.maskSourceId
           ? this.liveCoverage(groupLayer.maskSourceId, x, y, new Set([groupLayer.id]), this.documentToOutput) : 1);
-      if (coverage <= 0) continue;
+      const backdropAlpha = target[offset + 3]!;
+      const blendIf = blendIfFactorRgb(groupLayer.blendIf, nested[offset]! / alpha, nested[offset + 1]! / alpha,
+        nested[offset + 2]! / alpha, backdropAlpha > 0 ? target[offset]! / backdropAlpha : 0,
+        backdropAlpha > 0 ? target[offset + 1]! / backdropAlpha : 0,
+        backdropAlpha > 0 ? target[offset + 2]! / backdropAlpha : 0);
+      const finalCoverage = coverage * blendIf;
+      if (finalCoverage <= 0) continue;
       if (knockout) {
-        const cut = alpha * coverage;
+        const cut = alpha * finalCoverage;
         for (let channel = 0; channel < 4; channel++) {
           target[offset + channel] = target[offset + channel]! * (1 - cut)
             + (knockoutBase?.[offset + channel] ?? 0) * cut;
         }
       }
       compositePremultipliedWithFill(target, offset, nested[offset]!, nested[offset + 1]!, nested[offset + 2]!, alpha,
-        coverage, groupLayer.opacity, groupLayer.fillOpacity, mode, this.blendScratch,
+        finalCoverage, groupLayer.opacity, groupLayer.fillOpacity, mode, this.blendScratch,
         mode === 'dissolve' ? dissolveNoise(Math.floor(x), Math.floor(y), seed) : 0);
     }
   }

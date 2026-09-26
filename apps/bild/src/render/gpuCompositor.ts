@@ -15,7 +15,7 @@ import {
   Mesh, MeshGeometry, RenderTexture, Shader, State, Texture, TextureSource, WebGLRenderer,
 } from 'pixi.js';
 import { adjustmentProgram } from './adjustPrograms';
-import { ancestorIds, maskTransform as storedMaskTransform, type BlendMode, type CanvasDocument, type Layer } from '../core/document';
+import { ancestorIds, maskTransform as storedMaskTransform, type BlendIfSettings, type BlendMode, type CanvasDocument, type Layer } from '../core/document';
 import { apply, concat, invert, pixelToDocument, type Affine, type LayerTransform, type Point, type Rect } from '../core/geometry';
 import { Raster, TILE } from '../core/raster';
 import { blendSeed } from '../core/blend';
@@ -35,7 +35,7 @@ import { EffectLiveFilterHookAdapter } from './liveFilterPasses';
 import { defaultFilterSettings } from '../core/filters/settings';
 import { applyLiveFilters } from '../core/filters/live';
 import {
-  COMBINE_FRAGMENT, DENOISE_FRAGMENT, LENS_FRAGMENT, NOISE_FRAGMENT, QUANTIZE_FRAGMENT, SELECTION_MIX_FRAGMENT,
+  COMBINE_FRAGMENT, DENOISE_FRAGMENT, FILTER_BLEND_FRAGMENT, LENS_FRAGMENT, NOISE_FRAGMENT, QUANTIZE_FRAGMENT, SELECTION_MIX_FRAGMENT,
   filterHalo, gaussianFragment, gaussianSupport, gaussianWeights, liveViewFilter, previewViewFilter,
   usesRecursiveGaussian, type PreviewLayer, type ViewFilter,
 } from './gpuFilterPasses';
@@ -367,6 +367,24 @@ function mat3(m: Affine): Float32Array {
   return new Float32Array([m.a, m.b, 0, m.c, m.d, 0, m.tx, m.ty, 1]);
 }
 
+function blendIfDefinitions(): Uniforms {
+  return {
+    uHasBlendIf: { value: 0, type: 'i32' },
+    uBlendIfSource: { value: new Float32Array(16), type: 'vec4<f32>', size: 4 },
+    uBlendIfDestination: { value: new Float32Array(16), type: 'vec4<f32>', size: 4 },
+  };
+}
+
+function blendIfValues(settings: BlendIfSettings | null | undefined): Record<string, unknown> {
+  const channels = ['gray', 'red', 'green', 'blue'] as const;
+  const values = (side: BlendIfSettings['source']) => new Float32Array(channels.flatMap((channel) => {
+    const range = side[channel]; return [range.black0, range.black1, range.white0, range.white1];
+  }));
+  return settings ? { uHasBlendIf: 1, uBlendIfSource: values(settings.source),
+    uBlendIfDestination: values(settings.destination) }
+    : { uHasBlendIf: 0, uBlendIfSource: new Float32Array(16), uBlendIfDestination: new Float32Array(16) };
+}
+
 export class GpuCompositor {
   readonly renderer: WebGLRenderer;
   readonly gl: WebGL2RenderingContext;
@@ -524,6 +542,7 @@ export class GpuCompositor {
     if (existing) return existing;
     const sources: Record<string, [string, Uniforms, string[]]> = {
       layer: [LAYER_FRAGMENT, {
+        ...blendIfDefinitions(),
         uTarget: { value: new Float32Array(2), type: 'vec2<f32>' },
         uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
         uDocToLayer: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
@@ -560,6 +579,7 @@ export class GpuCompositor {
         uReplace: { value: 0, type: 'i32' },
       }, ['uBackdrop', 'uLayer', 'uMask', 'uClip']],
       filteredLayer: [FILTERED_LAYER_FRAGMENT, {
+        ...blendIfDefinitions(),
         uFilterOffset: { value: new Float32Array(2), type: 'vec2<f32>' },
         uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
         uDocToLayer: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
@@ -572,6 +592,7 @@ export class GpuCompositor {
         uHasClip: { value: 0, type: 'i32' }, uSnap: { value: 0, type: 'i32' },
       }, ['uBackdrop', 'uLayer', 'uMask', 'uClip']],
       warpMesh: [WARP_MESH_FRAGMENT, {
+        ...blendIfDefinitions(),
         uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
         uLayerSize: { value: new Float32Array(2), type: 'vec2<f32>' },
         uLayerEdge: { value: new Float32Array(2), type: 'vec2<f32>' },
@@ -675,12 +696,14 @@ export class GpuCompositor {
       }, ['uSource']],
       opaque: [OPAQUE_FRAGMENT, { uUnused: { value: 0, type: 'f32' } }, ['uSource']],
       stack: [STACK_FRAGMENT, {
+        ...blendIfDefinitions(),
         uHasClip: { value: 0, type: 'i32' },
         uMode: { value: 0, type: 'i32' },
         uDissolveSeed: { value: 0, type: 'i32' },
         uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
       }, ['uBackdrop', 'uSurface', 'uBase', 'uClip']],
       group: [GROUP_FRAGMENT, {
+        ...blendIfDefinitions(),
         uMode: { value: 0, type: 'i32' }, uDissolveSeed: { value: 0, type: 'i32' },
         uOpacity: { value: 1, type: 'f32' }, uFillOpacity: { value: 1, type: 'f32' },
         uKnockout: { value: 0, type: 'i32' }, uHasClip: { value: 0, type: 'i32' },
@@ -1061,6 +1084,9 @@ export class GpuCompositor {
     run(this.filterPass('filter:lens', LENS_FRAGMENT, ['uSource']));
     run(this.filterPass('filter:denoise', DENOISE_FRAGMENT, ['uSource']));
     run(this.filterPass('filter:combine', COMBINE_FRAGMENT, ['uSource', 'uSecond']), { uSecond: source.source });
+    run(this.filterPass('filter:blend', FILTER_BLEND_FRAGMENT, ['uSource', 'uSecond'], {
+      uMode: { value: 0, type: 'i32' }, uOpacity: { value: 1, type: 'f32' },
+    }), { uSecond: source.source });
     run(this.filterPass('filter:quantize', QUANTIZE_FRAGMENT, ['uSource']), {},
       { uParams: new Float32Array([255, 0, 0, 0]) });
     run(this.filterPass('filter:selection', SELECTION_MIX_FRAGMENT, ['uSource', 'uSecond', 'uSelection']),
@@ -1979,6 +2005,9 @@ export class GpuCompositor {
       opacity: 1, fillOpacity: 1, blendMode: 'normal' as const } as Layer;
     let current = this.drawLayer(empty, rawLayer, expandedView, hooks, null, 'normal', true, true);
     this.release(empty);
+    const filterOriginal = layer.filterMask?.enabled ? this.acquire(expandedView.width, expandedView.height, true) : null;
+    if (filterOriginal) this.run(this.pass('copy'), filterOriginal, expandedView.width, expandedView.height,
+      { uSource: current.source }, {});
 
     const expandedDocToView = invert(expandedView.viewToDoc), expandedMap = (point: Point) =>
       apply(expandedDocToView, apply(gridToDoc, point));
@@ -2000,6 +2029,15 @@ export class GpuCompositor {
         { width: raster.width, height: raster.height }, raster.maximum);
       const quantized = this.quantizeFilterTarget(after, raster.maximum);
       this.release(after); after = quantized;
+      if (filter.opacity < 1 || filter.blendMode !== 'normal') {
+        const mixed = this.acquire(after.width, after.height, true);
+        this.runFilter(this.filterPass('filter:blend', FILTER_BLEND_FRAGMENT, ['uSource', 'uSecond'], {
+          uMode: { value: 0, type: 'i32' }, uOpacity: { value: 1, type: 'f32' },
+        }), mixed, before, { uSecond: after.source }, {
+          uMode: BLEND_INDEX[filter.blendMode] ?? 0, uOpacity: filter.opacity,
+        });
+        this.release(after); after = this.quantizeFilterTarget(mixed, raster.maximum); this.release(mixed);
+      }
       if (index === 0 && selectionTarget) {
         const mixed = this.acquire(after.width, after.height, true);
         this.runFilter(this.filterPass('filter:selection', SELECTION_MIX_FRAGMENT,
@@ -2012,6 +2050,20 @@ export class GpuCompositor {
       this.release(before); current = after;
     });
     this.release(selectionTarget);
+
+    if (filterOriginal && layer.filterMask) {
+      const filterMask = layer.filterMask, placement = filterMask.placement ?? transform;
+      const drawnMask = this.residentLod(filterMask.raster, placement, expandedView);
+      const filterMaskTarget = this.renderMask(null, filterMask.raster, `filter-mask:${layer.id}`, placement, expandedView,
+        (filterMask.defaultColor ?? Math.round(maskBackground(drawnMask) * 255)) / 255);
+      const mixed = this.acquire(current.width, current.height, true);
+      this.runFilter(this.filterPass('filter:selection', SELECTION_MIX_FRAGMENT,
+        ['uSource', 'uSecond', 'uSelection']), mixed, filterOriginal,
+      { uSecond: current.source, uSelection: filterMaskTarget.source }, {});
+      this.release(current); current = this.quantizeFilterTarget(mixed, raster.maximum);
+      this.release(mixed); this.release(filterMaskTarget);
+    }
+    this.release(filterOriginal);
 
     let maskTarget: RenderTexture | null = null;
     const maskEnabled = layer.mask?.enabled || layer.vectorMask?.enabled;
@@ -2035,6 +2087,7 @@ export class GpuCompositor {
       uFilterOffset: new Float32Array([halo, halo]), uViewToDoc: mat3(view.viewToDoc),
       uDocToLayer: u.uDocToLayer, uDocToWarp: u.uDocToWarp, uHasWarp: u.uHasWarp,
       uLayerSize: u.uLayerSize, ...this.cropUniforms(layer, raster, raster),
+      ...blendIfValues(layer.blendIf),
       uOpacity: layer.opacity, uFillOpacity: layer.fillOpacity, uMode: BLEND_INDEX[mode] ?? 0,
       uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
       uHasMask: maskTarget ? 1 : 0, uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0,
@@ -2060,7 +2113,7 @@ export class GpuCompositor {
     // path is exact and stays cheap; production-size layers remain view-space and never enter the CPU here.
     if (raster && !preview && filters.length && raster.width * raster.height <= 16_384 && targetPerSource > 1) {
       this.performanceCounterValue.cpuLiveFilterFallbacks++;
-      const filtered = applyLiveFilters(raster, layer.filters);
+      const filtered = applyLiveFilters(raster, layer.filters, layer.filterMask, transform);
       const plain = { ...layer, filters: [] };
       const filteredHooks: CompositeHooks = {
         transform: (item) => hooks.transform(item), maskPlacement: (item) => hooks.maskPlacement(item),
@@ -2083,7 +2136,8 @@ export class GpuCompositor {
       const placement = hooks.maskPlacement(layer);
       const maskPlace = placement ?? hooks.transform(layer);
       const drawnMask = this.residentLod(maskRaster, maskPlace, view);
-      const psdDefault = (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault;
+      const psdDefault = layer.mask?.defaultColor
+        ?? (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault;
       maskTarget = this.renderMask(null, maskRaster, `mask:${layer.id}`, maskPlace, view,
         psdDefault !== undefined ? psdDefault / 255 : placement ? maskBackground(drawnMask) : 0);
     }
@@ -2123,6 +2177,7 @@ export class GpuCompositor {
           uMipLevel: u.uMipLevel, uRestrictChunk: restricted ? 1 : 0,
           uRestrictBounds: 0,
           ...this.cropUniforms(layer, raster, drawnRaster),
+          ...blendIfValues(layer.blendIf),
           uOpacity: layer.opacity, uFillOpacity: layer.fillOpacity, uMode: BLEND_INDEX[mode] ?? 0,
           uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
           uHasMask: maskTarget ? 1 : 0,
@@ -2158,6 +2213,7 @@ export class GpuCompositor {
             uTextureSize: new Float32Array([chunk.width + CHUNK_APRON * 2, chunk.height + CHUNK_APRON * 2]), uApron: CHUNK_APRON,
             uMipLevel: sharpUniforms.uMipLevel, uRestrictChunk: 1, uRestrictBounds: 0,
             ...this.cropUniforms(layer, raster, sharp),
+            ...blendIfValues(layer.blendIf),
             uOpacity: layer.opacity, uFillOpacity: layer.fillOpacity, uMode: BLEND_INDEX[mode] ?? 0,
             uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
             uHasMask: maskTarget ? 1 : 0, uHasClip: clip ? 1 : 0, uSnap: view.snap ? 1 : 0,
@@ -2193,6 +2249,7 @@ export class GpuCompositor {
           uRestrictBounds: 1, uDrawOrigin: new Float32Array([bounds.x, bounds.y]),
           uDrawSize: new Float32Array([bounds.width, bounds.height]),
           ...this.cropUniforms(layer, raster ?? pixelBrush, pixelBrush),
+          ...blendIfValues(layer.blendIf),
           uOpacity: layer.opacity, uFillOpacity: layer.fillOpacity, uMode: BLEND_INDEX[mode] ?? 0,
           uDissolveSeed: mode === 'dissolve' ? blendSeed(layer.id) : 0,
           uHasMask: maskTarget ? 1 : 0,
@@ -2340,8 +2397,10 @@ export class GpuCompositor {
     temporaries: RenderTexture[]): RenderTexture | null {
     const raster = layer.mask?.enabled || layer.vectorMask?.enabled ? hooks.maskRaster(layer) : null;
     if (!raster) return folderClip;
-    const background = ((layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault ?? 0) / 255;
-    const placement = (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault === undefined
+    const maskDefault = layer.mask?.defaultColor
+      ?? (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault;
+    const background = (maskDefault ?? 0) / 255;
+    const placement = maskDefault === undefined
       ? hooks.transform(layer) : hooks.maskPlacement(layer) ?? hooks.transform(layer);
     const clip = this.renderMask(folderClip, raster, `mask:${layer.id}`, placement, view, background);
     temporaries.push(clip); return clip;
@@ -2407,6 +2466,7 @@ export class GpuCompositor {
     this.run(this.pass('stack'), out, view.width, view.height, {
       uBackdrop: backdrop.source, uSurface: surface.source, uBase: baseAlone.source, uClip: clip?.source ?? this.white,
     }, { uHasClip: clip ? 1 : 0, uMode: BLEND_INDEX[mode] ?? 0,
+      ...blendIfValues(base.blendIf),
       uDissolveSeed: mode === 'dissolve' ? blendSeed(base.id) : 0, uViewToDoc: mat3(view.viewToDoc) });
     this.release(surface);
     return out;
@@ -2420,6 +2480,7 @@ export class GpuCompositor {
       uKnockoutBase: knockoutBase?.source ?? this.transparentSource(),
       uClip: clip?.source ?? this.white,
     }, { uMode: BLEND_INDEX[mode] ?? 0, uDissolveSeed: mode === 'dissolve' ? blendSeed(group.id) : 0,
+      ...blendIfValues(group.blendIf),
       uOpacity: group.opacity, uFillOpacity: group.fillOpacity,
       uKnockout: (group as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout ? 1 : 0,
       uHasClip: clip ? 1 : 0,

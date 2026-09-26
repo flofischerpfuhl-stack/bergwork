@@ -1,8 +1,13 @@
 import { carryMask, applyFilter } from './apply';
 import { defaultFilterSettings, type FilterKind } from './settings';
 import type { EditorSession } from '../session';
-import { withLayerRaster, type Layer, type LiveFilter } from '../document';
+import { withLayerRaster, type Layer, type LayerMask, type LiveFilter } from '../document';
 import type { Raster } from '../raster';
+import { Raster as RasterValue } from '../raster';
+import { compositePremultiplied } from '../blend';
+import { makePixelArray } from '../pixel/format';
+import { apply, pixelToDocument, type LayerTransform } from '../geometry';
+import { mapPlacement, maskBackground, preparePlacement, prepareSampler, sampleMask } from '../resample';
 
 export type LiveFilterKind = LiveFilter['kind'];
 
@@ -40,21 +45,69 @@ function filterSettings(filter: LiveFilter): { kind: FilterKind; settings: Retur
 export function applyLiveFilter(raster: Raster, filter: LiveFilter): Raster {
   if (!filter.enabled) return raster;
   const converted = filterSettings(filter);
-  return applyFilter(converted.kind, raster, {
+  const filtered = applyFilter(converted.kind, raster, {
     origin: { x: 0, y: 0 }, size: { width: raster.width, height: raster.height }, rotation: 0,
     flipX: false, flipY: false, sampling: 'High quality',
   }, converted.settings, { expand: false, seed: 0x6d2b79f5 }).raster;
+  const opacity = Math.min(1, Math.max(0, filter.opacity ?? 1)), mode = filter.blendMode ?? 'normal';
+  if (opacity >= 1 && mode === 'normal') return filtered;
+  const original = raster.toPixelsNative(), changed = filtered.toPixelsNative(), maximum = raster.maximum;
+  const output = makePixelArray(raster.format, original.length), pixel = new Float32Array(4), scratch = new Float64Array(6);
+  for (let offset = 0; offset < original.length; offset += 4) {
+    const ba = original[offset + 3]! / maximum, sa = changed[offset + 3]! / maximum;
+    pixel[0] = original[offset]! / maximum * ba; pixel[1] = original[offset + 1]! / maximum * ba;
+    pixel[2] = original[offset + 2]! / maximum * ba; pixel[3] = ba;
+    compositePremultiplied(pixel, 0, changed[offset]! / maximum * sa * opacity,
+      changed[offset + 1]! / maximum * sa * opacity, changed[offset + 2]! / maximum * sa * opacity,
+      sa * opacity, mode, false, scratch);
+    const alpha = pixel[3]!;
+    output[offset + 3] = Math.round(Math.min(1, Math.max(0, alpha)) * maximum);
+    for (let channel = 0; channel < 3; channel++) output[offset + channel] = Math.round(
+      Math.min(1, Math.max(0, alpha > 0 ? pixel[channel]! / alpha : 0)) * maximum);
+  }
+  return RasterValue.fromPixels(raster.width, raster.height, 4, output, { format: raster.format });
 }
 
 const cache = new WeakMap<Raster, WeakMap<object, Raster>>();
+function applyFilterMask(original: Raster, filtered: Raster, mask: LayerMask, transform: LayerTransform): Raster {
+  if (!mask.enabled || mask.raster.channels !== 1) return filtered;
+  const before = original.toPixelsNative(), after = filtered.toPixelsNative(), maximum = original.maximum;
+  const output = makePixelArray(original.format, before.length), sourceToDocument = pixelToDocument(transform, original.width, original.height);
+  const placement = mask.placement ?? transform;
+  const prepared = preparePlacement({ ...placement, sampling: 'High quality' }, mask.raster.width, mask.raster.height);
+  const sampler = prepareSampler(mask.raster, 'High quality', mask.raster.width), location = new Float64Array(3);
+  const outside = (mask.defaultColor ?? Math.round(maskBackground(mask.raster) * 255)) / 255;
+  for (let y = 0; y < original.height; y++) for (let x = 0; x < original.width; x++) {
+    const point = apply(sourceToDocument, { x: x + 0.5, y: y + 0.5 });
+    mapPlacement(prepared, point.x, point.y, location);
+    const sampled = sampleMask(sampler, location[0]!, location[1]!);
+    const coverage = outside + (sampled - outside) * location[2]!, offset = (y * original.width + x) * 4;
+    const beforeAlpha = before[offset + 3]! / maximum, afterAlpha = after[offset + 3]! / maximum;
+    const alpha = beforeAlpha * (1 - coverage) + afterAlpha * coverage;
+    output[offset + 3] = Math.round(alpha * maximum);
+    for (let channel = 0; channel < 3; channel++) {
+      const straight = before[offset + channel]! / maximum * (1 - coverage)
+        + after[offset + channel]! / maximum * coverage;
+      output[offset + channel] = Math.round(Math.min(1, Math.max(0, straight)) * maximum);
+    }
+  }
+  return RasterValue.fromPixels(original.width, original.height, 4, output, { format: original.format });
+}
+
 /** Cached, ordered live stack. Immutable filter arrays are the cache key. */
-export function applyLiveFilters(raster: Raster, filters: readonly LiveFilter[]): Raster {
+export function applyLiveFilters(raster: Raster, filters: readonly LiveFilter[], filterMask?: LayerMask | null,
+  transform?: LayerTransform): Raster {
   if (!filters.some((filter) => filter.enabled)) return raster;
-  let byStack = cache.get(raster); if (!byStack) { byStack = new WeakMap(); cache.set(raster, byStack); }
-  const key = filters as object, known = byStack.get(key); if (known) return known;
+  let byStack: WeakMap<object, Raster> | undefined, known: Raster | undefined;
+  if (!filterMask) {
+    byStack = cache.get(raster); if (!byStack) { byStack = new WeakMap(); cache.set(raster, byStack); }
+    known = byStack.get(filters as object); if (known) return known;
+  }
   let result = raster;
   for (const filter of filters) result = applyLiveFilter(result, filter);
-  byStack.set(key, result); return result;
+  if (filterMask && transform) result = applyFilterMask(raster, result, filterMask, transform);
+  else byStack?.set(filters as object, result);
+  return result;
 }
 
 function replaceFilters(session: EditorSession, layerId: string, filters: readonly LiveFilter[]): boolean {
@@ -103,6 +156,13 @@ export function endLiveFilterDrag(session: EditorSession, commit = true): boolea
 export function bakeLiveFilters(session: EditorSession, layerId: string): boolean {
   const document = session.document, layer = session.layer(layerId);
   if (!document || !layer?.raster || !layer.filters.length || session.editBlocker(layerId, 'pixels')) return false;
+  if (layer.filterMask) {
+    const raster = applyLiveFilters(layer.raster, layer.filters, layer.filterMask, layer.transform);
+    const replacement: Layer = { ...withLayerRaster(layer, raster), filters: [], filterMask: null };
+    session.edit('Apply Live Filters', () => session.replaceDocument({ ...document,
+      layers: document.layers.map((item) => item.id === layerId ? replacement : item) }));
+    return true;
+  }
   let raster = layer.raster, transform = layer.transform;
   for (const filter of layer.filters) {
     if (!filter.enabled) continue;
@@ -113,7 +173,7 @@ export function bakeLiveFilters(session: EditorSession, layerId: string): boolea
   if (mask && !mask.placement && (raster.width !== layer.raster.width || raster.height !== layer.raster.height)) {
     mask = { ...mask, raster: carryMask(mask.raster, layer.transform, transform, raster.width, raster.height) };
   }
-  const replacement: Layer = { ...withLayerRaster(layer, raster, transform, mask), filters: [] };
+  const replacement: Layer = { ...withLayerRaster(layer, raster, transform, mask), filters: [], filterMask: null };
   session.edit('Apply Live Filters', () => session.replaceDocument({ ...document,
     layers: document.layers.map((item) => item.id === layerId ? replacement : item) }));
   return true;

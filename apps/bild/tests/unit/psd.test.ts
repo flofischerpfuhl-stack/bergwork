@@ -313,10 +313,9 @@ describe('PSD colour modes and product wiring', () => {
         imageData: { width: 1, height: 1, data: new Uint8ClampedArray([255, 255, 255, 255]) } } };
     const imported = readPsdDocument(writePsdUint8Array({ width: 2, height: 1, children: [layer],
       imageData: image([255, 0, 0, 191, 255, 0, 0, 255]) }, { generateThumbnail: false }));
-    const densityLayer = imported.document.layers[0] as typeof imported.document.layers[number]
-      & { readonly psdMaskDefault?: number };
+    const densityLayer = imported.document.layers[0]!;
     expect(densityLayer.mask?.raster.toPixels()).toEqual(new Uint8Array([255]));
-    expect(densityLayer.psdMaskDefault).toBe(191);
+    expect(densityLayer.mask?.defaultColor).toBe(191);
     expect(imported.unsupported).toContainEqual(expect.objectContaining({
       code: 'mask-density', impact: 'editability-only',
     }));

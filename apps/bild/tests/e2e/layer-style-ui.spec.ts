@@ -40,6 +40,32 @@ async function openFromLayerMenu(page: Page, item: string, menu = 'Layer', subme
   await page.getByRole('menuitem', { name: item, exact: true }).click();
 }
 
+test('Fülloptionen edit Blend-If split thresholds live and Cancel restores pixels/state', async ({ page }) => {
+  await setup(page, 'de');
+  const square = await layerNamed(page, 'square1');
+  const start = await history(page);
+  const x = Math.round(square.origin.x) + 20, y = Math.round(square.origin.y) + 20;
+  expect(alphaAt(await exportedPixels(page), x, y)).toBe(255);
+  await openFromLayerMenu(page, 'Fülloptionen …', 'Ebene', 'Ebenenstil');
+  await expect(page.getByTestId('style-blending-options')).toHaveText('Fülloptionen');
+  await expect(page.getByText('Diese Ebene', { exact: true })).toBeVisible();
+  await expect(page.getByText('Darunter liegende Ebene', { exact: true })).toBeVisible();
+  await page.getByTestId('blend-if-source-black0').fill('255');
+  await expect.poll(async () => page.evaluate(() => (window as any).__editorForTests.session.activeLayer.blendIf.source.gray.black0)).toBe(255);
+  expect(alphaAt(await exportedPixels(page), x, y)).toBe(0);
+  await page.getByTestId('style-cancel').click();
+  expect(await page.evaluate(() => (window as any).__editorForTests.session.activeLayer.blendIf ?? null)).toBeNull();
+  expect(alphaAt(await exportedPixels(page), x, y)).toBe(255);
+  await openFromLayerMenu(page, 'Fülloptionen …', 'Ebene', 'Ebenenstil');
+  await page.getByTestId('blend-if-source-black0').fill('255');
+  await page.getByTestId('style-ok').click();
+  expect(await history(page)).toEqual({ count: start.count + 1, name: 'Layer Style' });
+  expect(alphaAt(await exportedPixels(page), x, y)).toBe(0);
+  await page.getByTestId('compositor-editor').press(undoKey);
+  expect(await page.evaluate(() => (window as any).__editorForTests.session.activeLayer.blendIf ?? null)).toBeNull();
+  expect(alphaAt(await exportedPixels(page), x, y)).toBe(255);
+});
+
 test('Layer Style dialog: drop shadow from the menu, distance typed and dragged, pixels, one undo step, Cancel, Enter and Escape', async ({ page }) => {
   await setup(page);
   const square = await layerNamed(page, 'square1');

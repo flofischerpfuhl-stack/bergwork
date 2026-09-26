@@ -10,7 +10,7 @@
  * Adobe's descriptions confirm the operand directions for the Photoshop-only modes:
  * https://helpx.adobe.com/photoshop/desktop/repair-retouch/adjust-light-tone/blending-mode-descriptions.html
  */
-import type { BlendMode } from './document';
+import type { BlendIfRange, BlendIfSettings, BlendMode } from './document';
 import { linearToSrgb, srgbToLinear } from './pixel/color';
 
 export type RGB = readonly [number, number, number];
@@ -20,6 +20,37 @@ export const SPECIAL_FILL_BLEND_MODES: ReadonlySet<BlendMode> = new Set([
 ]);
 
 export function clamp01(value: number): number { return Math.min(1, Math.max(0, value)); }
+
+export const DEFAULT_BLEND_IF_RANGE: BlendIfRange = { black0: 0, black1: 0, white0: 255, white1: 255 };
+
+/** Photoshop's split-handle ramp: hard when paired, linear between separated halves. */
+export function blendIfRangeFactor(value: number, range: BlendIfRange): number {
+  const sample = clamp01(value) * 255;
+  if (sample < range.black0 || sample > range.white1) return 0;
+  if (sample < range.black1) return range.black1 === range.black0 ? 1 : (sample - range.black0) / (range.black1 - range.black0);
+  if (sample > range.white0) return range.white1 === range.white0 ? 1 : (range.white1 - sample) / (range.white1 - range.white0);
+  return 1;
+}
+
+/** Blend If coverage for straight source/backdrop RGB. Channel constraints intersect. */
+export function blendIfFactor(settings: BlendIfSettings | null | undefined, source: readonly number[], destination: readonly number[]): number {
+  return blendIfFactorRgb(settings, source[0]!, source[1]!, source[2]!, destination[0]!, destination[1]!, destination[2]!);
+}
+
+export function blendIfFactorRgb(settings: BlendIfSettings | null | undefined, sr: number, sg: number, sb: number,
+  dr: number, dg: number, db: number): number {
+  if (!settings) return 1;
+  const sourceValues = [sr * 0.3 + sg * 0.59 + sb * 0.11, sr, sg, sb];
+  const destinationValues = [dr * 0.3 + dg * 0.59 + db * 0.11, dr, dg, db];
+  const channels = ['gray', 'red', 'green', 'blue'] as const;
+  let factor = 1;
+  for (let index = 0; index < channels.length; index++) {
+    const channel = channels[index]!;
+    factor = Math.min(factor, blendIfRangeFactor(sourceValues[index]!, settings.source[channel]),
+      blendIfRangeFactor(destinationValues[index]!, settings.destination[channel]));
+  }
+  return factor;
+}
 
 function lum3(r: number, g: number, b: number): number { return 0.3 * r + 0.59 * g + 0.11 * b; }
 function sat3(r: number, g: number, b: number): number { return Math.max(r, g, b) - Math.min(r, g, b); }

@@ -305,11 +305,15 @@ function v2DocumentExtras(document: CanvasDocument, context: V2BuildContext): V2
 function v2Layer(layer: Layer, context: V2BuildContext): LayerRecordV2 {
   const common: LayerCommonV2 = {
     id: layer.id, parentId: layer.parentId, name: layer.name, visible: layer.visible, opacity: layer.opacity,
-    fillOpacity: layer.fillOpacity ?? 1, blendMode: layer.blendMode,
+    fillOpacity: layer.fillOpacity ?? 1, blendMode: layer.blendMode, blendIf: layer.blendIf ?? null,
     locks: layer.locks,
     colorLabel: layer.colorLabel, transform: layer.transform, warp: layer.warp ?? null, crop: layer.crop ?? null,
     mask: layer.mask ? { assetId: addV2Asset(context, layer.mask.raster, 'mask'), transform: layer.mask.placement,
-      linked: layer.mask.linked, enabled: layer.mask.enabled } : null,
+      linked: layer.mask.linked, enabled: layer.mask.enabled, ...(layer.mask.defaultColor === undefined
+        ? {} : { defaultColor: layer.mask.defaultColor }) } : null,
+    filterMask: layer.filterMask ? { assetId: addV2Asset(context, layer.filterMask.raster, 'mask'),
+      transform: layer.filterMask.placement, linked: layer.filterMask.linked, enabled: layer.filterMask.enabled,
+      ...(layer.filterMask.defaultColor === undefined ? {} : { defaultColor: layer.filterMask.defaultColor }) } : null,
     vectorMask: layer.vectorMask ? { ...layer.vectorMask, schemaVersion: 1, density: layer.vectorMask.density ?? 1,
       feather: layer.vectorMask.feather ?? 0, paths: layer.vectorMask.paths.map(v2VectorPath) } : null, clippedTo: layer.maskSourceId,
     effects: layer.effects ?? [], filters: layer.filters ?? [],
@@ -933,7 +937,7 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
       if (!record || typeof record.id !== 'string' || !record.id || ids.has(record.id) || typeof record.name !== 'string'
         || !record.name.trim() || !num(record.opacity) || record.opacity < 0 || record.opacity > 1
         || !num(record.fillOpacity) || record.fillOpacity < 0 || record.fillOpacity > 1
-        || !BLEND_MODE_SET.has(record.blendMode) || !isLayerTransform(record.transform) || !validWarp(record.warp) || !validCrop(record.crop)
+        || !BLEND_MODE_SET.has(record.blendMode) || !validBlendIf(record.blendIf) || !isLayerTransform(record.transform) || !validWarp(record.warp) || !validCrop(record.crop)
         || !validLocks(record.locks) || !['none', 'red', 'orange', 'yellow', 'green', 'blue', 'violet', 'gray'].includes(record.colorLabel)
         || !Array.isArray(record.effects) || !record.effects.every((effect: import('../../contracts-v2').EffectRecordV2) => validEffect(effect, records))
         || !Array.isArray(record.filters) || !record.filters.every(validLiveFilter)
@@ -944,13 +948,22 @@ async function readV2Archive(manifest: ProjectManifestV2, entries: Record<string
         : record.kind === 'vector' || record.kind === 'text' || record.kind === 'embedded' ? record.previewAssetId : null;
       const raster = assetId ? await decode(assetId, false) : null;
       const maskRaster = record.mask ? await decode(record.mask.assetId, true) : null;
+      const filterMaskRaster = record.filterMask ? await decode(record.filterMask.assetId, true) : null;
+      if (record.mask?.defaultColor !== undefined && (!Number.isInteger(record.mask.defaultColor)
+        || record.mask.defaultColor < 0 || record.mask.defaultColor > 255)) invalid('mask default colour');
       const mask = record.mask && maskRaster ? { raster: maskRaster, enabled: record.mask.enabled,
-        linked: record.mask.linked, placement: record.mask.transform } : null;
+        linked: record.mask.linked, placement: record.mask.transform,
+        ...(record.mask.defaultColor === undefined ? {} : { defaultColor: record.mask.defaultColor }) } : null;
+      if (record.filterMask?.defaultColor !== undefined && (!Number.isInteger(record.filterMask.defaultColor)
+        || record.filterMask.defaultColor < 0 || record.filterMask.defaultColor > 255)) invalid('filter mask default colour');
+      const filterMask = record.filterMask && filterMaskRaster ? { raster: filterMaskRaster, enabled: record.filterMask.enabled,
+        linked: record.filterMask.linked, placement: record.filterMask.transform,
+        ...(record.filterMask.defaultColor === undefined ? {} : { defaultColor: record.filterMask.defaultColor }) } : null;
       const common = {
         id: record.id, name: record.name, visible: record.visible !== false,
         parentId: record.parentId, opacity: record.opacity, fillOpacity: record.fillOpacity,
-        blendMode: record.blendMode as BlendMode, locks: record.locks, colorLabel: record.colorLabel,
-        transform: record.transform, warp: record.warp, crop: record.crop, raster, mask,
+        blendMode: record.blendMode as BlendMode, blendIf: record.blendIf ?? null, locks: record.locks, colorLabel: record.colorLabel,
+        transform: record.transform, warp: record.warp, crop: record.crop, raster, mask, filterMask,
         vectorMask: normalizeVectorMaskRecord(record.vectorMask), maskSourceId: record.clippedTo, effects: record.effects, filters: record.filters,
       };
       switch (record.kind) {
@@ -1219,6 +1232,14 @@ function range(value: unknown, minimum: number, maximum: number): value is numbe
 }
 function unit(value: unknown): value is number { return range(value, 0, 1); }
 
+function validBlendIf(value: import('../../contracts-v2').BlendIfSettingsRecordV2 | null | undefined): boolean {
+  if (value == null) return true;
+  const channels = ['gray', 'red', 'green', 'blue'] as const;
+  return !!value.source && !!value.destination && channels.every((channel) => [value.source[channel], value.destination[channel]].every((entry) =>
+    !!entry && [entry.black0, entry.black1, entry.white0, entry.white1].every((sample) => Number.isInteger(sample) && sample >= 0 && sample <= 255)
+    && entry.black0 <= entry.black1 && entry.black1 <= entry.white0 && entry.white0 <= entry.white1));
+}
+
 function validEffectGradient(value: import('../../contracts-v2').EffectGradientV2): boolean {
   return !!value && Array.isArray(value.stops) && value.stops.length >= 2
     && value.stops.every((stop) => num(stop.offset) && stop.offset >= 0 && stop.offset <= 1
@@ -1233,6 +1254,8 @@ function validEffectFill(value: import('../../contracts-v2').EffectFillV2): bool
 
 function validLiveFilter(value: import('../../contracts-v2').FilterRecordV2): boolean {
   if (!value || value.schemaVersion !== 1 || typeof value.enabled !== 'boolean') return false;
+  if (value.opacity !== undefined && !unit(value.opacity)) return false;
+  if (value.blendMode !== undefined && !BLEND_MODE_SET.has(value.blendMode as BlendMode)) return false;
   if (value.kind === 'gaussianBlur') return num(value.radius);
   if (value.kind === 'motionBlur') return num(value.angle) && num(value.distance);
   if (value.kind === 'noise') return num(value.amount) && typeof value.gaussian === 'boolean' && typeof value.monochromatic === 'boolean';

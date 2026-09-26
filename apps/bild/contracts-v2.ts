@@ -83,16 +83,29 @@ export interface LayerCommonV2 {
   opacity: number;
   fillOpacity: number;
   blendMode: string;
+  /** Optional for compatibility with v2 files written before Blend If support. */
+  blendIf?: BlendIfSettingsRecordV2 | null;
   locks: { transparency: boolean; pixels: boolean; position: boolean; all: boolean };
   colorLabel: 'none' | 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'violet' | 'gray';
   transform: LayerTransformV2;
   warp: LayerWarpV2 | null;
   crop: { rect: RectV2; feather: number } | null;
-  mask: { assetId: AssetIdV2; transform: LayerTransformV2 | null; linked: boolean; enabled: boolean } | null;
+  mask: { assetId: AssetIdV2; transform: LayerTransformV2 | null; linked: boolean; enabled: boolean;
+    /** 0...255 coverage outside a positioned mask; absent in older v2 documents. */
+    defaultColor?: number } | null;
+  /** Optional for compatibility with v2 files written before live-filter masks. */
+  filterMask?: { assetId: AssetIdV2; transform: LayerTransformV2 | null; linked: boolean; enabled: boolean;
+    defaultColor?: number } | null;
   vectorMask: VectorMaskRecordV2 | null;
   clippedTo: LayerIdV2 | null;
   effects: readonly EffectRecordV2[];
   filters: readonly FilterRecordV2[];
+}
+
+export interface BlendIfRangeRecordV2 { black0: number; black1: number; white0: number; white1: number }
+export interface BlendIfSettingsRecordV2 {
+  source: Readonly<Record<'gray' | 'red' | 'green' | 'blue', BlendIfRangeRecordV2>>;
+  destination: Readonly<Record<'gray' | 'red' | 'green' | 'blue', BlendIfRangeRecordV2>>;
 }
 
 export interface VectorPathRecordV2 {
@@ -171,7 +184,7 @@ export type EffectRecordV2 =
       resourceId: AssetIdV2; patternWidth: number; patternHeight: number; scale: number; angle: number;
       linkWithLayer: boolean; phase?: PointV2 };
 
-export type FilterRecordV2 =
+export type FilterRecordV2 = (
   | { kind: 'gaussianBlur'; schemaVersion: 1; enabled: boolean; radius: number }
   | { kind: 'motionBlur'; schemaVersion: 1; enabled: boolean; angle: number; distance: number }
   | { kind: 'noise'; schemaVersion: 1; enabled: boolean; amount: number; gaussian: boolean; monochromatic: boolean }
@@ -179,7 +192,8 @@ export type FilterRecordV2 =
   | { kind: 'unsharpMask'; schemaVersion: 1; enabled: boolean; amount: number; radius: number; threshold: number }
   | { kind: 'smartSharpen'; schemaVersion: 1; enabled: boolean; amount: number; radius: number; threshold: number; reduceNoise: number }
   | { kind: 'highPass'; schemaVersion: 1; enabled: boolean; radius: number }
-  | { kind: 'denoise'; schemaVersion: 1; enabled: boolean; luminance: number; colour: number };
+  | { kind: 'denoise'; schemaVersion: 1; enabled: boolean; luminance: number; colour: number; detail?: number }
+  ) & { opacity?: number; blendMode?: string };
 
 export interface HueSaturationParametersV1 {
   hue: number; saturation: number; lightness: number; colorize: boolean;
