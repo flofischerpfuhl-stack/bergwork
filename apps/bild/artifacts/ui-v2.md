@@ -211,8 +211,64 @@ All in `/home/oem/.local/share/fernwork-compositor-lab/claude-tools/shots/uiv2/`
 
 ## Tests
 
-TEST_RESULTS
+Local Linux, headless, from worktree `p3-uiv2`:
+
+- **Typecheck:** `npx tsc --noEmit -p .` is clean.
+- **Unit:** `vitest run tests/unit` passed 93 files and 790 tests (`--maxWorkers=1`, during the quiet window).
+- **E2E, Chromium:** 26 spec files, 132 tests (workspace, editor-workflows, layer-panel-locks, qa-locks, painting,
+  selection, guides, qa-guides, adjust-p2-ui, layer-style-ui, text-tool, visual-tour, qa-german, export-dialog,
+  batch, perf-ui, objsel-ui, genai, adjustments, cmyk, crop, history-panel, qa-history, colour-panel and the new
+  floating-chrome).
+  - Result: 125 passed, 6 skipped (reference photos or GPU not available), 1 failed.
+  - The failure was visual-tour, a 90 s timeout under load (nice 10, two workers, other sessions running). Rerun alone,
+    it passed (2/2).
+  - After the last CSS change I re-ran adjust-p2-ui, painting, layer-style-ui, floating-chrome and colour-panel: 35
+    passed, 2 skipped.
+- **E2E, WebKit (`E2E_ALL_BROWSERS=1 --project=webkit`), same 132 tests:**
+  - Result: 122 passed, 8 skipped, 2 failed.
+  - The failures were text-tool:142 (CanvasKit engine not ready within 90 s) and workspace:6 (mount evaluate timeout),
+    both under load. Rerun alone, both passed (2/2).
+- **perf-ui (Chromium) passed.**
+  - Tool switch renders ContextBar, TransformInspector, ToolRail, StatusBar and RegisteredPanels once each.
+  - Opening a menu renders TopBar ×2 plus the two isolated top-bar buttons.
+  - Pan, slider and stroke render no LayerRow or thumbnails.
+- **Test changes, minimal and caused by the layout:**
+  - `genai.spec.ts`, `objsel-ui.spec.ts` (`at()`) and `adjustments.spec.ts` (screen-centre probe) now take the view
+    origin from `canvas-pane` instead of the `editor-canvas` box. The canvas surface is now full-bleed, so its box is
+    the whole editor.
+  - New `tests/e2e/floating-chrome.spec.ts` (7 tests) covers:
+    - a full-bleed surface under non-overlapping chrome;
+    - Fit inside the work area;
+    - Tab / Shift+Tab / Panels button / close / View menu;
+    - Tab inside the chrome moving focus;
+    - pointer input on chrome not painting, and canvas strokes painting;
+    - rulers at the work-area edge;
+    - the phone work area and the welcome card fitting on a phone.
+- **Behaviour fixes found on the way:**
+  - The editor's focus keeper pulled the focus back mid-transition, so Tab could never move between controls.
+  - A clicked control that disappears (Create canvas) now hands the keyboard back after React's commit.
+  - A mouse click on a chrome button gives the keyboard to the editor, as in Photoshop.
+  - Menus stay below their title instead of sliding over it on short windows.
 
 ## Open points
 
-OPEN_POINTS
+- **Theme source for Fernwork Lite.** The editor now follows `html[data-theme]` live. On the Fernwork site, whose default is
+  light, the embedded Lite editor would open light unless the site sets `data-theme="dark"`. Integrator: confirm that
+  this is wanted. Fernwork PDF already follows the site theme.
+- **Status bar on tablets (768 px):**
+  - the document facts are clipped at the end (the hint is dropped);
+  - the colour picker opened as a secondary panel at 1201–1440 px may reach over the tool palette.
+  Both are cosmetic.
+- **Canvas fill rate.** The canvas now renders the full editor area instead of the old pane, about 1.6× the pixels at
+  1440×900.
+  - perf-ui stayed green, but GPU-bound perf specs (perf-view, adjust-performance) were not in my list; the
+    integrator's central run should cover them.
+  - A later optimisation could skip compositing the bleed region under opaque chrome.
+- **Popovers outside the menu system** (brush presets, type and shape popovers) still clamp horizontally to the
+  window, not the editor. That is harmless with a title bar above the editor. The brush popover keeps
+  `max-height: calc(100vh - 120px)`.
+- **No docked Properties panel.** Adjustment panels remain movable flyouts next to the panel stack, not a docked tab.
+- **Tokens without a live re-read.** Hosts overriding `--cmp-canvas-bg` live without a theme switch see it after the next
+  resize or theme change (it is read then, not every frame).
+- **WebKit/Firefox screenshots.** All screenshots are Chromium. WebKit was covered by the e2e run only, and Firefox was
+  not run (Windows lane).
