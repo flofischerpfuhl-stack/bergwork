@@ -77,12 +77,18 @@ export interface HueResponse { readonly shift: number; readonly saturation: numb
 export function hueResponse(settings: HueSaturationSettings): HueResponse[] {
   const result: HueResponse[] = [];
   for (let degree = 0; degree <= 360; degree++) {
-    let shift = 0, saturation = 0, lightness = 0;
+    const master = settings.adjustments.Master ?? defaultRangeAdjustment();
+    let shift = master.hue, saturation = master.saturation, lightness = master.lightness;
+    let strongest = 0;
     for (const range of COLOR_RANGES) {
+      if (range === 'Master') continue;
       const a = settings.adjustments[range];
       if (!a || (a.hue === 0 && a.saturation === 0 && a.lightness === 0)) continue;
       const weight = hueRangeWeight(settings, range, degree);
-      shift += a.hue * weight; saturation += a.saturation * weight; lightness += a.lightness * weight;
+      if (weight <= strongest) continue;
+      strongest = weight;
+      shift = master.hue + a.hue * weight; saturation = master.saturation + a.saturation * weight;
+      lightness = master.lightness + a.lightness * weight;
     }
     result.push({ shift, saturation, lightness });
   }

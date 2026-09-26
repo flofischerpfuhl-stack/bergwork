@@ -1,4 +1,4 @@
-# PSD native-fidelity report — thirteenth round
+# PSD native-fidelity report — fourteenth round
 
 Corpus: psd-tools commit `30bf79c2a88e0fc63104ee85713e23b04362153d`; 300 PSD/PSB files. ag-psd 31.0.2 plus native non-RGB layer-channel decoding.
 
@@ -7,31 +7,31 @@ alpha (so undefined straight RGB below transparency is ignored): mean over all c
 percentile. A file passes only when both limits for its primary feature folder pass.
 The runner is a measurement baseline: fidelity failures are reported but do not make the command itself fail.
 
-Overall: 300/300 parsed, 300/300 rendered, 252/300 passed (84.0%).
+Overall: 300/300 parsed, 300/300 rendered, 256/300 passed (85.3%).
 Target (PRODUCT-PLAN M15, owner decision 2026-09-26): every fixable deviation is fixed; see the root-cause table
 below and artifacts/psd-target.md. A 90% pass rate is a later TODO that needs an owner-approved text/effect tolerance.
 
-Thirteenth-round input: 248/300 (82.7%). Current native result: 252/300 (84.0%), a net gain of 4 files.
-Primary-folder changes are: blend modes 28→30, adjustments 37→38, layers 32→32, effects 12→12,
+Fourteenth-round input: 252/300 (84.0%). Current native result: 256/300 (85.3%), a net gain of 4 files.
+Primary-folder changes are: blend modes 30→30, adjustments 38→39, layers 32→32, effects 12→14,
 path operations 12→12, masks 0→0, group clipping 1→1, transparency 16→16, colour modes 10→10, colour profiles
-1→1, gradients 4→4, descriptors 5→5, and root 90→91. The overlapping 16/32-bit and PSB tags changed
+1→1, gradients 4→4, descriptors 5→5, and root 91→92. The overlapping 16/32-bit and PSB tags changed
 26→26 and 30→30 respectively. No primary-folder pass count regressed.
 
 | Newly passing file | Before mean / p99 | After mean / p99 | Native change |
 |---|---:|---:|---|
-| adjustments/adjustment_clipping.psd | 22.142 / 33 | 0.172 / 1 | An adjustment used as a clipping base supplies full-canvas coverage to the following clipped adjustment. |
-| blend-modes/cmyk-blend-modes.psd | 188.197 / 255 | 0.552 / 8 | CMYK merged alpha and document-space Smart Object caches are retained; Difference, Exclusion and Subtract blend on inverted process components. |
-| blend-modes/gray-blend-modes.psd | 16.733 / 242 | 0.326 / 4 | Gray documents retain their Photoshop-rendered document-space layer caches instead of reusing RGB Smart Object sources. |
-| passthrough_opacity.psd | 54.199 / 86 | 0.590 / 4 | A bounded pass-through adjustment evaluates against the entry backdrop before group opacity interpolates its result. |
+| adjustments/huesaturation_saturation_rgb.psd | 5.786 / 90 | 4.360 / 49 | Overlapping targeted colour ranges select Photoshop’s strongest range instead of summing contradictory edits. |
+| effects/group-stroke-off-canvas.psd | 18.616 / 255 | 1.887 / 0 | Group effects trace an unbounded live descendant surface, including paint outside the document. |
+| effects/stroke-effects.psd | 20.403 / 255 | 2.629 / 62 | Vector effects trace editable path coverage rather than a stale or transparent paint cache. |
+| mask-density-layervectormask.psd | 3.431 / 48 | 0.016 / 1 | The analytic vector mask and independent user-mask channel are density-adjusted once and multiplied. |
 
 ## Thresholds and feature summary
 
 | Feature | Limits (mean / p99) | Files | Parsed | Rendered | Passed | Pass rate | Top failure causes |
 |---|---:|---:|---:|---:|---:|---:|---|
 | blend-modes | ≤ 2 / ≤ 8 | 32 | 32 | 32 | 30 | 93.8% | wrong math/order/colour conversion (2) |
-| adjustments | ≤ 8 / ≤ 64 | 39 | 39 | 39 | 38 | 97.4% | wrong math/order/colour conversion (1) |
+| adjustments | ≤ 8 / ≤ 64 | 39 | 39 | 39 | 39 | 100.0% | — |
 | layers | ≤ 2 / ≤ 16 | 36 | 36 | 36 | 32 | 88.9% | wrong math/order/colour conversion (4) |
-| effects | ≤ 8 / ≤ 64 | 15 | 15 | 15 | 12 | 80.0% | wrong math/order/colour conversion (3) |
+| effects | ≤ 8 / ≤ 64 | 15 | 15 | 15 | 14 | 93.3% | wrong math/order/colour conversion (1) |
 | path-operations | ≤ 4 / ≤ 32 | 12 | 12 | 12 | 12 | 100.0% | — |
 | masks | ≤ 3 / ≤ 24 | 1 | 1 | 1 | 0 | 0.0% | wrong math/order/colour conversion (1) |
 | group-clipping | ≤ 3 / ≤ 24 | 1 | 1 | 1 | 1 | 100.0% | — |
@@ -42,7 +42,7 @@ path operations 12→12, masks 0→0, group clipping 1→1, transparency 16→16
 | descriptors | ≤ 2 / ≤ 16 | 6 | 6 | 6 | 5 | 83.3% | wrong math/order/colour conversion (1) |
 | 16/32-bit | ≤ 3 / ≤ 24 | 29 | 29 | 29 | 26 | 89.7% | opened flattened (layers not decoded) (1); unsupported: bit-depth:16 (1); unsupported: bit-depth:32 (1) |
 | PSB | ≤ 2 / ≤ 16 | 37 | 37 | 37 | 30 | 81.1% | wrong math/order/colour conversion (6); unsupported: gradient-overlay (1) |
-| root | ≤ 2 / ≤ 16 | 120 | 120 | 120 | 91 | 75.8% | wrong math/order/colour conversion (20); opened flattened (layers not decoded) (3); unsupported: gradient-overlay (2) |
+| root | ≤ 2 / ≤ 16 | 120 | 120 | 120 | 92 | 76.7% | wrong math/order/colour conversion (19); opened flattened (layers not decoded) (3); unsupported: gradient-overlay (2) |
 
 Files in the `16/32-bit` and `PSB` rows are also counted in their feature/root row.
 
@@ -93,7 +93,7 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 |---|---:|
 | editability-only: ag-psd-parser | 247 |
 | editability-only: lock-artboards | 72 |
-| editability-only: generated-fill-cache | 44 |
+| editability-only: generated-fill-cache | 49 |
 | editability-only: mask-density | 23 |
 | editability-only: color-mode:1 | 20 |
 | approximated: bit-depth:32 | 17 |
@@ -177,9 +177,9 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | adjustments/exposure_grayscale.psd | adjustments | yes | yes | yes | 0.234 | 1 | 7 | — |
 | adjustments/exposure_rgb.psd | adjustments | yes | yes | yes | 1.093 | 7 | 21 | — |
 | adjustments/huesaturation_colorize_rgb.psd | adjustments | yes | yes | yes | 0.374 | 2 | 4 | — |
-| adjustments/huesaturation_lightness_rgb.psd | adjustments | yes | yes | yes | 0.264 | 2 | 6 | — |
-| adjustments/huesaturation_rgb.psd | adjustments | yes | yes | yes | 2.354 | 34 | 121 | — |
-| adjustments/huesaturation_saturation_rgb.psd | adjustments | yes | yes | no | 5.786 | 90 | 111 | — |
+| adjustments/huesaturation_lightness_rgb.psd | adjustments | yes | yes | yes | 0.990 | 16 | 205 | — |
+| adjustments/huesaturation_rgb.psd | adjustments | yes | yes | yes | 3.044 | 46 | 183 | — |
+| adjustments/huesaturation_saturation_rgb.psd | adjustments | yes | yes | yes | 4.360 | 49 | 105 | — |
 | adjustments/invert_cmyk.psd | adjustments | yes | yes | yes | 0.350 | 3 | 26 | — |
 | adjustments/invert_grayscale.psd | adjustments | yes | yes | yes | 0.030 | 1 | 9 | — |
 | adjustments/invert_rgb.psd | adjustments | yes | yes | yes | 0.000 | 0 | 0 | — |
@@ -277,14 +277,14 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | effects/effects-enabled.psd | effects | yes | yes | no | 14.500 | 49 | 49 | — |
 | effects/feathered-stroke.psd | effects | yes | yes | yes | 1.980 | 48 | 89 | — |
 | effects/group-clips-child-stroke.psd | effects | yes | yes | yes | 0.079 | 0 | 19 | — |
-| effects/group-stroke-off-canvas.psd | effects | yes | yes | no | 18.616 | 255 | 255 | — |
+| effects/group-stroke-off-canvas.psd | effects | yes | yes | yes | 1.887 | 0 | 255 | — |
 | effects/inset-stroke-sizes.psd | effects | yes | yes | yes | 0.000 | 0 | 0 | — |
 | effects/outside-stroke.psd | effects | yes | yes | yes | 0.117 | 0 | 19 | — |
 | effects/shape-fx.psd | effects | yes | yes | yes | 0.000 | 0 | 0 | — |
 | effects/shape-fx2.psd | effects | yes | yes | yes | 2.141 | 28 | 38 | — |
 | effects/stroke-composite.psd | effects | yes | yes | yes | 1.791 | 43 | 255 | — |
 | effects/stroke-effect-transparent-shape.psd | effects | yes | yes | yes | 0.000 | 0 | 0 | — |
-| effects/stroke-effects.psd | effects | yes | yes | no | 20.403 | 255 | 255 | — |
+| effects/stroke-effects.psd | effects | yes | yes | yes | 2.629 | 62 | 147 | — |
 | effects/stroke-without-vector-mask.psd | effects | yes | yes | yes | 0.000 | 0 | 0 | — |
 | empty-group.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | empty-layer.psb | root | yes | yes | yes | 0.000 | 0 | 0 | — |
@@ -311,13 +311,13 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | hidden-layer.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | history.psb | root | yes | yes | no | 173.866 | 255 | 255 | — |
 | history.psd | root | yes | yes | no | 173.866 | 255 | 255 | — |
-| layer_comps.psb | root | yes | yes | no | 8.876 | 66 | 144 | — |
-| layer_comps.psd | root | yes | yes | no | 8.807 | 67 | 183 | — |
-| layer_effects.psd | root | yes | yes | no | 4.845 | 56 | 156 | ag-psd-parser |
-| layer_mask_data.psb | root | yes | yes | no | 21.052 | 100 | 148 | — |
-| layer_mask_data.psd | root | yes | yes | no | 11.465 | 65 | 122 | — |
-| layer_params.psb | root | yes | yes | no | 5.467 | 116 | 219 | — |
-| layer_params.psd | root | yes | yes | no | 5.467 | 116 | 219 | — |
+| layer_comps.psb | root | yes | yes | no | 8.874 | 66 | 144 | — |
+| layer_comps.psd | root | yes | yes | no | 8.805 | 67 | 183 | — |
+| layer_effects.psd | root | yes | yes | no | 4.715 | 51 | 156 | ag-psd-parser |
+| layer_mask_data.psb | root | yes | yes | no | 2.476 | 58 | 112 | — |
+| layer_mask_data.psd | root | yes | yes | no | 2.282 | 56 | 108 | — |
+| layer_params.psb | root | yes | yes | no | 5.460 | 116 | 219 | — |
+| layer_params.psd | root | yes | yes | no | 5.460 | 116 | 219 | — |
 | layer-name-emoji.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | layers/black-and-white.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | — |
 | layers/brightness-contrast.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | — |
@@ -355,9 +355,9 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | layers-minimal/smartobject-layer.psd | layers | yes | yes | no | 19.549 | 255 | 255 | — |
 | layers-minimal/solid-color-fill.psd | layers | yes | yes | yes | 0.000 | 0 | 0 | — |
 | layers-minimal/type-layer.psd | layers | yes | yes | no | 19.549 | 255 | 255 | — |
-| mask_parameters.psd | root | yes | yes | no | 82.500 | 255 | 255 | — |
+| mask_parameters.psd | root | yes | yes | no | 49.616 | 255 | 255 | — |
 | mask-density-layermask.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
-| mask-density-layervectormask.psd | root | yes | yes | no | 3.431 | 48 | 62 | — |
+| mask-density-layervectormask.psd | root | yes | yes | yes | 0.016 | 1 | 1 | — |
 | mask-density-vectormask.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | mask-disabled.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | mask-index.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
@@ -382,7 +382,7 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | passthrough_clipping_mask_adjustment.psd | root | yes | yes | yes | 1.879 | 7 | 8 | — |
 | passthrough_clipping_mask_blendmode.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 | passthrough_fill_adjustment.psd | root | yes | yes | yes | 0.021 | 1 | 1 | — |
-| passthrough_fill_blendmode.psd | root | yes | yes | no | 1.974 | 26 | 33 | — |
+| passthrough_fill_blendmode.psd | root | yes | yes | no | 1.493 | 17 | 19 | — |
 | passthrough_opacity.psd | root | yes | yes | yes | 0.590 | 4 | 4 | — |
 | passthrough_vector_mask.psd | root | yes | yes | no | 3.091 | 7 | 8 | — |
 | path-operations/combine-group.psd | path-operations | yes | yes | yes | 0.000 | 0 | 0 | — |
@@ -439,10 +439,10 @@ use the PSD’s saved pixel cache and can still match the visual oracle.
 | vector-mask2.psd | root | yes | yes | yes | 0.996 | 3 | 4 | vector-fill:pattern |
 | vector-mask3.psd | root | yes | yes | yes | 0.000 | 0 | 0 | — |
 
-## Thirteenth-round root-cause triage
+## Fourteenth-round root-cause triage
 
 Method: every eleventh-round failure was classified from separate actual/oracle/difference PNGs in `/tmp/psd11-all.*`,
-then every fixable (a)/(b) bucket was rerendered through the live engine after the thirteenth-round changes.
+then every fixable (a)/(b) bucket was rerendered through the live engine after the fourteenth-round changes.
 The changed-pixel count below is from the full-resolution straight RGBA images; `α` is the subset whose alpha differs.
 Visible layers were then disabled individually over the changed region. An additional full-resolution all-hidden render
 detects stale/blank composites without using that composite as a pixel source. Classes are **(a)** engine defect,
@@ -457,7 +457,7 @@ all-hidden editable document matches the embedded composite at mean/p99 `0/0` wh
 | `adjustment-fillers.psd` | 34,696/0 pixels; all-hidden is 0/0 | Blank composite despite six visible fill/text layers; `textPath` is only the ordinary paragraph-frame sentinel. | **(c)** stale oracle, not text-on-path. |
 | `adjustments/adjustment_clipping.psd` | 40,000/0 pixels, 22.142/33 before; now 0.172/1 | An adjustment used as a clipping base now gives the following clipped adjustment full-canvas coverage. | **(a)** **fixed** on CPU/GPU. |
 | `adjustments/adjustment_nested_composition_1.psd` | 35,879/0 and 50.727/255 before; now 0.834/10 | Nested pass-through adjustment ordering is corrected by the group-surface and stored-mask-default paths. | **(a)** **fixed** on CPU/GPU. |
-| `adjustments/huesaturation_saturation_rgb.psd` | 33,052/0, 5.786/90; Hue/Saturation 2 copy localises the peak | Photoshop colour-range saturation transfer differs from the live formula; the thirteenth-round ordering repair does not change this formula defect. | **(a)** still open after PSD13. |
+| `adjustments/huesaturation_saturation_rgb.psd` | 33,052/0, 5.786/90 before; now 4.360/49 | Overlapping Cyan/Blue ranges now select the strongest Photoshop range instead of summing contradictory edits. | **(a)** **fixed** in the shared adjustment LUT used by CPU/GPU. |
 | `blend-and-clipping.psd` | 67,876/0; all-hidden is 0/0 | The embedded composite is blank although 13 layers are visible; all four `textPath` records are point-text sentinels. | **(c)** stale oracle. |
 | `blend-modes/cmyk-blend-modes.psd` | 271,360/271,360, 188.197/255 before; now 0.552/8 | The document-space Smart Object caches and merged alpha are retained, and Difference, Exclusion and Subtract evaluate on inverted CMYK process components. | **(a)** **fixed**; CPU result and GPU presentation differ by at most 1 byte. |
 | `blend-modes/dissolve.psd` | 3,333/1,640, 56.095/255; no layer removal isolates a formula error | PSD stores no Photoshop random table/seed, so the same density has different dots. | **(c)** irreproducible random realization. |
@@ -471,50 +471,50 @@ all-hidden editable document matches the embedded composite at mean/p99 `0/0` wh
 | `cmyk-spot.psd` | Native pixels equal, 0/0, but import is flattened | Same absence of layer records. | **(c)** M14 policy failure. |
 | `colormodes/100x20_1bit_bitmap_rle.psd` | 816/0 before fallback; no layer to bisect | Bitmap-mode PSD has no layer records, only its 1-bit merged bitmap. | **(c)** opening it flattened is possible, but cannot count under M14. |
 | `colormodes/20x5_1bit_bitmap.psd` | 38/0; no layer to bisect | Same flat-only bitmap structure. | **(c)** same limit. |
-| `colormodes/4x4_16bit_cmyk.psd` | 8/0 pixels, 1.813/30 | Little CMS 16-bit CMYK rounding differs by up to 30 in sparse samples; it is separate from blend-space compositing and unchanged. | **(a)** still open after PSD13. |
+| `colormodes/4x4_16bit_cmyk.psd` | 8/0 pixels, 1.813/30 | The 16-bit reflected-gradient cache still differs by up to 30 at its yellow/red midpoint; device-ink and rendered-RGB interpolation experiments both regressed other samples. | **(a)** still open after PSD14; no fixture-specific colour correction was retained. |
 | `colormodes/4x4_16bit_multichannel.psd` | 0/0 but explicitly flattened | Multichannel file has no native layer records. | **(c)** M14 policy failure. |
 | `colormodes/4x4_1bit_bitmap.psd` | 11/0 before fallback; no layer to bisect | Same flat-only bitmap structure. | **(c)** same limit. |
 | `colormodes/4x4_8bit_index_color.psd` | 0/0 but explicitly flattened | Indexed file has no decodable layer records. | **(c)** M14 policy failure. |
 | `colormodes/4x4_8bit_rgba.psd` | 16/16, 124.063/255 | Layer channel −1 is fully opaque while the merged alpha is fully transparent; RGB bytes otherwise agree within 1. | **(c)** contradictory layer/composite alpha. |
-| `descriptors/stroke-color-descriptors-gray.psd` | 62/0 pixels, 0.516/20, confined to stroke edges | Gray descriptor colour conversion/edge quantisation differs; document-space layer caches do not affect this generated stroke colour. | **(a)** still open after PSD13. |
+| `descriptors/stroke-color-descriptors-gray.psd` | 62/0 pixels, 0.516/20, confined to stroke edges | The dark Gray descriptor needs Photoshop's unrecorded gray working-space transfer; applying an sRGB gamma would regress the second, mid-gray stroke. | **(a)** still open after PSD14. |
 | `effect-stroke-gradient.psd` | 3,895/0, 11.836/187; localises to two text layers | Photoshop text antialiasing plus gradient-stroke rasterisation differs; records are paragraph frames, not path text. | **(c)** Adobe text/effect rasteriser boundary. |
 | `effects/effects-enabled.psd` | 1,024/0; all-hidden is 0/0 | Composite is white while Layer 1 has an enabled yellow colour overlay; disabling it matches exactly. | **(c)** stale oracle. |
-| `effects/group-stroke-off-canvas.psd` | 469/0, 18.616/255 around the clipped group edge | Group stroke bounds are clipped/expanded differently off canvas; contour transfer is not involved. | **(a)** still open after PSD13. |
-| `effects/stroke-effects.psd` | 15,880/6,074, 20.403/255 across stroke test groups | Multi-stroke alignment/paint and transparent-shape semantics differ; contour transfer is not involved. | **(a)** still open after PSD13. |
-| `fill_adjustments.psd` | 65,536/0, 12.319/127; Colour Lookup is reported not rendered | The bounded raw `clrL` block is only a 24-byte empty descriptor and contains no LUT payload to parse; the mismatch therefore cannot be repaired as the triaged parser defect. | **(b)** still open after PSD13; needs a fixture with native LUT data or a separately identified stack defect. |
+| `effects/group-stroke-off-canvas.psd` | 469/0, 18.616/255 before; now 1.887/0 | Group styles now trace the unbounded live descendant surface instead of a document-clipped preview. | **(a)** **fixed**; shared expansion gives identical CPU/GPU inputs. |
+| `effects/stroke-effects.psd` | 15,880/6,074, 20.403/255 before; now 2.629/62 | A materially stale/transparent shape cache is detected and effect alpha is rebuilt from the editable vector path; ordinary cached shape AA remains unchanged. | **(a)** **fixed**; `double-stroke-effects.psd` and `shape-fx2.psd` remain passing. |
+| `fill_adjustments.psd` | 65,536/0, 12.319/127; Colour Lookup is reported not rendered | The bounded raw `clrL` block remains a 24-byte empty descriptor with no LUT payload; there is no native table to parse without violating M14. | **(b)** still open after PSD14; needs a fixture carrying LUT data or a separately identified stack defect. |
 | `gray0.psb` | 141,356/0, 1.711/46 over the sole layer | Full-canvas gray-profile transfer differs from Photoshop's implicit gray working space. | **(c)** source profile/transfer is not encoded sufficiently to reproduce Photoshop defaults. |
 | `gray0.psd` | Same 141,356/0 and 1.711/46 | Same bytes/transfer as PSB. | **(c)** same limit. |
 | `history.psb` | 0/0 flattened; no native layers | History fixture stores only the merged result. | **(c)** M14 policy failure. |
 | `history.psd` | 0/0 flattened; no native layers | Same zero-layer structure. | **(c)** M14 policy failure. |
-| `layer_comps.psb` | 25,179/0, 8.876/66; styled vector layers localise the edges | Live bevel/gradient/stroke rasterisation differs from Photoshop's saved layer-comp appearance; its effects use linear contours, so richer contour transfer does not resolve it. | **(a)** still open after PSD13. |
-| `layer_comps.psd` | 25,152/0, 8.807/67 | Same styled layers and linear-contour limitation; PSD/PSB deltas differ only slightly. | **(a)** still open after PSD13. |
+| `layer_comps.psb` | 25,179/0, 8.876/66 before; now 8.874/66 | Smoothing the live bevel normal field removes radial faceting, but Photoshop's large smooth-bevel height transfer still differs. | **(a)** still open after PSD14. |
+| `layer_comps.psd` | 25,152/0, 8.807/67 before; now 8.805/67 | Same smooth-bevel transfer gap; the geometry improvement is visible but does not cross the strict root limit. | **(a)** still open after PSD14. |
 | `layer_effects.psd` | 174,102/0, 4.845/56 across 11 text layers | Saved text caches use Photoshop glyph AA and unsupported effect contour details; `textPath` flags are point text. | **(c)** text/effect rasteriser limit. |
-| `layer_mask_data.psb` | 34,972/0, 21.052/100; four vector/user-mask layers | PSB mask rectangles/cache composition differ from the Photoshop result; applying the stored outside default leaves this metric unchanged. | **(a)** still open after PSD13. |
-| `layer_mask_data.psd` | 30,321/0, 11.465/65 | Same mask stack with different PSD cache bounds; the outside-default repair does not affect its differing cache composition. | **(a)** still open after PSD13. |
-| `layer_params.psb` | 53,692/0; 6.637/130 before, now 5.467/116 | Native 0…255 effect contours are imported, rendered and writer-preserved; remaining bevel/glow geometry and scale parameters still diverge. | **(b)** partially fixed; still open after PSD13. |
-| `layer_params.psd` | Same 53,692/0; 6.637/130 before, now 5.467/116 | Same contour improvement and remaining geometry/scale gap as PSB. | **(b)** partially fixed; still open after PSD13. |
+| `layer_mask_data.psb` | 34,972/0, 21.052/100 before; now 2.476/58 | Density-weakened vector fills now paint their full source surface and combine analytic vector/user masks once; the residual is confined to Photoshop's feathered vector edge transfer. | **(a)** partially fixed; still open after PSD14. |
+| `layer_mask_data.psd` | 30,321/0, 11.465/65 before; now 2.282/56 | Same reconstruction and remaining antialiased/feathered edge tail with the PSD cache layout. | **(a)** partially fixed; still open after PSD14. |
+| `layer_params.psb` | 53,692/0; 5.467/116 before, now 5.460/116 | Smoothed bevel normals remove distance-field faceting; remaining bevel/glow height and scale transfer still diverge. | **(b)** partially fixed; still open after PSD14. |
+| `layer_params.psd` | Same 53,692/0; 5.467/116 before, now 5.460/116 | Same geometry/scale gap as PSB. | **(b)** partially fixed; still open after PSD14. |
 | `layers-minimal/pixel-layer.psd` | 623/0, 35.266/255; all-hidden 0/0 | Blank composite contradicts the sole visible pixel layer. | **(c)** stale oracle. |
 | `layers-minimal/shape-layer.psd` | 572/0, 34.268/255; all-hidden 0/0 | Blank composite contradicts the sole visible shape layer. | **(c)** stale oracle. |
 | `layers-minimal/smartobject-layer.psd` | 206/0, 19.549/255; all-hidden 0/0 | Blank composite contradicts the sole visible Smart Object cache. | **(c)** stale oracle. |
 | `layers-minimal/type-layer.psd` | 206/0, 19.549/255; all-hidden 0/0 | Blank composite contradicts the sole visible type cache; its frame is ordinary area text. | **(c)** stale oracle, not text-on-path. |
 | `mask_parameters.psd` | 40,000/0, 82.500/255; all-hidden 0/0 | Blank composite contradicts the visible masked rectangle. | **(c)** stale oracle. |
-| `mask-density-layervectormask.psd` | 356/0, 3.431/48 on four density bands | Vector/user cache density and outside-mask rounding differ; the repaired stored-default path leaves this metric unchanged, while skipping density regresses two passing siblings to p99 191. | **(a)** still open after PSD13; no fixture-specific workaround. |
+| `mask-density-layervectormask.psd` | 356/0, 3.431/48 before; now 0.016/1 | The vector path is rasterised at 4×4 coverage, vector and user densities are applied once, and the independent user channel is multiplied afterward. | **(a)** **fixed**; all three mask-density siblings pass and writer output bakes the composed mask for stable round trips. |
 | `masks/2.psd` | 2,742/0, 48.892/192; all-hidden 0/0 | Blank composite contradicts three visible ellipse layers. | **(c)** stale oracle. |
 | `masks.psb` | 163,283/0, 1.635/22 across text/mask edges | Mean is under limit; Photoshop text/effect edge AA alone exceeds the strict root p99 16. | **(c)** rasteriser-tail limit. |
 | `masks.psd` | 166,318/0, 1.673/22 | Same edge-only tail as PSB. | **(c)** rasteriser-tail limit. |
 | `masks3.psd` | 356/0 and 22.417/241 before; now 0.092/1 | Folder coverage now uses the PSD mask default colour outside its stored 27×8 rectangle. | **(a)** **fixed** on CPU/GPU. |
 | `note.psd` | 42,926/0, 90.744/255 across four shape layers | The saved composite and visible shape caches disagree over the note body, not just antialiasing. | **(c)** contradictory/stale composite. |
 | `passthrough_clipping_mask_adjustment.psd` | 1,024/0 and 33.261/146 before; now 1.879/7 | A zero-paint adjustment group now provides an opaque clipping-base surface without applying its adjustment to the backdrop twice. | **(a)** **fixed** on CPU/GPU. |
-| `passthrough_fill_blendmode.psd` | 703/0, 1.974/26 | Pass-through group Fill combined with Lighter Color differs in the p99 tail; the opacity-boundary repair deliberately preserves Fill's different semantics. | **(a)** still open after PSD13. |
+| `passthrough_fill_blendmode.psd` | 703/0, 1.974/26 before; now 1.493/17 | Safe pass-through groups propagate Fill to child blend evaluation; the remaining Lighter Color edge is one byte above the p99 gate. Adjustment/effect/knockout groups retain their boundary. | **(a)** partially fixed; still open after PSD14. |
 | `passthrough_opacity.psd` | 1,024/0, 54.199/86 before; now 0.590/4 | The pass-through adjustment evaluates against the entry backdrop, then group opacity interpolates that complete result. | **(a)** **fixed** on CPU/GPU. |
-| `passthrough_vector_mask.psd` | 1,024/0, 10.554/67 before PSD12; now 3.091/7 | The backdrop-order repair reduces the error, but vector-mask boundary coverage still produces a mean above 2. | **(a)** partially fixed; still open after PSD13. |
+| `passthrough_vector_mask.psd` | 1,024/0, 10.554/67 before PSD12; still 3.091/7 | The backdrop-order repair remains correct; the residual is a broad low-byte pass-through/vector-density transfer, not the vector boundary rasteriser. | **(a)** still open after PSD14. |
 | `patterns.psd` | 14,945/0 and 4.277/95 before; now 0.015/1 | The earlier triage was incorrect: five `Patt` resources and all six vector-pattern previews were already present. The failure was the 200% Pattern Overlay x/y grid origin. | **(a)** **fixed** in the shared CPU/GPU effect expansion. |
 | `vector-mask.psd` | 4,464/0, 31.796/218, concentrated on Background copy | 32-bit layer samples are clamped without Photoshop's document tone map. | **(c)** Phase-3 architecture explicitly excludes 32-bit HDR. |
 | `vector-mask3.psd` | 39,936/39,936 and 77.695/255 before; now 0/0 | The prior “contradictory alpha/cache” diagnosis was wrong: the pass-through group needed its native outside-mask default. | **(a)** **fixed** on CPU/GPU; reclassified from (c). |
 
 ### Reachable rate and owner decision
 
-The strict result is **252/300 (84.0%)**. PSD12's live group-mask repair proves one prior class-(c) diagnosis was an
+The strict result is **256/300 (85.3%)**. PSD12's live group-mask repair proves one prior class-(c) diagnosis was an
 engine defect, leaving 33 structural/oracle-limit files from the original 60 failures. Even if every remaining (a)/(b)
 item passed, keeping all 33 as strict failures caps this corpus at **267/300 (89.0%)**, below A7's 90% target. Four of
 those 33 are specifically Photoshop text/effect antialiasing tails; classifying only those four with a separately approved
@@ -523,9 +523,12 @@ remaining engine work.
 
 Recommendation: do not change the global thresholds. The owner should first decide whether fixtures proven stale/blank or
 flat-only should remain in the native-layer denominator, and separately approve or reject a feature-scoped text/effect
-tolerance backed by the recorded changed-pixel counts. Until then the honest accepted result remains 84.0%; no structural
-file is counted as passed and no saved document composite is used as a native pixel source. PSD13 fixes four engine files;
-15 classified (a)/(b) rows remain open, and the evidence-backed strict ceiling remains 267/300.
+tolerance backed by the recorded changed-pixel counts. Until then the honest accepted result remains 85.3%; no structural
+file is counted as passed and no saved document composite is used as a native pixel source. PSD14 fixes four more engine
+files; 11 classified (a)/(b) rows remain open, and the evidence-backed strict ceiling remains 267/300.
+
+
+
 
 
 
@@ -536,7 +539,8 @@ file is counted as passed and no saved document composite is used as a native pi
 - CMYK and grayscale layer channels use Little CMS with an embedded profile when present and deterministic default profiles
   otherwise. Imported non-RGB Smart Objects retain the document-space cache used by Photoshop. CMYK Difference, Exclusion
   and Subtract use inverted process-component blending. WebGL currently presents the exact CPU-backed native result;
-  a GPU-native four-process-component attachment remains open.
+  a GPU-native four-process-component attachment remains open. A synthetic two-layer 5,000×4,000 native-CMYK Difference
+  frame took **158,606.5 ms** on the CPU (load average 2.33/2.91/4.81), confirming that this fallback is not interactive.
   Lab uses a D50 Lab-to-sRGB conversion; duotone/multichannel use their available channel values because the
   proprietary Photoshop ink curves are not present in the parsed data.
 - RGBA16 layer data is retained. Cache-less 16/32-bit reflected fills are generated in their document colour space;
@@ -546,9 +550,10 @@ file is counted as passed and no saved document composite is used as a native pi
   pass-through group’s entry backdrop; ordinary non-group knockout uses the same bounded backdrop model.
 - Embedded/default gray and CMYK profiles now provide pre-CMS adjustment transfers for grayscale Invert, Posterize,
   Threshold, Levels, and Curves and CMYK Invert/Posterize/Threshold/Levels/Curves/Brightness-Contrast.
-  Non-colorize Hue/Saturation ranges remain mismatched.
-- The PSD -2 mask channel is used as Photoshop’s composed vector/user-mask cache; -3 is decoded as the real-mask fallback
-  when that cache is absent. Zero-area cache-less masks and bounded masks retain their document-wide outside value.
+  Overlapping non-colorize Hue/Saturation ranges use the strongest targeted range rather than additive cancellation.
+- Density-weakened vector/user masks are rebuilt from the editable vector path and independent -3 user channel. The composed
+  result is marked so PSD export writes one stable raster mask rather than applying the vector component twice on reopen.
+  Zero-area cache-less masks and bounded masks retain their document-wide outside value.
   Blend If is editable per channel with split source/underlying ramps. Supported smart-filter descriptors map to the live filter stack,
   including per-filter blending and raw/RLE smart-filter masks; ZIP smart-filter masks remain reported as not rendered.
   Pattern strokes and overlays render from the PSD pattern table; scaled overlays use Photoshop-compatible grid origins.

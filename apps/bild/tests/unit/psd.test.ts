@@ -208,6 +208,19 @@ describe('PSD colour modes and product wiring', () => {
       .toEqual(new Uint8Array([127, 0, 128, 255]));
   });
 
+  it('propagates pass-through group Fill to child Fill without creating an isolated surface', () => {
+    const child: AgLayer = { name: 'Lighter child', top: 0, left: 0, bottom: 1, right: 2,
+      blendMode: 'lighter color', fillOpacity: 0.5,
+      imageData: image([255, 0, 0, 255, 255, 0, 0, 128]) };
+    const group: AgLayer = { name: 'Pass-through Fill', opened: true, blendMode: 'pass through',
+      fillOpacity: 0.4, children: [child] };
+    const imported = readPsdDocument(writePsdUint8Array({ width: 2, height: 1, children: [group],
+      imageData: image([0, 0, 0, 0, 0, 0, 0, 0]) }, { generateThumbnail: false })).document.layers;
+    expect(imported[0]).toMatchObject({ kind: 'group', fillOpacity: 1 });
+    expect(imported[1]).toMatchObject({ parentId: imported[0]!.id, blendMode: 'lighterColor' });
+    expect(imported[1]!.fillOpacity).toBeCloseTo(0.2, 2);
+  });
+
   it('restores the enclosing group entry behind an ordinary shallow-knockout layer', () => {
     const transform = makeTransform({ x: 0, y: 0 }, { width: 1, height: 1 });
     const pixel = (rgba: readonly number[]) => Raster.fromPixels(1, 1, 4, new Uint8Array(rgba));

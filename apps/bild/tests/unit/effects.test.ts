@@ -173,6 +173,42 @@ describe('layer effects (PRODUCT-PLAN 6.7)', () => {
       new Uint8Array([0, 255, 0, 255, 0, 0, 0, 0, 0, 255, 0, 255]));
   });
 
+  it('builds a group effect source from the unbounded descendant surface', () => {
+    const group = newLayer({ id: 'group', name: 'Group', kind: 'group',
+      transform: makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 }),
+      effects: [{ kind: 'stroke', schemaVersion: 1, enabled: true, width: 1,
+        position: 'outside', color: green }] });
+    const child = newLayer({ id: 'child', parentId: 'group', name: 'Off canvas',
+      raster: Raster.fromPixels(1, 1, 4, [255, 0, 0, 255]),
+      transform: makeTransform({ x: -1, y: 0 }, { width: 1, height: 1 }, { sampling: 'Nearest' }) });
+    const document: CanvasDocument = { id: 'group-style', width: 2, height: 1, resolution: 72,
+      selection: null, layers: [group, child] };
+    const expanded = documentWithLayerEffects(document, { transform: (value) => value.transform,
+      maskPlacement: (value) => value.mask?.placement ?? null, raster: (value) => value.raster,
+      maskRaster: (value) => value.mask?.raster });
+    expect(compositeRegion(expanded, { x: 0, y: 0, width: 2, height: 1 }).rgba.slice(0, 4))
+      .toEqual(new Uint8Array([0, 255, 0, 255]));
+  });
+
+  it('traces vector effects from editable path coverage rather than a stale raster alpha cache', () => {
+    const point = (x: number, y: number) => ({ in: { x, y }, anchor: { x, y }, out: { x, y }, kind: 'corner' as const });
+    const layer = newLayer({ id: 'vector', name: 'Vector', kind: 'vector',
+      raster: Raster.fromPixels(2, 1, 4, [0, 0, 0, 255, 0, 0, 0, 0]),
+      transform: makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 }),
+      paths: [{ schemaVersion: 1, closed: true, fillRule: 'nonzero',
+        points: [point(0, 0), point(2, 0), point(2, 1), point(0, 1)] }],
+      style: { schemaVersion: 1, fill: null, stroke: null },
+      effects: [{ kind: 'colorOverlay', schemaVersion: 1, enabled: true, opacity: 1, color: red }] });
+    const document: CanvasDocument = { id: 'vector-style', width: 2, height: 1, resolution: 72,
+      selection: null, layers: [layer] };
+    const expanded = documentWithLayerEffects(document, { transform: (value) => value.transform,
+      maskPlacement: (value) => value.mask?.placement ?? null, raster: (value) => value.raster,
+      maskRaster: (value) => value.mask?.raster });
+    expect(expanded.layers[1]!.raster!.toPixels()).toEqual(new Uint8Array([
+      255, 0, 0, 255, 255, 0, 0, 255,
+    ]));
+  });
+
   it('clips effects on clipped layers only when the PSD base groups clipped elements', () => {
     const raster = Raster.fromPixels(1, 1, 4, [255, 255, 255, 255]);
     const transform = makeTransform({ x: 0, y: 0 }, { width: 1, height: 1 });
