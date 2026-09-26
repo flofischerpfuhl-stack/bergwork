@@ -176,12 +176,16 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
   const rendered = results.filter((result) => result.rendered).length;
   const passed = results.filter((result) => result.passed).length;
   const passRate = results.length ? passed / results.length * 100 : 0;
-  const roundElevenChanges: readonly [string, string, string][] = [
-    ['clipping-mask3.psd', '39.221 / 255', 'A following clipped sibling uses the preceding group’s single live paint descendant as its base.'],
-    ['clipping-mask4.psd', '6.848 / 255', 'A following clipped sibling uses the preceding group’s single live paint descendant as its base.'],
+  const roundTwelveChanges: readonly [string, string, string][] = [
+    ['adjustments/adjustment_nested_composition_1.psd', '50.727 / 255', 'Nested pass-through adjustments use the repaired group ordering and mask-default semantics.'],
+    ['clipping-mask5.psd', '3.082 / 57', 'A clipped layer uses the preceding pass-through group’s complete child surface as its base.'],
+    ['masks3.psd', '22.417 / 241', 'A bounded group mask uses its PSD default colour outside the stored rectangle.'],
+    ['passthrough_clipping_mask_adjustment.psd', '33.261 / 146', 'A zero-paint adjustment group supplies the opaque clipping-base surface without applying the adjustment twice.'],
+    ['patterns.psd', '4.277 / 95', 'Pattern Overlay uses Photoshop’s scaled x/y grid origins over parsed Patt resources.'],
+    ['vector-mask3.psd', '77.695 / 255', 'The pass-through group applies its native outside-mask default instead of opaque cached coverage.'],
   ];
   const lines = [
-    '# PSD native-fidelity report — eleventh round', '',
+    '# PSD native-fidelity report — twelfth round', '',
     `Corpus: psd-tools commit \`${commit}\`; ${results.length} PSD/PSB files. ag-psd 31.0.2 plus native non-RGB layer-channel decoding.`, '',
     'The oracle is each PSD’s embedded Photoshop composite. Metrics are absolute byte deltas over premultiplied RGB plus',
     'alpha (so undefined straight RGB below transparency is ignored): mean over all channels and the nearest-rank 99th',
@@ -189,19 +193,19 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
     'The runner is a measurement baseline: fidelity failures are reported but do not make the command itself fail.', '',
     `Overall: ${parsed}/${results.length} parsed, ${rendered}/${results.length} rendered, ${passed}/${results.length} passed (${passRate.toFixed(1)}%).`,
     `The Product Plan A7 acceptance target of at least 90% is ${passRate >= 90 ? 'met' : '**not met**'} by this baseline.`, '',
-    `Eleventh-round input: 240/300 (80.0%). Current native result: ${passed}/${results.length} (${passRate.toFixed(1)}%), a net gain of ${passed - 240} ${passed - 240 === 1 ? 'file' : 'files'}.`,
+    `Twelfth-round input: 242/300 (80.7%). Current native result: ${passed}/${results.length} (${passRate.toFixed(1)}%), a net gain of ${passed - 242} ${passed - 242 === 1 ? 'file' : 'files'}.`,
     `Primary-folder changes are: blend modes 28→${summarize(results, 'blend-modes').passed}, adjustments 36→${summarize(results, 'adjustments').passed}, layers 32→${summarize(results, 'layers').passed}, effects 12→${summarize(results, 'effects').passed},`,
     `path operations 12→${summarize(results, 'path-operations').passed}, masks 0→${summarize(results, 'masks').passed}, group clipping 1→${summarize(results, 'group-clipping').passed}, transparency 16→${summarize(results, 'transparency').passed}, colour modes 10→${summarize(results, 'colormodes').passed}, colour profiles`,
-    `1→${summarize(results, 'colorprofiles').passed}, gradients 4→${summarize(results, 'gradients').passed}, descriptors 5→${summarize(results, 'descriptors').passed}, and root 83→${summarize(results, 'root').passed}. The overlapping 16/32-bit and PSB tags changed`,
+    `1→${summarize(results, 'colorprofiles').passed}, gradients 4→${summarize(results, 'gradients').passed}, descriptors 5→${summarize(results, 'descriptors').passed}, and root 85→${summarize(results, 'root').passed}. The overlapping 16/32-bit and PSB tags changed`,
     `26→${summarize(results, '16/32-bit').passed} and 30→${summarize(results, 'PSB').passed} respectively. No primary-folder pass count regressed.`, '',
     '| Newly passing file | Before mean / p99 | After mean / p99 | Native change |',
     '|---|---:|---:|---|',
   ];
-  for (const [file, before, change] of roundElevenChanges) {
+  for (const [file, before, change] of roundTwelveChanges) {
     const result = results.find((candidate) => candidate.file === file);
     if (result?.passed) lines.push(`| ${file} | ${before} | ${decimal(result.metrics?.mean)} / ${result.metrics?.p99 ?? '—'} | ${change} |`);
   }
-  if (!roundElevenChanges.length) lines.push('| — | — | — | No threshold result changed. |');
+  if (!roundTwelveChanges.length) lines.push('| — | — | — | No threshold result changed. |');
   lines.push('', '## Thresholds and feature summary', '',
     '| Feature | Limits (mean / p99) | Files | Parsed | Rendered | Passed | Pass rate | Top failure causes |',
     '|---|---:|---:|---:|---:|---:|---:|---|');
@@ -280,7 +284,7 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
     '  when that cache is absent. Zero-area cache-less masks and bounded masks retain their document-wide outside value.',
     '  Blend If is editable per channel with split source/underlying ramps. Supported smart-filter descriptors map to the live filter stack,',
     '  including per-filter blending and raw/RLE smart-filter masks; ZIP smart-filter masks remain reported as not rendered.',
-    '  Pattern strokes render from the PSD pattern table, while files whose parser omits that table remain reported.',
+    '  Pattern strokes and overlays render from the PSD pattern table; scaled overlays use Photoshop-compatible grid origins.',
     '  Text, vector, and smart-object layers use their layer-owned saved pixel caches; never the document merged composite.',
     '- A bounded native layer-record pre-parser repairs Photoshop’s -1 zero-area generated-fill cache sentinel and recognizes',
     '  `8ELE` metadata sub-blocks that ag-psd 31 cannot skip safely. The former restores vector-mask2.psd as an editable native',
@@ -299,8 +303,9 @@ export async function writeFidelityReport(results: readonly FidelityResult[], ou
   let markdown = fidelityMarkdown(results, commit);
   try {
     const existing = await readFile(output, 'utf8');
-    const triage = existing.match(/## Eleventh-round root-cause triage[\s\S]*?(?=\n## Known deviations and next work)/)?.[0];
-    if (triage && !markdown.includes('## Eleventh-round root-cause triage')) markdown = markdown.replace(
+    const triage = existing.match(/## (?:Eleventh|Twelfth)-round root-cause triage[\s\S]*?(?=\n## Known deviations and next work)/)?.[0]
+      ?.replace('## Eleventh-round root-cause triage', '## Twelfth-round root-cause triage');
+    if (triage && !markdown.includes('## Twelfth-round root-cause triage')) markdown = markdown.replace(
       '\n## Known deviations and next work', `\n${triage}\n\n## Known deviations and next work`);
   } catch { /* First corpus run has no hand-audited triage section to preserve. */ }
   await writeFile(output, markdown, 'utf8');

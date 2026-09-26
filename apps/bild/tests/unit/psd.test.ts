@@ -376,7 +376,7 @@ describe('PSD colour modes and product wiring', () => {
       .toEqual(new Uint8Array(expected.data));
   });
 
-  it('A7: uses a single visible group descendant as the base of a following clipping stack', () => {
+  it('A7: uses the complete group surface as the base of a following clipping stack', () => {
     const background: AgLayer = { name: 'Background', imageData: image([255, 255, 255, 255, 255, 255, 255, 255]) };
     const base: AgLayer = { name: 'Base group', blendMode: 'pass through', children: [
       { name: 'Hidden paint', hidden: true, imageData: image([0, 0, 0, 255, 0, 0, 0, 255]) },
@@ -387,9 +387,9 @@ describe('PSD colour modes and product wiring', () => {
     const expected = image([255, 0, 0, 255, 255, 255, 255, 255]);
     const imported = readPsdDocument(writePsdUint8Array({ width: 2, height: 1,
       children: [background, base, clipped], imageData: expected }, { generateThumbnail: false }));
-    const visible = imported.document.layers.find((layer) => layer.name === 'Visible paint')!;
+    const importedGroup = imported.document.layers.find((layer) => layer.name === 'Base group')!;
     const importedClip = imported.document.layers.find((layer) => layer.name === 'Clipped red')!;
-    expect(importedClip.maskSourceId).toBe(visible.id);
+    expect(importedClip.maskSourceId).toBe(importedGroup.id);
     expect(imported.unsupported.some((feature) => feature.code === 'orphan-clipping')).toBe(false);
     expect(cpuCompositeRegion(imported.document, { x: 0, y: 0, width: 2, height: 1 }))
       .toEqual(new Uint8Array(expected.data));

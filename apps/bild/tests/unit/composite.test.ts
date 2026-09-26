@@ -102,6 +102,15 @@ describe('masks and hierarchy (LayerMaskTests, GroupTests)', () => {
     expect(alphas(render(document(3, 1, [{ ...folder, visible: false }, red])))).toEqual([0, 0, 0]);
   });
 
+  it('uses a PSD folder mask default outside its stored rectangle', () => {
+    const folder = layer('folder', null, transform(0, 0, 3, 1), { isGroup: true,
+      mask: { raster: mask(1, 1, [0]), enabled: true, placement: transform(1, 0, 1, 1),
+        linked: false, defaultColor: 255 } });
+    const red = layer('red', rgba(3, 1, [255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255]),
+      transform(0, 0, 3, 1), { parentId: 'folder' });
+    expect(alphas(render(document(3, 1, [folder, red])))).toEqual([255, 0, 255]);
+  });
+
   it('multiplies folder and layer masks before isolated group opacity', () => {
     // PSD group semantics: the children form one isolated surface, then folder opacity is applied once.
     const folder = layer('folder', null, transform(0, 0, 1, 1), { isGroup: true, opacity: 0.5,
@@ -135,6 +144,46 @@ describe('live masks (LiveMaskTests)', () => {
       { maskSourceId: 'source' });
     const source = layer('source', rgba(2, 1, [0, 0, 0, 255, 0, 0, 0, 64]), transform(0, 0, 2, 1), { visible: false });
     expect(alphas(render(document(2, 1, [target, source])))).toEqual([255, 64]);
+  });
+
+  it('uses the complete live group surface as a clipping base', () => {
+    const group = layer('group', null, transform(0, 0, 2, 1), { isGroup: true });
+    const left = layer('left', rgba(2, 1, [255, 0, 0, 255, 0, 0, 0, 0]), transform(0, 0, 2, 1),
+      { parentId: group.id });
+    const right = layer('right', rgba(2, 1, [0, 0, 0, 0, 0, 0, 255, 255]), transform(0, 0, 2, 1),
+      { parentId: group.id });
+    const clipped = layer('clipped', rgba(2, 1, [0, 255, 0, 255, 0, 255, 0, 255]), transform(0, 0, 2, 1),
+      { maskSourceId: group.id });
+    expect(Array.from(render(document(2, 1, [group, left, right, clipped]))))
+      .toEqual([0, 255, 0, 255, 0, 255, 0, 255]);
+  });
+
+  it('keeps sole-child stack blending when the clipped sibling has no paint', () => {
+    const background = layer('background', rgba(1, 1, [255, 255, 255, 128]), transform(0, 0, 1, 1));
+    const group = layer('group', null, transform(0, 0, 1, 1), { isGroup: true });
+    const base = layer('base', rgba(1, 1, [255, 0, 0, 128]), transform(0, 0, 1, 1),
+      { parentId: group.id, blendMode: 'linearDodge' });
+    const empty = layer('empty', null, transform(0, 0, 1, 1), { maskSourceId: group.id });
+    expect(Array.from(render(document(1, 1, [background, group, base, empty])))).toEqual([255, 170, 170, 192]);
+  });
+
+  it('uses a masked adjustment-only group as a clipping base', () => {
+    const inverse: LayerAdjustment = { kind: 'Invert', schemaVersion: 1, parameters: {} };
+    const applyInverse: AdjustmentApplier = (_settings, input) => {
+      const output = input.slice();
+      for (let offset = 0; offset < output.length; offset += 4) for (let channel = 0; channel < 3; channel++) {
+        output[offset + channel] = 1 - output[offset + channel]!;
+      }
+      return output;
+    };
+    const background = layer('background', rgba(2, 1, [255, 0, 0, 255, 255, 0, 0, 255]), transform(0, 0, 2, 1));
+    const group = layer('group', null, transform(0, 0, 2, 1), { isGroup: true,
+      mask: { raster: mask(2, 1, [255, 0]), enabled: true, placement: null, linked: true } });
+    const change = layer('adjust', null, transform(0, 0, 2, 1), { parentId: group.id, adjustment: inverse });
+    const clipped = layer('clipped', rgba(2, 1, [0, 0, 255, 255, 0, 0, 255, 255]), transform(0, 0, 2, 1),
+      { maskSourceId: group.id });
+    expect(Array.from(render(document(2, 1, [background, group, change, clipped]), { adjust: applyInverse })))
+      .toEqual([0, 0, 255, 255, 255, 0, 0, 255]);
   });
 
   it('multiplies a hidden source opacity and raster mask into live coverage', () => {

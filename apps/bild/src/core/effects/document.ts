@@ -76,8 +76,11 @@ function patternPasses(alpha: Uint8Array, width: number, height: number, transfo
     for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
       const point = apply(localToDocument, { x: x + 0.5, y: y + 0.5 });
       const px = point.x - layerBaseX - phase.x, py = point.y - layerBaseY - phase.y;
-      const fx = (px * cos - py * sin) / scale - 0.5;
-      const fy = (px * sin + py * cos) / scale - 0.5;
+      // Photoshop's pattern-effect grid is edge-aligned horizontally and row-centre-aligned vertically.
+      // patterns.psd pins the distinct scaled-origin compensation at 200%; both vanish at 100%.
+      const phaseCorrection = scale - 1;
+      const fx = (px * cos - py * sin - 0.5) / scale - phaseCorrection;
+      const fy = (px * sin + py * cos - 0.5) / scale - phaseCorrection / 2;
       const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
       const sample = (sx: number, sy: number, channel: number): number => pattern[
         (Math.floor(modulo(sy, overlay.patternHeight)) * overlay.patternWidth

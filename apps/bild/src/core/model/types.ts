@@ -175,7 +175,9 @@ export interface WarpMesh {
 }
 export type LayerWarp = WarpQuad | WarpMesh;
 
-export type LayerEffect =
+export interface EffectContourPoint { readonly x: number; readonly y: number }
+
+export type LayerEffect = (
   | { readonly kind: 'dropShadow'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number;
       readonly angle: number; readonly distance: number; readonly blur: number; readonly color: RGB;
       readonly blendMode?: BlendMode; readonly useGlobalLight?: boolean; readonly spread?: number;
@@ -209,7 +211,10 @@ export type LayerEffect =
   | { readonly kind: 'patternOverlay'; readonly schemaVersion: 1; readonly enabled: boolean; readonly opacity: number;
       readonly blendMode: BlendMode; readonly resourceId: string; readonly patternWidth: number; readonly patternHeight: number;
       readonly scale: number; readonly angle: number; readonly linkWithLayer: boolean;
-      readonly phase?: Readonly<{ x: number; y: number }> };
+      readonly phase?: Readonly<{ x: number; y: number }> }) & {
+        /** Photoshop effect transfer curve in its native 0...255 coordinate domain. */
+        readonly psdContour?: readonly EffectContourPoint[];
+      };
 
 export type LiveFilter = (
   | { readonly kind: 'gaussianBlur'; readonly schemaVersion: 1; readonly enabled: boolean; readonly radius: number }

@@ -39,6 +39,25 @@ test('GPU compositor reproduces upstream compositing semantics', async ({ page }
     const folder = newLayer({ id: 'F', name: 'f', kind: 'group', transform: makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 }),
       mask: { raster: Raster.fromPixels(2, 1, 1, [0, 255]), enabled: true, placement: null, linked: true } });
     out.folderMask = read(doc(2, 1, [folder, layer([9, 9, 9, 255, 9, 9, 9, 255], 2, 1, { parentId: 'F' })]), 2, 1);
+    const folderDefault = newLayer({ id: 'FD', name: 'fd', kind: 'group',
+      transform: makeTransform({ x: 0, y: 0 }, { width: 3, height: 1 }),
+      mask: { raster: Raster.fromPixels(1, 1, 1, [0]), enabled: true,
+        placement: makeTransform({ x: 1, y: 0 }, { width: 1, height: 1 }), linked: false, defaultColor: 255 } });
+    out.folderMaskDefault = read(doc(3, 1, [folderDefault,
+      layer([9, 9, 9, 255, 9, 9, 9, 255, 9, 9, 9, 255], 3, 1, { parentId: 'FD' })]), 3, 1);
+    const groupBase = newLayer({ id: 'GF', name: 'group base', kind: 'group',
+      transform: makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 }) });
+    const groupLeft = layer([255, 0, 0, 255, 0, 0, 0, 0], 2, 1, { parentId: groupBase.id });
+    const groupRight = layer([0, 0, 0, 0, 0, 0, 255, 255], 2, 1, { parentId: groupBase.id });
+    out.groupClippingSurface = read(doc(2, 1, [groupBase, groupLeft, groupRight,
+      layer([0, 255, 0, 255, 0, 255, 0, 255], 2, 1, { maskSourceId: groupBase.id })]), 2, 1);
+    const emptyClipGroup = newLayer({ id: 'GE', name: 'group with empty clip', kind: 'group',
+      transform: makeTransform({ x: 0, y: 0 }, { width: 1, height: 1 }) });
+    const soleBase = layer([255, 0, 0, 128], 1, 1, { parentId: emptyClipGroup.id, blendMode: 'linearDodge' });
+    const emptyClip = newLayer({ id: 'EC', name: 'empty clip', kind: 'pixel',
+      transform: makeTransform({ x: 0, y: 0 }, { width: 1, height: 1 }), maskSourceId: emptyClipGroup.id });
+    out.groupEmptyClip = read(doc(1, 1, [layer([255, 255, 255, 128], 1, 1),
+      emptyClipGroup, soleBase, emptyClip]), 1, 1);
     out.rotated = read(doc(1, 2, [newLayer({ id: 'R', name: 'r', raster: Raster.fromPixels(2, 1, 4, [255, 0, 0, 255, 0, 0, 255, 255]),
       transform: makeTransform({ x: -0.5, y: 0.5 }, { width: 2, height: 1 }, { rotation: 90, sampling: 'Nearest' }) })]), 1, 2);
     out.dodge = read(doc(1, 1, [layer([128, 128, 128, 255], 1, 1), layer([128, 128, 128, 255], 1, 1, { blendMode: 'colorDodge' })]), 1, 1);
@@ -64,6 +83,9 @@ test('GPU compositor reproduces upstream compositing semantics', async ({ page }
   near(o.clippingStack!, [0, 0, 255, 255, 0, 0, 0, 0]);
   near(o.liveMaskHiddenBase!, [0, 255, 0, 255, 0, 0, 0, 0]);
   near(o.folderMask!, [0, 0, 0, 0, 9, 9, 9, 255]);
+  near(o.folderMaskDefault!, [9, 9, 9, 255, 0, 0, 0, 0, 9, 9, 9, 255]);
+  near(o.groupClippingSurface!, [0, 255, 0, 255, 0, 255, 0, 255]);
+  near(o.groupEmptyClip!, [255, 170, 170, 192]);
   near(o.rotated!, [255, 0, 0, 255, 0, 0, 255, 255], 0);
   // Colour Dodge on sRGB values (LayerAppearanceTests pins dodge/burn to the sRGB formula): 0.502/(1-0.502) → 1.
   near(o.dodge!, [255, 255, 255, 255], 1);

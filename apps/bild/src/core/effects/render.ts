@@ -43,6 +43,18 @@ function solidFill(effect: Extract<LayerEffect, { kind: 'stroke' }>): EffectFill
 interface PsdStrokePattern { readonly data: Uint8Array; readonly width: number; readonly height: number;
   readonly x: number; readonly y: number; readonly linked: boolean }
 
+function effectContour(effect: LayerEffect, value: number): number {
+  const points = effect.psdContour;
+  if (!points?.length) return clamp01(value);
+  const input = clamp01(value) * 255;
+  let left = points[0]!, right = points[points.length - 1]!;
+  for (let index = 1; index < points.length; index++) if (input <= points[index]!.x) {
+    left = points[index - 1]!; right = points[index]!; break;
+  }
+  const amount = right.x === left.x ? 0 : clamp01((input - left.x) / (right.x - left.x));
+  return clamp01((left.y + (right.y - left.y) * amount) / 255);
+}
+
 function putPixel(output: Uint8Array, index: number, fill: EffectFill | RGB, alpha: number,
   x: number, y: number, sourceWidth: number, sourceHeight: number): void {
   let color: RGB, opacity = 1;
@@ -258,6 +270,7 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
           const distance = sampleDistance(distances, outWidth, outHeight, sx, sy);
           coverage = distance <= spread ? 1 : clamp01(1 - (distance - spread) / softness);
         }
+        coverage = effectContour(effect, coverage);
         if (effect.knockout ?? true) coverage *= 1 - source[y * outWidth + x]! / 255;
         putPixel(rgba, (y * outWidth + x) * 4, effect.color, coverage, x - margin, y - margin, width, height);
       }
@@ -267,7 +280,8 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
       const distances = solidDistances(), softness = Math.max(1e-6, size - spread);
       for (let i = 0; i < source.length; i++) {
         if (solid[i]) continue;
-        const coverage = size <= 0 ? 0 : distances[i]! <= spread ? 1 : clamp01(1 - (distances[i]! - spread) / softness);
+        const coverage = effectContour(effect,
+          size <= 0 ? 0 : distances[i]! <= spread ? 1 : clamp01(1 - (distances[i]! - spread) / softness));
         putPixel(rgba, i * 4, effect.color, coverage, i % outWidth - margin,
           Math.floor(i / outWidth) - margin, width, height);
       }
@@ -288,6 +302,7 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
         if (effect.kind === 'innerGlow' && effect.source === 'center') {
           coverage = size <= 0 ? 0 : distance <= choke ? 0 : clamp01((distance - choke) / softness);
         } else coverage = size <= 0 ? 0 : distance <= choke ? 1 : clamp01(1 - (distance - choke) / softness);
+        coverage = effectContour(effect, coverage);
         putPixel(rgba, index * 4, effect.color, coverage * shape, x - margin, y - margin, width, height);
       }
       above.push(pass(rgba, outWidth, outHeight, margin, 'above', effect.blendMode, effect.opacity, false, stackOrder));
@@ -313,7 +328,8 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
         let lighting = (gx / length * lx + gy / length * ly) * lightScale;
         if (effect.style === 'pillowEmboss' && outer) lighting = -lighting;
         if (effect.direction === 'down') lighting = -lighting;
-        const amount = clamp01(Math.abs(lighting) * profile * depth) * (source[index]! / 255 || (outer ? 1 : 0));
+        const amount = clamp01(effectContour(effect, Math.abs(lighting)) * profile * depth)
+          * (source[index]! / 255 || (outer ? 1 : 0));
         if (lighting >= 0) putPixel(highlight, index * 4, effect.highlightColor, amount, x - margin, y - margin, width, height);
         else putPixel(shadow, index * 4, effect.shadowColor, amount, x - margin, y - margin, width, height);
       }
@@ -329,6 +345,7 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
         let coverage = Math.abs(falloff(sampleDistance(distances, outWidth, outHeight, x - dx, y - dy))
           - falloff(sampleDistance(distances, outWidth, outHeight, x + dx, y + dy)));
         if (effect.invert) coverage = 1 - coverage;
+        coverage = effectContour(effect, coverage);
         putPixel(rgba, index * 4, effect.color, coverage * shape, x - margin, y - margin, width, height);
       }
       above.push(pass(rgba, outWidth, outHeight, margin, 'above', effect.blendMode, effect.opacity, false, stackOrder));
