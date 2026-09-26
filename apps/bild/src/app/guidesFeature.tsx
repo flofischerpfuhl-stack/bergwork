@@ -111,9 +111,10 @@ function paintRulersAndGuides(context: CanvasRenderingContext2D, session: Editor
   context.fillStyle = style.getPropertyValue('--cmp-raised').trim() || '#2b2b2b';
   context.fillRect(0, 0, width, RULER);
   context.fillRect(0, 0, RULER, height);
-  context.strokeStyle = 'rgba(255,255,255,0.25)';
-  context.fillStyle = 'rgba(255,255,255,0.7)';
-  context.font = '9px system-ui, sans-serif';
+  // Theme colours, so the rulers read in the light theme too.
+  context.strokeStyle = style.getPropertyValue('--cmp-border-strong').trim() || 'rgba(255,255,255,0.25)';
+  context.fillStyle = style.getPropertyValue('--cmp-text-secondary').trim() || 'rgba(255,255,255,0.7)';
+  context.font = `9px ${style.getPropertyValue('--cmp-font').trim() || 'system-ui, sans-serif'}`;
   const step = tickStep(ppp), minor = step / (step % 5 === 0 ? 5 : 2);
   context.beginPath();
   const firstX = Math.floor(-origin.x / ppp / minor) * minor;

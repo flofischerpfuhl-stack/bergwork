@@ -2,8 +2,8 @@
    controls, the raised popover of the shape/text options, the swatch panel's footer. */
 
 .presetButton {
-  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 6px 0 3px; border-radius: 13px;
-  border: 1px solid var(--cmp-border); background: var(--cmp-control); color: var(--cmp-text); font: 11px/1 var(--cmp-font);
+  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 6px 0 3px; border-radius: 8px;
+  border: 1px solid var(--cmp-border); background: var(--cmp-panel-2); color: var(--cmp-text); font: 11px/1 var(--cmp-font);
   font-variant-numeric: tabular-nums;
 }
 .presetButton:hover { background: var(--cmp-control-hover); }
@@ -13,14 +13,14 @@
 
 .popover {
   position: fixed; z-index: 56; display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 6px; white-space: normal;
-  border-radius: 12px; background: var(--cmp-raised); border: 1px solid var(--cmp-border); box-shadow: var(--cmp-shadow);
+  border-radius: 12px; background: var(--cmp-panel); border: 1px solid var(--cmp-border); box-shadow: var(--cmp-shadow);
   color: var(--cmp-text); font: 12px/1.3 var(--cmp-font); width: 372px; max-height: calc(100vh - 120px);
 }
 .popoverHeader { display: flex; align-items: center; gap: 8px; }
 .popoverTitle { margin: 0; font: 600 12px/1.2 var(--cmp-font); flex: 1 1 auto; }
 .search {
-  display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px; border-radius: 12px; border: 1px solid var(--cmp-border);
-  background: var(--cmp-surface); color: var(--cmp-text-secondary);
+  display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--cmp-border);
+  background: var(--cmp-panel-3); color: var(--cmp-text-secondary);
 }
 .search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--cmp-text); font: 12px/1 var(--cmp-font); outline: none; }
 .search:focus-within { border-color: var(--cmp-accent); box-shadow: 0 0 0 2px var(--cmp-accent-soft); }

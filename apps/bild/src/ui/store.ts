@@ -30,21 +30,36 @@ export interface UiState {
   pointerOverCanvas: boolean;
   /** Which tab of the side panel shows: layers, history, or a module's tab (controller.sidePanels, e.g. 'color'). */
   sidePanel: 'layers' | 'history' | (string & {});
+  /** Tab (Photoshop): tools, options bar, panels and status bar hidden; only the top bar floats over the canvas. */
+  chromeHidden: boolean;
+  /** The floating panel stack on the right (Layers, History, Colour…); Shift+Tab or the top bar's Layers button. */
+  panelsOpen: boolean;
+  /** Current colour theme (mount option, overridden by the host page's html[data-theme]). */
+  theme: 'dark' | 'light';
 }
+
+/** Width limits of the floating panel stack (the Layers panel was 202–352 in the Swift source). */
+export const LAYERS_WIDTH_MIN = 220;
+export const LAYERS_WIDTH_MAX = 380;
 
 export type UiStore = ReturnType<typeof createUiStore>;
 
 export function createUiStore() {
   const saved = Number(globalThis.localStorage?.getItem('compositor.layersPanelWidth') ?? '');
+  let panelsOpen = true;
+  try { panelsOpen = globalThis.localStorage?.getItem('compositor.panelsOpen') !== 'false'; } catch { /* storage blocked */ }
   return createStore<UiState>(() => ({
     featureRevision: 0,
     dialog: null,
     openMenu: null,
-    layersWidth: Number.isFinite(saved) && saved >= 202 && saved <= 352 ? saved : 252,
+    layersWidth: Number.isFinite(saved) && saved >= LAYERS_WIDTH_MIN && saved <= LAYERS_WIDTH_MAX ? saved : 264,
     sheet: null,
     compact: false,
     spaceHeld: false,
     pointerOverCanvas: false,
     sidePanel: 'layers',
+    chromeHidden: false,
+    panelsOpen,
+    theme: 'dark',
   }));
 }

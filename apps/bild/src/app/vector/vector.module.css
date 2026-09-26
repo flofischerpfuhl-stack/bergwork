@@ -6,16 +6,16 @@
 .kindIcon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
 
 .paintButton {
-  flex: none; width: 30px; height: 22px; padding: 0; border-radius: 6px; border: 1px solid var(--cmp-border);
+  flex: none; width: 30px; height: 24px; padding: 0; border-radius: 7px; border: 1px solid var(--cmp-border);
   box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.85); position: relative; overflow: hidden; background-color: #fff;
 }
 .paintButton:disabled { opacity: 0.4; }
 .paintNone::after {
-  content: ''; position: absolute; left: -4px; right: -4px; top: 50%; height: 2px; background: #ff3b30; transform: rotate(-35deg);
+  content: ''; position: absolute; left: -4px; right: -4px; top: 50%; height: 2px; background: var(--cmp-danger); transform: rotate(-35deg);
 }
 
 .number {
-  width: 48px; height: 22px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--cmp-border); background: var(--cmp-surface);
+  width: 48px; height: 26px; padding: 0 6px; border-radius: 7px; border: 1px solid var(--cmp-border); background: var(--cmp-panel-3);
   color: var(--cmp-text); font: 12px/1 var(--cmp-font); text-align: right; font-variant-numeric: tabular-nums;
 }
 .number:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent); }
@@ -26,7 +26,7 @@
 .narrow { width: 38px; }
 
 .iconButton {
-  flex: none; width: 26px; height: 24px; padding: 0; display: grid; place-items: center; border-radius: 6px; border: 1px solid transparent;
+  flex: none; width: 28px; height: 26px; padding: 0; display: grid; place-items: center; border-radius: 7px; border: 1px solid transparent;
   background: transparent; color: var(--cmp-text);
 }
 .iconButton:hover:not(:disabled) { background: var(--cmp-control-hover); }
@@ -34,8 +34,8 @@
 .iconButtonOn { background: var(--cmp-control-active); border-color: var(--cmp-border); }
 
 .strokeButton {
-  flex: none; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 20px 0 8px; border-radius: 12px;
-  border: 1px solid var(--cmp-border); background-color: var(--cmp-control); color: var(--cmp-text); position: relative;
+  flex: none; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 20px 0 8px; border-radius: 8px;
+  border: 1px solid var(--cmp-border); background-color: var(--cmp-panel-2); color: var(--cmp-text); position: relative;
 }
 .strokeButton:hover:not(:disabled) { background-color: var(--cmp-control-hover); }
 .strokeButton::after {
@@ -48,7 +48,7 @@
 
 .popover {
   position: fixed; z-index: 56; display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 14px; white-space: normal;
-  border-radius: 12px; background: var(--cmp-raised); border: 1px solid var(--cmp-border); box-shadow: var(--cmp-shadow);
+  border-radius: 12px; background: var(--cmp-panel); border: 1px solid var(--cmp-border); box-shadow: var(--cmp-shadow);
   color: var(--cmp-text); font: 12px/1.3 var(--cmp-font); width: 330px;
 }
 .row { display: flex; align-items: center; gap: 8px; min-width: 0; }

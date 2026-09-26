@@ -30,7 +30,8 @@ async function selectRect(page: import('@playwright/test').Page, x0: number, y0:
     const session = (window as any).__editorForTests.session;
     return [{ x: x0, y: y0 }, { x: x1, y: y1 }].map((point) => session.viewport.viewPoint(point, session.document));
   }, [x0, y0, x1, y1]);
-  const box = (await page.getByTestId('editor-canvas').boundingBox())!;
+  // View points start at the work area (canvas-pane); the canvas surface reaches under the floating chrome.
+  const box = (await page.getByTestId('canvas-pane').boundingBox())!;
   await page.mouse.move(box.x + points[0]!.x, box.y + points[0]!.y); await page.mouse.down();
   await page.mouse.move(box.x + points[1]!.x, box.y + points[1]!.y, { steps: 4 }); await page.mouse.up();
 }

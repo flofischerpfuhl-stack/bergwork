@@ -40,6 +40,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
     return f ? { label, shortcut, enabled: f.enabled(), run: f.run, checked: f.checked?.() } : { label, shortcut, enabled: false };
   };
   const mergePlan = session.mergePlan();
+  const ui = controller.ui.getState();
   return [
     {
       title: t('File'),
@@ -250,6 +251,12 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         'separator',
         { label: t('Show Transform Controls'), shortcut: 'mod+h', enabled: session.tool === 'move' && !!document, checked: session.showsTransformControls,
           run: () => { session.showsTransformControls = !session.showsTransformControls; session.notify('document'); } },
+        'separator',
+        // Photoshop: Tab hides tools, options and panels; Shift+Tab only the panels. The editor's key handler runs them
+        // (only while the keyboard is on the canvas, so Tab still moves focus inside the panels).
+        { label: t('Tools and Panels'), shortcut: 'tab', enabled: true, checked: !ui.chromeHidden, run: () => controller.toggleChrome(), testId: 'menu-toggle-chrome' },
+        { label: t('Panels'), shortcut: 'shift+tab', enabled: true, checked: ui.compact ? ui.sheet === 'layers' : ui.panelsOpen && !ui.chromeHidden,
+          run: () => controller.togglePanels(), testId: 'menu-toggle-panels' },
       ],
     },
     {
@@ -305,10 +312,10 @@ export function shortcutLabel(shortcut: string): string {
   const parts = shortcut.split('+');
   const key = parts.pop()!;
   const names: Record<string, string> = isMac
-    ? { mod: '⌘', alt: '⌥', shift: '⇧', backspace: '⌫' }
+    ? { mod: '⌘', alt: '⌥', shift: '⇧', backspace: '⌫', tab: '⇥' }
     : labelLocale === 'de'
-      ? { mod: 'Strg+', alt: 'Alt+', shift: 'Umschalt+', backspace: 'Rücktaste' }
-      : { mod: 'Ctrl+', alt: 'Alt+', shift: 'Shift+', backspace: 'Backspace' };
+      ? { mod: 'Strg+', alt: 'Alt+', shift: 'Umschalt+', backspace: 'Rücktaste', tab: 'Tab' }
+      : { mod: 'Ctrl+', alt: 'Alt+', shift: 'Shift+', backspace: 'Backspace', tab: 'Tab' };
   const order = isMac ? ['alt', 'shift', 'mod'] : ['mod', 'alt', 'shift'];
   const mods = order.filter((m) => parts.includes(m)).map((m) => names[m]).join('');
   return mods + (names[key] ?? key.toUpperCase());

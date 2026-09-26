@@ -642,6 +642,10 @@ const de: Record<string, string> = {
   'Business Source License 1.1 with a free tier for personal use, education, and organizations with three or fewer people. Each release changes to AGPL-3.0-or-later after four years.':
     'Business Source License 1.1 mit kostenloser Nutzung für private Zwecke, Bildung und Organisationen mit höchstens drei Personen. Jede Version wechselt nach vier Jahren zu AGPL-3.0-or-later.',
   'Business Source License 1.1': 'Business Source License 1.1',
+  // UI v0.2 floating chrome
+  'Hide panels': 'Bedienfelder ausblenden', 'Show or hide the panels': 'Bedienfelder ein- oder ausblenden',
+  'Tools and Panels': 'Werkzeuge und Bedienfelder',
+  'Open': 'Öffnen',
 };
 
 const isApple = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);

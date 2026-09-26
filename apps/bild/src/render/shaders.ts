@@ -875,6 +875,7 @@ uniform sampler2D uComposite;
 uniform sampler2D uProofLut;
 uniform vec4 uCanvasRect;   // device px: x, y, width, height
 uniform float uPointScale;  // device px per point
+uniform vec3 uWorkspace;    // the editor's --cmp-canvas-bg (linear 0–1 sRGB values)
 uniform int uGrid;
 uniform float uPixelSize;   // device px per document px
 uniform int uHasComposite;
@@ -894,7 +895,7 @@ vec4 proofColor(vec3 color) {
   return mix(mix(a, b, f.y), mix(d, e, f.y), f.z);
 }
 void main() {
-  vec3 workspace = vec3(0.105);
+  vec3 workspace = uWorkspace;
   vec2 p = vPos;
   vec2 rel = p - uCanvasRect.xy;
   bool inside = rel.x >= 0.0 && rel.y >= 0.0 && rel.x < uCanvasRect.z && rel.y < uCanvasRect.w;

@@ -385,6 +385,9 @@ function blendIfValues(settings: BlendIfSettings | null | undefined): Record<str
     : { uHasBlendIf: 0, uBlendIfSource: new Float32Array(16), uBlendIfDestination: new Float32Array(16) };
 }
 
+/** The screen's workspace grey around the canvas when the editor passes none (27/255 ≈ 0.105). */
+export const DEFAULT_WORKSPACE: readonly [number, number, number] = [0.105, 0.105, 0.105];
+
 export class GpuCompositor {
   readonly renderer: WebGLRenderer;
   readonly gl: WebGL2RenderingContext;
@@ -713,6 +716,7 @@ export class GpuCompositor {
       present: [PRESENT_FRAGMENT, {
         uCanvasRect: { value: new Float32Array(4), type: 'vec4<f32>' },
         uPointScale: { value: 1, type: 'f32' },
+        uWorkspace: { value: new Float32Array([0.105, 0.105, 0.105]), type: 'vec3<f32>' },
         uGrid: { value: 0, type: 'i32' },
         uPixelSize: { value: 1, type: 'f32' },
         uHasComposite: { value: 0, type: 'i32' },
@@ -2493,7 +2497,9 @@ export class GpuCompositor {
   /** Draws the workspace, canvas rectangle, checkerboard and composite to the screen canvas. */
   present(composite: RenderTexture | null, width: number, height: number, canvasRect: { x: number; y: number; width: number; height: number },
     pointScale: number, grid: boolean, pixelSize: number, compositeOrigin: { x: number; y: number } = { x: 0, y: 0 },
-    proof?: { readonly lut: CmykLut; readonly gamutWarning: boolean }): void {
+    proof?: { readonly lut: CmykLut; readonly gamutWarning: boolean },
+    /** Workspace colour around the canvas (0–1 sRGB); the default is the historical 10.5 % grey. */
+    workspace: readonly [number, number, number] = DEFAULT_WORKSPACE): void {
     this.resize(width, height);
     let proofSource = this.white;
     if (proof) {
@@ -2522,7 +2528,7 @@ export class GpuCompositor {
     }
     this.run(this.pass('present'), null, width, height, { uComposite: composite?.source ?? this.white, uProofLut: proofSource }, {
       uCanvasRect: new Float32Array([canvasRect.x, canvasRect.y, canvasRect.width, canvasRect.height]),
-      uPointScale: pointScale, uGrid: grid ? 1 : 0, uPixelSize: pixelSize, uHasComposite: composite ? 1 : 0,
+      uPointScale: pointScale, uWorkspace: new Float32Array(workspace), uGrid: grid ? 1 : 0, uPixelSize: pixelSize, uHasComposite: composite ? 1 : 0,
       uCompositeOrigin: new Float32Array([compositeOrigin.x, compositeOrigin.y]),
       uCompositeSize: new Float32Array([composite?.width ?? 0, composite?.height ?? 0]),
       uProof: proof ? 1 : 0, uGamutWarning: 0, uProofSize: proof?.lut.size ?? 2,

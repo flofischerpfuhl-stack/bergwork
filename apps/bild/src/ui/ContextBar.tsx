@@ -12,6 +12,7 @@ import { LAYER_SAMPLINGS, scalePercent, scaledToPercent, type LayerTransform } f
 import { makeTransform } from '../core/geometry';
 import type { EditorSession } from '../core/session';
 import { markUiRender } from './performance';
+import { shortcutLabel } from './menus';
 
 /** No trailing zeros on a whole number, two decimals otherwise (TransformValueField.formatted). */
 export function formatted(value: number): string {
@@ -192,18 +193,30 @@ export function StatusBar({ controller }: { controller: EditorController }) {
   const document = session.document;
   const zoom = session.viewport.zoom * 100;
   const hint = controller.statusHints[session.tool]?.(session) ?? statusHint(session, t);
+  const busy = session.isImporting ? t('Importing images…') : session.isProjectBusy ? t('Working…') : hint;
+  // Zoom sits where Fernwork PDF has it (the bottom bar) and where Photoshop shows it (the status bar, bottom left).
   return (
-    <div className={styles.status} role="status">
+    <div className={styles.status} role="status" data-testid="status-bar">
+      <span className={styles.zoomGroup}>
+        <button type="button" className={styles.iconButton} disabled={!document} aria-label={t('Zoom out')}
+          title={`${t('Zoom Out')} (${shortcutLabel('mod+-')})`} onClick={() => session.zoomTo(session.viewport.zoom / 1.25)}><Icon name="zoomOut" size={16} /></button>
+        <span className={styles.statusZoom} data-testid="zoomStatus">{document ? `${zoom >= 10 ? Math.round(zoom * 10) / 10 : Math.round(zoom * 100) / 100}%` : '–'}</span>
+        <button type="button" className={styles.iconButton} disabled={!document} aria-label={t('Zoom in')}
+          title={`${t('Zoom In')} (${shortcutLabel('mod+=')})`} onClick={() => session.zoomTo(session.viewport.zoom * 1.25)}><Icon name="zoomIn" size={16} /></button>
+        <button type="button" className={styles.iconButton} disabled={!document} onClick={() => session.fit()}
+          title={`${t('Fit Canvas')} (${shortcutLabel('mod+0')})`} data-testid="fit">{t('Fit')}</button>
+        <button type="button" className={styles.iconButton} disabled={!document} onClick={() => session.zoomTo(1)}
+          title={`${t('Actual Pixels')} (${shortcutLabel('mod+1')})`}>100%</button>
+      </span>
+      <span className={styles.chromeDivider} aria-hidden />
       {document ? (
-        <>
-          <span style={{ width: 62 }} data-testid="zoomStatus">{zoom >= 10 ? Math.round(zoom * 10) / 10 : Math.round(zoom * 100) / 100}%</span>
+        <span className={styles.statusFacts}>
           <span data-testid="canvasDimensions">{document.width.toLocaleString(controller.locale)} × {document.height.toLocaleString(controller.locale)} px</span>
           <span>sRGB · Transparent</span>
-        </>
+        </span>
       ) : <span>{t('Ready when you are')}</span>}
-      <span className={styles.statusHint}>
-        {session.isImporting ? t('Importing images…') : session.isProjectBusy ? t('Working…') : hint}
-      </span>
+      {busy ? <span className={styles.chromeDivider} aria-hidden /> : null}
+      {busy ? <span className={styles.statusHint} title={busy}>{busy}</span> : null}
     </div>
   );
 }

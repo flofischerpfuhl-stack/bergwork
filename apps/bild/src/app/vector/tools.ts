@@ -562,7 +562,7 @@ function outline(context: CanvasRenderingContext2D, paths: readonly VectorPath[]
 export function paintVectorOverlay(context: CanvasRenderingContext2D, session: EditorSession, hover: Point | null): void {
   const document = session.document, tool = session.tool;
   if (!document || (tool !== 'pen' && tool !== 'directSelect' && tool !== 'shape')) return;
-  const accent = getComputedStyle(context.canvas).getPropertyValue('--cmp-accent').trim() || '#0a84ff';
+  const accent = getComputedStyle(context.canvas).getPropertyValue('--cmp-canvas-accent').trim() || '#0a84ff';
   const state = vectorState(session);
   const toView = (p: Point) => session.viewport.viewPoint(p, document);
   const target = pathTarget(session);

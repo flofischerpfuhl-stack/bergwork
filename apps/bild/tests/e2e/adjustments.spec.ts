@@ -133,7 +133,8 @@ test('the Levels preview reaches the screen while dragging and Escape restores i
   test.skip(browserName === 'webkit', 'WebKit screenshots of WebGL lag one frame');
   await canvasWith(page, 'gray.png', solidPng(60, 60, [100, 100, 100, 255]));
   const centre = async (): Promise<number> => {
-    const box = (await page.getByTestId('editor-canvas').boundingBox())!;
+    // The document is centred in the work area (canvas-pane), not on the full-bleed canvas surface.
+    const box = (await page.getByTestId('canvas-pane').boundingBox())!;
     const png = await page.screenshot({ clip: { x: box.x + box.width / 2 - 2, y: box.y + box.height / 2 - 2, width: 4, height: 4 } });
     return page.evaluate(async (base64) => {
       const bytes = Uint8Array.from(atob(base64), (value) => value.charCodeAt(0));

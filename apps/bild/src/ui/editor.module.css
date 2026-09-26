@@ -1,45 +1,82 @@
 /*
- * Compositor browser UI. Dark, dense and Mac-like as in the official screenshots (hero.png):
- * near-black surfaces, hairline separators, small type, blue accents, rounded capsule controls.
- * Dimensions follow the SwiftUI source: 56 pt tool rail, 42 pt tool header, 252 pt Layers panel
- * (202–352), 30 pt status bar, 52 pt layer rows.
+ * Editor UI v0.2: floating chrome over a full-bleed canvas, in the design language of Fernwork PDF
+ * (near-black surfaces, 12 px bar radius, 8 px control radius, thin borders, soft drop shadows, fern-green
+ * accent, Inter/Geist type). Layout: the canvas fills the editor; the top bar (menus, tabs), the options bar
+ * (Photoshop's place: under the menus), the tool palette (left), the panel stack (right) and the status bar
+ * (bottom) float over it. `.canvasPane` is the uncovered work area between them: Fit, rulers and the welcome
+ * card use it, while the canvas surface itself bleeds under the chrome (CanvasView reads --cmp-pane-*).
+ * Decisions and compromises: artifacts/ui-v2.md.
  */
 
 .root {
-  --cmp-bg: #242424;
-  --cmp-surface: #1e1e1e;
+  /* Surfaces (Fernwork PDF dark tokens) */
+  --cmp-bg: #121212;
+  --cmp-surface: #0b0b0b;
   --cmp-canvas-bg: #1b1b1b;
-  --cmp-raised: #2c2c2e;
-  --cmp-control: rgba(255, 255, 255, 0.08);
-  --cmp-control-hover: rgba(255, 255, 255, 0.13);
-  --cmp-control-active: rgba(255, 255, 255, 0.18);
-  --cmp-border: rgba(255, 255, 255, 0.09);
-  --cmp-hairline: rgba(255, 255, 255, 0.06);
-  --cmp-text: rgba(255, 255, 255, 0.88);
-  --cmp-text-secondary: rgba(255, 255, 255, 0.55);
-  --cmp-text-tertiary: rgba(255, 255, 255, 0.32);
-  --cmp-accent: #0a84ff;
-  --cmp-accent-soft: rgba(10, 132, 255, 0.3);
-  --cmp-danger: #ff453a;
-  --cmp-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
-  --cmp-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --cmp-rail: 56px;
-  --cmp-header: 42px;
-  --cmp-top: 44px;
-  --cmp-status: 30px;
+  --cmp-raised: rgba(7, 7, 7, 0.97);
+  /* A hair short of opaque: Chrome treats an opaque scrolling box as covering its whole layer, shadow included, and
+     then skips painting the canvas under the shadow (transparent seams next to the chrome). */
+  --cmp-panel: rgba(7, 7, 7, 0.97);
+  --cmp-panel-2: #0d0d0d;
+  --cmp-panel-3: #121212;
+  --cmp-control: rgba(255, 255, 255, 0.06);
+  --cmp-control-hover: rgba(255, 255, 255, 0.1);
+  --cmp-control-active: rgba(255, 255, 255, 0.16);
+  --cmp-border: rgba(255, 255, 255, 0.12);
+  --cmp-border-strong: rgba(255, 255, 255, 0.26);
+  --cmp-hairline: rgba(255, 255, 255, 0.07);
+  --cmp-text: #f5f5f5;
+  --cmp-text-secondary: #a1a1aa;
+  --cmp-text-tertiary: rgba(255, 255, 255, 0.34);
+  /* Fernwork green for the interface; canvas overlays (handles, snapping) keep a neutral blue. */
+  --cmp-accent: #15803d;
+  --cmp-accent-strong: #22c55e;
+  --cmp-accent-hover: #16a34a;
+  --cmp-accent-soft: color-mix(in srgb, var(--cmp-accent-hover) 22%, transparent);
+  --cmp-accent-tint: color-mix(in srgb, var(--cmp-accent-hover) 13%, var(--cmp-panel-2));
+  --cmp-accent-contrast: #ffffff;
+  --cmp-canvas-accent: #0a84ff;
+  --cmp-danger: #ef4444;
+  --cmp-warning: #f59e0b;
+  --cmp-success: #22c55e;
+  --cmp-raised-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --cmp-segment-on: var(--cmp-control-active);
+  --cmp-thumb-bg: #2a2a2a;
+  --cmp-preview-bg: #1f1f1f;
+  --cmp-checker-a: #2a2a2a;
+  --cmp-checker-b: #333333;
+  --cmp-toast-bg: rgba(0, 0, 0, 0.78);
+  --cmp-toast-text: #ffffff;
+  --cmp-plot-bg: var(--cmp-panel-3);
+  --cmp-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --cmp-bar-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  --cmp-overlay: rgba(0, 0, 0, 0.58);
+  --cmp-font: 'Inter', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* Chrome geometry */
+  --cmp-inset: 10px;
+  --cmp-gap: 8px;
+  --cmp-control-size: 32px;
+  --cmp-bar: 44px;
+  --cmp-status-bar: 38px;
+  --cmp-radius: 12px;
+  --cmp-radius-control: 8px;
+  --cmp-rail-w: 44px;
   --cmp-target: 28px;
+  --cmp-panel-w: 264px;
+  /* The work area between the chrome (canvas-pane); the canvas itself reaches under the chrome. */
+  --cmp-pane-top: calc(var(--cmp-inset) + var(--cmp-bar) * 2 + var(--cmp-gap) * 2);
+  --cmp-pane-left: calc(var(--cmp-inset) + var(--cmp-rail-w) + var(--cmp-gap));
+  --cmp-pane-right: calc(var(--cmp-inset) + var(--cmp-panel-w) + var(--cmp-gap));
+  --cmp-pane-bottom: calc(var(--cmp-inset) + var(--cmp-status-bar) + var(--cmp-gap));
   position: relative;
   box-sizing: border-box;
   width: 100%;
   height: 100%;
   overflow: hidden;
-  display: grid;
-  grid-template-columns: var(--cmp-rail) minmax(0, 1fr) auto;
-  grid-template-rows: var(--cmp-top) var(--cmp-header) minmax(0, 1fr) var(--cmp-status);
-  grid-template-areas: 'top top top' 'header header header' 'rail canvas layers' 'status status status';
-  background: var(--cmp-bg);
+  background: var(--cmp-canvas-bg);
   color: var(--cmp-text);
   font: 12px/1.3 var(--cmp-font);
+  font-feature-settings: 'cv11', 'ss01';
   -webkit-font-smoothing: antialiased;
   color-scheme: dark;
   outline: none;
@@ -49,345 +86,491 @@
 }
 .root *, .root *::before, .root *::after { box-sizing: border-box; }
 .root input, .root select, .root textarea { user-select: text; -webkit-user-select: text; }
+.root :is(button, input, select, textarea, a, [role='tab'], [role='menuitem'], [role='treeitem']):focus-visible {
+  outline: 2px solid var(--cmp-accent-strong); outline-offset: 1px;
+}
 
 .light {
-  --cmp-bg: #ececec;
-  --cmp-surface: #f6f6f6;
-  --cmp-canvas-bg: #d9d9d9;
-  --cmp-raised: #ffffff;
-  --cmp-control: rgba(0, 0, 0, 0.06);
-  --cmp-control-hover: rgba(0, 0, 0, 0.1);
-  --cmp-control-active: rgba(0, 0, 0, 0.15);
-  --cmp-border: rgba(0, 0, 0, 0.12);
-  --cmp-hairline: rgba(0, 0, 0, 0.08);
-  --cmp-text: rgba(0, 0, 0, 0.85);
-  --cmp-text-secondary: rgba(0, 0, 0, 0.55);
-  --cmp-text-tertiary: rgba(0, 0, 0, 0.35);
+  --cmp-bg: #eef2f7;
+  --cmp-surface: #ffffff;
+  --cmp-canvas-bg: #e2e6ec;
+  --cmp-raised: rgba(255, 255, 255, 0.97);
+  --cmp-panel: rgba(255, 255, 255, 0.97);
+  --cmp-panel-2: #f8fafc;
+  --cmp-panel-3: #eef2f7;
+  --cmp-control: rgba(15, 23, 42, 0.05);
+  --cmp-control-hover: rgba(15, 23, 42, 0.09);
+  --cmp-control-active: rgba(15, 23, 42, 0.14);
+  --cmp-border: rgba(15, 23, 42, 0.14);
+  --cmp-border-strong: rgba(15, 23, 42, 0.28);
+  --cmp-hairline: rgba(15, 23, 42, 0.08);
+  --cmp-text: #0f172a;
+  --cmp-text-secondary: #64748b;
+  --cmp-text-tertiary: rgba(15, 23, 42, 0.36);
+  --cmp-accent-strong: #15803d;
+  --cmp-accent-soft: color-mix(in srgb, var(--cmp-accent-hover) 16%, transparent);
+  --cmp-accent-tint: color-mix(in srgb, var(--cmp-accent-hover) 12%, var(--cmp-panel-2));
+  --cmp-warning: #b45309;
+  --cmp-success: #15803d;
+  --cmp-danger: #dc2626;
+  --cmp-raised-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
+  --cmp-segment-on: #ffffff;
+  --cmp-thumb-bg: #d7dce3;
+  --cmp-preview-bg: #e6e9ee;
+  --cmp-checker-a: #e6e6e6;
+  --cmp-checker-b: #d2d2d2;
+  --cmp-shadow: 0 16px 40px rgba(15, 23, 42, 0.2);
+  --cmp-bar-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+  --cmp-overlay: rgba(15, 23, 42, 0.38);
   color-scheme: light;
 }
 
-/* Compact (phones, small windows): no side panels; tools in a strip; sheets for panels. */
+/* Tab hides the tools, options bar, panels and status bar; the top bar (menus, tabs) stays, as in Photoshop. */
+.chromeHidden {
+  --cmp-pane-top: calc(var(--cmp-inset) + var(--cmp-bar) + var(--cmp-gap));
+  --cmp-pane-left: 0px;
+  --cmp-pane-right: 0px;
+  --cmp-pane-bottom: 0px;
+}
+.panelsClosed { --cmp-pane-right: 0px; }
+/* Short windows: the tool palette gets two columns (Photoshop's double-column toolbar). */
+.railTwo { --cmp-rail-w: 80px; }
+
+/* Touch screens in the desktop layout (tablets): larger targets, as Fernwork PDF does for coarse pointers. */
+@media (pointer: coarse) {
+  .root { --cmp-control-size: 38px; --cmp-bar: 50px; --cmp-rail-w: 50px; --cmp-target: 34px; }
+  .root.railTwo { --cmp-rail-w: 92px; }
+}
+
+/* Compact (phones, small windows): tools in a floating strip at the bottom, panels as floating sheets. */
 .compact {
   --cmp-target: 44px;
-  --cmp-top: 48px;
-  --cmp-header: 48px;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: calc(var(--cmp-top) + env(safe-area-inset-top)) var(--cmp-header) minmax(0, 1fr) calc(60px + env(safe-area-inset-bottom));
-  grid-template-areas: 'top' 'header' 'canvas' 'rail';
+  --cmp-control-size: 40px;
+  --cmp-bar: 52px;
+  --cmp-inset: 8px;
+  --cmp-gap: 6px;
+  --cmp-pane-top: calc(env(safe-area-inset-top) + var(--cmp-inset) + var(--cmp-bar) * 2 + var(--cmp-gap) * 2);
+  --cmp-pane-left: 0px;
+  --cmp-pane-right: 0px;
+  --cmp-pane-bottom: calc(env(safe-area-inset-bottom) + var(--cmp-inset) + 58px + var(--cmp-gap));
 }
 .compactLandscape {
   --cmp-target: 44px;
-  --cmp-top: 44px;
-  --cmp-header: 44px;
-  grid-template-columns: calc(60px + env(safe-area-inset-left)) minmax(0, 1fr);
-  grid-template-rows: var(--cmp-top) var(--cmp-header) minmax(0, 1fr);
-  grid-template-areas: 'top top' 'header header' 'rail canvas';
+  --cmp-control-size: 38px;
+  --cmp-bar: 48px;
+  --cmp-inset: 8px;
+  --cmp-gap: 6px;
+  --cmp-pane-top: calc(var(--cmp-inset) + var(--cmp-bar) * 2 + var(--cmp-gap) * 2);
+  --cmp-pane-left: calc(env(safe-area-inset-left) + var(--cmp-inset) + 58px + var(--cmp-gap));
+  --cmp-pane-right: 0px;
+  --cmp-pane-bottom: 0px;
+}
+.compact.chromeHidden, .compactLandscape.chromeHidden {
+  --cmp-pane-top: calc(env(safe-area-inset-top) + var(--cmp-inset) + var(--cmp-bar) + var(--cmp-gap));
+  --cmp-pane-left: 0px;
+  --cmp-pane-bottom: 0px;
 }
 
-/* Top bar: menus, tabs, zoom */
+/* Floating chrome: one bar style for the top bar, options bar, tool palette and status bar. */
+.topBar, .header, .rail, .status {
+  position: absolute;
+  border: 1px solid var(--cmp-border);
+  border-radius: var(--cmp-radius);
+  background: var(--cmp-panel);
+  box-shadow: var(--cmp-bar-shadow);
+}
+
+/* Top bar: menus, new canvas, tabs, undo/redo, panel toggle */
 .topBar {
-  grid-area: top;
+  top: calc(var(--cmp-inset) + env(safe-area-inset-top));
+  left: max(var(--cmp-inset), env(safe-area-inset-left));
+  right: max(var(--cmp-inset), env(safe-area-inset-right));
+  height: var(--cmp-bar);
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  padding-top: env(safe-area-inset-top);
-  padding-left: max(10px, env(safe-area-inset-left));
-  padding-right: max(10px, env(safe-area-inset-right));
-  background: var(--cmp-surface);
-  border-bottom: 1px solid var(--cmp-border);
+  gap: 4px;
+  padding: 0 5px;
   min-width: 0;
 }
 .menuBar { display: flex; align-items: center; gap: 1px; flex: none; }
 .menuTitle {
-  height: 26px; padding: 0 9px; border-radius: 6px; border: 0; background: transparent; color: var(--cmp-text);
+  height: var(--cmp-control-size); padding: 0 9px; border-radius: var(--cmp-radius-control); border: 0; background: transparent; color: var(--cmp-text);
   font: 500 12.5px/1 var(--cmp-font); cursor: default;
 }
 .menuTitle:hover, .menuTitleOpen { background: var(--cmp-control-hover); }
+.chromeDivider { flex: none; width: 1px; height: 22px; margin: 0 4px; background: var(--cmp-border); }
 .menuPopup {
-  position: fixed; z-index: 50; min-width: 240px; max-height: calc(100vh - 60px); overflow-y: auto; padding: 5px;
-  background: var(--cmp-raised); border: 1px solid var(--cmp-border); border-radius: 9px; box-shadow: var(--cmp-shadow);
-  backdrop-filter: blur(20px);
+  position: fixed; z-index: 70; min-width: 240px; overflow-y: auto; padding: 6px;
+  background: var(--cmp-panel); border: 1px solid var(--cmp-border); border-radius: var(--cmp-radius); box-shadow: var(--cmp-shadow);
 }
 .menuItem {
-  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 24px; padding: 4px 10px 4px 22px; border: 0;
-  border-radius: 5px; background: transparent; color: var(--cmp-text); font: 13px/1.2 var(--cmp-font); text-align: left; position: relative;
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 28px; padding: 4px 10px 4px 26px; border: 0;
+  border-radius: var(--cmp-radius-control); background: transparent; color: var(--cmp-text); font: 500 13px/1.2 var(--cmp-font); text-align: left; position: relative;
 }
-.menuItem:hover:not(:disabled), .menuItem:focus-visible { background: var(--cmp-accent); color: #fff; outline: none; }
+.menuItem:hover:not(:disabled), .menuItem:focus-visible { background: var(--cmp-control-hover); outline: none; }
 .menuItem:disabled { color: var(--cmp-text-tertiary); }
-.menuItem .shortcut { margin-left: auto; color: var(--cmp-text-secondary); font-size: 12px; }
-.menuItem:hover:not(:disabled) .shortcut { color: rgba(255, 255, 255, 0.8); }
-.menuCheck { position: absolute; left: 7px; }
+.menuItem .shortcut { margin-left: auto; color: var(--cmp-text-secondary); font-size: 12px; font-weight: 400; }
+.menuCheck { position: absolute; left: 9px; color: var(--cmp-accent-strong); }
 .menuSeparator { height: 1px; margin: 5px 8px; background: var(--cmp-border); }
-.compact .menuItem, .compactLandscape .menuItem { min-height: 40px; font-size: 15px; }
+.compact .menuItem, .compactLandscape .menuItem { min-height: 42px; font-size: 15px; }
 
 .tabs {
-  display: flex; align-items: center; gap: 6px; overflow-x: auto; flex: 1 1 auto; min-width: 0; scrollbar-width: none;
-  mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+  display: flex; align-items: center; gap: 4px; overflow-x: auto; flex: 1 1 auto; min-width: 0; scrollbar-width: none;
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
 }
 .tabs::-webkit-scrollbar { display: none; }
 .tab {
-  flex: none; display: flex; align-items: center; height: 28px; max-width: 190px; border-radius: 14px;
-  background: var(--cmp-control); border: 1px solid var(--cmp-hairline);
+  flex: none; display: flex; align-items: center; height: var(--cmp-control-size); max-width: 220px; border-radius: var(--cmp-radius-control);
+  background: var(--cmp-panel-2); border: 1px solid var(--cmp-border);
 }
-.tabActive { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.22); }
-.light .tabActive { background: rgba(0, 0, 0, 0.1); border-color: rgba(0, 0, 0, 0.2); }
+.tab:hover { background: var(--cmp-control-hover); }
+/* Tabs switch content; they are not tools, so no filled accent (as in Fernwork PDF). */
+.tabActive, .tabActive:hover { background: var(--cmp-panel-3); border-color: var(--cmp-border-strong); }
 .tabLabel {
-  display: flex; align-items: center; gap: 5px; height: 100%; min-width: 35px; max-width: 155px; padding: 0 8px 0 11px;
-  border: 0; background: transparent; color: var(--cmp-text); font: 500 12px/1 var(--cmp-font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: flex; align-items: center; gap: 7px; height: 100%; min-width: 35px; max-width: 185px; padding: 0 6px 0 11px;
+  border: 0; background: transparent; color: var(--cmp-text-secondary); font: 600 12.5px/1 var(--cmp-font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.tabActive .tabLabel { font-weight: 600; }
-.tabDot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none; }
+.tabActive .tabLabel { color: var(--cmp-text); }
+.tabDot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
 .tabClose {
-  width: 21px; height: 100%; padding-right: 5px; border: 0; background: transparent; color: var(--cmp-text-secondary);
+  width: 24px; height: 100%; padding-right: 6px; border: 0; background: transparent; color: var(--cmp-text-secondary);
   display: grid; place-items: center;
 }
-.compact .tab, .compactLandscape .tab { height: 36px; border-radius: 18px; }
-.compact .tabClose, .compactLandscape .tabClose { width: 36px; }
+.tabClose:hover:not(:disabled) { color: var(--cmp-text); }
 
 .iconButton {
   flex: none; display: inline-grid; place-items: center; min-width: var(--cmp-target); height: var(--cmp-target); padding: 0 6px;
-  border: 0; border-radius: 7px; background: transparent; color: var(--cmp-text); font: 500 12px/1 var(--cmp-font);
+  border: 0; border-radius: var(--cmp-radius-control); background: transparent; color: var(--cmp-text); font: 600 12px/1 var(--cmp-font);
 }
 .iconButton:hover:not(:disabled) { background: var(--cmp-control-hover); }
 .iconButton:active:not(:disabled) { background: var(--cmp-control-active); }
 .iconButton:disabled { color: var(--cmp-text-tertiary); }
 .iconButtonOn { background: var(--cmp-control-active); }
+/* Fernwork PDF's chrome button: square, bordered, raised a step from the bar. */
+.chromeButton {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: var(--cmp-control-size); height: var(--cmp-control-size);
+  padding: 0; border: 1px solid var(--cmp-border); border-radius: var(--cmp-radius-control); background: var(--cmp-panel-2); color: var(--cmp-text);
+  font: 700 12px/1 var(--cmp-font); white-space: nowrap;
+}
+.chromeButtonText { padding: 0 11px; }
+.chromeButton:hover:not(:disabled) { background: var(--cmp-control-hover); }
+.chromeButton:active:not(:disabled) { background: var(--cmp-control-active); }
+.chromeButton:disabled { opacity: 0.4; }
+/* A toggle that is on: quieter than the active tool, which alone gets the filled accent. */
+.chromeButtonOn, .chromeButtonOn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--cmp-accent-hover) 50%, var(--cmp-border)); background: var(--cmp-accent-tint); color: var(--cmp-accent-strong);
+}
+.chromeGroup { display: flex; align-items: center; gap: 4px; flex: none; }
 .zoomGroup { display: flex; align-items: center; gap: 2px; flex: none; }
 
-/* Tool header (context bar) */
+/* Options bar (Photoshop's place, under the menu bar, above tools and panels): as wide as its content, up to the
+   full width; long bars (Transform) scroll sideways and fade out at the end. */
 .header {
-  grid-area: header; display: flex; align-items: center; gap: 12px; padding: 0 18px; min-width: 0; overflow-x: auto; overflow-y: hidden;
-  background: var(--cmp-bg); border-bottom: 1px solid var(--cmp-border); scrollbar-width: none; white-space: nowrap;
+  top: calc(var(--cmp-inset) + var(--cmp-bar) + var(--cmp-gap) + env(safe-area-inset-top));
+  left: max(var(--cmp-inset), env(safe-area-inset-left));
+  width: max-content;
+  max-width: calc(100% - max(var(--cmp-inset), env(safe-area-inset-left)) - max(var(--cmp-inset), env(safe-area-inset-right)));
+  height: var(--cmp-bar);
+  display: flex; align-items: center; gap: 10px; padding: 0 14px 0 12px; min-width: 0; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; white-space: nowrap;
+  mask-image: linear-gradient(to right, black calc(100% - 14px), transparent);
 }
 .header::-webkit-scrollbar { display: none; }
-.headerTitle { font: 600 13px/1 var(--cmp-font); flex: none; }
-.compact .header, .compactLandscape .header { padding: 0 max(10px, env(safe-area-inset-left)); gap: 8px; }
-.field { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--cmp-text-secondary); font-size: 11px; }
+.headerTitle { font: 700 12.5px/1 var(--cmp-font); flex: none; }
+.compact .header, .compactLandscape .header { right: var(--cmp-inset); width: auto; max-width: none; gap: 8px; padding: 0 10px; }
+.field { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--cmp-text-secondary); font-size: 11.5px; font-weight: 600; }
 .field input {
-  width: 58px; height: 22px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--cmp-border); background: var(--cmp-surface);
-  color: var(--cmp-text); font: 12px/1 var(--cmp-font); text-align: right; font-variant-numeric: tabular-nums;
+  width: 58px; height: 26px; padding: 0 7px; border-radius: 7px; border: 1px solid var(--cmp-border); background: var(--cmp-panel-3);
+  color: var(--cmp-text); font: 500 12px/1 var(--cmp-font); text-align: right; font-variant-numeric: tabular-nums;
 }
 .compact .field input, .compactLandscape .field input { height: 34px; width: 64px; font-size: 15px; }
-.field input:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent); }
-.check { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: 12px; }
+.field input:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent-hover); }
+.field input:disabled { color: var(--cmp-text-tertiary); }
+.check { display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 12px; font-weight: 500; }
 .check input { accent-color: var(--cmp-accent); width: 14px; height: 14px; margin: 0; }
 .compact .check input, .compactLandscape .check input { width: 22px; height: 22px; }
 .pill {
-  flex: none; height: 24px; padding: 0 11px; border-radius: 12px; border: 1px solid var(--cmp-border); background: var(--cmp-control);
-  color: var(--cmp-text); font: 12px/1 var(--cmp-font);
+  flex: none; height: 26px; padding: 0 11px; border-radius: var(--cmp-radius-control); border: 1px solid var(--cmp-border); background: var(--cmp-panel-2);
+  color: var(--cmp-text); font: 600 12px/1 var(--cmp-font);
 }
 .pill:hover:not(:disabled) { background: var(--cmp-control-hover); }
 .pill:disabled { color: var(--cmp-text-tertiary); }
-.pillPrimary { background: var(--cmp-accent); border-color: var(--cmp-accent); color: #fff; }
-.pillPrimary:hover:not(:disabled) { background: #1f8fff; }
-.pillOn { background: var(--cmp-accent); border-color: var(--cmp-accent); color: #fff; }
-.compact .pill, .compactLandscape .pill { height: 36px; border-radius: 18px; padding: 0 14px; font-size: 14px; }
+.pillPrimary, .pillPrimary:disabled { background: var(--cmp-accent); border-color: var(--cmp-accent); color: var(--cmp-accent-contrast); }
+.pillPrimary:disabled { opacity: 0.45; }
+.pillPrimary:hover:not(:disabled) { background: var(--cmp-accent-hover); }
+.pillOn, .pillOn:hover:not(:disabled) { background: var(--cmp-accent-tint); border-color: color-mix(in srgb, var(--cmp-accent-hover) 50%, var(--cmp-border)); color: var(--cmp-accent-strong); }
+.compact .pill, .compactLandscape .pill { height: 36px; padding: 0 14px; font-size: 14px; }
 .select {
-  height: 24px; padding: 0 22px 0 10px; border-radius: 12px; border: 1px solid var(--cmp-border); background-color: var(--cmp-control);
-  color: var(--cmp-text); font: 12px/1 var(--cmp-font); appearance: none; -webkit-appearance: none;
+  height: 26px; padding: 0 24px 0 9px; border-radius: var(--cmp-radius-control); border: 1px solid var(--cmp-border); background-color: var(--cmp-panel-2);
+  color: var(--cmp-text); font: 500 12px/1 var(--cmp-font); appearance: none; -webkit-appearance: none;
   background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: calc(100% - 12px) 10px, calc(100% - 8px) 10px; background-size: 4px 4px; background-repeat: no-repeat;
+  background-position: calc(100% - 13px) 11px, calc(100% - 9px) 11px; background-size: 4px 4px; background-repeat: no-repeat;
 }
-.compact .select, .compactLandscape .select { height: 36px; font-size: 14px; border-radius: 18px; }
-.segmented { display: inline-flex; flex: none; border-radius: 12px; background: var(--cmp-control); padding: 2px; gap: 2px; }
-.segment { height: 20px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: var(--cmp-text); font: 12px/1 var(--cmp-font); }
-.segmentOn { background: var(--cmp-accent); color: #fff; }
-.compact .segment, .compactLandscape .segment { height: 34px; padding: 0 12px; border-radius: 17px; font-size: 14px; }
+.select:hover:not(:disabled) { background-color: var(--cmp-control-hover); }
+.compact .select, .compactLandscape .select { height: 36px; font-size: 14px; background-position: calc(100% - 13px) 16px, calc(100% - 9px) 16px; }
+.segmented {
+  display: inline-flex; flex: none; border-radius: var(--cmp-radius-control); background: var(--cmp-panel-3); border: 1px solid var(--cmp-border);
+  padding: 2px; gap: 2px;
+}
+.segment {
+  height: 20px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--cmp-text-secondary);
+  font: 600 12px/1 var(--cmp-font);
+}
+.segment:hover { color: var(--cmp-text); }
+/* A chosen mode is a raised segment, not a filled accent (Fernwork PDF); only the active tool is green. */
+.segmentOn, .segmentOn:hover { background: var(--cmp-segment-on); color: var(--cmp-text); box-shadow: var(--cmp-raised-shadow); }
+.compact .segment, .compactLandscape .segment { height: 32px; padding: 0 12px; font-size: 14px; }
 .spacer { flex: 1 1 auto; }
 
-/* Tool rail */
+/* Tool palette (left) */
 .rail {
-  grid-area: rail; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px 0 12px; overflow-y: auto;
-  scrollbar-width: none; border-right: 1px solid var(--cmp-border); background: var(--cmp-bg); min-height: 0;
+  top: var(--cmp-pane-top); left: max(var(--cmp-inset), env(safe-area-inset-left)); width: var(--cmp-rail-w);
+  max-height: calc(100% - var(--cmp-pane-top) - var(--cmp-inset));
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 5px 0 8px; overflow-y: auto; scrollbar-width: none;
 }
 .rail::-webkit-scrollbar { display: none; }
+.railTwo .rail { display: grid; grid-template-columns: repeat(2, var(--cmp-control-size)); justify-content: center; gap: 2px 4px; padding: 5px 0 8px; }
+.railTwo .palette { grid-column: 1 / -1; justify-self: center; }
 .tool {
-  flex: none; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 7px; border: 1px solid transparent;
-  background: transparent; color: var(--cmp-text);
+  flex: none; width: var(--cmp-control-size); height: var(--cmp-control-size); display: grid; place-items: center; border-radius: var(--cmp-radius-control);
+  border: 1px solid transparent; background: transparent; color: var(--cmp-text);
 }
-.tool:hover:not(:disabled) { background: var(--cmp-control); }
-.toolOn { background: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.14); }
-.light .toolOn { background: rgba(0, 0, 0, 0.1); border-color: rgba(0, 0, 0, 0.14); }
+.tool:hover:not(:disabled) { background: var(--cmp-control-hover); }
+.toolOn, .toolOn:hover:not(:disabled) { background: var(--cmp-accent); border-color: var(--cmp-accent); color: var(--cmp-accent-contrast); }
 .tool:disabled { color: var(--cmp-text-tertiary); }
 .compact .rail {
-  flex-direction: row; justify-content: flex-start; gap: 4px; padding: 6px max(8px, env(safe-area-inset-left)) calc(6px + env(safe-area-inset-bottom));
-  overflow-x: auto; overflow-y: hidden; border-right: 0; border-top: 1px solid var(--cmp-border);
+  top: auto; bottom: calc(var(--cmp-inset) + env(safe-area-inset-bottom)); left: var(--cmp-inset); right: var(--cmp-inset); width: auto; height: 58px;
+  max-height: none; flex-direction: row; justify-content: flex-start; gap: 2px; padding: 0 6px; overflow-x: auto; overflow-y: hidden;
 }
-.compactLandscape .rail { padding: 8px 0 8px env(safe-area-inset-left); gap: 4px; }
-.compact .tool, .compactLandscape .tool { width: 48px; height: 48px; border-radius: 10px; }
+.compactLandscape .rail { top: var(--cmp-pane-top); width: 58px; padding: 6px 0; gap: 2px; }
+.compact .tool, .compactLandscape .tool { width: 44px; height: 44px; border-radius: 10px; }
 
-.palette { position: relative; width: 36px; height: 36px; flex: none; margin-top: 8px; }
-.compact .palette { margin: 0 8px; width: 44px; height: 44px; }
+.palette { position: relative; width: 36px; height: 36px; flex: none; margin-top: 10px; }
+.compact .palette { margin: 0 6px 0 8px; width: 40px; height: 40px; }
+.compactLandscape .palette { margin-top: 8px; }
 .swatch {
-  position: absolute; width: 24px; height: 24px; border-radius: 6px; border: 1px solid #000; box-shadow: inset 0 0 0 1.5px #fff; padding: 0;
+  position: absolute; width: 24px; height: 24px; border-radius: 6px; border: 1px solid rgba(0, 0, 0, 0.8); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.9); padding: 0;
 }
 .swatchBack { left: 12px; top: 12px; }
 .swatchFront { left: 0; top: 0; z-index: 1; }
-.compact .swatch { width: 30px; height: 30px; }
-.compact .swatchBack { left: 14px; top: 14px; }
+.compact .swatch { width: 28px; height: 28px; }
+.compact .swatchBack { left: 12px; top: 12px; }
 .paletteMini {
   position: absolute; width: 14px; height: 14px; padding: 0; border: 0; background: transparent; color: var(--cmp-text-secondary);
   display: grid; place-items: center;
 }
 
-/* Canvas */
-.canvasPane { grid-area: canvas; position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--cmp-canvas-bg); outline: none; }
+/* Work area: the part of the canvas no chrome covers. The canvas surface reaches under the chrome. */
+.canvasPane {
+  position: absolute; top: var(--cmp-pane-top); left: var(--cmp-pane-left); right: var(--cmp-pane-right); bottom: var(--cmp-pane-bottom);
+  min-width: 0; min-height: 0; overflow: visible; outline: none;
+}
 .dropTarget::after {
-  content: ''; position: absolute; inset: 3px; border: 3px solid var(--cmp-accent); border-radius: 8px; pointer-events: none;
+  content: ''; position: absolute; inset: 3px; border: 2px dashed var(--cmp-accent-strong); border-radius: var(--cmp-radius); pointer-events: none;
+  background: color-mix(in srgb, var(--cmp-accent) 8%, transparent); z-index: 3;
 }
 .canvasMessage {
   z-index: 2; position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); padding: 8px 14px; border-radius: 10px;
-  background: rgba(0, 0, 0, 0.7); color: #fff; font-size: 12px; pointer-events: none; max-width: 90%; text-align: center;
+  background: var(--cmp-toast-bg); color: var(--cmp-toast-text); font-size: 12px; pointer-events: none; max-width: 90%; text-align: center;
 }
 
 /* Welcome / new canvas */
 .welcome {
-  z-index: 2; position: absolute; inset: 0; display: grid; place-items: center; overflow: auto; padding: 16px;
+  z-index: 2; position: absolute; inset: 0; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; overflow: auto; padding: 16px;
 }
 .sheetCard {
-  width: min(500px, 100%); padding: 28px; border-radius: 14px; background: var(--cmp-raised); border: 1px solid var(--cmp-border);
-  box-shadow: var(--cmp-shadow); display: flex; flex-direction: column; gap: 24px;
+  width: min(500px, 100%); padding: 28px; border-radius: var(--cmp-radius); background: var(--cmp-panel); border: 1px solid var(--cmp-border);
+  box-shadow: var(--cmp-shadow); display: flex; flex-direction: column; gap: 22px;
 }
-.sheetTitle { font: 600 20px/1.2 var(--cmp-font); margin: 0; }
+.sheetTitle { font: 600 22px/1.2 var(--cmp-font); letter-spacing: -0.01em; margin: 0; }
 .secondary { color: var(--cmp-text-secondary); }
 .dimensionRow { display: flex; align-items: flex-end; gap: 16px; }
-.dimension { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; font: 500 13px/1 var(--cmp-font); }
-.dimensionInput { display: flex; align-items: center; gap: 6px; padding: 12px; border-radius: 7px; background: var(--cmp-control); min-width: 0; }
+.dimension { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; font: 600 12.5px/1 var(--cmp-font); }
+.dimensionInput {
+  display: flex; align-items: center; gap: 6px; padding: 0 12px; height: 40px; border-radius: var(--cmp-radius-control); background: var(--cmp-panel-3);
+  border: 1px solid var(--cmp-border); min-width: 0;
+}
+.dimensionInput:focus-within { border-color: var(--cmp-accent-hover); outline: 2px solid var(--cmp-accent-soft); }
 .dimensionInput input {
-  flex: 1; min-width: 0; border: 0; background: transparent; color: var(--cmp-text); font: 15px/1 var(--cmp-font); outline: none;
+  flex: 1; min-width: 0; border: 0; background: transparent; color: var(--cmp-text); font: 500 15px/1 var(--cmp-font); outline: none;
   font-variant-numeric: tabular-nums;
 }
-.buttonRow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.warning { color: #ff9f0a; }
+.buttonRow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sheetCard .buttonRow .pill { height: 32px; padding: 0 14px; }
+.warning { color: var(--cmp-warning); }
 
-/* Layers panel */
+/* Panel stack (right): Layers, History and module tabs in one floating card */
 .layers {
-  grid-area: layers; position: relative; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--cmp-border);
-  background: var(--cmp-bg);
+  position: absolute; top: var(--cmp-pane-top); right: max(var(--cmp-inset), env(safe-area-inset-right));
+  bottom: var(--cmp-inset); width: var(--cmp-panel-w); display: flex; flex-direction: column; min-height: 0;
+  border: 1px solid var(--cmp-border); border-radius: var(--cmp-radius); background: var(--cmp-panel); box-shadow: var(--cmp-shadow);
 }
-.resizeEdge { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 2; touch-action: none; }
-.layersHeader { display: flex; align-items: center; justify-content: space-between; padding: 18px; border-bottom: 1px solid var(--cmp-border); }
-.layersTitle { font: 600 12px/1 var(--cmp-font); }
-.layerCount { color: var(--cmp-text-tertiary); font-variant-numeric: tabular-nums; font-size: 11px; }
-.appearance { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-bottom: 1px solid var(--cmp-border); }
-.appearanceRow { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.resizeEdge { position: absolute; left: -5px; top: 12px; bottom: 12px; width: 8px; cursor: col-resize; z-index: 2; touch-action: none; }
+.layersHeader { display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px; }
+.layersTitle { font: 700 12px/1 var(--cmp-font); }
+.layerCount {
+  min-width: 18px; padding: 2px 6px; border-radius: 999px; background: var(--cmp-control-active); color: var(--cmp-text-secondary);
+  font-variant-numeric: tabular-nums; font-size: 10.5px; font-weight: 600; text-align: center; flex: none;
+}
+.panelClose { width: var(--cmp-control-size); height: var(--cmp-control-size); }
+.appearance { display: flex; flex-direction: column; gap: 8px; padding: 4px 12px 10px; border-bottom: 1px solid var(--cmp-hairline); }
+.appearanceRow { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--cmp-text-secondary); }
 .appearanceRow .select { flex: 1; min-width: 0; }
 .slider { flex: 1; min-width: 0; accent-color: var(--cmp-accent); height: 20px; }
 .compact .slider { height: 36px; }
-.layerList { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 2px 0; outline: none; }
+.layerList { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 6px; outline: none; }
 .emptyLayers {
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px;
   color: var(--cmp-text-secondary); text-align: center;
 }
+.emptyLayers strong { color: var(--cmp-text); font-size: 13px; }
 .layerRow {
   position: relative; display: flex; align-items: center; height: 52px; margin-bottom: 2px; padding-right: 8px;
-  border-bottom: 1px solid var(--cmp-hairline); cursor: default;
+  border: 1px solid transparent; border-radius: var(--cmp-radius-control); cursor: default;
 }
-.layerRowSelected { background: var(--cmp-accent-soft); }
+.layerRow:hover { background: var(--cmp-control); }
+.layerRowSelected, .layerRowSelected:hover { background: var(--cmp-accent-soft); border-color: color-mix(in srgb, var(--cmp-accent-hover) 45%, transparent); }
 .layerRowDim { opacity: 0.35; }
-.layerRowDropAbove { box-shadow: inset 0 2px 0 var(--cmp-accent); }
-.layerRowDropInto { box-shadow: inset 0 0 0 2px var(--cmp-accent); }
-.eye { width: 28px; height: 32px; margin-left: 4px; border: 0; background: transparent; color: var(--cmp-text-secondary); display: grid; place-items: center; flex: none; }
+.layerRowDropAbove { box-shadow: inset 0 2px 0 var(--cmp-accent-strong); }
+.layerRowDropInto { box-shadow: inset 0 0 0 2px var(--cmp-accent-strong); }
+.eye { width: 28px; height: 32px; margin-left: 2px; border: 0; background: transparent; color: var(--cmp-text-secondary); display: grid; place-items: center; flex: none; }
+.eye:hover { color: var(--cmp-text); }
 .disclosure { width: 16px; height: 24px; border: 0; background: transparent; color: var(--cmp-text-secondary); padding: 0; display: grid; place-items: center; flex: none; }
 .thumbSlot { width: 36px; display: grid; place-items: center; flex: none; margin-left: -2px; }
 .thumb {
-  display: block; border-radius: 3px; background: #383838; border: 0; padding: 0; overflow: hidden; color: var(--cmp-text);
-  outline: 2px solid transparent; outline-offset: 0;
+  display: block; border-radius: 4px; background: var(--cmp-thumb-bg); border: 0; padding: 0; overflow: hidden; color: var(--cmp-text);
+  outline: 2px solid transparent; outline-offset: 0; box-shadow: 0 0 0 1px var(--cmp-border);
 }
-.thumbTarget { outline-color: var(--cmp-accent); }
+.thumbTarget { outline-color: var(--cmp-accent-strong); }
 .thumb canvas { display: block; width: 100%; height: 100%; }
-.iconThumb { background: transparent; display: grid; place-items: center; width: 36px; height: 36px; }
+.iconThumb { background: transparent; display: grid; place-items: center; width: 36px; height: 36px; box-shadow: none; }
 .linkButton { width: 13px; display: grid; place-items: center; border: 0; background: transparent; color: var(--cmp-text-secondary); padding: 0; flex: none; }
 .maskSlot { width: 30px; display: grid; place-items: center; flex: none; position: relative; }
-.maskDisabled { position: absolute; inset: 0; display: grid; place-items: center; color: #ff453a; font: 500 28px/1 var(--cmp-font); pointer-events: none; }
-.layerText { flex: 1; min-width: 0; margin-left: 6px; display: flex; flex-direction: column; gap: 3px; }
-.layerName { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.layerMeta { font-size: 10px; color: var(--cmp-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.maskDisabled { position: absolute; inset: 0; display: grid; place-items: center; color: var(--cmp-danger); font: 500 28px/1 var(--cmp-font); pointer-events: none; }
+.layerText { flex: 1; min-width: 0; margin-left: 7px; display: flex; flex-direction: column; gap: 3px; }
+.layerName { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.layerMeta { font-size: 10.5px; color: var(--cmp-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .renameInput {
-  font: 13px/1.2 var(--cmp-font); padding: 2px 5px; border-radius: 5px; border: 1px solid var(--cmp-accent); background: var(--cmp-surface);
+  font: 13px/1.2 var(--cmp-font); padding: 2px 5px; border-radius: 5px; border: 1px solid var(--cmp-accent-hover); background: var(--cmp-panel-3);
   color: var(--cmp-text); width: 100%;
 }
-.lockNotice { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 10px; background: var(--cmp-raised); color: var(--cmp-text); box-shadow: var(--cmp-shadow); font-size: 12px; pointer-events: none; z-index: 5; }
+.lockNotice {
+  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 9px 14px;
+  border-radius: 10px; border: 1px solid var(--cmp-border); background: var(--cmp-panel); color: var(--cmp-text); box-shadow: var(--cmp-shadow);
+  font-size: 12px; font-weight: 500; pointer-events: none; z-index: 5;
+}
 .layerRowContext { opacity: 0.55; }
-.eye[data-label]:not([data-label="none"]) { color: #fff; border-radius: 4px; }
+.eye[data-label]:not([data-label="none"]) { color: #fff; border-radius: 5px; }
 .layerLock { flex: none; display: grid; place-items: center; width: 18px; color: var(--cmp-text-secondary); }
 .layerLockPartial { opacity: 0.5; }
 .lockButtons { display: flex; gap: 2px; }
-.lockButton { width: 26px; height: 22px; border: 0; border-radius: 5px; background: transparent; color: var(--cmp-text-secondary); display: grid; place-items: center; }
+.lockButton { width: 26px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--cmp-text-secondary); display: grid; place-items: center; }
 .lockButton:hover:not(:disabled) { background: var(--cmp-control-hover); color: var(--cmp-text); }
 .lockButton:disabled { color: var(--cmp-text-tertiary); }
-.lockButtonOn, .lockButtonOn:hover:not(:disabled) { background: var(--cmp-accent-soft); color: var(--cmp-text); }
-.layerFilter { display: flex; align-items: center; gap: 6px; padding: 4px 8px 4px 12px; border-bottom: 1px solid var(--cmp-border); color: var(--cmp-text-secondary); }
-.layerFilter input { flex: 1; min-width: 0; height: 24px; border: 0; border-radius: 6px; padding: 0 8px; background: var(--cmp-control); color: var(--cmp-text); font: inherit; font-size: 11px; }
-.layerFilter .footerButton { padding: 4px 6px; border-radius: 5px; }
+.lockButtonOn, .lockButtonOn:hover:not(:disabled) { background: var(--cmp-accent-soft); color: var(--cmp-accent-strong); }
+.layerFilter { display: flex; align-items: center; gap: 6px; padding: 8px 8px 4px; color: var(--cmp-text-secondary); position: relative; }
+.layerFilter > svg { position: absolute; left: 18px; pointer-events: none; }
+.layerFilter input {
+  flex: 1; min-width: 0; height: 30px; border: 1px solid var(--cmp-border); border-radius: var(--cmp-radius-control); padding: 0 8px 0 28px;
+  background: var(--cmp-panel-2); color: var(--cmp-text); font: inherit; font-size: 12.5px;
+}
+.layerFilter input:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent-hover); }
+.layerFilter .footerButton { width: 30px; height: 30px; padding: 0; border-radius: var(--cmp-radius-control); border: 1px solid var(--cmp-border); background: var(--cmp-panel-2); }
 .layerList .panelNote { padding: 12px 16px; }
 .layerMore { width: 28px; height: 28px; border: 0; background: transparent; color: var(--cmp-text-secondary); display: none; place-items: center; flex: none; }
 .compact .layerMore, .compactLandscape .layerMore { display: grid; width: 44px; height: 44px; }
 .compact .layerRow, .compactLandscape .layerRow { height: 60px; }
 .compact .eye, .compactLandscape .eye { width: 44px; height: 44px; }
 .compact .disclosure, .compactLandscape .disclosure { width: 30px; height: 44px; }
-.layersFooter { display: flex; align-items: center; padding: 4px 8px; border-top: 1px solid var(--cmp-border); color: var(--cmp-text-secondary); }
-.footerButton { padding: 12px 8px; border: 0; background: transparent; color: inherit; display: grid; place-items: center; }
-.footerButton:hover:not(:disabled) { color: var(--cmp-text); }
-.footerButton:disabled { color: var(--cmp-text-tertiary); }
-.compact .footerButton, .compactLandscape .footerButton { min-width: 48px; min-height: 48px; }
-
-/* Bottom / side sheet for compact layouts */
-.sheetBackdrop { position: absolute; inset: 0; z-index: 30; background: rgba(0, 0, 0, 0.35); }
-.sheet {
-  position: absolute; left: 0; right: 0; bottom: 0; z-index: 31; max-height: 72%; height: 72%; display: flex; flex-direction: column;
-  border-radius: 14px 14px 0 0; background: var(--cmp-bg); box-shadow: var(--cmp-shadow); padding-bottom: env(safe-area-inset-bottom);
+.layersFooter { display: flex; align-items: center; gap: 4px; padding: 8px; border-top: 1px solid var(--cmp-hairline); color: var(--cmp-text-secondary); }
+.footerButton {
+  min-width: 30px; height: 30px; padding: 0 4px; border: 0; border-radius: var(--cmp-radius-control); background: transparent; color: inherit;
+  display: grid; place-items: center;
 }
-.compactLandscape .sheet { left: auto; top: 0; width: min(380px, 70%); height: 100%; max-height: none; border-radius: 14px 0 0 14px; }
-.sheet .layers { border-left: 0; flex: 1; min-height: 0; }
-.sheetGrabber { width: 40px; height: 5px; border-radius: 3px; background: var(--cmp-text-tertiary); margin: 8px auto 0; flex: none; }
+.footerButton:hover:not(:disabled) { color: var(--cmp-text); background: var(--cmp-control-hover); }
+.footerButton:disabled { color: var(--cmp-text-tertiary); }
+.compact .footerButton, .compactLandscape .footerButton { min-width: 44px; min-height: 44px; }
+
+/* Floating sheets for compact layouts (Layers above the tool strip; beside it in landscape) */
+.sheetBackdrop { position: absolute; inset: 0; z-index: 30; background: var(--cmp-overlay); }
+.sheet {
+  position: absolute; left: var(--cmp-inset); right: var(--cmp-inset); bottom: var(--cmp-pane-bottom); z-index: 31; height: min(62%, 560px);
+  display: flex; flex-direction: column; border: 1px solid var(--cmp-border); border-radius: var(--cmp-radius); background: var(--cmp-panel);
+  box-shadow: var(--cmp-shadow); overflow: hidden;
+}
+.compactLandscape .sheet { left: auto; top: var(--cmp-inset); bottom: var(--cmp-inset); width: min(380px, 70%); height: auto; }
+.sheet .layers { position: static; width: auto; border: 0; border-radius: 0; box-shadow: none; flex: 1; min-height: 0; background: transparent; }
+.sheetGrabber { width: 40px; height: 4px; border-radius: 2px; background: var(--cmp-border-strong); margin: 8px auto 0; flex: none; }
 .sheetClose { position: absolute; right: 8px; top: 6px; z-index: 3; }
 
-/* Status bar */
-.status {
-  grid-area: status; display: flex; align-items: center; gap: 16px; padding: 0 18px; min-width: 0; overflow: hidden;
-  border-top: 1px solid var(--cmp-border); color: var(--cmp-text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap;
+/* Status bar (bottom, centred between tools and panels): zoom, document facts, tool hint */
+.statusDock {
+  position: absolute; left: var(--cmp-pane-left); right: var(--cmp-pane-right); bottom: var(--cmp-inset); display: flex; justify-content: center;
+  pointer-events: none; min-width: 0; padding: 0 var(--cmp-gap);
 }
-.statusHint { margin-left: auto; overflow: hidden; text-overflow: ellipsis; }
-.compact .status, .compactLandscape .status { display: none; }
+.chromeHidden .statusDock { display: none; }
+.status {
+  position: relative; pointer-events: auto; height: var(--cmp-status-bar); max-width: 100%; display: flex; align-items: center; gap: 10px;
+  padding: 0 12px 0 4px; min-width: 0; overflow: hidden; color: var(--cmp-text-secondary); font-size: 11.5px; font-weight: 500;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.status .iconButton { min-width: 28px; height: 28px; }
+.statusZoom {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 58px; height: 28px; padding: 0 8px; border-radius: var(--cmp-radius-control);
+  border: 1px solid var(--cmp-border); background: var(--cmp-panel-2); color: var(--cmp-text); font-weight: 700;
+}
+.statusFacts { display: flex; align-items: center; gap: 12px; flex: none; }
+.statusHint { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; max-width: 520px; }
+.compact .statusDock, .compactLandscape .statusDock { display: none; }
 
 /* Dialogs */
-.dialogBackdrop { position: absolute; inset: 0; z-index: 60; display: grid; place-items: center; background: rgba(0, 0, 0, 0.4); padding: 16px; }
+.dialogBackdrop { position: absolute; inset: 0; z-index: 60; display: grid; place-items: center; background: var(--cmp-overlay); padding: 16px; }
 .dialog {
-  width: min(460px, 100%); max-height: 100%; overflow: auto; padding: 22px; border-radius: 14px; background: var(--cmp-raised);
+  width: min(460px, 100%); max-height: 100%; overflow: auto; padding: 22px; border-radius: var(--cmp-radius); background: var(--cmp-panel);
   border: 1px solid var(--cmp-border); box-shadow: var(--cmp-shadow); display: flex; flex-direction: column; gap: 14px;
 }
+.dialog .pill { height: 30px; padding: 0 14px; }
 .dialogWide { width: min(620px, 100%); }
-.dialogTitle { margin: 0; font: 600 15px/1.3 var(--cmp-font); }
+.dialogTitle { margin: 0; font: 700 15px/1.3 var(--cmp-font); letter-spacing: -0.005em; }
 .dialogMessage { margin: 0; color: var(--cmp-text-secondary); white-space: pre-wrap; font-size: 12.5px; line-height: 1.45; }
 .dialogButtons { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.preview { height: 300px; background: #1f1f1f; display: grid; place-items: center; overflow: hidden; border-radius: 8px; }
+.preview { height: 300px; background: var(--cmp-preview-bg); display: grid; place-items: center; overflow: hidden; border-radius: var(--cmp-radius-control); }
 .preview img { max-width: 100%; max-height: 100%; }
 .contextMenu { position: fixed; z-index: 55; }
 
 .visuallyHidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.sheet .layersHeader { padding-right: 60px; }
+.sheet .layersHeader { padding-right: 56px; }
 
 /* Adjustment and filter panels (FloatingPanel.swift: movable, never dims the editor) */
 .floatingPanel {
-  position: absolute; z-index: 50; right: 262px; top: 92px; width: min(440px, calc(100% - 16px)); max-height: calc(100% - 100px);
-  overflow: auto; padding: 14px 18px 18px; border-radius: 14px; background: var(--cmp-raised); border: 1px solid var(--cmp-border);
+  /* Opens beside the panel stack, below the options bar (Photoshop's Properties flyout); movable by its title. */
+  /* Never wider than the work area, so it does not cover the tool palette on tablets. */
+  --cmp-panel-room: calc(100% - max(var(--cmp-pane-right), var(--cmp-inset)) - max(var(--cmp-pane-left), var(--cmp-inset)));
+  position: absolute; z-index: 50; right: max(var(--cmp-pane-right), var(--cmp-inset)); top: var(--cmp-pane-top);
+  width: min(440px, var(--cmp-panel-room)); max-height: calc(100% - var(--cmp-pane-top) - var(--cmp-inset));
+  overflow: auto; padding: 12px 16px 16px; border-radius: var(--cmp-radius); background: var(--cmp-panel); border: 1px solid var(--cmp-border);
   box-shadow: var(--cmp-shadow); display: flex; flex-direction: column; gap: 12px;
 }
-.floatingPanelSecondary { z-index: 51; right: 720px; top: 120px; }
-.compact .floatingPanel, .compactLandscape .floatingPanel { right: 8px; top: auto; bottom: 8px; left: 8px; width: auto; max-height: 60%; }
-.panelHeader { display: flex; align-items: center; justify-content: space-between; cursor: grab; touch-action: none; user-select: none; margin: -4px 0 0; }
+.floatingPanel .pill { height: 28px; }
+.floatingPanelSecondary { z-index: 51; right: calc(max(var(--cmp-pane-right), var(--cmp-inset)) + 448px); top: var(--cmp-pane-top); }
+.compact .floatingPanel, .compactLandscape .floatingPanel {
+  right: var(--cmp-inset); top: auto; bottom: var(--cmp-pane-bottom); left: var(--cmp-inset); width: auto; max-height: 60%;
+}
+.compactLandscape .floatingPanel { bottom: var(--cmp-inset); left: var(--cmp-pane-left); }
+.panelHeader {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: grab; touch-action: none; user-select: none;
+  margin: -2px -6px 0 0; min-height: 30px;
+}
 .panelBody { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .panelRow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .panelLabel { width: 84px; flex: none; font-size: 12px; }
-.rawNumber { width: 72px; border: 1px solid var(--cmp-border); border-radius: 6px; padding: 5px 7px; background: var(--cmp-control); color: var(--cmp-text); }
+.rawNumber { width: 72px; border: 1px solid var(--cmp-border); border-radius: 7px; padding: 5px 7px; background: var(--cmp-panel-3); color: var(--cmp-text); }
 .panelCaption { font-size: 11px; color: var(--cmp-text-secondary); }
 .panelFields { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .panelNote { margin: 0; font-size: 11px; color: var(--cmp-text-secondary); line-height: 1.4; }
 .panelError { margin: 0; font-size: 12px; color: var(--cmp-danger); }
 .histogramBox { position: relative; display: flex; flex-direction: column; }
-.histogram { width: 100%; height: 130px; background: rgba(0, 0, 0, 0.25); border-radius: 4px 4px 0 0; display: block; }
+.histogram { width: 100%; height: 130px; background: var(--cmp-plot-bg); border-radius: 6px 6px 0 0; display: block; }
 .histogramLoading { position: absolute; left: 8px; top: 6px; font-size: 11px; color: var(--cmp-text-secondary); }
 .levelsHandles { position: relative; height: 18px; touch-action: none; cursor: ew-resize; }
 .levelsHandle {
@@ -401,34 +584,44 @@
 .bandInner, .bandOuter { position: absolute; background: var(--cmp-text); transform: translateX(-50%); }
 .bandInner { top: 0; bottom: 0; width: 2px; }
 .bandOuter { top: 3px; width: 7px; height: 5px; }
-.curves { width: min(100%, 280px); align-self: center; aspect-ratio: 1; background: rgba(0, 0, 0, 0.35); border-radius: 4px; touch-action: none; cursor: crosshair; }
-.curves line { stroke: rgba(255, 255, 255, 0.12); stroke-width: 1; vector-effect: non-scaling-stroke; }
-.curveLine { fill: none; stroke: #fff; stroke-width: 2; vector-effect: non-scaling-stroke; }
-.curvePoint, .curvePointOn { fill: #fff; stroke: #000; stroke-width: 1; vector-effect: non-scaling-stroke; }
-.curvePointOn { fill: var(--cmp-accent); }
+.curves { width: min(100%, 280px); align-self: center; aspect-ratio: 1; background: var(--cmp-plot-bg); border: 1px solid var(--cmp-hairline); border-radius: 6px; touch-action: none; cursor: crosshair; }
+.curves line { stroke: var(--cmp-hairline); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.curveLine { fill: none; stroke: var(--cmp-text); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.curvePoint, .curvePointOn { fill: var(--cmp-text); stroke: var(--cmp-panel); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.curvePointOn { fill: var(--cmp-accent-strong); }
 .gradientRamp { height: 20px; border-radius: 4px; border: 1px solid rgba(0, 0, 0, 0.35); }
-.colorWell { width: 28px; height: 24px; padding: 0; border: 1px solid var(--cmp-border); border-radius: 6px; background: none; }
+.colorWell { width: 28px; height: 24px; padding: 0; border: 1px solid var(--cmp-border); border-radius: 7px; background: none; }
 
 /* On narrow screens the secondary panel (color picker) takes the top instead of the bottom sheet position. */
-@media (max-width: 1200px) { .floatingPanelSecondary { right: 16px; top: 72px; } }
-.compact .floatingPanelSecondary, .compactLandscape .floatingPanelSecondary { top: 8px; bottom: auto; max-height: calc(100% - 16px); }
+@media (max-width: 1200px) { .floatingPanelSecondary { right: max(var(--cmp-pane-right), var(--cmp-inset)); top: calc(var(--cmp-pane-top) + 28px); } }
+.compact .floatingPanelSecondary, .compactLandscape .floatingPanelSecondary { top: var(--cmp-pane-top); bottom: auto; max-height: calc(100% - var(--cmp-pane-top) - var(--cmp-inset)); }
 
-/* Side panel tabs and the History panel (PRODUCT-PLAN 6.1) */
-.panelTabs { display: inline-flex; gap: 4px; }
-.panelTab { border: 0; background: none; color: var(--cmp-text-secondary); font: 600 12px/1 var(--cmp-font); padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+/* Side panel tabs (a segmented control, as Properties | Layers in Fernwork PDF) and the History panel (PRODUCT-PLAN 6.1) */
+.panelTabs {
+  display: flex; flex: 1 1 auto; min-width: 0; gap: 2px; padding: 3px; border-radius: var(--cmp-radius-control); background: var(--cmp-panel-3);
+  border: 1px solid var(--cmp-border);
+}
+.panelTab {
+  flex: 1 1 0; min-width: 0; height: 26px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; background: none;
+  color: var(--cmp-text-secondary); font: 700 12px/1 var(--cmp-font); padding: 0 6px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
 .panelTab:hover { color: var(--cmp-text); }
-.panelTabOn { color: var(--cmp-text); background: var(--cmp-control); }
+.panelTabOn, .panelTabOn:hover { color: var(--cmp-text); background: var(--cmp-segment-on); box-shadow: var(--cmp-raised-shadow); }
 .historyPanel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.historyList { list-style: none; margin: 0; padding: 6px; overflow: auto; flex: 1; }
-.historyRow { width: 100%; text-align: left; border: 0; background: none; color: var(--cmp-text); font: 12px/1.2 var(--cmp-font); padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+.historyList { list-style: none; margin: 0; padding: 4px 8px; overflow: auto; flex: 1; }
+.historyRow {
+  width: 100%; text-align: left; border: 1px solid transparent; background: none; color: var(--cmp-text); font: 500 12.5px/1.2 var(--cmp-font); padding: 8px 10px;
+  border-radius: var(--cmp-radius-control); cursor: pointer;
+}
 .historyRow:hover:not(:disabled) { background: var(--cmp-control-hover); }
-.historyCurrent { background: var(--cmp-accent-soft); }
+.historyCurrent, .historyCurrent:hover:not(:disabled) { background: var(--cmp-accent-soft); border-color: color-mix(in srgb, var(--cmp-accent-hover) 45%, transparent); }
 .historyFuture { color: var(--cmp-text-tertiary); }
-.historyOption { display: flex; align-items: center; gap: 6px; padding: 10px 16px; border-top: 1px solid var(--cmp-border); font-size: 12px; color: var(--cmp-text-secondary); }
+.historyOption { display: flex; align-items: center; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--cmp-hairline); font-size: 12px; color: var(--cmp-text-secondary); }
 .compact .historyRow, .compactLandscape .historyRow { padding: 12px 12px; font-size: 14px; }
 
 /* Layer Style dialog (a floating panel: live canvas preview, never dims the editor) */
-.stylePanel { width: min(620px, calc(100% - 16px)); }
+.stylePanel { width: min(620px, var(--cmp-panel-room)); }
 .stylePanel .panelHeader .dialogTitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .styleLayout { display: flex; gap: 16px; align-items: stretch; flex-wrap: wrap; min-width: 0; }
 .styleList {
@@ -438,6 +631,7 @@
 .styleItem { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 4px 0 8px; border-radius: 6px; }
 .styleItem:hover { background: var(--cmp-control); }
 .styleItemOn, .styleItemOn:hover { background: var(--cmp-accent-soft); }
+.styleItem { border-radius: var(--cmp-radius-control); }
 .styleItem input { accent-color: var(--cmp-accent); width: 14px; height: 14px; margin: 0; flex: none; }
 .styleItemName {
   flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: transparent; color: var(--cmp-text); font: 12px/1 var(--cmp-font);
@@ -488,13 +682,12 @@
 .exportBody { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; }
 .exportPreviewPane { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .exportPreview {
-  flex: 1 1 auto; min-height: 160px; display: grid; place-items: center; overflow: hidden; border-radius: 8px; padding: 12px;
-  background-color: #2a2a2a;
-  background-image: linear-gradient(45deg, #333 25%, transparent 25%), linear-gradient(-45deg, #333 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #333 75%), linear-gradient(-45deg, transparent 75%, #333 75%);
+  flex: 1 1 auto; min-height: 160px; display: grid; place-items: center; overflow: hidden; border-radius: var(--cmp-radius-control); padding: 12px;
+  background-color: var(--cmp-checker-a);
+  background-image: linear-gradient(45deg, var(--cmp-checker-b) 25%, transparent 25%), linear-gradient(-45deg, var(--cmp-checker-b) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--cmp-checker-b) 75%), linear-gradient(-45deg, transparent 75%, var(--cmp-checker-b) 75%);
   background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0;
 }
-.light .exportPreview { background-color: #e6e6e6; background-image: linear-gradient(45deg, #d2d2d2 25%, transparent 25%), linear-gradient(-45deg, #d2d2d2 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #d2d2d2 75%), linear-gradient(-45deg, transparent 75%, #d2d2d2 75%); }
 .exportPreview img { width: 100%; height: 100%; object-fit: contain; display: block; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35); background: transparent; }
 .exportPreviewStale { opacity: 0.5; transition: opacity 0.15s; }
 .exportCaption { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: var(--cmp-text-secondary); font-variant-numeric: tabular-nums; min-width: 0; }
@@ -525,13 +718,13 @@
 .exportLabelFixed { width: 64px; }
 .exportValue { flex: none; width: 42px; text-align: right; font-variant-numeric: tabular-nums; }
 .exportText {
-  flex: 1 1 auto; min-width: 0; height: 24px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--cmp-border); background: var(--cmp-surface);
+  flex: 1 1 auto; min-width: 0; height: 26px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--cmp-border); background: var(--cmp-panel-3);
   color: var(--cmp-text); font: 12px/1 var(--cmp-font);
 }
-.exportText:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent); }
+.exportText:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent-hover); }
 .exportMini {
-  flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 1px solid var(--cmp-border); border-radius: 12px;
-  background: var(--cmp-control); color: var(--cmp-text);
+  flex: none; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 1px solid var(--cmp-border); border-radius: var(--cmp-radius-control);
+  background: var(--cmp-panel-2); color: var(--cmp-text);
 }
 .exportMini:hover:not(:disabled) { background: var(--cmp-control-hover); }
 .exportMini:disabled { color: var(--cmp-text-tertiary); }
@@ -552,7 +745,7 @@
 .compact .exportCheckRow input, .compactLandscape .exportCheckRow input { width: 22px; height: 22px; }
 .compact .exportRow, .compactLandscape .exportRow { font-size: 14px; }
 .compact .exportLabel, .compactLandscape .exportLabel { font-size: 13px; }
-.compact .exportMini, .compactLandscape .exportMini { width: 40px; height: 40px; border-radius: 20px; }
+.compact .exportMini, .compactLandscape .exportMini { width: 40px; height: 40px; }
 .compact .exportSizeRow .select, .compactLandscape .exportSizeRow .select { width: 96px; }
 .compact .exportText, .compactLandscape .exportText { height: 36px; font-size: 15px; }
 .compactLandscape .exportBody { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 14px; }
@@ -560,14 +753,14 @@
 /* Artboard context bar background choice, Layers panel artboard rows */
 .segmentSwatchLabel { display: inline-flex; align-items: center; gap: 5px; }
 .segmentSwatch { width: 10px; height: 10px; border-radius: 3px; border: 1px solid rgba(128, 128, 128, 0.8); flex: none; }
-.artboardRow { background: rgba(255, 255, 255, 0.025); }
-.light .artboardRow { background: rgba(0, 0, 0, 0.025); }
+.artboardRow { background: var(--cmp-control); }
 .artboardRow.layerRowSelected { background: var(--cmp-accent-soft); }
 .artboardSpacer { width: 32px; flex: none; }
 .compact .artboardSpacer, .compactLandscape .artboardSpacer { width: 48px; }
 
-/* Module tabs (Colour) make three side-panel tabs: in a narrow panel they tighten instead of running into the layer count. */
-.layersHeader { container-type: inline-size; }
-@container (max-width: 200px) { .panelTabs { gap: 0; } .panelTab { padding: 4px 3px; } }
+/* Module tabs (Colour) make three side-panel tabs: in a narrow panel they tighten and drop the layer count badge. */
+.panelTabs { container-type: inline-size; }
+@container (max-width: 250px) { .panelTab { padding: 0 3px; gap: 4px; } .panelTab .layerCount { display: none; } }
+@container (max-width: 200px) { .panelTab { font-size: 11.5px; } }
 /* The colour picker with the colour module's column (recent colours, swatches, readouts) beside the fields. */
-.floatingPanelWide { width: min(660px, calc(100% - 16px)); }
+.floatingPanelWide { width: min(660px, var(--cmp-panel-room)); }
