@@ -521,6 +521,9 @@
 }
 .statusFacts { display: flex; align-items: center; gap: 12px; flex: none; }
 .statusHint { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; max-width: 520px; }
+.root[data-bar-width='narrow'] .status { gap: 6px; padding-right: 8px; }
+.root[data-bar-width='narrow'] .statusFacts { gap: 7px; }
+.root[data-bar-width='narrow'] .statusTabletOptional { display: none; }
 .compact .statusDock, .compactLandscape .statusDock { display: none; }
 
 /* Dialogs */
@@ -552,7 +555,10 @@
   box-shadow: var(--cmp-shadow); display: flex; flex-direction: column; gap: 12px;
 }
 .floatingPanel .pill { height: 28px; }
-.floatingPanelSecondary { z-index: 51; right: calc(max(var(--cmp-pane-right), var(--cmp-inset)) + 448px); top: var(--cmp-pane-top); }
+.floatingPanelSecondary {
+  --cmp-panel-room: calc(100% - max(var(--cmp-pane-left), var(--cmp-inset)) - max(var(--cmp-pane-right), var(--cmp-inset)) - 448px);
+  z-index: 51; right: calc(max(var(--cmp-pane-right), var(--cmp-inset)) + 448px); top: var(--cmp-pane-top);
+}
 .compact .floatingPanel, .compactLandscape .floatingPanel {
   right: var(--cmp-inset); top: auto; bottom: var(--cmp-pane-bottom); left: var(--cmp-inset); width: auto; max-height: 60%;
 }
@@ -593,7 +599,17 @@
 .colorWell { width: 28px; height: 24px; padding: 0; border: 1px solid var(--cmp-border); border-radius: 7px; background: none; }
 
 /* On narrow screens the secondary panel (color picker) takes the top instead of the bottom sheet position. */
-@media (max-width: 1200px) { .floatingPanelSecondary { right: max(var(--cmp-pane-right), var(--cmp-inset)); top: calc(var(--cmp-pane-top) + 28px); } }
+@media (max-width: 1200px) {
+  .floatingPanelSecondary {
+    --cmp-panel-room: calc(100% - max(var(--cmp-pane-right), var(--cmp-inset)) - max(var(--cmp-pane-left), var(--cmp-inset)));
+    right: max(var(--cmp-pane-right), var(--cmp-inset)); top: calc(var(--cmp-pane-top) + 28px);
+  }
+}
+.root[data-layout='desktop'][data-bar-width='narrow'] .floatingPanelSecondary,
+.root[data-layout='desktop'][data-bar-width='dense'] .floatingPanelSecondary {
+  --cmp-panel-room: calc(100% - max(var(--cmp-pane-right), var(--cmp-inset)) - max(var(--cmp-pane-left), var(--cmp-inset)));
+  right: max(var(--cmp-pane-right), var(--cmp-inset)); top: calc(var(--cmp-pane-top) + 28px);
+}
 .compact .floatingPanelSecondary, .compactLandscape .floatingPanelSecondary { top: var(--cmp-pane-top); bottom: auto; max-height: calc(100% - var(--cmp-pane-top) - var(--cmp-inset)); }
 
 /* Side panel tabs (a segmented control, as Properties | Layers in Fernwork PDF) and the History panel (PRODUCT-PLAN 6.1) */

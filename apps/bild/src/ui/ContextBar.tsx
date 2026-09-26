@@ -193,7 +193,8 @@ export function StatusBar({ controller }: { controller: EditorController }) {
   const document = session.document;
   const zoom = session.viewport.zoom * 100;
   const hint = controller.statusHints[session.tool]?.(session) ?? statusHint(session, t);
-  const busy = session.isImporting ? t('Importing images…') : session.isProjectBusy ? t('Working…') : hint;
+  const activity = session.isImporting ? t('Importing images…') : session.isProjectBusy ? t('Working…') : '';
+  const busy = activity || hint;
   // Zoom sits where Fernwork PDF has it (the bottom bar) and where Photoshop shows it (the status bar, bottom left).
   return (
     <div className={styles.status} role="status" data-testid="status-bar">
@@ -203,20 +204,20 @@ export function StatusBar({ controller }: { controller: EditorController }) {
         <span className={styles.statusZoom} data-testid="zoomStatus">{document ? `${zoom >= 10 ? Math.round(zoom * 10) / 10 : Math.round(zoom * 100) / 100}%` : '–'}</span>
         <button type="button" className={styles.iconButton} disabled={!document} aria-label={t('Zoom in')}
           title={`${t('Zoom In')} (${shortcutLabel('mod+=')})`} onClick={() => session.zoomTo(session.viewport.zoom * 1.25)}><Icon name="zoomIn" size={16} /></button>
-        <button type="button" className={styles.iconButton} disabled={!document} onClick={() => session.fit()}
+        <button type="button" className={`${styles.iconButton} ${styles.statusTabletOptional}`} disabled={!document} onClick={() => session.fit()}
           title={`${t('Fit Canvas')} (${shortcutLabel('mod+0')})`} data-testid="fit">{t('Fit')}</button>
-        <button type="button" className={styles.iconButton} disabled={!document} onClick={() => session.zoomTo(1)}
+        <button type="button" className={`${styles.iconButton} ${styles.statusTabletOptional}`} disabled={!document} onClick={() => session.zoomTo(1)}
           title={`${t('Actual Pixels')} (${shortcutLabel('mod+1')})`}>100%</button>
       </span>
       <span className={styles.chromeDivider} aria-hidden />
       {document ? (
-        <span className={styles.statusFacts}>
+        <span className={styles.statusFacts} data-testid="status-facts">
           <span data-testid="canvasDimensions">{document.width.toLocaleString(controller.locale)} × {document.height.toLocaleString(controller.locale)} px</span>
           <span>sRGB · Transparent</span>
         </span>
       ) : <span>{t('Ready when you are')}</span>}
-      {busy ? <span className={styles.chromeDivider} aria-hidden /> : null}
-      {busy ? <span className={styles.statusHint} title={busy}>{busy}</span> : null}
+      {busy ? <span className={`${styles.chromeDivider} ${activity ? '' : styles.statusTabletOptional}`} aria-hidden /> : null}
+      {busy ? <span className={`${styles.statusHint} ${activity ? '' : styles.statusTabletOptional}`} title={busy}>{busy}</span> : null}
     </div>
   );
 }

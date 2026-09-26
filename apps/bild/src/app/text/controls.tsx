@@ -4,7 +4,8 @@
  * active text layer's otherwise; changes apply to the selection, the whole layer, or the tool settings (editor.ts).
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import styles from '../../ui/editor.module.css';
 import css from './text.module.css';
 import type { EditorController } from '../../ui/controller';
@@ -16,6 +17,7 @@ import { BUNDLED_TEXT_FONTS, type MissingFont, type ParagraphStylePatch, type Te
 import { BUNDLED_FAMILIES, type TextRuntime } from './runtime';
 import type { TextEditor } from './editor';
 import { PathTextButton, WarpButton } from './warpControls';
+import { useAnchoredPopover } from '../../ui/popovers';
 
 export interface TextUiParts { readonly runtime: TextRuntime; readonly editor: TextEditor }
 
@@ -109,17 +111,12 @@ function facesFor(runtime: TextRuntime, family: string, current: TextRunStyle): 
 
 export function usePopover(open: boolean, close: () => void, anchor: React.RefObject<HTMLElement | null>, panel: React.RefObject<HTMLElement | null>,
   width: number, editor: TextEditor) {
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const placement = useAnchoredPopover(open, anchor, width);
   useEffect(() => {
     if (!open) return;
     editor.popovers.add(close);
     return () => { editor.popovers.delete(close); };
   }, [open, close, editor]);
-  useLayoutEffect(() => {
-    if (!open || !anchor.current) { setPosition(null); return; }
-    const rect = anchor.current.getBoundingClientRect();
-    setPosition({ left: Math.max(8, Math.min(rect.left, globalThis.innerWidth - width - 8)), top: rect.bottom + 6 });
-  }, [open, anchor, width]);
   useEffect(() => {
     if (!open) return;
     const down = (event: PointerEvent) => {
@@ -132,7 +129,7 @@ export function usePopover(open: boolean, close: () => void, anchor: React.RefOb
     globalThis.addEventListener('pointerdown', down, true);
     return () => globalThis.removeEventListener('pointerdown', down, true);
   }, [open, close, anchor, panel]);
-  return position;
+  return placement;
 }
 
 // MARK: Font family
@@ -160,7 +157,7 @@ function FontPicker({ controller, ui, session, family, missing, mixed, disabled 
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const close = useMemo(() => () => { setOpen(false); ui.editor.refocusLater(); }, [ui]);
-  const position = usePopover(open, close, button, panel, 280, ui.editor);
+  const placement = usePopover(open, close, button, panel, 280, ui.editor);
   return (
     <>
       <button ref={button} type="button" className={css.fontButton} disabled={disabled} data-testid="font-family" aria-haspopup="listbox"
@@ -168,12 +165,12 @@ function FontPicker({ controller, ui, session, family, missing, mixed, disabled 
         <span className={css.fontName} style={{ fontFamily: mixed ? undefined : cssFamily(family) }}>{mixed ? '–' : family}</span>
         {missing && !mixed ? <span className={css.missingMark} title={t('Missing font')}>⚠</span> : null}
       </button>
-      {open && position ? (
-        <div ref={panel} className={`${css.popover} ${css.fontPopover}`} style={position} data-testid="font-list"
+      {open && placement ? createPortal(
+        <div ref={panel} className={`${css.popover} ${css.fontPopover}`} style={placement.style} data-testid="font-list"
           onKeyDown={(event) => { event.stopPropagation(); if (event.key === 'Escape') close(); }}>
           <FontList controller={controller} ui={ui} session={session} family={family}
             pick={(value) => { setOpen(false); void ui.editor.applyStyle(session, { fontFamily: value }); }} />
-        </div>
+        </div>, placement.target
       ) : null}
     </>
   );
@@ -409,7 +406,7 @@ export function TextControls({ controller, ui }: { controller: EditorController;
   const panelButton = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const closePanel = useMemo(() => () => { setPanelOpen(false); ui.editor.refocusLater(); }, [ui]);
-  const position = usePopover(panelOpen, closePanel, panelButton, panel, 460, ui.editor);
+  const placement = usePopover(panelOpen, closePanel, panelButton, panel, 460, ui.editor);
   const faces = facesFor(ui.runtime, style.fontFamily, style);
   const face = faceKey(style.fontWeight, style.fontStyle !== 'normal');
   const color = style.color;
@@ -463,12 +460,12 @@ export function TextControls({ controller, ui }: { controller: EditorController;
           </button>
         </>
       ) : null}
-      {panelOpen && position ? (
-        <div ref={panel} className={`${css.popover} ${css.panelPopover}`} style={position} role="dialog" aria-label={t('Character & Paragraph')}
+      {panelOpen && placement ? createPortal(
+        <div ref={panel} className={`${css.popover} ${css.panelPopover}`} style={placement.style} role="dialog" aria-label={t('Character & Paragraph')}
           data-testid="text-panel" onKeyDown={(event) => { event.stopPropagation(); if (event.key === 'Escape') closePanel(); }}>
           <TypePanel controller={controller} ui={ui} session={session} style={style} paragraph={paragraph} mixed={mixed}
             disabled={disabled} close={closePanel} />
-        </div>
+        </div>, placement.target
       ) : null}
     </>
   );

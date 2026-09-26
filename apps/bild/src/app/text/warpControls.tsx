@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import styles from '../../ui/editor.module.css';
 import css from './text.module.css';
 import type { EditorController } from '../../ui/controller';
@@ -91,7 +92,7 @@ export function WarpButton({ controller, ui, session, disabled }: {
   const onPath = !!layer?.textPath;
   const close = useMemo(() => (commit = true) => { setOpen(false); ui.editor.endWarp(commit); }, [ui]);
   const closeCommit = useMemo(() => () => close(true), [close]);
-  const position = usePopover(open, closeCommit, button, panel, 340, ui.editor);
+  const placement = usePopover(open, closeCommit, button, panel, 340, ui.editor);
   // A popover that goes away with its tab or tool still ends its session (committing what it shows).
   useEffect(() => () => { if (ui.editor.warpOpen) ui.editor.endWarp(true); }, [ui]);
   const title = onPath ? t('Text on a path can’t be warped') : t('Warp Text');
@@ -105,15 +106,15 @@ export function WarpButton({ controller, ui, session, disabled }: {
         }}>
         <WarpIcon />
       </button>
-      {open && position && layer ? (
-        <div ref={panel} className={`${css.popover} ${css.warpPopover}`} style={position} role="dialog" aria-label={t('Warp Text')}
+      {open && placement && layer ? createPortal(
+        <div ref={panel} className={`${css.popover} ${css.warpPopover}`} style={placement.style} role="dialog" aria-label={t('Warp Text')}
           data-testid="warp-panel" onKeyDown={(event) => {
             event.stopPropagation();
             if (event.key === 'Escape') close(false);
             else if (event.key === 'Enter' && (event.target as HTMLElement).tagName !== 'BUTTON') close(true);
           }}>
           <WarpPanel controller={controller} editor={ui.editor} layer={layer} close={close} />
-        </div>
+        </div>, placement.target
       ) : null}
     </>
   );
@@ -128,7 +129,7 @@ export function PathTextButton({ controller, ui, session, disabled }: {
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const close = useMemo(() => () => { setOpen(false); ui.editor.refocusLater(); }, [ui]);
-  const position = usePopover(open, close, button, panel, 320, ui.editor);
+  const placement = usePopover(open, close, button, panel, 320, ui.editor);
   const layer = ui.editor.targetLayer(session);
   const settings = layer?.textPath;
   if (!settings) return null;
@@ -140,8 +141,8 @@ export function PathTextButton({ controller, ui, session, disabled }: {
         data-testid="path-text-toggle" title={t('Text on Path')} onClick={() => setOpen(!open)}>
         {t('Path Text')}
       </button>
-      {open && position ? (
-        <div ref={panel} className={`${css.popover} ${css.pathPopover}`} style={position} role="dialog" aria-label={t('Text on Path')}
+      {open && placement ? createPortal(
+        <div ref={panel} className={`${css.popover} ${css.pathPopover}`} style={placement.style} role="dialog" aria-label={t('Text on Path')}
           data-testid="path-text-panel" onKeyDown={(event) => { event.stopPropagation(); if (event.key === 'Escape') close(); }}>
           <div className={styles.panelHeader} style={{ cursor: 'default' }}>
             <h2 className={styles.dialogTitle}>{t('Text on Path')}</h2>
@@ -170,7 +171,7 @@ export function PathTextButton({ controller, ui, session, disabled }: {
             </label>
           </div>
           <p className={styles.panelNote}>{t('Drag the start and end markers along the path with the Type tool.')}</p>
-        </div>
+        </div>, placement.target
       ) : null}
     </>
   );

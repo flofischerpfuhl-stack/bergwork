@@ -5,12 +5,14 @@
  * shape.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import styles from '../../ui/editor.module.css';
 import css from './vector.module.css';
 import type { EditorController } from '../../ui/controller';
 import { useSession } from '../../ui/hooks';
 import { Icon } from '../../ui/icons';
+import { useAnchoredPopover } from '../../ui/popovers';
 import type { EditorSession } from '../../core/session';
 import type { FillParameters, Layer, RGB } from '../../core/model';
 import { changeLayer, liveEdit, withShapeParameters } from './edits';
@@ -192,12 +194,7 @@ function Segmented<T extends string>({ value, options, onChange, label, fill }: 
 
 /** A popover under its button; closes on Escape and on presses outside it (the colour picker is not outside). */
 function usePopover(open: boolean, close: () => void, anchor: React.RefObject<HTMLElement | null>, panel: React.RefObject<HTMLElement | null>, width = 330) {
-  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
-  useLayoutEffect(() => {
-    if (!open || !anchor.current) { setPosition(null); return; }
-    const rect = anchor.current.getBoundingClientRect();
-    setPosition({ left: Math.max(8, Math.min(rect.left, globalThis.innerWidth - width - 8)), top: rect.bottom + 6 });
-  }, [open, anchor, width]);
+  const placement = useAnchoredPopover(open, anchor, width);
   useEffect(() => {
     if (!open) return;
     const down = (event: PointerEvent) => {
@@ -210,7 +207,7 @@ function usePopover(open: boolean, close: () => void, anchor: React.RefObject<HT
     globalThis.addEventListener('keydown', key, true);
     return () => { globalThis.removeEventListener('pointerdown', down, true); globalThis.removeEventListener('keydown', key, true); };
   }, [open, close, anchor, panel]);
-  return position;
+  return placement;
 }
 
 /** A colour well that opens the app's colour picker, previewing live (one undo step when committed). */
@@ -243,7 +240,7 @@ function PaintControl({ controller, session, label, paint, onChange, testId, all
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null);
   const close = () => setOpen(false);
-  const position = usePopover(open, close, button, panel);
+  const placement = usePopover(open, close, button, panel);
   const kind = !paint ? 'none' : paint.kind === 'gradient' ? 'gradient' : 'solid';
   const fg = session.foregroundColor, bg = session.backgroundColor;
   const base: RGB = paint?.kind === 'solid' ? paint.color : paint?.kind === 'gradient' ? [...paint.stops].sort((a, b) => a.offset - b.offset)[0]!.color : fg;
@@ -264,8 +261,8 @@ function PaintControl({ controller, session, label, paint, onChange, testId, all
       <span className={css.label}>{label}</span>
       <button ref={button} type="button" className={`${css.paintButton} ${paint ? '' : css.paintNone}`} style={{ background: paintCss(paint) }}
         aria-label={name} title={name} aria-expanded={open} data-testid={testId} onClick={() => setOpen(!open)} />
-      {open && position ? (
-        <div ref={panel} className={css.popover} style={position} role="dialog" aria-label={name} data-testid={`${testId}-popover`}>
+      {open && placement ? createPortal(
+        <div ref={panel} className={css.popover} style={placement.style} role="dialog" aria-label={name} data-testid={`${testId}-popover`}>
           <p className={css.popoverTitle}>{name}</p>
           <Segmented label={name} value={kind} options={options} onChange={choose} fill />
           {paint?.kind === 'solid' ? (
@@ -282,7 +279,7 @@ function PaintControl({ controller, session, label, paint, onChange, testId, all
             </div>
           ) : null}
           {paint?.kind === 'gradient' ? <GradientControls controller={controller} session={session} label={name} paint={paint} onChange={onChange} testId={testId} /> : null}
-        </div>
+        </div>, placement.target
       ) : null}
     </span>
   );
@@ -352,7 +349,7 @@ function StrokeOptionsControl({ controller, session, model }: { controller: Edit
   const t = controller.t;
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null);
-  const position = usePopover(open, () => setOpen(false), button, panel, 420);
+  const placement = usePopover(open, () => setOpen(false), button, panel, 420);
   const stroke = model.stroke, preset = dashPreset(stroke);
   const end = () => liveEdit(session).end();
   const sample = stroke.dash.length ? stroke.dash.map((v) => Math.max(0.5, v / Math.max(1, stroke.width) * 2)).join(' ') : undefined;
@@ -364,8 +361,8 @@ function StrokeOptionsControl({ controller, session, model }: { controller: Edit
           <line x1="2" y1="5" x2="32" y2="5" stroke="currentColor" strokeWidth="2" strokeDasharray={sample} strokeLinecap={stroke.cap === 'square' ? 'square' : stroke.cap} />
         </svg>
       </button>
-      {open && position ? (
-        <div ref={panel} className={css.popover} style={{ ...position, width: 420 }} role="dialog" aria-label={t('Stroke Options')} data-testid="vector-stroke-popover">
+      {open && placement ? createPortal(
+        <div ref={panel} className={css.popover} style={{ ...placement.style, width: 420 }} role="dialog" aria-label={t('Stroke Options')} data-testid="vector-stroke-popover">
           <p className={css.popoverTitle}>{t('Stroke Options')}</p>
           <div className={css.row}>
             <span className={css.rowLabel}>{t('Alignment')}</span>
@@ -400,7 +397,7 @@ function StrokeOptionsControl({ controller, session, model }: { controller: Edit
             <ValueField label={t('Gap')} value={stroke.dash[1] ?? 0} suffix="px" min={0} max={10_000} locale={controller.locale} testId="stroke-gap"
               onEnd={end} onChange={(v, live) => model.setStroke({ dash: [stroke.dash[0] ?? Math.max(1, v), v] }, live)} />
           </div>
-        </div>
+        </div>, placement.target
       ) : null}
     </>
   );
