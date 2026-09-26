@@ -82,7 +82,7 @@ Last update: 2026-09-25, end of Phase 2 (PSD 90 % and some performance items ope
 | PNG/JPEG/TIFF import with ICC → sRGB | ✅ | `tests/unit/icc.test.ts`, `tests/unit/jpeg.test.ts`, `tests/e2e/own-files.spec.ts` (integrator files) |
 | HEIC (browser / host codec / opt-in LGPL) | ✅ | `tests/e2e/heic.spec.ts`; camera HEIC mean Δ 0.38 |
 | WebP/AVIF/GIF import | ✅ | `tests/unit/codec-formats.test.ts`, `tests/e2e/own-files.spec.ts` (integrator files android.webp, adobe.webp, example.avif, pal.gif; Chromium, Firefox, WebKit) |
-| PSD read | 🟡 native fidelity 67 % (201/300; honest measurement, M14), target 90 % open | `artifacts/psd-fidelity.md`, `tests/e2e/psd-open.spec.ts` |
+| PSD read | 🟡 native fidelity 80.7 % (242/300, M14); target = all fixable deviations (ceiling 266/300 = 88.7 %, M15); 90 % is a later TODO needing an owner-approved text/effect tolerance (`artifacts/psd-target.md`) | `artifacts/psd-fidelity.md`, `tests/e2e/psd-open.spec.ts` |
 | PSD write, RAW | ❌ | Phase 3 |
 | Mac `.comp` read | ✅ | `tests/unit/compPackage.test.ts`, `tests/e2e/workspace.spec.ts` |
 | Mac `.comp` write | ✅ (removed from the menu, E2) | writer code still present, used by reader tests; removal proposed in the Phase-1 cleanup (needs frozen fixtures) |
