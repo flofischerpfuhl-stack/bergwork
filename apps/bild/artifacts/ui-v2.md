@@ -179,7 +179,7 @@ warm stone-grey accent. The editor guarantees the following.
 - Status colours: `--cmp-danger`, `--cmp-warning`, `--cmp-success`
 - Shadows and overlays: `--cmp-shadow`, `--cmp-bar-shadow`, `--cmp-raised-shadow`, `--cmp-overlay`
 - Content surfaces:
-  - `--cmp-thumb-bg`, `--cmp-preview-bg`
+  - `--cmp-thumb-bg`, `--cmp-preview-bg`, `--cmp-plot-bg` (histogram, curves)
   - `--cmp-checker-a`, `--cmp-checker-b` (export preview)
   - `--cmp-toast-bg`, `--cmp-toast-text`
 - Type: `--cmp-font`

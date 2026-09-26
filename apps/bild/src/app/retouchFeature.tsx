@@ -181,7 +181,7 @@ function ContentFillPanel({ controller, close }: { controller: EditorController;
   const phase = state?.phase ?? 'cancelled';
   return (
     <div className={styles.dialog} role="dialog" aria-label={t('Content-Aware Fill…')} data-testid="content-fill-panel"
-      style={{ position: 'absolute', right: 16, top: 16, width: 320 }}>
+      style={{ position: 'absolute', right: 'max(var(--cmp-pane-right), var(--cmp-inset))', top: 'var(--cmp-pane-top)', width: 320, zIndex: 50 }}>
       <h2 className={styles.dialogTitle}>{t('Content-Aware Fill…').replace('…', '')}</h2>
       <p className={styles.dialogMessage}>
         {phase === 'preparing' ? t('Filling the selection…') : phase === 'ready' ? t('Preview shown on the canvas.') : phase === 'error' ? state?.error ?? '' : phase === 'applying' ? t('Applying…') : ''}

@@ -568,7 +568,7 @@
 .panelNote { margin: 0; font-size: 11px; color: var(--cmp-text-secondary); line-height: 1.4; }
 .panelError { margin: 0; font-size: 12px; color: var(--cmp-danger); }
 .histogramBox { position: relative; display: flex; flex-direction: column; }
-.histogram { width: 100%; height: 130px; background: var(--cmp-panel-3); border-radius: 6px 6px 0 0; display: block; }
+.histogram { width: 100%; height: 130px; background: var(--cmp-plot-bg); border-radius: 6px 6px 0 0; display: block; }
 .histogramLoading { position: absolute; left: 8px; top: 6px; font-size: 11px; color: var(--cmp-text-secondary); }
 .levelsHandles { position: relative; height: 18px; touch-action: none; cursor: ew-resize; }
 .levelsHandle {
@@ -582,7 +582,7 @@
 .bandInner, .bandOuter { position: absolute; background: var(--cmp-text); transform: translateX(-50%); }
 .bandInner { top: 0; bottom: 0; width: 2px; }
 .bandOuter { top: 3px; width: 7px; height: 5px; }
-.curves { width: min(100%, 280px); align-self: center; aspect-ratio: 1; background: var(--cmp-panel-3); border: 1px solid var(--cmp-hairline); border-radius: 6px; touch-action: none; cursor: crosshair; }
+.curves { width: min(100%, 280px); align-self: center; aspect-ratio: 1; background: var(--cmp-plot-bg); border: 1px solid var(--cmp-hairline); border-radius: 6px; touch-action: none; cursor: crosshair; }
 .curves line { stroke: var(--cmp-hairline); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .curveLine { fill: none; stroke: var(--cmp-text); stroke-width: 2; vector-effect: non-scaling-stroke; }
 .curvePoint, .curvePointOn { fill: var(--cmp-text); stroke: var(--cmp-panel); stroke-width: 1; vector-effect: non-scaling-stroke; }
