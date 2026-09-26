@@ -451,6 +451,8 @@ const de: Record<string, string> = {
   'Color Overlay': 'Farbüberlagerung', 'Gradient Overlay': 'Verlaufsüberlagerung', 'Inner Shadow': 'Schatten nach innen',
   'Inner Glow': 'Schein nach innen', 'Bevel & Emboss': 'Abgeflachte Kante und Relief', 'Satin': 'Glanz',
   'Pattern Overlay': 'Musterüberlagerung',
+  'Blending Options': 'Fülloptionen', 'Blending Options…': 'Fülloptionen …', 'Blend If': 'Farbbereich',
+  'Underlying Layer': 'Darunter liegende Ebene',
   'Drop Shadow…': 'Schlagschatten …', 'Stroke…': 'Kontur …', 'Outer Glow…': 'Schein nach außen …',
   'Gradient Overlay…': 'Verlaufsüberlagerung …', 'Color Overlay…': 'Farbüberlagerung …',
   'Inner Shadow…': 'Schatten nach innen …', 'Inner Glow…': 'Schein nach innen …',

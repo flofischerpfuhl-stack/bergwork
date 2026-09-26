@@ -39,17 +39,20 @@ export function filterSettingsOf(filter: LiveFilter): FilterSettings {
   }
 }
 
-export function liveFilterFrom(kind: LiveFilterKind, value: FilterSettings, enabled: boolean): LiveFilter {
+export function liveFilterFrom(kind: LiveFilterKind, value: FilterSettings, enabled: boolean,
+  blending?: Pick<LiveFilter, 'opacity' | 'blendMode'>): LiveFilter {
   const s = normalizeFilterSettings(value);
+  const common = { ...(blending?.opacity === undefined ? {} : { opacity: blending.opacity }),
+    ...(blending?.blendMode === undefined ? {} : { blendMode: blending.blendMode }) };
   switch (kind) {
-    case 'gaussianBlur': return { kind, schemaVersion: 1, enabled, radius: s.radius };
-    case 'motionBlur': return { kind, schemaVersion: 1, enabled, angle: s.angle, distance: s.distance };
-    case 'noise': return { kind, schemaVersion: 1, enabled, amount: s.amount, gaussian: s.gaussian, monochromatic: s.monochromatic };
-    case 'lensCorrection': return { kind, schemaVersion: 1, enabled, distortion: s.distortion };
-    case 'unsharpMask': return { kind, schemaVersion: 1, enabled, amount: s.amount, radius: s.radius, threshold: s.threshold };
-    case 'smartSharpen': return { kind, schemaVersion: 1, enabled, amount: s.amount, radius: s.radius, threshold: s.threshold, reduceNoise: s.reduceNoise };
-    case 'highPass': return { kind, schemaVersion: 1, enabled, radius: s.radius };
-    case 'denoise': return { kind, schemaVersion: 1, enabled, luminance: s.luminance, colour: s.colour, detail: s.detail };
+    case 'gaussianBlur': return { kind, schemaVersion: 1, enabled, radius: s.radius, ...common };
+    case 'motionBlur': return { kind, schemaVersion: 1, enabled, angle: s.angle, distance: s.distance, ...common };
+    case 'noise': return { kind, schemaVersion: 1, enabled, amount: s.amount, gaussian: s.gaussian, monochromatic: s.monochromatic, ...common };
+    case 'lensCorrection': return { kind, schemaVersion: 1, enabled, distortion: s.distortion, ...common };
+    case 'unsharpMask': return { kind, schemaVersion: 1, enabled, amount: s.amount, radius: s.radius, threshold: s.threshold, ...common };
+    case 'smartSharpen': return { kind, schemaVersion: 1, enabled, amount: s.amount, radius: s.radius, threshold: s.threshold, reduceNoise: s.reduceNoise, ...common };
+    case 'highPass': return { kind, schemaVersion: 1, enabled, radius: s.radius, ...common };
+    case 'denoise': return { kind, schemaVersion: 1, enabled, luminance: s.luminance, colour: s.colour, detail: s.detail, ...common };
   }
 }
 
@@ -60,6 +63,7 @@ export interface LiveFilterEditState {
   /** Whether the filter was visible before the panel opened; Preview off hides it only while the panel is open. */
   readonly enabled: boolean;
   readonly isNew: boolean;
+  readonly blending?: Pick<LiveFilter, 'opacity' | 'blendMode'>;
   settings: FilterSettings;
   preview: boolean;
 }
@@ -96,10 +100,10 @@ export function beginLiveFilterEdit(session: EditorSession, layerId: string, ind
   session.beginEdit('Edit Smart Filter');
   if (!session.beginLayerLiveFilterEdit(layerId)) { session.endEdit(); return null; }
   const state: LiveFilterEditState = { layerId, index, kind: filter.kind, enabled: filter.enabled, isNew: false,
-    settings: filterSettingsOf(filter), preview: true };
+    blending: { opacity: filter.opacity, blendMode: filter.blendMode }, settings: filterSettingsOf(filter), preview: true };
   edits.set(session, state);
   // The panel always shows its filter, even one that was hidden in the stack.
-  session.updateLayerLiveFilter(index, liveFilterFrom(filter.kind, state.settings, true), layerId, true);
+  session.updateLayerLiveFilter(index, liveFilterFrom(filter.kind, state.settings, true, state.blending), layerId, true);
   session.notify('ui');
   return state;
 }
@@ -108,7 +112,7 @@ export function updateLiveFilterEdit(session: EditorSession, settings: FilterSet
   const state = edits.get(session); if (!state) return;
   state.settings = normalizeFilterSettings(settings);
   if (preview !== undefined) state.preview = preview;
-  session.updateLayerLiveFilter(state.index, liveFilterFrom(state.kind, state.settings, state.preview), state.layerId, true);
+  session.updateLayerLiveFilter(state.index, liveFilterFrom(state.kind, state.settings, state.preview, state.blending), state.layerId, true);
   session.notify('ui');
 }
 
@@ -116,7 +120,7 @@ export function finishLiveFilterEdit(session: EditorSession, apply: boolean): vo
   const state = edits.get(session); if (!state) return;
   edits.delete(session);
   // OK keeps the filter visible as it was before (a new filter is visible); Preview only affects the open panel.
-  if (apply) session.updateLayerLiveFilter(state.index, liveFilterFrom(state.kind, state.settings, state.isNew || state.enabled), state.layerId, true);
+  if (apply) session.updateLayerLiveFilter(state.index, liveFilterFrom(state.kind, state.settings, state.isNew || state.enabled, state.blending), state.layerId, true);
   session.endLayerLiveFilterEdit(apply);
   session.endEdit();
   session.notify('document');

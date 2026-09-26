@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { blendRgb, blendSeed, compositePremultiplied, dissolveNoise } from '../../src/core/blend';
+import { blendIfFactor, blendIfRangeFactor, blendRgb, blendSeed, compositePremultiplied, dissolveNoise } from '../../src/core/blend';
 import { BLEND_MODES, type BlendMode } from '../../src/core/document';
 
 function close(actual: ArrayLike<number>, expected: readonly number[]): void {
@@ -10,6 +10,17 @@ function close(actual: ArrayLike<number>, expected: readonly number[]): void {
 }
 
 describe('Photoshop-only blend formulas', () => {
+  it('evaluates Blend If hard and split thresholds per source and underlying channel', () => {
+    expect(blendIfRangeFactor(99 / 255, { black0: 100, black1: 100, white0: 220, white1: 220 })).toBe(0);
+    expect(blendIfRangeFactor(125 / 255, { black0: 100, black1: 150, white0: 200, white1: 250 })).toBeCloseTo(0.5);
+    expect(blendIfRangeFactor(225 / 255, { black0: 100, black1: 150, white0: 200, white1: 250 })).toBeCloseTo(0.5);
+    const identity = { black0: 0, black1: 0, white0: 255, white1: 255 };
+    const settings = { source: { gray: identity, red: identity, green: identity, blue: identity },
+      destination: { gray: identity, red: { black0: 100, black1: 200, white0: 255, white1: 255 }, green: identity, blue: identity } };
+    expect(blendIfFactor(settings, [1, 0, 0], [50 / 255, 0, 0])).toBe(0);
+    expect(blendIfFactor(settings, [1, 0, 0], [150 / 255, 0, 0])).toBeCloseTo(0.5);
+    expect(blendIfFactor(settings, [1, 0, 0], [200 / 255, 0, 0])).toBe(1);
+  });
   it('lists all modes in Photoshop menu-group order', () => {
     expect(BLEND_MODES.map(({ mode }) => mode)).toEqual([
       'normal', 'dissolve',

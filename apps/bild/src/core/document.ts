@@ -10,12 +10,12 @@
 import type { LayerTransform, Point } from './geometry';
 import { transformsEqual } from './geometry';
 import type {
-  LayerAdjustmentKind, BlendMode, CanvasDocument, ColorLabel, CropParameters, EmbeddedLayer, FillParameters, Layer,
+  LayerAdjustmentKind, BlendIfSettings, BlendMode, CanvasDocument, ColorLabel, CropParameters, EmbeddedLayer, FillParameters, Layer,
   LayerAdjustment, LayerEffect, LayerLocks, LayerMask, LayerShape, LegacyTextRun, LiveFilter, TextParagraph,
   TextRun, TextRunStyle, VectorMask, VectorPath, VectorStyle, LayerWarp, WarpMesh, WarpQuad,
 } from './model';
 export type {
-  LayerAdjustmentKind, Artboard, Guide, BlendMode, CanvasDocument, ColorLabel, CropParameters, DocumentFont, DocumentResource, EmbeddedLayer,
+  LayerAdjustmentKind, Artboard, Guide, BlendIfChannel, BlendIfRange, BlendIfSettings, BlendMode, CanvasDocument, ColorLabel, CropParameters, DocumentFont, DocumentResource, EmbeddedLayer,
   FillLayer, FillParameters, GroupLayer, Layer, LayerAdjustment, LayerEffect, LayerLocks, LayerMask, ModelLayer,
   LayerShape, LegacyTextRun, LiveFilter, PixelLayer, TextLayer, TextParagraph, TextParagraphStyle, TextRun, TextRunStyle,
   TextKerning, TextOpenTypeFeature, VectorLayer, VectorMask, VectorPath, VectorStyle, LayerWarp, WarpMesh, WarpQuad,
@@ -81,13 +81,15 @@ export function masksEqual(a: LayerMask | null, b: LayerMask | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
   return a.raster === b.raster && a.enabled === b.enabled && a.linked === b.linked
+    && (a.defaultColor ?? null) === (b.defaultColor ?? null)
     && (a.placement === b.placement || (!!a.placement && !!b.placement && transformsEqual(a.placement, b.placement)));
 }
 
 export function layersEqual(a: Layer, b: Layer): boolean {
   return a === b || (a.id === b.id && a.name === b.name && a.visible === b.visible
     && transformsEqual(a.transform, b.transform) && a.raster === b.raster && a.parentId === b.parentId
-    && a.opacity === b.opacity && a.blendMode === b.blendMode && masksEqual(a.mask, b.mask)
+    && a.opacity === b.opacity && a.blendMode === b.blendMode && jsonEqual(a.blendIf, b.blendIf) && masksEqual(a.mask, b.mask)
+    && masksEqual(a.filterMask ?? null, b.filterMask ?? null)
     && a.kind === b.kind && (a.fillOpacity ?? 1) === (b.fillOpacity ?? 1) && jsonEqual(a.locks, b.locks)
     && (a.colorLabel ?? 'none') === (b.colorLabel ?? 'none')
     && jsonEqual(a.warp ?? null, b.warp ?? null) && jsonEqual(a.crop ?? null, b.crop ?? null)
@@ -138,12 +140,14 @@ export interface NewLayerFields {
   opacity?: number;
   fillOpacity?: number;
   blendMode?: BlendMode;
+  blendIf?: BlendIfSettings | null;
   locks?: LayerLocks;
   colorLabel?: ColorLabel;
   warp?: LayerWarp | null;
   crop?: CropParameters | null;
   raster?: import('./raster').Raster | null;
   mask?: LayerMask | null;
+  filterMask?: LayerMask | null;
   vectorMask?: VectorMask | null;
   maskSourceId?: string | null;
   effects?: readonly LayerEffect[];
@@ -213,8 +217,8 @@ export function newLayer(fields: NewLayerFields): import('./model').ModelLayer {
     id: fields.id, name: fields.name, transform: fields.transform,
     visible: fields.visible ?? true, parentId: fields.parentId ?? null,
     opacity: fields.opacity ?? 1, fillOpacity: fields.fillOpacity ?? 1,
-    blendMode: 'normal' as const, locks,
-    colorLabel: 'none' as const, warp: null, crop: null, mask: null, vectorMask: null,
+    blendMode: 'normal' as const, blendIf: null, locks,
+    colorLabel: 'none' as const, warp: null, crop: null, mask: null, filterMask: null, vectorMask: null,
     maskSourceId: null, effects: [], filters: [],
     ...pickCommon(fields), kind,
   };
@@ -259,11 +263,13 @@ function pickCommon(fields: NewLayerFields): Partial<import('./model').LayerComm
     ...(fields.opacity === undefined ? {} : { opacity: fields.opacity }),
     ...(fields.fillOpacity === undefined ? {} : { fillOpacity: fields.fillOpacity }),
     ...(fields.blendMode === undefined ? {} : { blendMode: fields.blendMode }),
+    ...(fields.blendIf === undefined ? {} : { blendIf: fields.blendIf }),
     ...(fields.locks === undefined ? {} : { locks: fields.locks }),
     ...(fields.colorLabel === undefined ? {} : { colorLabel: fields.colorLabel }),
     ...(fields.warp === undefined ? {} : { warp: fields.warp }),
     ...(fields.crop === undefined ? {} : { crop: fields.crop }),
     ...(fields.mask === undefined ? {} : { mask: fields.mask }),
+    ...(fields.filterMask === undefined ? {} : { filterMask: fields.filterMask }),
     ...(fields.vectorMask === undefined ? {} : { vectorMask: fields.vectorMask }),
     ...(fields.maskSourceId === undefined ? {} : { maskSourceId: fields.maskSourceId }),
     ...(fields.effects === undefined ? {} : { effects: fields.effects }),

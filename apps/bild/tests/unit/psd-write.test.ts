@@ -39,6 +39,74 @@ function comparableEffects(values: readonly LayerEffect[]): unknown {
 }
 
 describe('PRODUCT-PLAN A7 PSD writer', () => {
+  it('round-trips editable per-channel split Blend If ranges and their rendered pixels', () => {
+    const full = makeTransform({ x: 0, y: 0 }, { width: 2, height: 1 }, { sampling: 'Nearest' });
+    const identity = { black0: 0, black1: 0, white0: 255, white1: 255 };
+    const blendIf = { source: { gray: identity, red: identity, green: identity, blue: identity },
+      destination: { gray: identity, red: { black0: 100, black1: 200, white0: 255, white1: 255 }, green: identity, blue: identity } };
+    const base = newLayer({ id: 'base', name: 'Base', transform: full, raster: Raster.fromPixels(2, 1, 4,
+      new Uint8Array([50, 0, 0, 255, 200, 0, 0, 255])) });
+    const top = newLayer({ id: 'top', name: 'Top', transform: full, blendIf,
+      raster: solid(2, 1, [0, 0, 255, 255]) });
+    const input = document([base, top], { width: 2, height: 1 });
+    expect(cpuCompositeRegion(input, { x: 0, y: 0, width: 2, height: 1 }))
+      .toEqual(new Uint8Array([50, 0, 0, 255, 0, 0, 255, 255]));
+    const output = writePsdDocument(input), reopened = readPsdDocument(output.bytes);
+    const raw = readPsd(output.bytes, { useImageData: true, skipThumbnail: true });
+    const ranges = raw.children?.find((layer) => layer.name === 'Top')?.blendingRanges;
+    expect(ranges?.compositeGrayBlendSource).toEqual([0, 0, 255, 255]);
+    expect(ranges?.ranges[0]).toEqual({ sourceRange: [0, 0, 255, 255], destRange: [100, 200, 255, 255] });
+    expect(reopened.document.layers.find((layer) => layer.name === 'Top')?.blendIf).toEqual(blendIf);
+    expect(cpuCompositeRegion(reopened.document, { x: 0, y: 0, width: 2, height: 1 }))
+      .toEqual(new Uint8Array([50, 0, 0, 255, 0, 0, 255, 255]));
+  });
+
+  it('writes and reimports Photoshop smart-filter descriptors with blending options', () => {
+    const transform = makeTransform({ x: 0, y: 0 }, { width: 3, height: 1 }, { sampling: 'Nearest' });
+    const sourceRaster = Raster.fromPixels(3, 1, 4, new Uint8Array([
+      0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255,
+    ]));
+    const bytes = encodePng(sourceRaster.toPixels(), 3, 1, 4);
+    const filterMask = Raster.fromPixels(3, 1, 1, new Uint8Array([0, 128, 255]));
+    const filters = [
+      { kind: 'gaussianBlur' as const, schemaVersion: 1 as const, enabled: true, radius: 1.5, opacity: 0.65, blendMode: 'screen' as const },
+      { kind: 'unsharpMask' as const, schemaVersion: 1 as const, enabled: true, amount: 125, radius: 0.8, threshold: 3,
+        opacity: 0.8, blendMode: 'luminosity' as const },
+      { kind: 'noise' as const, schemaVersion: 1 as const, enabled: false, amount: 7, gaussian: true, monochromatic: true },
+      { kind: 'motionBlur' as const, schemaVersion: 1 as const, enabled: true, angle: 25, distance: 4 },
+      { kind: 'highPass' as const, schemaVersion: 1 as const, enabled: true, radius: 2 },
+      { kind: 'smartSharpen' as const, schemaVersion: 1 as const, enabled: true, amount: 90, radius: 0.6,
+        threshold: 2, reduceNoise: 0 },
+      { kind: 'denoise' as const, schemaVersion: 1 as const, enabled: true, luminance: 15, colour: 20, detail: 40 },
+    ];
+    const placed = newLayer({ id: 'smart', name: 'Smart filters', kind: 'embedded', transform, raster: sourceRaster,
+      filters, filterMask: { raster: filterMask, enabled: true, placement: null, linked: false, defaultColor: 255 },
+      content: { mode: 'embedded', mediaType: 'image', assetId: 'source', sourceName: 'source.png', width: 3, height: 1 } });
+    const input = document([placed], { width: 3, height: 1, resources: [
+      { id: 'source', role: 'embedded', mime: 'image/png', bytes },
+    ] });
+    const output = writePsdDocument(input), reopened = readPsdDocument(output.bytes);
+    const raw = readPsd(output.bytes, { useImageData: true, skipThumbnail: true });
+    expect(output.notices).toEqual([]);
+    expect(raw.children?.[0]?.placedLayer?.filter).toMatchObject({ maskEnabled: true, maskLinked: false, maskExtendWithWhite: true });
+    expect(raw.children?.[0]?.filterEffectsMasks?.[0]?.extra?.data).toEqual(filterMask.toPixels());
+    expect(raw.children?.[0]?.placedLayer?.filter?.list.map((filter) => [filter.type, filter.opacity, filter.blendMode, filter.enabled]))
+      .toEqual([
+        ['gaussian blur', 0.65, 'screen', true], ['unsharp mask', 0.8, 'luminosity', true],
+        ['add noise', 1, 'normal', false], ['motion blur', 1, 'normal', true], ['high pass', 1, 'normal', true],
+        ['smart sharpen', 1, 'normal', true], ['reduce noise', 1, 'normal', true],
+      ]);
+    const imported = reopened.document.layers[0]?.filters ?? [];
+    expect(imported.map((filter) => filter.kind)).toEqual(filters.map((filter) => filter.kind));
+    expect(imported).toMatchObject(filters.map((filter) => ({ ...filter,
+      opacity: filter.opacity ?? 1, blendMode: filter.blendMode ?? 'normal',
+      ...(filter.kind === 'noise' ? { amount: expect.closeTo(filter.amount, 9) } : {}) })));
+    expect(reopened.document.layers[0]?.filterMask).toMatchObject({ enabled: true, linked: false, defaultColor: 255 });
+    expect(reopened.document.layers[0]?.filterMask?.raster.toPixels()).toEqual(filterMask.toPixels());
+    const expected = cpuCompositeRegion(input, { x: 0, y: 0, width: 3, height: 1 });
+    const actual = cpuCompositeRegion(reopened.document, { x: 0, y: 0, width: 3, height: 1 });
+    expect(maximumDifference(actual, expected)).toBeLessThanOrEqual(1);
+  });
   it('round-trips hierarchy, clipping, blend/opacity/fill, locks, labels, masks, guides and CPU composite pixels', () => {
     const full = makeTransform({ x: 0, y: 0 }, { width: 4, height: 2 }, { sampling: 'Nearest' });
     const base = newLayer({ id: 'base', name: 'Base', transform: full, raster: solid(4, 2, [80, 120, 180, 255]),

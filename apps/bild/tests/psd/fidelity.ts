@@ -176,11 +176,9 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
   const rendered = results.filter((result) => result.rendered).length;
   const passed = results.filter((result) => result.passed).length;
   const passRate = results.length ? passed / results.length * 100 : 0;
-  const roundNineChanges: readonly [string, string, string][] = [
-    ['vector-mask2.psd', '0.000 / 0 (flattened)', 'native empty-cache sentinel parsing and descriptor-derived gradient fill'],
-  ];
+  const roundTenChanges: readonly [string, string, string][] = [];
   const lines = [
-    '# PSD native-fidelity report — ninth round', '',
+    '# PSD native-fidelity report — tenth round', '',
     `Corpus: psd-tools commit \`${commit}\`; ${results.length} PSD/PSB files. ag-psd 31.0.2 plus native non-RGB layer-channel decoding.`, '',
     'The oracle is each PSD’s embedded Photoshop composite. Metrics are absolute byte deltas over premultiplied RGB plus',
     'alpha (so undefined straight RGB below transparency is ignored): mean over all channels and the nearest-rank 99th',
@@ -188,18 +186,19 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
     'The runner is a measurement baseline: fidelity failures are reported but do not make the command itself fail.', '',
     `Overall: ${parsed}/${results.length} parsed, ${rendered}/${results.length} rendered, ${passed}/${results.length} passed (${passRate.toFixed(1)}%).`,
     `The Product Plan A7 acceptance target of at least 90% is ${passRate >= 90 ? 'met' : '**not met**'} by this baseline.`, '',
-    `Ninth-round input: 239/300 (79.7%). Current native result: ${passed}/${results.length} (${passRate.toFixed(1)}%), a net gain of ${passed - 239} ${passed - 239 === 1 ? 'file' : 'files'}.`,
+    `Tenth-round input: 240/300 (80.0%). Current native result: ${passed}/${results.length} (${passRate.toFixed(1)}%), a net gain of ${passed - 240} ${passed - 240 === 1 ? 'file' : 'files'}.`,
     `Primary-folder changes are: blend modes 28→${summarize(results, 'blend-modes').passed}, adjustments 36→${summarize(results, 'adjustments').passed}, layers 32→${summarize(results, 'layers').passed}, effects 12→${summarize(results, 'effects').passed},`,
     `path operations 12→${summarize(results, 'path-operations').passed}, masks 0→${summarize(results, 'masks').passed}, group clipping 1→${summarize(results, 'group-clipping').passed}, transparency 16→${summarize(results, 'transparency').passed}, colour modes 10→${summarize(results, 'colormodes').passed}, colour profiles`,
-    `1→${summarize(results, 'colorprofiles').passed}, gradients 4→${summarize(results, 'gradients').passed}, descriptors 5→${summarize(results, 'descriptors').passed}, and root 82→${summarize(results, 'root').passed}. The overlapping 16/32-bit and PSB tags changed`,
+    `1→${summarize(results, 'colorprofiles').passed}, gradients 4→${summarize(results, 'gradients').passed}, descriptors 5→${summarize(results, 'descriptors').passed}, and root 83→${summarize(results, 'root').passed}. The overlapping 16/32-bit and PSB tags changed`,
     `26→${summarize(results, '16/32-bit').passed} and 30→${summarize(results, 'PSB').passed} respectively. No primary-folder pass count regressed.`, '',
     '| Newly passing file | Before mean / p99 | After mean / p99 | Native change |',
     '|---|---:|---:|---|',
   ];
-  for (const [file, before, change] of roundNineChanges) {
+  for (const [file, before, change] of roundTenChanges) {
     const result = results.find((candidate) => candidate.file === file);
     if (result?.passed) lines.push(`| ${file} | ${before} | ${decimal(result.metrics?.mean)} / ${result.metrics?.p99 ?? '—'} | ${change} |`);
   }
+  if (!roundTenChanges.length) lines.push('| — | — | — | Blend If and smart-filter descriptors had no representative corpus fixture; no threshold result changed. |');
   lines.push('', '## Thresholds and feature summary', '',
     '| Feature | Limits (mean / p99) | Files | Parsed | Rendered | Passed | Pass rate | Top failure causes |',
     '|---|---:|---:|---:|---:|---:|---:|---|');
@@ -275,8 +274,10 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
     '  Threshold, Levels, and Curves and CMYK Invert/Posterize/Threshold/Levels/Curves/Brightness-Contrast.',
     '  Non-colorize Hue/Saturation ranges remain mismatched.',
     '- The PSD -2 mask channel is used as Photoshop’s composed vector/user-mask cache; -3 is decoded as the real-mask fallback',
-    '  when that cache is absent. Zero-area cache-less masks use their document-wide default. Smart filters and blend-if remain unsupported;',
-    '  pattern strokes render from the PSD pattern table, while files whose parser omits that table remain reported.',
+    '  when that cache is absent. Zero-area cache-less masks and bounded masks retain their document-wide outside value.',
+    '  Blend If is editable per channel with split source/underlying ramps. Supported smart-filter descriptors map to the live filter stack,',
+    '  including per-filter blending and raw/RLE smart-filter masks; ZIP smart-filter masks remain reported as not rendered.',
+    '  Pattern strokes render from the PSD pattern table, while files whose parser omits that table remain reported.',
     '  Text, vector, and smart-object layers use their layer-owned saved pixel caches; never the document merged composite.',
     '- A bounded native layer-record pre-parser repairs Photoshop’s -1 zero-area generated-fill cache sentinel and recognizes',
     '  `8ELE` metadata sub-blocks that ag-psd 31 cannot skip safely. The former restores vector-mask2.psd as an editable native',

@@ -1,11 +1,11 @@
 import {
-  writePsdUint8Array, type AdjustmentLayer as AgAdjustment, type BezierPath, type BlendMode as AgBlendMode,
+  writePsdUint8Array, type AdjustmentLayer as AgAdjustment, type BezierPath, type BlendMode as AgBlendMode, type Filter as AgFilter,
   type EffectSolidGradient, type Layer as AgLayer, type LayerEffectsInfo, type LayerTextData, type LinkedFile,
   type PatternInfo, type PixelData, type Psd, type VectorContent,
 } from 'ag-psd';
 import {
-  PRO_MAX_PIXELS, PRO_MAX_SIDE, type BlendMode, type CanvasDocument, type FillParameters,
-  type Layer, type LayerAdjustment, type LayerEffect, type TextLayer, type VectorPath,
+  PRO_MAX_PIXELS, PRO_MAX_SIDE, type BlendIfSettings, type BlendMode, type CanvasDocument, type FillParameters,
+  type Layer, type LayerAdjustment, type LayerEffect, type LiveFilter, type TextLayer, type VectorPath,
 } from '../../core/document';
 import { curveValue, levelValue } from '../../core/adjust/levels';
 import { artboardMembership } from '../../core/artboards';
@@ -386,7 +386,7 @@ function layerMask(layer: Layer, state: State) {
   const raster = state.hooks.maskRaster(layer) ?? layer.mask.raster;
   return { left: Math.floor(transform.origin.x), top: Math.floor(transform.origin.y),
     right: Math.ceil(transform.origin.x + transform.size.width), bottom: Math.ceil(transform.origin.y + transform.size.height),
-    defaultColor: (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault ?? 0,
+    defaultColor: layer.mask.defaultColor ?? (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault ?? 0,
     disabled: !layer.mask.enabled, positionRelativeToLayer: false, imageData: maskImage(raster, state.bits),
     ...(layer.vectorMask?.density === undefined ? {} : { vectorMaskDensity: layer.vectorMask.density }),
     ...(layer.vectorMask?.feather === undefined ? {} : { vectorMaskFeather: layer.vectorMask.feather }),
@@ -417,7 +417,52 @@ function placed(layer: Extract<Layer, { kind: 'embedded' }>, transform: LayerTra
     pageNumber: (layer.content.page ?? 0) + 1, totalPages: 1, transform: quad ?? corners, nonAffineTransform: quad ?? undefined,
     warp: layer.warp?.kind === 'mesh' ? meshWarpToPsd(layer.warp, transform, width, height)
       : { style: 'none' as const, value: 0, perspective: 0, perspectiveOther: 0, rotate: 'horizontal' as const },
-    width, height, resolution: { units: 'Density' as const, value: state.document.resolution } };
+    width, height, resolution: { units: 'Density' as const, value: state.document.resolution },
+    ...(layer.filters.length ? { filter: placedFilters(layer.filters, layer.filterMask) } : {}) };
+}
+
+function placedFilter(value: LiveFilter): AgFilter {
+  const base = { name: value.kind, opacity: clamp01(value.opacity ?? 1), blendMode: BLENDS[value.blendMode ?? 'normal'],
+    enabled: value.enabled, hasOptions: true, foregroundColor: { r: 0, g: 0, b: 0 } as const,
+    backgroundColor: { r: 255, g: 255, b: 255 } as const };
+  switch (value.kind) {
+    case 'gaussianBlur': return { ...base, type: 'gaussian blur', filter: { radius: pixelsUnit(value.radius) } };
+    case 'motionBlur': return { ...base, type: 'motion blur', filter: { angle: value.angle, distance: pixelsUnit(value.distance) } };
+    case 'noise': return { ...base, type: 'add noise', filter: { amount: value.amount / 100,
+      distribution: value.gaussian ? 'gaussian' : 'uniform', monochromatic: value.monochromatic, randomSeed: 0x6d2b79f5 } };
+    case 'unsharpMask': return { ...base, type: 'unsharp mask', filter: { amount: value.amount / 100,
+      radius: pixelsUnit(value.radius), threshold: value.threshold } };
+    case 'smartSharpen': return { ...base, type: 'smart sharpen', filter: { amount: value.amount / 100,
+      radius: pixelsUnit(value.radius), threshold: value.threshold, angle: 0, moreAccurate: true, blur: 'gaussian blur', preset: 'Custom',
+      shadow: { fadeAmount: 0, tonalWidth: 0.5, radius: 1 }, highlight: { fadeAmount: 0, tonalWidth: 0.5, radius: 1 } } };
+    case 'highPass': return { ...base, type: 'high pass', filter: { radius: pixelsUnit(value.radius) } };
+    case 'denoise': return { ...base, type: 'reduce noise', filter: { preset: 'Custom', removeJpegArtifact: false,
+      reduceColorNoise: value.colour / 100, sharpenDetails: 0, channelDenoise: [{ channels: ['composite'],
+        amount: value.luminance, preserveDetails: value.detail ?? 50 }] } };
+    case 'lensCorrection': throw new TypeError('Lens Correction has no Photoshop smart-filter descriptor mapping');
+  }
+}
+
+function placedFilters(filters: readonly LiveFilter[], mask: Layer['filterMask']): NonNullable<NonNullable<AgLayer['placedLayer']>['filter']> {
+  return { enabled: true, validAtPosition: true, maskEnabled: !!mask?.enabled, maskLinked: mask?.linked ?? true,
+    maskExtendWithWhite: (mask?.defaultColor ?? 255) >= 128,
+    list: filters.filter((filter) => filter.kind !== 'lensCorrection').map(placedFilter) };
+}
+
+function psdFilterEffectsMask(layer: Layer, placedId: string, transform: LayerTransform): NonNullable<AgLayer['filterEffectsMasks']> {
+  const mask = layer.filterMask!;
+  const placement = mask.placement ?? transform, width = Math.max(1, Math.round(placement.size.width));
+  const height = Math.max(1, Math.round(placement.size.height)), source = mask.raster.toPixels();
+  const data = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const sx = Math.min(mask.raster.width - 1, Math.floor((x + 0.5) * mask.raster.width / width));
+    const sy = Math.min(mask.raster.height - 1, Math.floor((y + 0.5) * mask.raster.height / height));
+    data[y * width + x] = source[sy * mask.raster.width + sx]!;
+  }
+  const left = Math.round(placement.origin.x), top = Math.round(placement.origin.y);
+  return [{ id: placedId, left, top, right: left + width, bottom: top + height, depth: 8,
+    channels: [undefined, undefined], extra: { left, top, right: left + width, bottom: top + height,
+      compressionMode: 0, data } }];
 }
 
 function common(layer: Layer, path: string, state: State): AgLayer {
@@ -429,10 +474,14 @@ function common(layer: Layer, path: string, state: State): AgLayer {
     protected: locks, layerColor: layer.colorLabel, clipping: !!layer.maskSourceId, effects: effects(layer.effects, state, path),
     mask: layerMask(layer, state), left: placement.left, top: placement.top, right: placement.right, bottom: placement.bottom,
     ...(placement.data ? { imageData: placement.data } : {}) };
+  if (layer.blendIf) output.blendingRanges = psdBlendIf(layer.blendIf);
   if (layer.vectorMask) output.vectorMask = { invert: layer.vectorMask.inverted, disable: !layer.vectorMask.enabled,
     notLink: false, fillStartsWithAllPixels: layer.vectorMask.inverted,
     paths: bezier(layer.vectorMask.paths, state.hooks.transform(layer)) };
-  if (layer.filters.length) notice(state, 'live-filters', 'Live filters were baked into the layer pixels; Photoshop filter parameters are unavailable.',
+  if (layer.filters.length && layer.kind !== 'embedded') notice(state, 'live-filters', 'Live filters were baked into the layer pixels; Photoshop filter parameters are unavailable.',
+    'editability-only', path);
+  if (layer.kind === 'embedded' && layer.filters.some((filter) => filter.kind === 'lensCorrection')) notice(state, 'live-filter:lens-correction',
+    'Lens Correction was baked into the placed-layer pixels because Photoshop has no equivalent smart-filter descriptor in this mapping.',
     'editability-only', path);
   if (layer.crop) notice(state, 'non-destructive-crop',
     'The non-destructive crop was baked into layer pixels because PSD has no equivalent editable layer crop.', 'editability-only', path);
@@ -450,6 +499,18 @@ function common(layer: Layer, path: string, state: State): AgLayer {
     state.knockoutModes.set(output.id, knockout === 'shallow' ? 'shallow' : 'deep');
   }
   return output;
+}
+
+function psdBlendIf(settings: BlendIfSettings): NonNullable<AgLayer['blendingRanges']> {
+  const values = (range: BlendIfSettings['source']['gray']) =>
+    [range.black0, range.black1, range.white0, range.white1];
+  return {
+    compositeGrayBlendSource: values(settings.source.gray),
+    compositeGraphBlendDestinationRange: values(settings.destination.gray),
+    ranges: (['red', 'green', 'blue'] as const).map((channel) => ({
+      sourceRange: values(settings.source[channel]), destRange: values(settings.destination[channel]),
+    })),
+  };
 }
 
 function convertLayer(layer: Layer, path: string, children: AgLayer[], state: State): AgLayer {
@@ -511,7 +572,10 @@ function convertLayer(layer: Layer, path: string, children: AgLayer[], state: St
         { anchor: { x: 0, y: transform.size.height }, in: { x: 0, y: transform.size.height }, out: { x: 0, y: transform.size.height }, kind: 'corner' },
       ],
     }], transform) };
-  } else if (layer.kind === 'embedded') output.placedLayer = placed(layer, transform, state, path);
+  } else if (layer.kind === 'embedded') {
+    output.placedLayer = placed(layer, transform, state, path);
+    if (layer.filters.length && layer.filterMask) output.filterEffectsMasks = psdFilterEffectsMask(layer, output.placedLayer.placed ?? output.placedLayer.id, transform);
+  }
   return output;
 }
 

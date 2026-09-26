@@ -446,6 +446,8 @@
 .styleDelete { display: inline-flex; align-items: center; justify-content: center; gap: 5px; margin-top: 10px; }
 .styleBody { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .styleHeading { margin: 0; font: 600 13px/1.2 var(--cmp-font); }
+.blendIfGroup { display: flex; flex-direction: column; gap: 7px; padding: 9px; border: 1px solid var(--cmp-border); border-radius: 8px; }
+.blendIfGroup > strong { font: 600 11px/1.2 var(--cmp-font); color: var(--cmp-text-secondary); }
 .styleSelect { flex: 1; min-width: 0; }
 .styleUnit { min-width: 12px; }
 .styleRamp { flex: 1; min-width: 0; }

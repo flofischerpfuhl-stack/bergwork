@@ -33,10 +33,14 @@ export const BLEND_INDEX: Record<string, number> = {
   hue: 23, saturation: 24, color: 25, luminosity: 26,
 };
 
-const COMMON = /* glsl */ `#version 300 es
+export const COMMON = /* glsl */ `#version 300 es
 precision highp float;
 precision highp int;
 precision highp sampler2D;
+
+uniform int uHasBlendIf;
+uniform vec4 uBlendIfSource[4];
+uniform vec4 uBlendIfDestination[4];
 
 float lum(vec3 c) { return dot(c, vec3(0.3, 0.59, 0.11)); }
 vec3 clipColor(vec3 c) {
@@ -109,6 +113,27 @@ vec3 blendColor(int mode, vec3 b, vec3 s) {
 
 vec3 toLinear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
 vec3 toSRGB(vec3 c) { c = clamp(c, 0.0, 1.0); return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+
+float blendIfRamp(float value, vec4 range) {
+  float level = clamp(value, 0.0, 1.0) * 255.0;
+  if (level < range.x || level > range.w) return 0.0;
+  if (level < range.y) return range.y == range.x ? 1.0 : (level - range.x) / (range.y - range.x);
+  if (level > range.z) return range.w == range.z ? 1.0 : (range.w - level) / (range.w - range.z);
+  return 1.0;
+}
+float blendIfCoverage(vec4 sampled, vec4 dst) {
+  if (uHasBlendIf == 0 || sampled.a <= 0.0) return 1.0;
+  vec3 source = sampled.rgb / sampled.a;
+  vec3 destination = dst.a > 0.0 ? dst.rgb / dst.a : vec3(0.0);
+  vec4 sourceValues = vec4(lum(source), source);
+  vec4 destinationValues = vec4(lum(destination), destination);
+  float factor = 1.0;
+  for (int channel = 0; channel < 4; channel++) {
+    factor = min(factor, blendIfRamp(sourceValues[channel], uBlendIfSource[channel]));
+    factor = min(factor, blendIfRamp(destinationValues[channel], uBlendIfDestination[channel]));
+  }
+  return factor;
+}
 
 /** Source-over style compositing of premultiplied src onto premultiplied dst with a PDF blend mode. */
 uint dissolveNoise(ivec2 p, int seed) {
@@ -325,6 +350,7 @@ void main() {
     coverage *= texelFetch(uMask, ivec2(vPos), 0).r;
   }
   if (uHasClip == 1) coverage *= texelFetch(uClip, ivec2(vPos), 0).r;
+  if (uReplace == 0) coverage *= blendIfCoverage(sampled, dst);
   vec4 src = sampled * (coverage * uOpacity * uFillOpacity);
   finalColor = uReplace == 1 ? src
     : compositeFill(uMode, dst, sampled, coverage, uOpacity, uFillOpacity, ivec2(floor(doc)), uDissolveSeed);
@@ -367,6 +393,7 @@ void main(){
     else if(uCropFeather>0.0)coverage*=clamp(min(min(lp.x-uCropRect.x,cropEnd.x-lp.x),min(lp.y-uCropRect.y,cropEnd.y-lp.y))/uCropFeather,0.0,1.0);}
   if(uHasMask==1)coverage*=texelFetch(uMask,targetPixel,0).r;
   if(uHasClip==1)coverage*=texelFetch(uClip,targetPixel,0).r;
+  coverage*=blendIfCoverage(sampled,dst);
   finalColor=compositeFill(uMode,dst,sampled,coverage,uOpacity,uFillOpacity,ivec2(floor(doc)),uDissolveSeed);
 }
 `;
@@ -420,6 +447,7 @@ void main() {
   }
   if (uHasMask == 1) coverage *= texelFetch(uMask, targetPixel, 0).r;
   if (uHasClip == 1) coverage *= texelFetch(uClip, targetPixel, 0).r;
+  if (uReplace == 0) coverage *= blendIfCoverage(sampled, dst);
   vec2 doc = (uViewToDoc * vec3(vPos, 1.0)).xy;
   if (uSnap == 1) doc = floor(doc) + 0.5;
   vec4 src = sampled * (coverage * uOpacity * uFillOpacity);
@@ -753,6 +781,7 @@ void main() {
   float a = texelFetch(uBase, p, 0).a;
   vec4 src = vec4(texelFetch(uSurface, p, 0).rgb * a, a);
   if (uHasClip == 1) src *= texelFetch(uClip, p, 0).r;
+  src *= blendIfCoverage(src, dst);
   ivec2 documentPixel = ivec2(floor((uViewToDoc * vec3(vPos, 1.0)).xy));
   finalColor = composite(uMode, dst, src, documentPixel, uDissolveSeed);
 }
@@ -778,6 +807,7 @@ void main() {
   vec4 dst = texelFetch(uBackdrop, p, 0);
   vec4 group = texelFetch(uSurface, p, 0);
   if (uHasClip == 1) group *= texelFetch(uClip, p, 0).r;
+  group *= blendIfCoverage(group, dst);
   if (uKnockout == 1) dst = mix(dst, texelFetch(uKnockoutBase, p, 0), group.a);
   vec4 src = group * (uOpacity * uFillOpacity);
   ivec2 documentPixel = ivec2(floor((uViewToDoc * vec3(vPos, 1.0)).xy));

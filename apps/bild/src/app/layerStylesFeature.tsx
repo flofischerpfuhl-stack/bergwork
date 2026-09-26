@@ -17,7 +17,7 @@ import { Icon } from '../ui/icons';
 import { editBlockers, type EditorSession } from '../core/session';
 import { BLEND_MODES, type CanvasDocument, type Layer } from '../core/document';
 import { DEFAULT_GLOBAL_LIGHT_ANGLE } from '../core/effects/render';
-import type { BlendMode, EffectFill, EffectGradient, GradientStop, LayerEffect, RGB } from '../core/model/types';
+import type { BlendIfChannel, BlendIfSettings, BlendMode, EffectFill, EffectGradient, GradientStop, LayerEffect, RGB } from '../core/model/types';
 import { decodeImageFile } from '../io/imageImport';
 import { FloatingPanel } from './panels';
 import { Check, Segmented } from './adjustmentsFeature';
@@ -119,11 +119,12 @@ function insertionIndex(effects: readonly LayerEffect[], kind: EffectKind): numb
 interface StyleEdit {
   readonly layerId: string;
   readonly before: readonly LayerEffect[];
+  readonly beforeBlendIf: BlendIfSettings | null;
   readonly beforeAngle: number;
   readonly beforeResources: CanvasDocument['resources'];
   /** Effects of each kind the layer had when the dialog opened; later ones of that kind were added in the dialog. */
   readonly beforeCounts: Readonly<Record<EffectKind, number>>;
-  selected: { kind: EffectKind; ordinal: number };
+  selected: { kind: EffectKind | 'blendingOptions'; ordinal: number };
 }
 const edits = new WeakMap<EditorSession, StyleEdit>();
 /** Set while the dialog itself calls the session, which the edit blocker otherwise refuses. */
@@ -135,6 +136,7 @@ function own<T>(body: () => T): T {
 const blocksEditing = (session: EditorSession) => !applying && edits.has(session);
 
 function currentEffect(session: EditorSession, edit: StyleEdit): { effect: LayerEffect; index: number } | null {
+  if (edit.selected.kind === 'blendingOptions') return null;
   const effects = session.layer(edit.layerId)?.effects ?? [];
   const index = indexOf(effects, edit.selected.kind, edit.selected.ordinal);
   return index < 0 ? null : { effect: effects[index]!, index };
@@ -148,7 +150,7 @@ function addEffect(session: EditorSession, edit: StyleEdit, kind: EffectKind): v
   }
 }
 
-function openStyle(controller: EditorController, layerId: string, target?: EffectKind | number): void {
+function openStyle(controller: EditorController, layerId: string, target?: EffectKind | number | 'blendingOptions'): void {
   const session = controller.session;
   const layer = session.layer(layerId);
   if (!styleable(layer) || !session.document) return;
@@ -161,15 +163,18 @@ function openStyle(controller: EditorController, layerId: string, target?: Effec
     const counts = Object.fromEntries(KINDS.map((k) => [k, layer.effects.filter((e) => e.kind === k).length])) as Record<EffectKind, number>;
     const first = [...layer.effects.keys()].sort((a, b) => KINDS.indexOf(layer.effects[a]!.kind) - KINDS.indexOf(layer.effects[b]!.kind))[0];
     edit = {
-      layerId, before: layer.effects, beforeAngle: session.document.globalLightAngle ?? DEFAULT_GLOBAL_LIGHT_ANGLE, beforeCounts: counts,
+      layerId, before: layer.effects, beforeBlendIf: layer.blendIf ?? null,
+      beforeAngle: session.document.globalLightAngle ?? DEFAULT_GLOBAL_LIGHT_ANGLE, beforeCounts: counts,
       beforeResources: session.document.resources,
-      selected: first === undefined ? { kind: 'dropShadow', ordinal: 0 } : { kind: layer.effects[first]!.kind, ordinal: ordinalOf(layer.effects, first) },
+      selected: first === undefined ? { kind: 'dropShadow', ordinal: 0 }
+        : { kind: layer.effects[first]!.kind, ordinal: ordinalOf(layer.effects, first) },
     };
     session.beginEdit('Layer Style');
     edits.set(session, edit);
   }
   const effects = session.layer(layerId)!.effects;
-  if (typeof target === 'number') {
+  if (target === 'blendingOptions') edit.selected = { kind: target, ordinal: 0 };
+  else if (typeof target === 'number') {
     if (effects[target]) edit.selected = { kind: effects[target].kind, ordinal: ordinalOf(effects, target) };
   } else if (target) {
     // Choosing an effect from a menu turns it on, as in Photoshop.
@@ -218,7 +223,9 @@ function finishStyle(controller: EditorController, commit: boolean): void {
       if (edit.before.length) session.pasteLayerStyle(edit.layerId, edit.before);
       else session.clearLayerStyle(edit.layerId);
       session.setGlobalLightAngle(edit.beforeAngle);
-      if (session.document) session.replaceDocument({ ...session.document, resources: edit.beforeResources });
+      if (session.document) session.replaceDocument({ ...session.document, resources: edit.beforeResources,
+        layers: session.document.layers.map((candidate) => candidate.id === edit.layerId
+          ? { ...candidate, blendIf: edit.beforeBlendIf } : candidate) });
     }
   });
   edits.delete(session);
@@ -686,6 +693,55 @@ function EffectControls({ controller, session, effect, change }: {
   }
 }
 
+const blendIfRange = () => ({ black0: 0, black1: 0, white0: 255, white1: 255 });
+function defaultBlendIf(): BlendIfSettings {
+  const side = () => ({ gray: blendIfRange(), red: blendIfRange(), green: blendIfRange(), blue: blendIfRange() });
+  return { source: side(), destination: side() };
+}
+
+function BlendIfControls({ controller, session, layer }: {
+  controller: EditorController; session: EditorSession; layer: Layer;
+}) {
+  const t = controller.t;
+  const [channel, setChannel] = useState<BlendIfChannel>('gray');
+  const value = layer.blendIf ?? defaultBlendIf();
+  const update = (side: 'source' | 'destination', key: keyof ReturnType<typeof blendIfRange>, sample: number) => own(() => {
+    const document = session.document;
+    if (!document) return;
+    const current = session.layer(layer.id)?.blendIf ?? defaultBlendIf(), range = current[side][channel];
+    const next = { ...range, [key]: sample };
+    // Split handles may meet but never cross; moving one carries only the directly adjacent half.
+    if (key === 'black0') next.black1 = Math.max(next.black0, next.black1);
+    else if (key === 'black1') { next.black0 = Math.min(next.black0, next.black1); next.white0 = Math.max(next.black1, next.white0); }
+    else if (key === 'white0') { next.black1 = Math.min(next.black1, next.white0); next.white1 = Math.max(next.white0, next.white1); }
+    else next.white0 = Math.min(next.white0, next.white1);
+    const blendIf = { ...current, [side]: { ...current[side], [channel]: next } };
+    session.replaceDocument({ ...document, layers: document.layers.map((candidate) =>
+      candidate.id === layer.id ? { ...candidate, blendIf } : candidate) });
+  });
+  const rows = (side: 'source' | 'destination', label: string) => {
+    const range = value[side][channel];
+    return <div className={styles.blendIfGroup}>
+      <strong>{label}</strong>
+      <RangeRow label={`${t('Black')} 1`} value={range.black0} min={0} max={255} suffix="" testId={`blend-if-${side}-black0`} onChange={(v) => update(side, 'black0', v)} />
+      <RangeRow label={`${t('Black')} 2`} value={range.black1} min={0} max={255} suffix="" testId={`blend-if-${side}-black1`} onChange={(v) => update(side, 'black1', v)} />
+      <RangeRow label={`${t('White')} 1`} value={range.white0} min={0} max={255} suffix="" testId={`blend-if-${side}-white0`} onChange={(v) => update(side, 'white0', v)} />
+      <RangeRow label={`${t('White')} 2`} value={range.white1} min={0} max={255} suffix="" testId={`blend-if-${side}-white1`} onChange={(v) => update(side, 'white1', v)} />
+    </div>;
+  };
+  return <>
+    <div className={styles.panelRow}>
+      <span className={styles.panelLabel}>{t('Blend If')}</span>
+      <select className={`${styles.select} ${styles.styleSelect}`} value={channel} aria-label={t('Blend If')}
+        data-testid="blend-if-channel" onChange={(event) => setChannel(event.target.value as BlendIfChannel)}>
+        {(['gray', 'red', 'green', 'blue'] as const).map((item) => <option key={item} value={item}>{t(item === 'gray' ? 'Gray' : item[0]!.toUpperCase() + item.slice(1))}</option>)}
+      </select>
+    </div>
+    {rows('source', t('This Layer'))}
+    {rows('destination', t('Underlying Layer'))}
+  </>;
+}
+
 // MARK: The dialog
 
 function LayerStylePanel({ controller }: { controller: EditorController }) {
@@ -727,6 +783,13 @@ function LayerStylePanel({ controller }: { controller: EditorController }) {
         }}>
         <div className={styles.styleList} role="listbox" aria-label={t('Effects')}>
           <span className={styles.styleListTitle}>{t('Effects')}</span>
+          <div className={`${styles.styleItem} ${edit.selected.kind === 'blendingOptions' ? styles.styleItemOn : ''}`}
+            role="option" aria-selected={edit.selected.kind === 'blendingOptions'}>
+            <button type="button" className={styles.styleItemName} data-testid="style-blending-options"
+              onClick={() => { edit.selected = { kind: 'blendingOptions', ordinal: 0 }; session.notify('ui'); }}>
+              {t('Blending Options')}
+            </button>
+          </div>
           {rows.map(({ kind, ordinal, count }) => {
             const index = indexOf(effects, kind, ordinal);
             const effect = index >= 0 ? effects[index]! : null;
@@ -752,9 +815,10 @@ function LayerStylePanel({ controller }: { controller: EditorController }) {
           </button>
         </div>
         <div className={styles.styleBody} data-testid="style-body" data-kind={current?.effect.kind ?? ''}>
-          <h3 className={styles.styleHeading}>{t(LABELS[edit.selected.kind])}</h3>
-          {current ? <EffectControls controller={controller} session={session} effect={current.effect} change={change} />
-            : <p className={styles.panelNote}>{t('Choose an effect on the left to add it to the layer.')}</p>}
+          <h3 className={styles.styleHeading}>{edit.selected.kind === 'blendingOptions' ? t('Blending Options') : t(LABELS[edit.selected.kind])}</h3>
+          {edit.selected.kind === 'blendingOptions' ? <BlendIfControls controller={controller} session={session} layer={layer} />
+            : current ? <EffectControls controller={controller} session={session} effect={current.effect} change={change} />
+              : <p className={styles.panelNote}>{t('Choose an effect on the left to add it to the layer.')}</p>}
         </div>
       </div>
       <div className={styles.dialogButtons}>
@@ -795,6 +859,8 @@ export function installLayerStyles(controller: EditorController): void {
         testId: `menu-style-${kind}`, run: () => openStyle(controller, layerId, kind),
       }));
       return [
+        { label: t('Blending Options…'), enabled: can, testId: 'menu-style-blending-options', run: () => openStyle(controller, layerId, 'blendingOptions') },
+        'separator',
         ...entries,
         'separator',
         { label: t('Copy Layer Style'), enabled: styleable(layer) && layer.effects.length > 0, testId: 'menu-copy-style',

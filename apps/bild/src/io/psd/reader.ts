@@ -1,11 +1,11 @@
 import {
   initializeCanvas, readPsd, type BlendMode as AgBlendMode, type Layer as AgLayer,
-  type BezierPath, type Color as AgColor, type EffectSolidGradient, type LayerEffectsInfo, type LayerTextData, type LinkedFile, type PixelData, type Psd,
+  type BezierPath, type Color as AgColor, type EffectSolidGradient, type Filter as AgFilter, type LayerEffectsInfo, type LayerTextData, type LinkedFile, type PixelData, type Psd,
   type LayerMaskData, type PatternInfo, type UnitsValue, type VectorContent,
 } from 'ag-psd';
 import {
-  type BlendMode, type CanvasDocument, type ColorLabel, type FillParameters, type Layer, type LayerAdjustment, type LayerEffect,
-  type LayerLocks, type VectorMask, type VectorPath, type VectorStyle,
+  type BlendIfRange, type BlendIfSettings, type BlendMode, type CanvasDocument, type ColorLabel, type FillParameters, type Layer, type LayerAdjustment, type LayerEffect,
+  type LayerLocks, type LiveFilter, type VectorMask, type VectorPath, type VectorStyle,
   DEFAULT_TEXT_STYLE, defaultTextParagraphStyle, MAX_LAYERS, MAX_PIXELS, MAX_SIDE, newLayer,
 } from '../../core/document';
 import { apply, makeTransform, samePlacement, unitToDocument, type LayerTransform } from '../../core/geometry';
@@ -125,6 +125,7 @@ interface ImportState {
   readonly documentHeight: number;
   readonly bitsPerChannel: number;
   readonly colorMode: number;
+  readonly isPsb: boolean;
   readonly artboards: boolean;
   readonly resolution: number;
   readonly unsupported: PsdUnsupportedFeature[];
@@ -365,17 +366,6 @@ function decodedMask(mask: LayerMaskData | undefined, parameters: LayerMaskData 
   const top = (mask.top ?? 0) + (relative ? layerTransform.origin.y : 0);
   const placement = transform(left, top, mask.imageData.width, mask.imageData.height);
   const raster = Raster.fromPixels(mask.imageData.width, mask.imageData.height, 1, pixels);
-  let edgeTotal = 0, edgeCount = 0;
-  for (let y = 0; y < raster.height; y++) for (let x = 0; x < raster.width; x++) {
-    if (y === 0 || y === raster.height - 1 || x === 0 || x === raster.width - 1) {
-      edgeTotal += pixels[y * raster.width + x]!; edgeCount++;
-    }
-  }
-  const inferredDefault = edgeTotal * 2 >= edgeCount * 255 ? 255 : 0;
-  if (inferredDefault !== defaultColor && !samePlacement(placement, layerTransform)) {
-    issue(state, 'mask-default', `PSD outside-mask value ${defaultColor} differs from the editor's edge inference.`,
-      'approximated', layerPath);
-  }
   return { raster, enabled: mask.disabled !== true, placement: samePlacement(placement, layerTransform) ? null : placement,
     linked: relative, defaultColor };
 }
@@ -403,19 +393,10 @@ function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportSta
   if (warpStyle === 'custom' || warpStyle === 'cylinder') issue(state, 'text-warp', 'A custom or cylinder text warp keeps the saved preview; it is not rendered after editing.', 'not-rendered', layerPath);
   else if (warpStyle && warpStyle !== 'none') issue(state, 'text-warp', 'Warped PSD text is re-rendered with Fernwork’s envelope for its style after editing.', 'approximated', layerPath);
   if (source.text?.textPath) issue(state, 'text-path', 'PSD type on a path keeps its saved preview; after editing it is laid out as point text.', 'approximated', layerPath);
-  if (source.placedLayer?.filter) issue(state, 'smart-filter',
-    'Smart-object filters remain in the PSD preview; their editable parameters are not imported.', 'editability-only', layerPath);
-  if (source.filterEffectsMasks) issue(state, 'smart-filter', 'Smart filters and their masks are not rendered.', 'not-rendered', layerPath);
+  if (source.placedLayer?.filter?.list.some((filter) => !smartFilter(filter))) issue(state, 'smart-filter',
+    'An unsupported smart-object filter remains in the PSD preview.', 'editability-only', layerPath);
   if (source.knockout) issue(state, 'knockout', 'Knockout is rendered from the layer shape; its boundary is inferred from group nesting.',
     'approximated', layerPath);
-  const ranges = source.blendingRanges;
-  const defaultRange = (values: readonly number[]): boolean => values.length === 4
-    && values[0] === 0 && values[1] === 0 && values[2] === 255 && values[3] === 255;
-  if (ranges && (!defaultRange(ranges.compositeGrayBlendSource)
-    || !defaultRange(ranges.compositeGraphBlendDestinationRange)
-    || ranges.ranges.some((range) => !defaultRange(range.sourceRange) || !defaultRange(range.destRange)))) {
-    issue(state, 'blend-if', 'Non-default blend-if channel ranges are not rendered.', 'not-rendered', layerPath);
-  }
   const hasClippedChildren = isGroup && source.children?.some((child) => child.clipping) === true;
   if (source.transparencyShapesLayer === false || (hasClippedChildren && source.blendClippendElements === false)) {
     issue(state, 'advanced-blending', 'Advanced blending flags are not rendered.', 'not-rendered', layerPath);
@@ -423,6 +404,118 @@ function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportSta
   if (source.protected?.artboards) issue(state, 'lock-artboards',
     'The PSD artboard lock has no layer-lock equivalent.', 'editability-only', layerPath);
   // Non-pass-through group isolation and group opacity are carried by PSD-specific group metadata below.
+}
+
+function smartFilter(value: AgFilter): LiveFilter | null {
+  const common = { schemaVersion: 1 as const, enabled: value.enabled, opacity: value.opacity,
+    blendMode: effectBlend(value.blendMode, 'normal') };
+  switch (value.type) {
+    case 'gaussian blur': return { ...common, kind: 'gaussianBlur', radius: units(value.filter.radius) };
+    case 'motion blur': return { ...common, kind: 'motionBlur', angle: value.filter.angle, distance: units(value.filter.distance) };
+    case 'add noise': return { ...common, kind: 'noise', amount: value.filter.amount * 100,
+      gaussian: value.filter.distribution === 'gaussian', monochromatic: value.filter.monochromatic };
+    case 'unsharp mask': return { ...common, kind: 'unsharpMask', amount: value.filter.amount * 100,
+      radius: units(value.filter.radius), threshold: value.filter.threshold };
+    case 'smart sharpen': return { ...common, kind: 'smartSharpen', amount: value.filter.amount * 100,
+      radius: units(value.filter.radius), threshold: value.filter.threshold, reduceNoise: 0 };
+    case 'high pass': return { ...common, kind: 'highPass', radius: units(value.filter.radius) };
+    case 'reduce noise': {
+      const composite = value.filter.channelDenoise.find((entry) => entry.channels.includes('composite'))
+        ?? value.filter.channelDenoise[0];
+      return { ...common, kind: 'denoise', luminance: composite?.amount ?? 0,
+        colour: value.filter.reduceColorNoise * 100, detail: composite?.preserveDetails ?? 50 };
+    }
+    default: return null;
+  }
+}
+
+function smartFilters(source: AgLayer): readonly LiveFilter[] {
+  const stack = source.placedLayer?.filter;
+  if (!stack) return [];
+  return stack.list.map(smartFilter).filter((filter): filter is LiveFilter => filter !== null)
+    .map((filter) => stack.enabled ? filter : { ...filter, enabled: false });
+}
+
+function decodeFilterMaskBytes(data: Uint8Array, compression: number, width: number, height: number,
+  large: boolean): Uint8Array | null {
+  const expected = width * height;
+  if (compression === 0) return data.length >= expected ? data.slice(0, expected) : null;
+  const lengthBytes = large ? 4 : 2;
+  if (compression !== 1 || data.length < height * lengthBytes) return null;
+  const output = new Uint8Array(expected), view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let input = height * lengthBytes, target = 0;
+  for (let row = 0; row < height; row++) {
+    const length = large ? view.getUint32(row * lengthBytes, false) : view.getUint16(row * lengthBytes, false);
+    const end = input + length, rowEnd = (row + 1) * width;
+    if (end > data.length) return null;
+    while (input < end && target < rowEnd) {
+      const header = data[input++]!;
+      if (header <= 127) {
+        const count = header + 1;
+        if (input + count > end || target + count > rowEnd) return null;
+        output.set(data.subarray(input, input + count), target); input += count; target += count;
+      } else if (header >= 129) {
+        const count = 257 - header;
+        if (input >= end || target + count > rowEnd) return null;
+        output.fill(data[input++]!, target, target + count); target += count;
+      }
+    }
+    if (target !== rowEnd) return null;
+    input = end;
+  }
+  return output;
+}
+
+function smartFilterMask(source: AgLayer, layerTransform: LayerTransform, state: ImportState,
+  layerPath: string): Layer['filterMask'] {
+  const stack = source.placedLayer?.filter;
+  if (!stack?.maskEnabled) return null;
+  const ids = new Set([source.placedLayer?.placed, source.placedLayer?.id].filter((id): id is string => !!id));
+  const record = source.filterEffectsMasks?.find((candidate) => ids.has(candidate.id) && candidate.extra)?.extra
+    ?? source.filterEffectsMasks?.find((candidate) => candidate.extra)?.extra;
+  if (!record) {
+    issue(state, 'smart-filter-mask', 'The smart-filter mask has no decodable pixel record.', 'not-rendered', layerPath);
+    return null;
+  }
+  const width = record.right - record.left, height = record.bottom - record.top;
+  const bytes = width > 0 && height > 0
+    ? decodeFilterMaskBytes(record.data, record.compressionMode, width, height, state.isPsb) : null;
+  if (!bytes) {
+    issue(state, 'smart-filter-mask', `Smart-filter mask compression ${record.compressionMode} is not supported.`,
+      'not-rendered', layerPath);
+    return null;
+  }
+  const placement = transform(record.left, record.top, width, height);
+  return { raster: Raster.fromPixels(width, height, 1, bytes), enabled: true, linked: stack.maskLinked,
+    placement: samePlacement(placement, layerTransform) ? null : placement,
+    defaultColor: stack.maskExtendWithWhite ? 255 : 0 };
+}
+
+const DEFAULT_BLEND_RANGE: BlendIfRange = { black0: 0, black1: 0, white0: 255, white1: 255 };
+function psdBlendRange(values: readonly number[] | undefined): BlendIfRange {
+  if (!values || values.length !== 4) return DEFAULT_BLEND_RANGE;
+  const ordered = values.map((value) => Math.min(255, Math.max(0, Math.round(value))));
+  return { black0: ordered[0]!, black1: Math.max(ordered[0]!, ordered[1]!),
+    white0: Math.max(ordered[1]!, ordered[2]!), white1: Math.max(ordered[2]!, ordered[3]!) };
+}
+
+/** ag-psd reads Photoshop's native `lbrg` layer blending-range record. */
+function psdBlendIf(source: AgLayer): BlendIfSettings | null {
+  const value = source.blendingRanges;
+  if (!value) return null;
+  const channels = ['red', 'green', 'blue'] as const;
+  const make = (destination: boolean): BlendIfSettings['source'] => ({
+    gray: psdBlendRange(destination ? value.compositeGraphBlendDestinationRange : value.compositeGrayBlendSource),
+    red: psdBlendRange(destination ? value.ranges[0]?.destRange : value.ranges[0]?.sourceRange),
+    green: psdBlendRange(destination ? value.ranges[1]?.destRange : value.ranges[1]?.sourceRange),
+    blue: psdBlendRange(destination ? value.ranges[2]?.destRange : value.ranges[2]?.sourceRange),
+  });
+  const settings: BlendIfSettings = { source: make(false), destination: make(true) };
+  return (['gray', ...channels] as const).some((channel) => {
+    const range = settings.source[channel], under = settings.destination[channel];
+    return range.black0 !== 0 || range.black1 !== 0 || range.white0 !== 255 || range.white1 !== 255
+      || under.black0 !== 0 || under.black1 !== 0 || under.white0 !== 255 || under.white1 !== 255;
+  }) ? settings : null;
 }
 
 function placedMedia(file: LinkedFile | undefined): 'image' | 'svg' | 'pdf' | 'project' {
@@ -1131,7 +1224,7 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     }
     let imported: Layer = newLayer({
       id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : placed ? 'embedded' : textData ? 'text' : vectorContent ? 'vector' : adjustment ? 'adjustment' : 'pixel',
-      visible: source.hidden !== true, opacity, fillOpacity, blendMode: mappedMode,
+      visible: source.hidden !== true, opacity, fillOpacity, blendMode: mappedMode, blendIf: psdBlendIf(source),
       locks: importedLocks(source), colorLabel: importedColorLabel(source, state, layerPath), transform: placement.transform,
       warp: placement.warp,
       raster: placedPixels ?? (image ? rasterFromPixelData(image) : vectorRaster),
@@ -1145,9 +1238,11 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
         // lacks Photoshop classic interpolation and non-linear gradient styles.
         style: vectorRaster ? { ...vectorStyle!, fill: null, stroke: null } : vectorStyle!, sourceShape: null } : {}),
       mask: importedMask,
+      filterMask: smartFilterMask(source, placement.transform, state, layerPath),
       vectorMask,
       maskSourceId: source.clipping ? clippingBaseId : null,
       effects: importEffects(source, state, layerPath),
+      filters: smartFilters(source),
       ...(adjustment ? { adjustment } : {}),
     });
     const knockoutMode = source.id === undefined ? undefined : state.knockoutModes.get(source.id);
@@ -1156,9 +1251,8 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
         & { readonly psdIsolated: boolean; readonly psdKnockout: PsdKnockoutMode | false };
     else if (knockoutMode || source.knockout === true) imported = { ...imported,
       psdKnockout: knockoutMode ?? 'deep' } as Layer & { readonly psdKnockout: PsdKnockoutMode };
-    if (importedMaskResult.defaultColor !== undefined) imported = { ...imported,
-      psdMaskDefault: importedMaskResult.defaultColor } as Layer
-      & { readonly psdMaskDefault: number };
+    if (importedMaskResult.defaultColor !== undefined && imported.mask) imported = { ...imported,
+      mask: { ...imported.mask, defaultColor: importedMaskResult.defaultColor } };
     else if (artboard) imported = { ...imported, psdMaskDefault: 0 } as Layer
       & { readonly psdMaskDefault: number };
     if (artboard) imported = { ...imported, psdArtboardRect: { x: artboard.rect.left, y: artboard.rect.top,
@@ -1368,7 +1462,7 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
     impact: 'editability-only' });
   const documentResolution = resolution(psd);
   const state: ImportState = { nextId: 1, documentWidth: psd.width, documentHeight: psd.height,
-    bitsPerChannel, colorMode, artboards: !!psd.artboards, resolution: documentResolution,
+    bitsPerChannel, colorMode, isPsb: bytes[5] === 2, artboards: !!psd.artboards, resolution: documentResolution,
     unsupported, resources: [], linkedFiles: new Map((psd.linkedFiles ?? []).map((file) => [file.id, file])),
     patterns: new Map((psd.patterns ?? []).map((pattern) => [pattern.id, pattern])),
     grayTransfer: documentGrayTransfer, cmykTransfer: documentCmykTransfer,

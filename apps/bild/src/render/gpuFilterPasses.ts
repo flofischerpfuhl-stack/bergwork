@@ -1,7 +1,9 @@
 import type { LiveFilter } from '../core/document';
+import type { BlendMode } from '../core/document';
 import type { FilterKind, FilterSettings } from '../core/filters/settings';
+import { COMMON } from './shaders';
 
-export type ViewFilter =
+export type ViewFilter = (
   | { readonly kind: 'Gaussian Blur'; readonly settings: FilterSettings; readonly seed: number }
   | { readonly kind: 'Motion Blur'; readonly settings: FilterSettings; readonly seed: number }
   | { readonly kind: 'Add Noise'; readonly settings: FilterSettings; readonly seed: number }
@@ -9,7 +11,9 @@ export type ViewFilter =
   | { readonly kind: 'Unsharp Mask'; readonly settings: FilterSettings; readonly seed: number }
   | { readonly kind: 'Smart Sharpen'; readonly settings: FilterSettings; readonly seed: number }
   | { readonly kind: 'High Pass'; readonly settings: FilterSettings; readonly seed: number }
-  | { readonly kind: 'Denoise'; readonly settings: FilterSettings; readonly seed: number };
+  | { readonly kind: 'Denoise'; readonly settings: FilterSettings; readonly seed: number }) & {
+    readonly opacity: number; readonly blendMode: BlendMode;
+  };
 
 export interface GpuFilterPreview {
   readonly kind: FilterKind;
@@ -23,27 +27,27 @@ export type PreviewLayer = import('../core/document').Layer & { readonly gpuFilt
 /** View-space counterparts of upstream `Compositor/Document/Filters.swift` `PixelFilter.run`. */
 export function liveViewFilter(filter: LiveFilter, defaults: FilterSettings): ViewFilter | null {
   if (!filter.enabled) return null;
-  const seed = 0x6d2b79f5;
+  const seed = 0x6d2b79f5, opacity = filter.opacity ?? 1, blendMode = filter.blendMode ?? 'normal';
   switch (filter.kind) {
-    case 'gaussianBlur': return { kind: 'Gaussian Blur', settings: { ...defaults, radius: filter.radius }, seed };
-    case 'motionBlur': return { kind: 'Motion Blur', settings: { ...defaults, angle: filter.angle, distance: filter.distance }, seed };
+    case 'gaussianBlur': return { kind: 'Gaussian Blur', settings: { ...defaults, radius: filter.radius }, seed, opacity, blendMode };
+    case 'motionBlur': return { kind: 'Motion Blur', settings: { ...defaults, angle: filter.angle, distance: filter.distance }, seed, opacity, blendMode };
     case 'noise': return { kind: 'Add Noise', settings: { ...defaults, amount: filter.amount,
-      gaussian: filter.gaussian, monochromatic: filter.monochromatic }, seed };
-    case 'lensCorrection': return { kind: 'Lens Correction', settings: { ...defaults, distortion: filter.distortion }, seed };
+      gaussian: filter.gaussian, monochromatic: filter.monochromatic }, seed, opacity, blendMode };
+    case 'lensCorrection': return { kind: 'Lens Correction', settings: { ...defaults, distortion: filter.distortion }, seed, opacity, blendMode };
     case 'unsharpMask': return { kind: 'Unsharp Mask', settings: { ...defaults, amount: filter.amount,
-      radius: filter.radius, threshold: filter.threshold }, seed };
+      radius: filter.radius, threshold: filter.threshold }, seed, opacity, blendMode };
     case 'smartSharpen': return { kind: 'Smart Sharpen', settings: { ...defaults, amount: filter.amount,
-      radius: filter.radius, threshold: filter.threshold, reduceNoise: filter.reduceNoise }, seed };
-    case 'highPass': return { kind: 'High Pass', settings: { ...defaults, radius: filter.radius }, seed };
+      radius: filter.radius, threshold: filter.threshold, reduceNoise: filter.reduceNoise }, seed, opacity, blendMode };
+    case 'highPass': return { kind: 'High Pass', settings: { ...defaults, radius: filter.radius }, seed, opacity, blendMode };
     case 'denoise': return { kind: 'Denoise', settings: { ...defaults, luminance: filter.luminance,
-      colour: filter.colour, detail: filter.detail ?? 50 }, seed };
+      colour: filter.colour, detail: filter.detail ?? 50 }, seed, opacity, blendMode };
   }
 }
 
 export function previewViewFilter(preview: GpuFilterPreview): ViewFilter | null {
   switch (preview.kind) {
     case 'Gaussian Blur': case 'Motion Blur': case 'Add Noise': case 'Lens Correction':
-    case 'Unsharp Mask': case 'Smart Sharpen': case 'High Pass': case 'Denoise': return preview as ViewFilter;
+    case 'Unsharp Mask': case 'Smart Sharpen': case 'High Pass': case 'Denoise': return { ...preview, opacity: 1, blendMode: 'normal' } as ViewFilter;
     default: return null;
   }
 }
@@ -142,6 +146,18 @@ void main(){ivec2 p=ivec2(vPos);vec4 source=texelFetch(uSource,p,0),blurred=texe
   changed=floor(changed*levels+0.5)/levels;
   finalColor=vec4(changed*source.a,source.a);
 }`;
+
+/** Photoshop smart-filter blending options: filtered result over the pre-filter image. */
+export const FILTER_BLEND_FRAGMENT = `${COMMON}
+in vec2 vPos;
+out vec4 finalColor;
+uniform sampler2D uSource;
+uniform sampler2D uSecond;
+uniform int uMode;
+uniform float uOpacity;
+void main(){ivec2 p=ivec2(vPos);vec4 before=texelFetch(uSource,p,0),filtered=texelFetch(uSecond,p,0);
+  finalColor=composite(uMode,before,filtered*clamp(uOpacity,0.0,1.0),p,0);}
+`;
 
 export const DENOISE_FRAGMENT = `${HEADER}
 vec4 sampleAt(vec2 q){return all(greaterThanEqual(q,vec2(0.0)))&&all(lessThan(q,uSourceSize))

@@ -136,6 +136,8 @@ export interface LayerMask {
   readonly enabled: boolean;
   readonly placement: LayerTransform | null;
   readonly linked: boolean;
+  /** Coverage outside a positioned mask's stored rectangle; inferred from its edge when absent. */
+  readonly defaultColor?: number;
 }
 
 export interface VectorPath {
@@ -209,7 +211,7 @@ export type LayerEffect =
       readonly scale: number; readonly angle: number; readonly linkWithLayer: boolean;
       readonly phase?: Readonly<{ x: number; y: number }> };
 
-export type LiveFilter =
+export type LiveFilter = (
   | { readonly kind: 'gaussianBlur'; readonly schemaVersion: 1; readonly enabled: boolean; readonly radius: number }
   | { readonly kind: 'motionBlur'; readonly schemaVersion: 1; readonly enabled: boolean; readonly angle: number; readonly distance: number }
   | { readonly kind: 'noise'; readonly schemaVersion: 1; readonly enabled: boolean; readonly amount: number;
@@ -221,7 +223,24 @@ export type LiveFilter =
       readonly amount: number; readonly radius: number; readonly threshold: number; readonly reduceNoise: number }
   | { readonly kind: 'highPass'; readonly schemaVersion: 1; readonly enabled: boolean; readonly radius: number }
   | { readonly kind: 'denoise'; readonly schemaVersion: 1; readonly enabled: boolean;
-      readonly luminance: number; readonly colour: number; readonly detail?: number };
+      readonly luminance: number; readonly colour: number; readonly detail?: number }) & {
+        /** Photoshop smart-filter blending options; absent means normal at 100%. */
+        readonly opacity?: number;
+        readonly blendMode?: BlendMode;
+      };
+
+/** Photoshop Blend If split handles, expressed in the native 0...255 slider domain. */
+export interface BlendIfRange {
+  readonly black0: number;
+  readonly black1: number;
+  readonly white0: number;
+  readonly white1: number;
+}
+export type BlendIfChannel = 'gray' | 'red' | 'green' | 'blue';
+export interface BlendIfSettings {
+  readonly source: Readonly<Record<BlendIfChannel, BlendIfRange>>;
+  readonly destination: Readonly<Record<BlendIfChannel, BlendIfRange>>;
+}
 
 export interface LayerCommon {
   readonly id: string;
@@ -231,12 +250,16 @@ export interface LayerCommon {
   readonly opacity: number;
   readonly fillOpacity: number;
   readonly blendMode: BlendMode;
+  /** Absent on in-memory values created before Blend If support; normalized to no restriction. */
+  readonly blendIf?: BlendIfSettings | null;
   readonly locks: LayerLocks;
   readonly colorLabel: ColorLabel;
   readonly transform: LayerTransform;
   readonly warp: LayerWarp | null;
   readonly crop: CropParameters | null;
   readonly mask: LayerMask | null;
+  /** Mask for the live-filter stack only; white applies filters and black keeps the unfiltered source. */
+  readonly filterMask?: LayerMask | null;
   readonly vectorMask: VectorMask | null;
   readonly maskSourceId: string | null;
   readonly effects: readonly LayerEffect[];

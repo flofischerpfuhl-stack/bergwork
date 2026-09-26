@@ -120,8 +120,8 @@ function effectAlpha(layer: Layer, source: ResolvedEffectSource): Uint8Array {
   const sourceToDocument = pixelToDocument(layerTransform, raster.width, raster.height);
   const sampler = prepareSampler(maskRaster, 'High quality', maskRaster.width);
   const prepared = preparePlacement({ ...placement, sampling: 'High quality' }, maskRaster.width, maskRaster.height);
-  const placed = !samePlacement(placement, layerTransform), psdDefault =
-    (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault;
+  const placed = !samePlacement(placement, layerTransform), psdDefault = mask.defaultColor
+    ?? (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault;
   const background = placed ? psdDefault === undefined ? maskBackground(maskRaster) : psdDefault / 255 : 0;
   const location = new Float64Array(3);
   for (let y = 0; y < raster.height; y++) for (let x = 0; x < raster.width; x++) {

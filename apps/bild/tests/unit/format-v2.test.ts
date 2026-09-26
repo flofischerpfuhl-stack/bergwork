@@ -27,7 +27,9 @@ function fixture(): CanvasDocument {
     layers: [
       newLayer({ ...common('pixel', 'Pixel'), kind: 'pixel', warp: mesh, raster: Raster.fromPixels(1, 1, 4, new Uint8Array([7, 8, 9, 255])),
         effects: [{ kind: 'stroke', schemaVersion: 1, enabled: true, width: 2, position: 'inside', color: { red: 1, green: 0, blue: 0 } }],
-        filters: [{ kind: 'gaussianBlur', schemaVersion: 1, enabled: true, radius: 3 }] }),
+        filters: [{ kind: 'gaussianBlur', schemaVersion: 1, enabled: true, radius: 3 }],
+        filterMask: { raster: Raster.fromPixels(2, 1, 1, new Uint8Array([0, 255])), enabled: true,
+          placement: makeTransform({ x: 1, y: 1 }, { width: 2, height: 1 }), linked: false, defaultColor: 173 } }),
       newLayer({ ...common('group', 'Group'), kind: 'group' }),
       newLayer({ ...common('adjustment', 'Levels'), kind: 'adjustment', adjustment: { kind: 'Levels', schemaVersion: 1,
         parameters: { channel: 'RGB', ranges: Array.from({ length: 4 }, () => ({ black: 0, gamma: 1, white: 255, outputBlack: 0, outputWhite: 255 })) } } }),
@@ -54,6 +56,8 @@ describe('format v2 (PRODUCT-PLAN A2/P7/P8)', () => {
     expect(loaded.document.layers.map((layer) => layer.kind)).toEqual(manifest.layers.map((layer) => layer.kind));
     expect(loaded.document.layers[0]!.raster!.pixel(0, 0)).toEqual([7, 8, 9, 255]);
     expect(loaded.document.layers[0]!.effects?.[0]?.kind).toBe('stroke');
+    expect(loaded.document.layers[0]!.filterMask).toMatchObject({ enabled: true, linked: false, defaultColor: 173 });
+    expect(loaded.document.layers[0]!.filterMask?.raster.toPixels()).toEqual(new Uint8Array([0, 255]));
     expect((loaded.document.layers[3] as import('../../src/core/model').FillLayer).fill.kind).toBe('gradient');
     expect((loaded.document.layers[5] as import('../../src/core/model').TextLayer).text).toBe('Hello');
     expect((loaded.document.layers[6] as import('../../src/core/model').EmbeddedLayer).content.assetId).toBe('embedded-svg');

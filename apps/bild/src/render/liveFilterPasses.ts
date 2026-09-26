@@ -16,7 +16,7 @@ export class LiveFilterHookAdapter implements CompositeHooks {
   readonly blendMode = (layer: Layer): BlendMode => this.source.blendMode(layer);
   readonly raster = (layer: Layer): Raster | null | undefined => {
     const raster = this.source.raster(layer);
-    return raster && layer.filters.length ? applyLiveFilters(raster, layer.filters) : raster;
+    return raster && layer.filters.length ? applyLiveFilters(raster, layer.filters, layer.filterMask, this.source.transform(layer)) : raster;
   };
   readonly maskRaster = (layer: Layer): Raster | null | undefined => this.source.maskRaster(layer);
   get brush(): GpuBrushPreview | null { return this.source.brush ?? null; }
@@ -27,7 +27,7 @@ export class EffectLiveFilterHookAdapter extends LiveFilterHookAdapter {
   override readonly raster = (layer: Layer): Raster | null | undefined => {
     const raster = this.source.raster(layer);
     return raster && layer.filters.length && layer.effects.some((effect) => effect.enabled)
-      ? applyLiveFilters(raster, layer.filters) : raster;
+      ? applyLiveFilters(raster, layer.filters, layer.filterMask, this.source.transform(layer)) : raster;
   };
 }
 
