@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import fs from 'node:fs';
-import { writePsdUint8Array, type Psd } from 'ag-psd';
+import { readPsd, writePsdUint8Array, type Psd } from 'ag-psd';
 import { unzipSync } from 'fflate';
 import { decodePng, encodePng } from '../../src/io/png';
 import {
@@ -239,8 +239,8 @@ export async function benchmark03(page: Page): Promise<void> {
 }
 
 /** File › Open Project… with a PSD made in Node (ag-psd writer, no product code). */
-async function openPsd(page: Page, name: string, bytes: Uint8Array): Promise<void> {
-  await mountForTest(page);
+async function openPsd(page: Page, name: string, bytes: Uint8Array, fileTargets = false): Promise<void> {
+  await mountForTest(page, { fileTargets });
   await page.getByTestId('menu-File').click();
   await expect(page.getByRole('menuitem', { name: 'Open Project…' })).toBeEnabled();
   const chooser = page.waitForEvent('filechooser');
@@ -324,7 +324,7 @@ export async function benchmark04(page: Page): Promise<void> {
 export async function benchmark05(page: Page): Promise<void> {
   test.setTimeout(180_000);
   // Phase 2: the client PSD opens with its headline as an editable text layer.
-  await openPsd(page, 'client.psd', clientPsd());
+  await openPsd(page, 'client.psd', clientPsd(), true);
   const text = () => page.evaluate(() => (window as any).__editorForTests.session.document.layers
     .filter((l: any) => l.kind === 'text').map((l: any) => ({ name: l.name, text: l.text })));
   expect(await text()).toEqual([{ name: 'Headline', text: 'Summer Sale' }]);
@@ -341,7 +341,7 @@ export async function benchmark05(page: Page): Promise<void> {
   const field = [240, 240, 235, 255];
   expect(inkCount(await renderedRegion(page, 10, 10, 180, 50), field)).toBeGreaterThan(80);
 
-  // Hand it back as PSD: the one export path offers no PSD format, and Save writes the editor's own .fwimg.
+  // Hand it back as PSD. Export remains image-only; layered PSD belongs to File > Save As.
   await page.getByTestId('menu-File').click();
   await page.getByTestId('menu-export').click();
   await expect(page.getByTestId('export-dialog')).toBeVisible();
@@ -351,9 +351,24 @@ export async function benchmark05(page: Page): Promise<void> {
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('export-dialog')).toHaveCount(0);
   // Photoshop stores the PostScript name (here NotoSans-Regular); the bundled Noto Sans Regular is that font, so a client
-  // file set in it must not be reported as using a missing font. (Product bug: the name is matched only as a family.)
+  // file set in it must not be reported as using a missing font.
   await expect(page.getByTestId('missing-fonts'), 'no missing-font notice for the bundled Noto Sans Regular').toHaveCount(0);
-  missing('PSD write (save the edited client file back as a layered, editable PSD)', task(5));
+  await page.evaluate(() => { (window as any).__pickerAnswer = 'client-edited.psd'; });
+  await page.getByTestId('compositor-editor').press(`${mod}+Shift+s`);
+  await expect.poll(() => page.evaluate(() => (window as any).__targetWrites.at(-1)?.name)).toBe('client-edited.psd');
+  const saved = await page.evaluate(async () => {
+    const write = (window as any).__targetWrites.at(-1);
+    return { op: write.op, name: write.name, bytes: Array.from(new Uint8Array(await write.blob.arrayBuffer())) };
+  });
+  expect(saved.op).toBe('to');
+  expect(saved.name).toBe('client-edited.psd');
+  const bytes = Uint8Array.from(saved.bytes);
+  expect(new TextDecoder().decode(bytes.subarray(0, 4))).toBe('8BPS');
+  // ag-psd is an independent consumer here: the returned file must still contain two editable layers and live text.
+  const reopened = readPsd(bytes, { skipLayerImageData: true, skipCompositeImageData: true });
+  expect(reopened.children?.map((layer) => layer.name)).toEqual(['Background', 'Headline']);
+  expect(reopened.children?.[1]?.text?.text).toBe('Winter Sale');
+  expect(reopened.children?.[1]?.text?.style?.font?.name).toBe('NotoSans-Regular');
 }
 
 /** A 200 × 70 client file: a light background and an editable text layer "Summer Sale". */
@@ -923,7 +938,34 @@ export async function benchmark15(page: Page): Promise<void> {
   await page.getByTestId('text-feature-smcp').uncheck();
   await page.keyboard.press('Escape');
 
-  missing('text on a path (type along a curve) for the poster headline', task(15));
+  // Phase 3: a second headline follows an ellipse. Verify both the live path model and changed composited pixels.
+  await page.getByTestId('compositor-editor').press('u');
+  await page.getByTestId('vector-kind-Ellipse').click();
+  await page.getByTestId('vector-fill').click();
+  await page.getByTestId('vector-fill-none').click();
+  await page.getByTestId('vector-fill').click();
+  await dragView(page, [10, 15], [110, 115]);
+  const beforePathText = await renderedRegion(page, 0, 0, 120, 130);
+  await chooseTextTool(page);
+  await clickView(page, 60, 15);
+  await expect(page.getByTestId('text-commit')).toBeVisible();
+  await page.keyboard.type('WINTER SALE');
+  await page.keyboard.press('Escape');
+  const pathState = await page.evaluate(() => {
+    const layers = (window as any).__editorForTests.session.document.layers.filter((layer: any) => layer.kind === 'text');
+    const layer = layers.find((value: any) => value.text === 'WINTER SALE');
+    return { textLayers: layers.length, closed: layer?.textPath?.path?.closed ?? false,
+      points: layer?.textPath?.path?.points?.length ?? 0, text: layer?.text ?? null };
+  });
+  expect(pathState).toEqual({ textLayers: 2, closed: true, points: 4, text: 'WINTER SALE' });
+  await expect.poll(async () => {
+    const after = await renderedRegion(page, 0, 0, 120, 130);
+    let changed = 0;
+    for (let i = 0; i < after.data.length; i += 4) {
+      if (Math.abs(after.data[i + 3]! - beforePathText.data[i + 3]!) > 32) changed++;
+    }
+    return changed;
+  }, { message: 'path headline changes the composited pixels' }).toBeGreaterThan(100);
 }
 
 export async function benchmark16(page: Page): Promise<void> {
