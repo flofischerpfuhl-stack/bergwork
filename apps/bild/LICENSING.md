@@ -41,12 +41,15 @@ logo, because the license grants no trademark rights.
 ## Third-party code
 
 Third-party components keep their own licenses. See
-[LICENSES/THIRD_PARTY.md](LICENSES/THIRD_PARTY.md). New dependencies must be
-permissively licensed (MIT, BSD, Apache-2.0, ISC and similar) or use file-level
-copyleft (MPL-2.0, EPL-2.0). LGPL code is only used as a separately loaded,
-replaceable module (the FFmpeg WebAssembly core). GPL, AGPL, SSPL and
-non-commercial licenses are not accepted. `npm run check:licenses` enforces
-this for npm packages.
+[LICENSES/THIRD_PARTY.md](LICENSES/THIRD_PARTY.md); the same inventory is shown in the app under About › Licences. New
+dependencies must be permissively licensed (MIT, BSD, Apache-2.0, ISC and
+similar) or use file-level copyleft (MPL-2.0, which the Tauri runtime brings in;
+Unicode-3.0 is accepted for Tauri's text crates). LGPL code is never bundled: it
+is only used as a separately loaded, replaceable opt-in component (libheif for
+HEIC, and the system LibRaw for camera RAW on Linux). GPL, AGPL, SSPL and
+non-commercial licenses are not accepted. `npm run check:licenses` enforces this
+for npm packages, Rust crates and the bundled native, WASM, font and model
+components.
 
 ## Contributing
 
