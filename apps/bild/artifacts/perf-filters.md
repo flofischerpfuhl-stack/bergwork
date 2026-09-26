@@ -20,6 +20,12 @@ No dependency, licence, contract, or i18n changes were made.
 
 The 1536×1536 destructive Gaussian preview used a 768×768 selection. The preview-versus-exact-Apply maximum was **1/255** in both engines; pixels outside the selection changed by **0**. Apply produced real document pixels and one exact committed raster.
 
+### Windows AMD precision follow-up
+
+On the Ryzen 3 3200G / Vega Windows machine, Firefox initially put one transparent-edge Unsharp Mask sample on the other side of the nonzero threshold: GPU byte 20 versus CPU byte 22, for a **2/255** maximum error. The filter path was already highp with RGBA32F intermediates; the discrepancy came after the premultiplied Gaussian was unpremultiplied and rounded for the threshold gate. Exact threshold hits at a partially covered blur boundary are now blended halfway between the gated and ungated preview values, bounding either float32-driver rounding to one display byte without changing interior samples or threshold-zero filters.
+
+The branch-specific Windows run (`c042f8d`, Chromium and Firefox, one worker) passed both projects. Unsharp Mask maximum/mean error was **1/255, 0.02135 byte** in Chromium and **1/255, 0.02240 byte** in Firefox. Gaussian Blur, Motion Blur, Add Noise, Smart Sharpen, High Pass, Denoise, Lens Correction, the ordered filter stack, and the smart-filter mask were all **≤1/255**; Blend If was exact. The test now reports the signed worst pixel as well as maximum and mean error, making future driver-only rounding failures diagnosable from the remote log.
+
 ## Performance method
 
 The harness uses a 1536×1536 shared-tile RGBA8 raster, a 1280×800 viewport, six live Gaussian changes, and six destructive Gaussian slider changes. It counts `Worker` construction and full-raster `toPixelsNative` copies. The final harness explicitly separates first GPU-filter interaction, steady filter frames, slider handler time, and preview frame time.
