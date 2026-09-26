@@ -131,6 +131,9 @@ html[data-brand="bergwork"] .oo-pdf-shell {
   --pdf-selected: rgba(168, 162, 158, 0.16);
   --pdf-text-selection-bg: #d6d0c8;
   --pdf-text-selection-text: #1c1917;
+  /* Form fields lie on the white page in both themes: a light stone tint. */
+  --pdf-form-field-bg: #ebe8e4;
+  --pdf-form-field-text: #1c1917;
   --bw-titlebar-bg: #181818;
 }
 
