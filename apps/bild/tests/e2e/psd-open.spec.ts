@@ -11,6 +11,7 @@ const PSD_NATIVE_GPU_FIXTURES = ['mask-density-layermask.psd', 'effects/stroke-c
   path.resolve('tests/fixtures/psd/corpus', name));
 const PSD_CACHELESS_FILL = path.resolve('tests/fixtures/psd/corpus/vector-mask2.psd');
 const PSD_CMYK_BLEND = path.resolve('tests/fixtures/psd/corpus/blend-modes/cmyk-blend-modes.psd');
+const PSD_GRAY_BLEND = path.resolve('tests/fixtures/psd/corpus/blend-modes/gray-blend-modes.psd');
 
 test('opens a corpus PSD through Open as a layered document', async ({ page }) => {
   // The psd-tools corpus is fetched by scripts/fetch-psd-corpus.sh and not committed (E5); without it there is nothing to open.
@@ -135,11 +136,40 @@ test('managed CMYK process-space blending matches on GPU and CPU within one byte
       const difference = Math.abs(pixels[index]! - cpu[index]!);
       maximum = Math.max(maximum, difference); if (difference) changed++;
     }
+    const counters = gpu.performanceCounters;
     gpu.destroy(); canvas.remove();
-    return { maximum, changed, pixels: pixels.length };
+    return { maximum, changed, pixels: pixels.length, counters };
   }, bytes);
   expect(result.pixels).toBe(100 * 100 * 4);
   expect(result.maximum, JSON.stringify(result)).toBeLessThanOrEqual(1);
+  expect(result.counters.nativeCmykFrames).toBe(1);
+  expect(result.counters.cpuDocumentFallbacks).toBe(0);
+});
+
+test('managed grayscale blending remains GPU-native and matches the CPU oracle', async ({ page }) => {
+  test.skip(!fs.existsSync(PSD_GRAY_BLEND), 'PSD corpus not fetched');
+  await page.goto('/?harness=gpu');
+  const bytes = Array.from(fs.readFileSync(PSD_GRAY_BLEND));
+  const result = await page.evaluate(async (source) => {
+    const load = (module: string): Promise<any> => import(/* @vite-ignore */ module);
+    const [{ GpuCompositor }, { cpuCompositeRegion }, { readPsdDocumentManaged }] = await Promise.all([
+      load('/src/render/gpuCompositor.ts'), load('/src/render/cpuRender.ts'), load('/src/io/psd/reader.ts'),
+    ]);
+    const imported = await readPsdDocumentManaged(new Uint8Array(source));
+    const size = 100, cpu = cpuCompositeRegion(imported.document, { x: 0, y: 0, width: size, height: size });
+    const canvas = globalThis.document.createElement('canvas'); globalThis.document.body.append(canvas);
+    const gpu = await GpuCompositor.create(canvas, size, size);
+    const pixels = gpu.readRegion(imported.document, 0, 0, size, size);
+    let maximum = 0;
+    for (let index = 0; index < pixels.length; index++) maximum = Math.max(maximum, Math.abs(pixels[index]! - cpu[index]!));
+    const counters = gpu.performanceCounters;
+    gpu.destroy(); canvas.remove();
+    return { maximum, pixels: pixels.length, counters };
+  }, bytes);
+  expect(result.pixels).toBe(100 * 100 * 4);
+  expect(result.maximum, JSON.stringify(result)).toBeLessThanOrEqual(1);
+  expect(result.counters.nativeGrayFrames).toBe(1);
+  expect(result.counters.cpuDocumentFallbacks).toBe(0);
 });
 
 test('PSD cache-less generated fill matches on GPU and CPU within one output byte', async ({ page }) => {
