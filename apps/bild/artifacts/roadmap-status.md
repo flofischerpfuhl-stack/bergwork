@@ -84,7 +84,7 @@ silently change the plan. Last updated 2026-09-26 after Phase 3, the performance
 | PNG/JPEG/TIFF import; HEIC | ✅ | `tests/e2e/import-formats.spec.ts`, `tests/e2e/heic.spec.ts`, `tests/unit/icc.test.ts` |
 | WebP/AVIF/GIF import | ✅ | `tests/unit/codec-formats.test.ts`, `tests/e2e/import-formats.spec.ts` |
 | Place SVG/PDF | 🟡 | SVG is built in; PDF is host-capability-only and the available PDFium runtime is not release-approved. `tests/e2e/embedded.spec.ts`, `artifacts/embedded.md` |
-| PSD read/write | 🟡 | Write is delivered (commit `69f74c8`, `tests/e2e/psd-save.spec.ts`, `artifacts/psd-write.md`). Read is 252/300 = 84.0%; M15 target is every fixable deviation, current ceiling 267/300 = 89.0%. `artifacts/psd-fidelity.md`, `artifacts/psd-target.md` |
+| PSD read/write | 🟡 | Write is delivered (commit `69f74c8`, `tests/e2e/psd-save.spec.ts`, `artifacts/psd-write.md`). Read is 256/300 = 85.3%; M15 target is every fixable deviation, current ceiling 267/300 = 89.0%. `artifacts/psd-fidelity.md`, `artifacts/psd-target.md` |
 | RAW | ✅ | Browser DNG plus opt-in host decoding (Windows WIC / system LibRaw); commit `84e581f`, `tests/e2e/raw-dng.spec.ts`, `artifacts/raw.md`; benchmark 12 |
 | Read Mac `.comp` | ✅ | `tests/unit/compPackage.test.ts`, `tests/e2e/workspace.spec.ts` |
 | Write Mac `.comp` | ✅ plan action completed: removed from product UI | Compatibility writer remains test-only until frozen fixtures permit deletion (E2/M5) |
@@ -104,7 +104,7 @@ silently change the plan. Last updated 2026-09-26 after Phase 3, the performance
 | Phase 2 exit | 🟡 | Features landed, but M15 PSD read target is not yet met and the A9 user test remains owner-deferred |
 | Phase 3 feature scope | ✅ | PSD write, CMYK proof/export, RAW, local remove/upscale, warp/liquify, brushes/ABR, path text, remaining styles, batch and recipes are merged; commits/evidence are listed above |
 | Phase 3 exit (core tasks 11–20 + user test) | 🟡 | Current automation: 18 passed, task 13 red, task 7 environment-skipped; task 13 is in the 11–20 exit set. User test remains owner-deferred. `artifacts/benchmarks.md` |
-| A0–A8 | ✅/🟡 | A0/A2/A3/A4/A5/A6/A8 are implemented and measured. A7 write is green; A7 read remains at 252/300 against the M15 267/300 ceiling. See `artifacts/a0-hosts.md`, `artifacts/a4d-memory.md`, `artifacts/psd-fidelity.md` |
+| A0–A8 | ✅/🟡 | A0/A2/A3/A4/A5/A6/A8 are implemented and measured. A7 write is green; A7 read remains at 256/300 against the M15 267/300 ceiling. See `artifacts/a0-hosts.md`, `artifacts/a4d-memory.md`, `artifacts/psd-fidelity.md` |
 | A9 core-task automation | 🟡 | 18/20 current passes, 1 genuine red, 1 model-dependent skip; no user study yet. `artifacts/benchmarks.md` |
 | A10 Lite start bundle | ✅ | Split gate landed at 263.10 kB gzip (`bdb24c7`); latest recorded production value is 281.26 kB, still below 400 kB. `artifacts/bundle-budget.md`, `artifacts/perf-io.md` |
 | Licensing | ✅ inventory / 🟡 release | Commit `e82f033`: 546 entries, 20 full texts, offline searchable UI and checker. MPL-2.0/Unicode-3.0 remain Tauri-runtime-only under M13; Tauri stays internal pending legal advice. `artifacts/licensing.md` |
