@@ -180,6 +180,11 @@ function effectFill(value: LayerEffect & { readonly kind: 'gradientOverlay' }) {
 }
 
 const LINEAR_CONTOUR = { name: 'Linear', curve: [{ x: 0, y: 0 }, { x: 255, y: 255 }] };
+function effectContour(effect: LayerEffect): typeof LINEAR_CONTOUR {
+  return effect.psdContour?.length ? { name: 'Custom', curve: effect.psdContour.map((point) => ({
+    x: Math.min(255, Math.max(0, point.x)), y: Math.min(255, Math.max(0, point.y)),
+  })) } : LINEAR_CONTOUR;
+}
 
 function effectPattern(effect: LayerEffect & { readonly kind: 'patternOverlay' }, state: State,
   path: string): { name: string; id: string } | undefined {
@@ -208,10 +213,11 @@ function effects(values: readonly LayerEffect[], state: State, path: string): La
     case 'dropShadow': (result.dropShadow ??= []).push({ present: true, enabled: effect.enabled,
       opacity: clamp01(effect.opacity), angle: effect.angle, useGlobalLight: effect.useGlobalLight ?? false,
       distance: pixelsUnit(effect.distance), size: pixelsUnit(effect.size ?? effect.blur), choke: pixelsUnit(effect.spread ?? 0),
-      color: color(effect.color), blendMode: BLENDS[effect.blendMode ?? 'multiply'], layerConceals: effect.knockout ?? true }); break;
+      color: color(effect.color), blendMode: BLENDS[effect.blendMode ?? 'multiply'], layerConceals: effect.knockout ?? true,
+      contour: effectContour(effect) }); break;
     case 'outerGlow': result.outerGlow = { present: true, enabled: effect.enabled, opacity: clamp01(effect.opacity),
       size: pixelsUnit(effect.size), choke: pixelsUnit(effect.spread), color: color(effect.color), blendMode: BLENDS[effect.blendMode],
-      source: 'edge', noise: 0 }; break;
+      source: 'edge', noise: 0, contour: effectContour(effect) }; break;
     case 'colorOverlay': (result.solidFill ??= []).push({ present: true, enabled: effect.enabled,
       opacity: clamp01(effect.opacity), color: color(effect.color), blendMode: BLENDS[effect.blendMode ?? 'normal'] }); break;
     case 'gradientOverlay': (result.gradientOverlay ??= []).push({ present: true, enabled: effect.enabled,
@@ -220,10 +226,10 @@ function effects(values: readonly LayerEffect[], state: State, path: string): La
     case 'innerShadow': (result.innerShadow ??= []).push({ present: true, enabled: effect.enabled,
       opacity: clamp01(effect.opacity), blendMode: BLENDS[effect.blendMode], color: color(effect.color), angle: effect.angle,
       useGlobalLight: effect.useGlobalLight, distance: pixelsUnit(effect.distance), choke: pixelsUnit(effect.choke),
-      size: pixelsUnit(effect.size), contour: LINEAR_CONTOUR }); break;
+      size: pixelsUnit(effect.size), contour: effectContour(effect) }); break;
     case 'innerGlow': result.innerGlow = { present: true, enabled: effect.enabled, opacity: clamp01(effect.opacity),
       blendMode: BLENDS[effect.blendMode], color: color(effect.color), source: effect.source, technique: 'softer',
-      choke: pixelsUnit(effect.choke), size: pixelsUnit(effect.size), contour: LINEAR_CONTOUR, noise: 0, range: 1 }; break;
+      choke: pixelsUnit(effect.choke), size: pixelsUnit(effect.size), contour: effectContour(effect), noise: 0, range: 1 }; break;
     case 'bevelEmboss': result.bevel = { present: true, enabled: effect.enabled,
       style: effect.style === 'innerBevel' ? 'inner bevel' : effect.style === 'outerBevel' ? 'outer bevel'
         : effect.style === 'pillowEmboss' ? 'pillow emboss' : 'emboss',
@@ -232,12 +238,12 @@ function effects(values: readonly LayerEffect[], state: State, path: string): La
       angle: effect.angle, altitude: effect.altitude, useGlobalLight: effect.useGlobalLight,
       highlightBlendMode: BLENDS[effect.highlightMode], highlightColor: color(effect.highlightColor),
       highlightOpacity: clamp01(effect.highlightOpacity), shadowBlendMode: BLENDS[effect.shadowMode],
-      shadowColor: color(effect.shadowColor), shadowOpacity: clamp01(effect.shadowOpacity), contour: LINEAR_CONTOUR,
+      shadowColor: color(effect.shadowColor), shadowOpacity: clamp01(effect.shadowOpacity), contour: effectContour(effect),
       useTexture: false, useShape: false }; break;
     case 'satin': result.satin = { present: true, enabled: effect.enabled, opacity: clamp01(effect.opacity),
       blendMode: BLENDS[effect.blendMode], color: color(effect.color), angle: effect.angle,
       distance: pixelsUnit(effect.distance), size: pixelsUnit(effect.size), invert: effect.invert,
-      contour: LINEAR_CONTOUR }; break;
+      contour: effectContour(effect) }; break;
     case 'patternOverlay': {
       const pattern = effectPattern(effect, state, path);
       if (pattern) result.patternOverlay = { present: true, enabled: effect.enabled, opacity: clamp01(effect.opacity),

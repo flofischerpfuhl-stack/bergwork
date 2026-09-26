@@ -1584,6 +1584,8 @@ export class GpuCompositor {
       this.destroyBrushCompositeCache();
     }
     const byId = new Map(document.layers.map((l) => [l.id, l]));
+    const groupClippingBaseIds = new Set(document.layers.map((layer) => layer.maskSourceId)
+      .filter((id): id is string => !!id && byId.get(id)?.kind === 'group'));
     if (!activeBrush) this.destroyBrushState();
     const children = new Map<string | null, Layer[]>();
     for (const layer of document.layers) {
@@ -1605,8 +1607,12 @@ export class GpuCompositor {
       for (const layer of children.get(parent) ?? []) {
         if (!layer.visible) continue;
         if (layer.kind === 'group') {
-          if (isolated(layer)) output.push(layer); else output.push(...sequence(layer.id));
-        } else if (hooks.raster(layer) || activeBrush?.layerId === layer.id || layer.adjustment) output.push(layer);
+          if (isolated(layer) || groupClippingBaseIds.has(layer.id)) output.push(layer); else output.push(...sequence(layer.id));
+        } else if (hooks.raster(layer) || activeBrush?.layerId === layer.id || layer.adjustment || layer.maskSourceId) {
+          // A cache-less clipped layer is still a stack boundary. Keeping the sentinel here lets
+          // a group base retain its sole-descendant stack semantics without inventing pixels.
+          output.push(layer);
+        }
       }
       return output;
     };
@@ -1624,8 +1630,10 @@ export class GpuCompositor {
       for (const folder of folders) {
         const raster = hooks.maskRaster(folder);
         if (!raster) continue;
+        const legacyDefault = (folder as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault;
+        const background = (folder.mask?.defaultColor ?? legacyDefault ?? 0) / 255;
         clip = this.multiplyMask(clip, raster, `mask:${folder.id}`,
-          hooks.maskPlacement(folder) ?? hooks.transform(folder), view, temporaries);
+          hooks.maskPlacement(folder) ?? hooks.transform(folder), view, temporaries, background);
       }
       folderClips.set(key, clip);
       return clip;
@@ -1636,7 +1644,36 @@ export class GpuCompositor {
       if (liveCoverage.has(id)) return liveCoverage.get(id)!;
       liveCoverage.set(id, null); // cycle guard
       const layer = byId.get(id);
-      if (!layer || depth >= 256 || !hooks.raster(layer)) return null;
+      if (!layer || depth >= 256) return null;
+      if (layer.kind === 'group') {
+        const descendants = sequence(layer.id);
+        const hasPaint = descendants.some((candidate) => candidate.kind !== 'group'
+          && !candidate.adjustment && !!hooks.raster(candidate));
+        const hasAdjustment = descendants.some((candidate) => !!candidate.adjustment);
+        if (!hasPaint && !hasAdjustment) return null;
+        let clip: RenderTexture | null = null;
+        if (layer.maskSourceId) {
+          clip = coverageOf(layer.maskSourceId, depth + 1);
+          if (!clip) return null;
+        }
+        const mask = hooks.maskRaster(layer);
+        if ((layer.mask?.enabled || layer.vectorMask?.enabled) && mask) {
+          clip = this.multiplyMask(clip, mask, `group-coverage-mask:${layer.id}`,
+            hooks.maskPlacement(layer) ?? hooks.transform(layer), view, temporaries,
+            (layer.mask?.defaultColor ?? 0) / 255);
+        }
+        const groupSurface = hasPaint ? renderSequence(descendants, false, layer.id) : this.acquire(width, height);
+        if (!hasPaint) this.clear(groupSurface, true);
+        temporaries.push(groupSurface);
+        const empty = this.acquire(width, height); this.clear(empty); temporaries.push(empty);
+        const composed = this.drawGroupSurface(empty, groupSurface, null, clip,
+          { ...layer, blendMode: 'normal' }, view, 'normal');
+        temporaries.push(composed);
+        const coverage = this.coverageFromAlpha(composed, view, temporaries);
+        liveCoverage.set(id, coverage);
+        return coverage;
+      }
+      if (!hooks.raster(layer)) return null;
       let clip: RenderTexture | null = null;
       if (layer.maskSourceId) {
         clip = coverageOf(layer.maskSourceId, depth + 1);
@@ -1652,8 +1689,11 @@ export class GpuCompositor {
       return coverage;
     };
 
-    const renderSequence = (layers: readonly Layer[], root = false, scopeParent: string | null = null): RenderTexture => {
-      let surface = this.acquire(width, height); this.clear(surface, root
+    const renderSequence = (layers: readonly Layer[], root = false, scopeParent: string | null = null,
+      initial: RenderTexture | null = null): RenderTexture => {
+      let surface = this.acquire(width, height);
+      if (initial) this.run(this.pass('copy'), surface, width, height, { uSource: initial.source }, {});
+      else this.clear(surface, root
         && (document as CanvasDocument & { readonly psdOpaqueCanvas?: boolean }).psdOpaqueCanvas === true);
       const hasLayerKnockout = layers.some((layer) => layer.kind !== 'group'
         && !!(layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout);
@@ -1663,7 +1703,7 @@ export class GpuCompositor {
       const passThroughBases = new Map<string, RenderTexture>();
       const stacks = new Map<string, Layer[]>(), stacked = new Set<string>();
       layers.forEach((base, index) => {
-        if (base.kind === 'group' || base.maskSourceId || base.adjustment) return;
+        if (base.maskSourceId || base.adjustment) return;
         const clipped: Layer[] = [];
         for (const child of layers.slice(index + 1)) {
           if (child.kind === 'group' || child.maskSourceId !== base.id || child.parentId !== base.parentId) break;
@@ -1687,6 +1727,42 @@ export class GpuCompositor {
           this.run(this.pass('copy'), base, width, height, { uSource: surface.source }, {});
           passThroughBases.set(ancestor.id, base);
         }
+        const clipped = stacks.get(layer.id);
+        if (layer.kind === 'group' && clipped
+          && !clipped.some((candidate) => !!candidate.adjustment || !!hooks.raster(candidate))) {
+          const paint = sequence(layer.id).filter((candidate) => candidate.visible && candidate.kind !== 'group'
+            && !candidate.adjustment && !!hooks.raster(candidate));
+          if (paint.length === 1) {
+            const base = paint[0]!, next = this.drawLayer(surface, base, view, hooks,
+              folderClip(base.id), hooks.blendMode(base));
+            this.release(surface); surface = next; continue;
+          }
+        }
+        if (layer.kind === 'group' && clipped
+          && clipped.some((candidate) => !!candidate.adjustment || !!hooks.raster(candidate))) {
+          const content = sequence(layer.id);
+          const paintCount = content.filter((candidate) => candidate.visible && candidate.kind !== 'group'
+            && !candidate.adjustment && !!hooks.raster(candidate)).length;
+          const hasPaint = paintCount > 0;
+          if (!hasPaint && !clipped.some((candidate) => !!candidate.adjustment || !!hooks.raster(candidate))) continue;
+          const alphaSurface = hasPaint ? renderSequence(content, false, layer.id) : this.acquire(width, height);
+          if (!hasPaint) this.clear(alphaSurface, true);
+          const needsBackdrop = content.some((candidate) => candidate.visible
+            && (!!candidate.adjustment || candidate.blendMode !== 'normal'));
+          // A clipping-base group is a child surface unless a pass-through descendant explicitly needs
+          // the entry backdrop for an adjustment or non-normal blend mode.
+          const colorSurface = isolated(layer) || !needsBackdrop
+            ? alphaSurface : renderSequence(content, false, layer.id, surface);
+          let groupClip = folderClip(layer.id);
+          const ownMask = hooks.maskRaster(layer);
+          if ((layer.mask?.enabled || layer.vectorMask?.enabled) && ownMask) groupClip = this.multiplyMask(groupClip,
+            ownMask, `group-stack-mask:${layer.id}`, hooks.maskPlacement(layer) ?? hooks.transform(layer), view, temporaries,
+            (layer.mask?.defaultColor ?? 0) / 255);
+          const next = this.drawGroupStack(surface, layer, clipped, alphaSurface, colorSurface, view, hooks, groupClip, temporaries);
+          this.release(surface); this.release(alphaSurface);
+          if (colorSurface !== alphaSurface) this.release(colorSurface);
+          surface = next; continue;
+        }
         if (layer.kind === 'group') {
           const groupSurface = renderSequence(sequence(layer.id), false, layer.id);
           const groupClip = layer.maskSourceId ? coverageOf(layer.maskSourceId, 1) : null;
@@ -1706,7 +1782,6 @@ export class GpuCompositor {
           const next = this.adjust(surface, layer, view, hooks, this.adjustmentClip(layer, clip, view, hooks, temporaries));
           this.release(surface); surface = next; continue;
         }
-        const clipped = stacks.get(layer.id);
         if (clipped) {
           const next = this.drawStack(surface, layer, clipped, view, hooks, clip, temporaries);
           this.release(surface); surface = next; continue;
@@ -2312,8 +2387,8 @@ export class GpuCompositor {
 
   /** previous × transformed mask (outside the mask rect → 0), as FolderMaskClip does. */
   private multiplyMask(previous: RenderTexture | null, raster: Raster, slotKey: string, placement: LayerTransform, view: ViewSpec,
-    temporaries: RenderTexture[]): RenderTexture {
-    const out = this.renderMask(previous, raster, slotKey, placement, view, 0);
+    temporaries: RenderTexture[], background = 0): RenderTexture {
+    const out = this.renderMask(previous, raster, slotKey, placement, view, background);
     temporaries.push(out);
     return out;
   }
@@ -2474,6 +2549,37 @@ export class GpuCompositor {
       uDissolveSeed: mode === 'dissolve' ? blendSeed(base.id) : 0, uViewToDoc: mat3(view.viewToDoc) });
     this.release(surface);
     return out;
+  }
+
+  private drawGroupStack(backdrop: RenderTexture, group: Layer, children: Layer[], alphaSurface: RenderTexture,
+    colorSurface: RenderTexture, view: ViewSpec, hooks: CompositeHooks, clip: RenderTexture | null,
+    temporaries: RenderTexture[]): RenderTexture {
+    const empty = this.acquire(view.width, view.height); this.clear(empty);
+    const effectiveAlpha = this.drawGroupSurface(empty, alphaSurface, null, clip,
+      { ...group, blendMode: 'normal' }, view, 'normal');
+    let surface = this.acquire(view.width, view.height);
+    this.run(this.pass('opaque'), surface, view.width, view.height, { uSource: colorSurface.source }, {});
+    for (const child of children) {
+      const next = child.adjustment
+        ? this.adjust(surface, child, view, hooks, this.adjustmentClip(child, null, view, hooks, temporaries))
+        : this.drawLayer(surface, child, view, hooks, null, hooks.blendMode(child));
+      this.release(surface);
+      surface = next;
+    }
+    const out = this.acquire(view.width, view.height), mode = this.blendModeForGroupStack(group, hooks);
+    this.run(this.pass('stack'), out, view.width, view.height, {
+      uBackdrop: backdrop.source, uSurface: surface.source, uBase: effectiveAlpha.source, uClip: this.white,
+    }, { uHasClip: 0, uMode: BLEND_INDEX[mode] ?? 0,
+      ...blendIfValues(group.blendIf), uDissolveSeed: mode === 'dissolve' ? blendSeed(group.id) : 0,
+      uViewToDoc: mat3(view.viewToDoc) });
+    this.release(empty); this.release(effectiveAlpha); this.release(surface);
+    return out;
+  }
+
+  private blendModeForGroupStack(group: Layer, hooks: CompositeHooks): BlendMode {
+    const isolated = (group as Layer & { readonly psdIsolated?: boolean }).psdIsolated === true
+      || group.opacity !== 1 || group.fillOpacity !== 1 || group.blendMode !== 'normal';
+    return isolated ? hooks.blendMode(group) : 'normal';
   }
 
   private drawGroupSurface(backdrop: RenderTexture, surface: RenderTexture, knockoutBase: RenderTexture | null,

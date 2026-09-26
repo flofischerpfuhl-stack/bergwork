@@ -6,7 +6,7 @@ import {
 import { ancestorIds, descendantIds, hierarchyEntries,
   type BlendMode, type CanvasDocument, type Layer, type LayerAdjustment } from './document';
 import type { Affine, LayerSampling, LayerTransform, Rect } from './geometry';
-import { concat, invert, pixelToDocument, samePlacement } from './geometry';
+import { apply, concat, invert, pixelToDocument, samePlacement } from './geometry';
 import { alphaBounds, Raster, TILE } from './raster';
 import {
   mapPlacement, maskBackground, preparePlacement, prepareSampler, sampleMask, sampleRgba, sampleRgbaBicubic,
@@ -59,15 +59,20 @@ class BandRenderer {
   private readonly liveSample = new Float32Array(4);
   private readonly blendScratch = new Float64Array(6);
   private readonly blendSeeds = new Map<string, number>();
+  private readonly groupCoverageSurfaces = new Map<string, Float32Array>();
   private readonly documentToOutput: Affine | undefined;
   private readonly order: readonly Layer[];
   private readonly shallowBoundaryIds = new Set<string>();
+  private activeBand: { readonly width: number; readonly height: number;
+    readonly originX: number; readonly originY: number } | null = null;
   skippedAdjustment = false;
 
   constructor(private readonly document: CanvasDocument, private readonly options: CompositeOptions,
     private readonly outputToDocument?: Affine, private readonly rootKnockout = true) {
     this.documentToOutput = outputToDocument ? invert(outputToDocument) : undefined;
     this.byId = new Map(document.layers.map((layer) => [layer.id, layer]));
+    const groupClippingBaseIds = new Set(document.layers.map((layer) => layer.maskSourceId)
+      .filter((id): id is string => !!id && this.byId.get(id)?.kind === 'group'));
     const isolated = document.layers.filter((layer) => layer.kind === 'group'
       && ((layer as Layer & { readonly psdIsolated?: boolean }).psdIsolated === true
         || layer.opacity !== 1 || layer.fillOpacity !== 1 || layer.blendMode !== 'normal' || !!layer.maskSourceId));
@@ -76,13 +81,14 @@ class BandRenderer {
       if ((layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout !== 'shallow') continue;
       for (const id of ancestorIds(document.layers, layer.id)) if (!isolatedIds.has(id)) this.shallowBoundaryIds.add(id);
     }
+    const surfaceGroupIds = new Set([...isolatedIds, ...groupClippingBaseIds]);
     const insideIsolated = new Set<string>();
-    for (const group of isolated) for (const id of descendantIds(document.layers, group.id)) insideIsolated.add(id);
+    for (const id of surfaceGroupIds) for (const descendant of descendantIds(document.layers, id)) insideIsolated.add(descendant);
     this.order = hierarchyEntries(document.layers).filter((entry) => entry.visible
       && ((entry.layer.kind === 'group' && !insideIsolated.has(entry.layer.id)
-          && isolatedIds.has(entry.layer.id))
+          && surfaceGroupIds.has(entry.layer.id))
         || (entry.layer.kind !== 'group' && !insideIsolated.has(entry.layer.id)))).map((entry) => entry.layer);
-    const ids = this.order.filter((layer) => layer.kind !== 'group');
+    const ids = this.order;
     for (let index = 0; index < ids.length; index++) {
       const base = ids[index]!;
       if (base.maskSourceId || base.adjustment) continue;
@@ -218,8 +224,10 @@ class BandRenderer {
       const transform = { ...placement, sampling: 'High quality' as const };
       const prepared = this.preparedPlacement(`folder:${folder.id}`, transform, raster.width, raster.height, documentToOutput);
       mapPlacement(prepared, x, y, this.location);
-      if (this.location[2]! <= 0) return 0;
-      coverage *= sampleMask(this.maskSampler(raster, transform, documentToOutput), this.location[0]!, this.location[1]!) * this.location[2]!;
+      const legacyDefault = (folder as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault;
+      const background = (folder.mask?.defaultColor ?? legacyDefault ?? 0) / 255;
+      const sampled = sampleMask(this.maskSampler(raster, transform, documentToOutput), this.location[0]!, this.location[1]!);
+      coverage *= background + (sampled - background) * this.location[2]!;
       if (coverage <= 0) return 0;
     }
     return coverage;
@@ -310,8 +318,44 @@ class BandRenderer {
   liveCoverage(id: string, x: number, y: number, visiting: Set<string>, documentToOutput?: Affine): number {
     if (visiting.size >= 256 || visiting.has(id)) return 0;
     const layer = this.byId.get(id);
-    if (!layer || layer.kind === 'group' || layer.adjustment) return 0;
+    if (!layer || layer.adjustment) return 0;
     visiting.add(id);
+    if (layer.kind === 'group') {
+      const band = this.activeBand;
+      if (!band) { visiting.delete(id); return 0; }
+      let surface = this.groupCoverageSurfaces.get(id);
+      if (!surface) {
+        const ids = descendantIds(this.document.layers, id);
+        const descendants = this.document.layers.filter((candidate) => ids.has(candidate.id)).map((candidate) =>
+          candidate.parentId === id ? { ...candidate, parentId: null } : candidate);
+        const nested = descendants.length
+          ? new BandRenderer({ ...this.document, layers: descendants }, this.options, this.outputToDocument, false)
+            .render(band.width, band.height, band.originX, band.originY)
+          : new Float32Array(band.width * band.height * 4);
+        const hasPaint = descendants.some((candidate) => candidate.visible && candidate.kind !== 'group'
+          && !candidate.adjustment && !!this.raster(candidate));
+        const hasAdjustment = descendants.some((candidate) => candidate.visible && !!candidate.adjustment);
+        surface = new Float32Array(band.width * band.height);
+        const map = this.outputToDocument;
+        for (let py = 0; py < band.height; py++) for (let px = 0; px < band.width; px++) {
+          const ox = band.originX + px + 0.5, oy = band.originY + py + 0.5;
+          const documentX = map ? map.a * ox + map.c * oy + map.tx : ox;
+          const documentY = map ? map.b * ox + map.d * oy + map.ty : oy;
+          const base = !hasPaint && hasAdjustment ? 1 : nested[(py * band.width + px) * 4 + 3]!;
+          let coverage = base * this.ownMask(layer, documentX, documentY, false, this.documentToOutput)
+            * clamp01(layer.opacity) * clamp01(layer.fillOpacity);
+          if (layer.maskSourceId) coverage *= this.liveCoverage(layer.maskSourceId, documentX, documentY,
+            visiting, this.documentToOutput);
+          surface[py * band.width + px] = coverage;
+        }
+        this.groupCoverageSurfaces.set(id, surface);
+      }
+      const outputPoint = documentToOutput
+        ? apply(documentToOutput, { x, y }) : { x, y };
+      const px = Math.floor(outputPoint.x - band.originX), py = Math.floor(outputPoint.y - band.originY);
+      visiting.delete(id);
+      return px >= 0 && py >= 0 && px < band.width && py < band.height ? surface[py * band.width + px]! : 0;
+    }
     const edge = this.sourceAt(layer, x, y, this.liveSample, documentToOutput);
     let coverage = this.liveSample[3]! * edge * clamp01(layer.opacity) * clamp01(layer.fillOpacity)
       * this.ownMask(layer, x, y, false, documentToOutput);
@@ -481,6 +525,10 @@ class BandRenderer {
   }
 
   private drawStack(stack: Stack, target: Float32Array, width: number, height: number, originX: number, originY: number): void {
+    if (stack.base.kind === 'group') {
+      this.drawGroupStack(stack, target, width, height, originX, originY);
+      return;
+    }
     const group = new Float32Array(width * height * 4);
     this.drawLayer(stack.base, group, width, height, originX, originY, false, false);
     const alpha = new Uint8Array(width * height);
@@ -509,6 +557,57 @@ class BandRenderer {
       compositePremultiplied(target, offset, group[offset]! * coverage, group[offset + 1]! * coverage,
         group[offset + 2]! * coverage, sourceAlpha * coverage, mode, false, this.blendScratch,
         mode === 'dissolve' ? dissolveNoise(Math.floor(x), Math.floor(y), seed) : 0);
+    }
+  }
+
+  private drawGroupStack(stack: Stack, target: Float32Array, width: number, height: number,
+    originX: number, originY: number): void {
+    const ids = descendantIds(this.document.layers, stack.base.id);
+    const layers = this.document.layers.filter((layer) => ids.has(layer.id)).map((layer) =>
+      layer.parentId === stack.base.id ? { ...layer, parentId: null } : layer);
+    if (!layers.length) return;
+    const nested = new BandRenderer({ ...this.document, layers }, this.options, this.outputToDocument, false);
+    const alphaSurface = nested.render(width, height, originX, originY);
+    const paintLayers = layers.filter((layer) => layer.visible && layer.kind !== 'group'
+      && !layer.adjustment && !!this.raster(layer));
+    const adjustmentOnly = !paintLayers.length && layers.some((layer) => layer.visible && !!layer.adjustment);
+    if (adjustmentOnly && !stack.children.some((layer) => !!layer.adjustment || !!this.raster(layer))) return;
+    const isolated = (stack.base as Layer & { readonly psdIsolated?: boolean }).psdIsolated === true
+      || stack.base.opacity !== 1 || stack.base.fillOpacity !== 1 || stack.base.blendMode !== 'normal';
+    if (!stack.children.some((layer) => !!layer.adjustment || !!this.raster(layer)) && paintLayers.length === 1) {
+      this.drawStack({ base: paintLayers[0]!, children: [] }, target, width, height, originX, originY);
+      return;
+    }
+    const needsBackdrop = layers.some((layer) => layer.visible && (!!layer.adjustment || layer.blendMode !== 'normal'));
+    // A clipping-base group contributes its child surface unless a pass-through descendant explicitly
+    // needs the entry backdrop for an adjustment or blend mode (clipping-mask4.psd).
+    const group = isolated || !needsBackdrop ? alphaSurface.slice() : nested.render(width, height, originX, originY, target);
+    const alpha = new Uint8Array(width * height), map = this.outputToDocument;
+    for (let py = 0; py < height; py++) for (let px = 0; px < width; px++) {
+      const pixel = py * width + px, offset = pixel * 4;
+      const ox = originX + px + 0.5, oy = originY + py + 0.5;
+      const x = map ? map.a * ox + map.c * oy + map.tx : ox;
+      const y = map ? map.b * ox + map.d * oy + map.ty : oy;
+      alpha[pixel] = Math.round(clamp01((adjustmentOnly ? 1 : alphaSurface[offset + 3]!)
+        * this.ownMask(stack.base, x, y, false, this.documentToOutput)
+        * stack.base.opacity * stack.base.fillOpacity) * 255);
+      const compositeAlpha = group[offset + 3]!;
+      if (compositeAlpha > 0) {
+        group[offset] = group[offset]! / compositeAlpha;
+        group[offset + 1] = group[offset + 1]! / compositeAlpha;
+        group[offset + 2] = group[offset + 2]! / compositeAlpha;
+      }
+      group[offset + 3] = 1;
+    }
+    for (const child of stack.children) {
+      if (child.adjustment) this.adjust(child, group, width, height, originX, originY, false);
+      else this.drawLayer(child, group, width, height, originX, originY, false, false);
+    }
+    this.stackRoundTrip(group, alpha, true);
+    const mode = isolated ? this.blendMode(stack.base) : 'normal';
+    for (let offset = 0; offset < group.length; offset += 4) {
+      compositePremultiplied(target, offset, group[offset]!, group[offset + 1]!, group[offset + 2]!,
+        group[offset + 3]!, mode, false, this.blendScratch);
     }
   }
 
@@ -552,8 +651,11 @@ class BandRenderer {
     }
   }
 
-  render(width: number, height: number, originX: number, originY: number): Float32Array {
-    const target = new Float32Array(width * height * 4);
+  render(width: number, height: number, originX: number, originY: number,
+    initial?: Float32Array): Float32Array {
+    this.activeBand = { width, height, originX, originY };
+    this.groupCoverageSurfaces.clear();
+    const target = initial?.slice() ?? new Float32Array(width * height * 4);
     if (this.rootKnockout
       && (this.document as CanvasDocument & { readonly psdOpaqueCanvas?: boolean }).psdOpaqueCanvas === true) target.fill(1);
     const documentBase = target.slice();
@@ -571,6 +673,8 @@ class BandRenderer {
           passThroughBases.set(ancestor.id, target.slice());
         }
       }
+      const stack = this.stacks.get(layer.id);
+      if (stack) { this.drawStack(stack, target, width, height, originX, originY); continue; }
       if (layer.kind === 'group') {
         const knockout = (layer as Layer & { readonly psdKnockout?: 'shallow' | 'deep' | false }).psdKnockout;
         const shallowBase = ancestors.map((ancestor) => passThroughBases.get(ancestor.id))
@@ -580,9 +684,7 @@ class BandRenderer {
         this.drawIsolatedGroup(layer, target, width, height, originX, originY, base); continue;
       }
       if (this.stacked.has(layer.id)) continue;
-      const stack = this.stacks.get(layer.id);
-      if (stack) this.drawStack(stack, target, width, height, originX, originY);
-      else if (layer.adjustment) {
+      if (layer.adjustment) {
         // LiveMaskRenderer skips adjustment layers linked outside a clipping stack.
         if (!layer.maskSourceId) this.adjust(layer, target, width, height, originX, originY, true);
       } else {

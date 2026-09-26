@@ -162,6 +162,16 @@ function effectBlend(mode: string | undefined, fallback: BlendMode): BlendMode {
   return BLEND_MODES.get(mode as AgBlendMode) ?? fallback;
 }
 
+function withPsdContour<T extends LayerEffect>(effect: T,
+  contour: { readonly curve?: readonly Readonly<{ x: number; y: number }>[] } | undefined): T {
+  const curve = contour?.curve;
+  if (!curve || curve.length < 2) return effect;
+  if (curve.length === 2 && curve[0]?.x === 0 && curve[0].y === 0
+    && curve[1]?.x === 255 && curve[1].y === 255) return effect;
+  return { ...effect, psdContour: curve.map((point) => ({ x: Math.min(255, Math.max(0, point.x)),
+    y: Math.min(255, Math.max(0, point.y)) })) };
+}
+
 function gradient(value: EffectSolidGradient | undefined): import('../../core/model').EffectGradient {
   if (!value || value.type !== 'solid' || value.colorStops.length < 2) return { stops: [
     { offset: 0, color: { red: 0, green: 0, blue: 0 }, opacity: 1 },
@@ -185,27 +195,27 @@ function importEffects(source: AgLayer, state: ImportState, layerPath: string): 
   // Effect dimensions are already final pixels. The list-wide Scl metadata is not a render-time
   // multiplier (psd-tools test_second_stroke_traces_the_layer pins 1 px strokes with Scl 208%).
   const result: LayerEffect[] = [];
-  for (const shadow of info.dropShadow ?? []) if (shadow.present !== false) result.push({
+  for (const shadow of info.dropShadow ?? []) if (shadow.present !== false) result.push(withPsdContour({
     kind: 'dropShadow', schemaVersion: 1, enabled: shadow.enabled !== false, opacity: shadow.opacity ?? 1,
     angle: shadow.angle ?? 120, useGlobalLight: shadow.useGlobalLight ?? false, distance: units(shadow.distance),
     blur: units(shadow.size), size: units(shadow.size), spread: units(shadow.choke), color: rgb(shadow.color),
     blendMode: effectBlend(shadow.blendMode, 'multiply'), contour: 'linear', noise: 0, knockout: shadow.layerConceals !== false,
-  });
-  for (const shadow of info.innerShadow ?? []) if (shadow.present !== false) result.push({
+  }, shadow.contour));
+  for (const shadow of info.innerShadow ?? []) if (shadow.present !== false) result.push(withPsdContour({
     kind: 'innerShadow', schemaVersion: 1, enabled: shadow.enabled !== false, opacity: shadow.opacity ?? 1,
     blendMode: effectBlend(shadow.blendMode, 'multiply'), color: rgb(shadow.color), angle: shadow.angle ?? 120,
     useGlobalLight: shadow.useGlobalLight ?? false, distance: units(shadow.distance), choke: units(shadow.choke),
     size: units(shadow.size), contour: 'linear',
-  });
+  }, shadow.contour));
   const glow = info.outerGlow;
-  if (glow?.present !== false && glow) result.push({ kind: 'outerGlow', schemaVersion: 1, enabled: glow.enabled !== false,
+  if (glow?.present !== false && glow) result.push(withPsdContour({ kind: 'outerGlow', schemaVersion: 1, enabled: glow.enabled !== false,
     opacity: glow.opacity ?? 1, color: rgb(glow.color), blendMode: effectBlend(glow.blendMode, 'screen'),
-    spread: units(glow.choke), size: units(glow.size), contour: 'linear', noise: 0 });
+    spread: units(glow.choke), size: units(glow.size), contour: 'linear', noise: 0 }, glow.contour));
   const innerGlow = info.innerGlow;
-  if (innerGlow?.present !== false && innerGlow) result.push({ kind: 'innerGlow', schemaVersion: 1,
+  if (innerGlow?.present !== false && innerGlow) result.push(withPsdContour({ kind: 'innerGlow', schemaVersion: 1,
     enabled: innerGlow.enabled !== false, opacity: innerGlow.opacity ?? 1, color: rgb(innerGlow.color),
     blendMode: effectBlend(innerGlow.blendMode, 'screen'), source: innerGlow.source ?? 'edge',
-    choke: units(innerGlow.choke), size: units(innerGlow.size), contour: 'linear' });
+    choke: units(innerGlow.choke), size: units(innerGlow.size), contour: 'linear' }, innerGlow.contour));
   for (const fill of info.solidFill ?? []) if (fill.present !== false) result.push({
     kind: 'colorOverlay', schemaVersion: 1, enabled: fill.enabled !== false, opacity: fill.opacity ?? 1,
     color: rgb(fill.color), blendMode: effectBlend(fill.blendMode, 'normal'),
@@ -251,19 +261,19 @@ function importEffects(source: AgLayer, state: ImportState, layerPath: string): 
     const technique = bevel.technique === 'chisel hard' ? 'chiselHard'
       : bevel.technique === 'chisel soft' ? 'chiselSoft' : 'smooth';
     const strength = bevel.strength ?? 1;
-    result.push({ kind: 'bevelEmboss', schemaVersion: 1, enabled: bevel.enabled !== false, style, technique,
+    result.push(withPsdContour({ kind: 'bevelEmboss', schemaVersion: 1, enabled: bevel.enabled !== false, style, technique,
       depth: Math.max(1, strength <= 10 ? strength * 100 : strength), direction: bevel.direction ?? 'up',
       size: units(bevel.size), soften: units(bevel.soften), angle: bevel.angle ?? 120, altitude: bevel.altitude ?? 30,
       useGlobalLight: bevel.useGlobalLight ?? false, highlightMode: effectBlend(bevel.highlightBlendMode, 'screen'),
       highlightColor: rgb(bevel.highlightColor, { red: 1, green: 1, blue: 1 }), highlightOpacity: bevel.highlightOpacity ?? 0.75,
       shadowMode: effectBlend(bevel.shadowBlendMode, 'multiply'), shadowColor: rgb(bevel.shadowColor),
-      shadowOpacity: bevel.shadowOpacity ?? 0.75, glossContour: 'linear' });
+      shadowOpacity: bevel.shadowOpacity ?? 0.75, glossContour: 'linear' }, bevel.contour));
   }
   const satin = info.satin;
-  if (satin?.present !== false && satin) result.push({ kind: 'satin', schemaVersion: 1, enabled: satin.enabled !== false,
+  if (satin?.present !== false && satin) result.push(withPsdContour({ kind: 'satin', schemaVersion: 1, enabled: satin.enabled !== false,
     opacity: satin.opacity ?? 0.5, blendMode: effectBlend(satin.blendMode, 'multiply'), color: rgb(satin.color),
     angle: satin.angle ?? 19, distance: units(satin.distance), size: units(satin.size), invert: satin.invert ?? true,
-    contour: 'linear' });
+    contour: 'linear' }, satin.contour));
   const overlay = info.patternOverlay;
   if (overlay && overlay.present !== false) {
   const pattern = overlay.pattern?.id ? state.patterns.get(overlay.pattern.id) : undefined;
@@ -1283,22 +1293,12 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
           ])) }));
       }
       // Photoshop also permits an unclipped group to be the base for following clipped siblings.
-      // When the group's alpha is exactly one visible paint descendant, preserve the fully live
-      // CPU/GPU clipping path by using that descendant; multi-paint group alpha still needs a native
-      // group-stack mask and remains reported as orphan clipping.
+      // Keep the group itself as the live source: its surface can be the union of several descendants,
+      // or just a group mask around a pass-through adjustment. Mapping a sole paint descendant loses
+      // both cases (clipping-mask5.psd and passthrough_clipping_mask_adjustment.psd).
       const importedChildren = importSiblings(source.children ?? [], id, layerPath, state);
       result.push(...importedChildren);
-      if (!source.clipping) {
-        const childById = new Map(importedChildren.map((child) => [child.id, child]));
-        const effectivelyVisible = (child: Layer): boolean => {
-          for (let current: Layer | undefined = child; current && current.id !== id;
-            current = current.parentId ? childById.get(current.parentId) : undefined) if (!current.visible) return false;
-          return true;
-        };
-        const paint = importedChildren.filter((child) => effectivelyVisible(child) && child.kind !== 'group'
-          && !child.adjustment && !!child.raster);
-        clippingBaseId = paint.length === 1 ? paint[0]!.id : null;
-      }
+      if (!source.clipping) clippingBaseId = id;
     } else if (!source.clipping) {
       clippingBaseId = id;
     }
