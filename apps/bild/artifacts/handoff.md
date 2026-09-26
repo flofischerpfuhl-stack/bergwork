@@ -1,12 +1,12 @@
-# Handoff: Compositor browser port
+# Fernwork Bildeditor handoff
 
-Upstream: Compositor (macOS, MIT) at `a19db9011282399785dc18efcfded904627bdcc2`. Port: TypeScript 7 strict, React 19,
+Upstream reference: the MIT-licensed macOS editor at `a19db9011282399785dc18efcfded904627bdcc2`. Product: TypeScript 7 strict, React 19,
 PixiJS 8 / WebGL 2, Web Workers + WASM (upstream C kernels), Vite 8. Standalone package; Fernwork's existing editor is
 untouched and `contracts.ts` is unchanged. Per-feature status and every known deviation are in `parity.json`. Build,
 test and architecture notes are in `README.md`.
 
-All figures below were measured on 2026-09-23 on the reference machine (Intel HD Graphics 630, ANGLE/OpenGL, Chromium
-headless with GPU, 1440×900 at dpr 1).
+Unless a later dated section states otherwise, the initial figures were measured on 2026-09-23 on the reference
+machine (Intel HD Graphics 630, ANGLE/OpenGL, Chromium headless with GPU, 1440×900 at dpr 1).
 
 ## Status
 
@@ -176,19 +176,87 @@ soft-proof, RAW, recipes/batch, text on path, mesh warp, and the 30-layer 200-MP
 - Windows re-check of the scratch-index and bundled-fonts fixes.
 - Screen eyedropper on Windows not yet verified by hand.
 
-## Tests (current master)
+## Phase 3, performance rounds and UI v0.2 — 2026-09-25/26
+
+Phase 3's named feature scope is merged. The automated phase exit is not complete: the current core-task capability
+state is 19 green / 1 red, task 13 still lacks the packaged Pro/Tauri 200-MP **30-layer** save/reopen proof, and the
+A9 user test remains owner-deferred. The 2026-09-26 benchmark run observed 18 passes, task 13 red and task 7 skipped
+because no local SlimSAM model files were present; see `artifacts/benchmarks.md`.
+
+**Phase 3 features (implementation commits):**
+
+- Mesh Warp, Perspective, Straighten and Liquify light: `20effa7` (`artifacts/warp.md`).
+- CMYK soft proof and TIFF/JPEG export: `57490af`; exact Little CMS transform follow-up: `f6887a3`
+  (`artifacts/cmyk-exact.md`). No redistributable output profile was added.
+- Brush presets, dynamics and `.abr` tips: `779604a`.
+- Local Remove (optional MI-GAN) and 2x/4x Upscale (optional Real-ESRGAN), with user-initiated downloads and offline
+  fallbacks: `c4115f6` (`artifacts/genai.md`).
+- Text on a path and Warp Text: `874a20a`; Recipes and File > Batch: `ba5f481`.
+- Browser DNG plus optional Tauri host RAW paths: `84e581f`, hardened by `4f23b58` (`artifacts/raw.md`). System LibRaw
+  remains opt-in and no LGPL library is bundled.
+- Remaining live layer styles: `a1e1150`, corrected by `8d7ef88` (`artifacts/layer-styles-2.md`).
+- Layered PSD/PSB writing: `73d6caf`/`d598034`, completed for editable Phase-3 structures and 16-bit precision by
+  `69f74c8` (`artifacts/psd-write.md`). Photoshop itself is unavailable here; independent `psd-tools`/`ag-psd` and
+  read/write/read state/pixel checks are the compatibility evidence.
+- Non-destructive crop, Reveal All, artboard crop and embedded-layer crop: `09699b9` (`artifacts/crop.md`).
+
+**PSD read fidelity and M15.** Twelve fidelity rounds bring the native product render to **248/300 = 82.7%**. The
+binding M14 rule never uses the PSD's saved composite as the render oracle. M15 replaces the old blanket 90% exit:
+the target is every fixable deviation, with the current measured ceiling **267/300 = 89.0%**. A later 90% target would
+need owner approval for a separate text/effect antialiasing tolerance. Evidence: `artifacts/psd-fidelity.md`,
+`artifacts/psd-target.md`; target documentation commit `4d13092`.
+
+**Performance rounds (measured results, not generic claims):**
+
+- `469021e`: brush workers capped to four physical cores; SlimSAM gained WebGPU/threaded-WASM selection; text and
+  vector share one CanvasKit instance, saving **128 MiB** WASM heap and **7,317,645 bytes** of transfer. Contended
+  SlimSAM WebGPU encoder measurements were 5.17–6.17 s, still above the 3 s target (`artifacts/perf2.md`).
+- `430f45d`: selected brush/eraser strokes stay off the main-thread raster path. Intel selected-event p95 fell
+  **86–92%** and committed pixels stayed byte-identical to independent CPU replay (`artifacts/perf3-webkit-brush.md`).
+- `a87fea6` and `e085d16`: retained frames, visible-chunk upload and view LOD. The measured visible texture working set
+  fell **363.00 → 90.75 MiB** and unchanged-frame p95 **2.24 → 0.07 ms** in Chromium (`artifacts/perf-view.md`,
+  `artifacts/perf-view-2.md`).
+- `fdade6f` and `ae1497c`: adjustment/filter previews moved to compositor/view-space passes. Steady Chromium live-
+  filter p95 is **5.61 ms** and preview versus exact Apply differs by at most **1/255** (`artifacts/perf-tools.md`,
+  `artifacts/perf-filters.md`).
+- `6b35fbf`: fine-grained React subscriptions; pan, opacity and brush input render **zero** layer rows/thumbnails
+  (`artifacts/perf-ui.md`).
+- `28daa6c` and `76ddb40`: staged startup, background image decode, binary/lazy native I/O, PSD workers and streamed
+  PNG. Import heartbeat gaps fell to 10–12 ms; PSD main-thread gaps fell 85–99%; the 46-MP stream avoids
+  **183,877,632 bytes** of complete output allocation (`artifacts/perf-io.md`, `artifacts/perf-io-2.md`).
+- `0ae302b`: moving-pixel and retouch pointer-event p95 fell 98.0–99.99%; exact Clone commit remains synchronous at
+  roughly 582–630 ms (`artifacts/perf-retouch.md`).
+
+Open performance gates are explicit: warm Lite 46-MP PNG meets ≤8 s, but Pro ≤3 s and the cold run do not;
+WebKitGTK brush ≤16 ms remains open (M10); task 13's 30-layer native workflow remains open. Real Tauri/GPU measurements
+were not repeated under Xvfb.
+
+**UI v0.2.** Merge `8d9976b` (implementation `6cfe761`, layout follow-up `ff0edc9`) adopts the Fernwork PDF visual
+language while retaining image-editor/Photoshop conventions: full-bleed canvas, floating top/options/tool/panel/status
+cards, panel resize/toggle, Tab and Shift+Tab chrome controls, desktop/tablet/phone layouts, light/dark token themes,
+and live host theme overrides. The editor fills its mount element and exposes `fw-image-editor` plus `--cmp-*` tokens;
+no web font or network request was added. Evidence: `tests/e2e/floating-chrome.spec.ts`, `artifacts/ui-v2.md`.
+
+**Licensing and test selection.** Commit `e82f033` adds generated notices, 546-entry offline inventory, 20 complete
+licence texts, checker and searchable About/Preferences UI (`artifacts/licensing.md`). The repository is BSL 1.1;
+MPL-2.0/Unicode-3.0 are restricted to the Tauri runtime and opt-in LGPL host capabilities remain unbundled. Tauri
+stays internal pending M13 legal advice. Commit `ee05a58` adds smoke, changed, area and capped gate commands plus a
+16-area manifest whose unit test requires every E2E spec to be assigned (`artifacts/e2e-sets.md`).
+
+## Current verification (2026-09-26 documentation update)
 
 | Suite | Result |
 |---|---|
-| TypeScript (`tsc --noEmit`, whole project) | clean |
-| Unit (Vitest, 36 files) | 347 passed |
-| Browser e2e, Chromium | 51 passed, 1 skipped (best-quality subject model not downloaded locally) |
-| Browser e2e, Firefox + WebKit (`E2E_ALL_BROWSERS=1`) | 91 passed, 1 skipped: Firefox drops `clipboardData` on synthetic paste events, a test artefact |
-| Acceptance specs (research/compositor-port/acceptance) | 5 passed |
-| Official runner gates (sandboxed: typecheck, build, unit, e2e, perf, acceptance) | all passed, contract unchanged; 5 e2e specs skipped (reference photos and the downloaded best-quality model are absent in the sandbox); see `artifacts/runner-gates.json` |
+| TypeScript (`npx tsc --noEmit -p .`, whole project) | clean |
+| Unit (`npx vitest run tests/unit --maxWorkers=2`) | 95 files / 807 tests passed in 69.84 s; the 4000×3000 TIFF case passed in-suite |
+| Core-task benchmarks, Chromium, one worker | 18 passed, task 13 red, task 7 environment-skipped, 13.0 min (`artifacts/benchmarks.md`) |
+| `npm run test:e2e:changed`, Chromium, one worker | No area matched the docs/benchmark-only diff, so the selector explicitly used smoke: 22 passed in 2.5 min |
+| `npm run test:e2e:smoke`, Chromium, one worker | 22 passed in 2.8 min |
 
-The subject-removal and visual-tour specs use reference photos outside the repository and are skipped when they are
-missing. In the sandboxed gates they are therefore skipped.
+The benchmark start load was 14.33/10.11/6.46; unit start load was 10.35/9.95/9.52. Durations are execution context,
+not performance claims. Task 7 was skipped because neither `FERNWORK_SLIMSAM_DIR` nor a `/tmp/slimsam.*` model pair
+was present; it is not counted as a pass. Full Chromium and Firefox/WebKit suites were not run in this lane under the
+change-relevant test-set rule; integration retains responsibility for the complete matrices.
 
 ## Integrator's own checks with unseen files
 
