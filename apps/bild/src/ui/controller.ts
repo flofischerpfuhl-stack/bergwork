@@ -111,8 +111,12 @@ export class EditorController {
   readonly profile: EditorProfile;
   readonly t: (text: string) => string;
   readonly locale: Locale;
-  readonly theme: 'dark' | 'light';
   readonly ui: UiStore = createUiStore();
+  /**
+   * The mount option's theme; a host page's `html[data-theme="light|dark"]` overrides it live (EditorRoot watches the
+   * attribute), so an embedding app switches the editor with its own theme switch.
+   */
+  get theme(): 'dark' | 'light' { return this.ui.getState().theme; }
   /** Installed by the RAW UI module; null means the user cancelled RAW files in this import batch. */
   requestRawImportOptions: ((files: readonly File[]) => Promise<RawDecodeOptions | null>) | null = null;
   private readonly imports: ImportQueue;
@@ -261,7 +265,7 @@ export class EditorController {
     this.capabilities = capabilitiesOf(host);
     this.profile = profile;
     this.locale = locale;
-    this.theme = theme;
+    this.ui.setState({ theme });
     this.t = translator(locale);
     setShortcutLocale(locale);
     const scratch = host as HostAdapter & Partial<ScratchHostCapability>;
@@ -466,6 +470,20 @@ export class EditorController {
   // MARK: Dialogs
 
   showDialog(dialog: Dialog | null): void { this.ui.setState({ dialog, openMenu: null }); }
+
+  // MARK: Floating chrome
+
+  /** Tab (Photoshop): hides or shows the tools, options bar, panels and status bar. */
+  toggleChrome(): void { this.ui.setState((state) => ({ chromeHidden: !state.chromeHidden, openMenu: null })); }
+
+  /** Shift+Tab and the top bar's Layers button: the panel stack on the right (the Layers sheet in compact layouts). */
+  togglePanels(open?: boolean): void {
+    const state = this.ui.getState();
+    if (state.compact) { this.ui.setState({ sheet: (open ?? state.sheet !== 'layers') ? 'layers' : null }); return; }
+    const next = open ?? (state.chromeHidden ? true : !state.panelsOpen);
+    this.ui.setState({ panelsOpen: next, chromeHidden: false });
+    try { globalThis.localStorage?.setItem('compositor.panelsOpen', String(next)); } catch { /* storage blocked */ }
+  }
 
   /** Builds and installs the selected output-device LUT without changing document pixels. */
   async setProofSetup(profile: CmykProfile, options: ProofOptions, session: EditorSession = this.session): Promise<void> {

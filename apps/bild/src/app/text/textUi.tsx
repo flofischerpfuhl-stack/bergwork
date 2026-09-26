@@ -60,7 +60,7 @@ export function createTextUi(controller: EditorController): TextUi {
   const ui: TextUi = {
     runtime, editor, tool: editor.tool,
     paint: (context, session) => {
-      accent ??= getComputedStyle(context.canvas).getPropertyValue('--cmp-accent').trim() || '#0a84ff';
+      accent ??= getComputedStyle(context.canvas).getPropertyValue('--cmp-canvas-accent').trim() || '#0a84ff';
       editor.paint(context, session, accent);
     },
     doubleClick: (point) => editor.doubleClick(point),

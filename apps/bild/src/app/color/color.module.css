@@ -21,7 +21,7 @@
 }
 .miniButton:hover:not(:disabled) { background: var(--cmp-control-hover); color: var(--cmp-text); }
 .miniButton:disabled { color: var(--cmp-text-tertiary); }
-.miniButtonOn { background: var(--cmp-accent); color: #fff; }
+.miniButtonOn { background: var(--cmp-accent); color: var(--cmp-accent-contrast); }
 
 .sliderRow { display: grid; grid-template-columns: 14px minmax(0, 1fr) 44px; align-items: center; gap: 6px; }
 .sliderLabel { font: 600 11px/1 var(--cmp-font); color: var(--cmp-text-secondary); text-align: center; }

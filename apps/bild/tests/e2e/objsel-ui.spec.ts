@@ -51,7 +51,8 @@ async function at(page: Page, x: number, y: number): Promise<{ x: number; y: num
     const session = controller.session;
     return session.viewport.viewPoint({ x: px, y: py }, session.document);
   }, [x, y] as const);
-  const box = (await page.getByTestId('editor-canvas').boundingBox())!;
+  // View points start at the work area (canvas-pane); the canvas surface reaches under the floating chrome.
+  const box = (await page.getByTestId('canvas-pane').boundingBox())!;
   return { x: box.x + offset.x, y: box.y + offset.y };
 }
 

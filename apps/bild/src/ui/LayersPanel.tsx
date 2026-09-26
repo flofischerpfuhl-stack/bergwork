@@ -23,6 +23,7 @@ import type { Artboard } from '../core/document';
 import { duplicateArtboard, renameArtboard } from '../core/artboardCommands';
 import { confirmDeleteArtboard, groupRowsByArtboard, isArtboardCollapsed, requestArtboardRename, selectArtboard, takeArtboardRename, selectedArtboard, toggleArtboardCollapsed, type PanelRow } from './artboardState';
 import { markUiRender } from './performance';
+import { LAYERS_WIDTH_MAX, LAYERS_WIDTH_MIN } from './store';
 
 const ADJUSTMENT_ICONS: Record<AdjustmentKind, IconName> = {
   'Hue/Saturation': 'adjustment', 'Levels': 'levels', 'Curves': 'curves', 'Exposure': 'exposure', 'Gradient Map': 'gradientMap', 'Grain': 'grain',
@@ -496,8 +497,8 @@ function layersSnapshot(controller: EditorController, session: EditorSession): L
 }
 
 /** Panel tab state is isolated so switching tabs does not reconcile the layer tree. */
-function PanelChrome({ controller, layerCount, layers }: {
-  controller: EditorController; layerCount: number; layers: RefObject<HTMLDivElement | null>;
+function PanelChrome({ controller, layerCount, layers, inSheet }: {
+  controller: EditorController; layerCount: number; layers: RefObject<HTMLDivElement | null>; inSheet: boolean;
 }) {
   markUiRender('PanelChrome');
   const t = controller.t;
@@ -509,7 +510,7 @@ function PanelChrome({ controller, layerCount, layers }: {
       <span className={styles.panelTabs}>
         <button type="button" role="tab" aria-selected={side === 'layers'} data-testid="tab-layers"
           className={`${styles.panelTab} ${side === 'layers' ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: 'layers' })}>
-          {t('Layers')}
+          {t('Layers')}<span className={styles.layerCount} data-testid="layerCount">{layerCount}</span>
         </button>
         <button type="button" role="tab" aria-selected={side === 'history'} data-testid="tab-history"
           className={`${styles.panelTab} ${side === 'history' ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: 'history' })}>
@@ -522,7 +523,10 @@ function PanelChrome({ controller, layerCount, layers }: {
           </button>
         ))}
       </span>
-      <span className={styles.layerCount} data-testid="layerCount">{layerCount}</span>
+      {!inSheet ? (
+        <button type="button" className={`${styles.chromeButton} ${styles.panelClose}`} aria-label={t('Hide panels')} title={t('Hide panels')}
+          data-testid="close-panels" onClick={() => controller.togglePanels(false)}><Icon name="close" size={15} /></button>
+      ) : null}
     </div>
     <div style={{ display: side === 'history' ? 'contents' : 'none' }}><HistoryPanel controller={controller} /></div>
     {sidePanel ? sidePanel.render() : null}
@@ -557,8 +561,6 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
   const [effectsOpen, setEffectsOpen] = useState<ReadonlySet<string>>(new Set());
   const toggleEffects = (id: string) => setEffectsOpen((open) => { const next = new Set(open); if (!next.delete(id)) next.add(id); return next; });
   const layerStyles = controller.layerStyles;
-  const width = controller.ui.getState().layersWidth;
-  const [panelWidth, setPanelWidth] = useState(width);
   const layersContent = useRef<HTMLDivElement>(null);
 
   const startDrag = (event: ReactPointerEvent, id: string) => {
@@ -690,23 +692,27 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
   const deleteLabel = session.isMaskSelected ? t('Delete layer mask') : session.selectedLayerIds.size > 1 ? t('Delete selected layers') : t('Delete selected layer');
   const adjustmentsAvailable = !!controller.features.adjustmentLayers;
   return (
-    <aside className={styles.layers} style={inSheet ? undefined : { width: panelWidth }} aria-label={t('Layers')} data-testid="layers-panel">
+    <aside className={styles.layers} aria-label={t('Layers')} data-testid="layers-panel">
       {!inSheet ? (
         <div className={styles.resizeEdge} title={t('Drag to resize the panel')}
           onPointerDown={(event) => {
-            const start = event.clientX, startWidth = panelWidth;
+            // The width is the editor's --cmp-panel-w: the panel and the work area beside it follow while dragging
+            // without a React render; the UI store takes the final width once.
+            const start = event.clientX, startWidth = controller.ui.getState().layersWidth;
+            const editor = (event.currentTarget as HTMLElement).closest<HTMLElement>('[data-testid="compositor-editor"]');
+            const widthAt = (x: number) => Math.min(LAYERS_WIDTH_MAX, Math.max(LAYERS_WIDTH_MIN, Math.round(startWidth - (x - start))));
             (event.target as HTMLElement).setPointerCapture(event.pointerId);
-            const move = (e: PointerEvent) => setPanelWidth(Math.min(352, Math.max(202, Math.round(startWidth - (e.clientX - start)))));
+            const move = (e: PointerEvent) => editor?.style.setProperty('--cmp-panel-w', `${widthAt(e.clientX)}px`);
             const up = (e: PointerEvent) => {
               window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
-              const next = Math.min(352, Math.max(202, Math.round(startWidth - (e.clientX - start))));
+              const next = widthAt(e.clientX);
               controller.ui.setState({ layersWidth: next });
               try { localStorage.setItem('compositor.layersPanelWidth', String(next)); } catch { /* ignore */ }
             };
             window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
           }} />
       ) : null}
-      <PanelChrome controller={controller} layerCount={document?.layers.length ?? 0} layers={layersContent} />
+      <PanelChrome controller={controller} layerCount={document?.layers.length ?? 0} layers={layersContent} inSheet={inSheet} />
       <div ref={layersContent} style={{ display: controller.ui.getState().sidePanel === 'layers' ? 'contents' : 'none' }}>
       <Appearance controller={controller} session={session} />
       {document ? (

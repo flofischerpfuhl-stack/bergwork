@@ -12,7 +12,7 @@ type IconName =
   | 'adjustment' | 'trash' | 'link' | 'plus' | 'close' | 'zoomIn' | 'zoomOut' | 'swap' | 'reset' | 'menu'
   | 'layers' | 'sliders' | 'levels' | 'curves' | 'exposure' | 'grain' | 'gradientMap' | 'more'
   | 'lock' | 'lockTransparency' | 'search' | 'filter' | 'artboard' | 'minus'
-  | 'text' | 'pen' | 'directSelect' | 'pathSelect';
+  | 'text' | 'pen' | 'directSelect' | 'pathSelect' | 'undo' | 'redo' | 'open' | 'save' | 'export';
 
 const paths: Record<IconName, ReactElement> = {
   move: <path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3" />,
@@ -70,11 +70,17 @@ const paths: Record<IconName, ReactElement> = {
   pen: <><path d="M12 3.5 17.5 13 14 20.5h-4L6.5 13z" /><path d="M12 3.5V11" /><circle cx="12" cy="12.6" r="1.4" /><path d="M9.5 20.5h5" /></>,
   directSelect: <path d="M6 3.5v15.5l4.2-4.1 2.9 6.2 2.6-1.2-2.9-6.1 5.8-.3z" />,
   pathSelect: <path d="M6 3.5v15.5l4.2-4.1 2.9 6.2 2.6-1.2-2.9-6.1 5.8-.3z" fill="currentColor" />,
+  undo: <><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></>,
+  redo: <><path d="m15 14 5-5-5-5" /><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" /></>,
+  open: <><path d="M3.5 18.5v-12A1.5 1.5 0 0 1 5 5h4l2 2h6.5A1.5 1.5 0 0 1 19 8.5V10" /><path d="M3.5 18.5 6.3 11.2A1.5 1.5 0 0 1 7.7 10.2H20.6a1 1 0 0 1 .9 1.4l-2.6 6.2a1.5 1.5 0 0 1-1.4.9H3.5z" /></>,
+  save: <><path d="M5 4.5A.5.5 0 0 1 5.5 4H16l4 4v11.5a.5.5 0 0 1-.5.5h-14a.5.5 0 0 1-.5-.5z" /><path d="M8 4v5h7V4M8 20v-6h8v6" /></>,
+  export: <><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5" /><path d="M5 14v4.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V14" /></>,
 };
 
+/** Line icons in the weight of Fernwork PDF's icon set (round caps and joins, a little heavier below 18 px). */
 export function Icon({ name, size = 18, title }: { name: IconName; size?: number; title?: string }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6}
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={size <= 16 ? 2 : 1.8}
       strokeLinecap="round" strokeLinejoin="round" aria-hidden={title ? undefined : true} role={title ? 'img' : undefined}>
       {title ? <title>{title}</title> : null}
       {paths[name]}

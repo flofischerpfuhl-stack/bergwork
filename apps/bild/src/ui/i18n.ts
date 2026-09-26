@@ -628,6 +628,10 @@ const de: Record<string, string> = {
   'Drag Handle': 'Griff ziehen', 'Convert Point': 'Punkt umwandeln', 'Delete Anchor': 'Ankerpunkt löschen', 'Nudge Anchors': 'Ankerpunkte verschieben',
   'Create Line': 'Linie erstellen', 'Pen Path': 'Zeichenstiftpfad', 'Create Rectangle': 'Rechteck erstellen', 'Create Ellipse': 'Ellipse erstellen',
   'Create Star': 'Stern erstellen', 'Boolean Path Operation': 'Pfadvorgang',
+  // UI v0.2 floating chrome
+  'Hide panels': 'Bedienfelder ausblenden', 'Show or hide the panels': 'Bedienfelder ein- oder ausblenden',
+  'Tools and Panels': 'Werkzeuge und Bedienfelder',
+  'Open': 'Öffnen',
 };
 
 const isApple = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);

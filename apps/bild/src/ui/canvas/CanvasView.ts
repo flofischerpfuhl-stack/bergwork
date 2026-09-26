@@ -34,6 +34,16 @@ export interface CanvasPerformanceCounters {
   readonly lastRenderScale: number;
 }
 
+/**
+ * The canvas surface reaches under the floating chrome: the host element is the uncovered work area (view
+ * coordinates, Fit, rulers), while both canvases extend past it by the editor's --cmp-pane-* insets to the
+ * editor's edges. Without those variables (a bare host) the canvases match the host.
+ */
+const BLEED_CANVAS_CSS = 'position:absolute;display:block;'
+  + 'left:calc(-1 * var(--cmp-pane-left, 0px));top:calc(-1 * var(--cmp-pane-top, 0px));'
+  + 'width:calc(100% + var(--cmp-pane-left, 0px) + var(--cmp-pane-right, 0px));'
+  + 'height:calc(100% + var(--cmp-pane-top, 0px) + var(--cmp-pane-bottom, 0px))';
+
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
 /** Tools that change pixels of the active layer (or its mask); a pixel lock refuses them. */
@@ -88,11 +98,11 @@ export class CanvasView implements CanvasHost {
     this.controller = controller;
     this.element = document.createElement('div');
     this.element.className = 'compositor-canvas-host';
-    this.element.style.cssText = 'position:absolute;inset:0;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none';
+    this.element.style.cssText = 'position:absolute;inset:0;overflow:visible;touch-action:none;user-select:none;-webkit-user-select:none';
     this.glCanvas = document.createElement('canvas');
     this.overlay = document.createElement('canvas');
     for (const canvas of [this.glCanvas, this.overlay]) {
-      canvas.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;display:block';
+      canvas.style.cssText = BLEED_CANVAS_CSS;
       this.element.append(canvas);
     }
     this.glCanvas.setAttribute('aria-label', controller.t('Canvas'));
@@ -101,6 +111,8 @@ export class CanvasView implements CanvasHost {
     this.overlay.style.pointerEvents = 'none';
     this.resizeObserver = new ResizeObserver(() => this.syncGeometry());
     this.resizeObserver.observe(this.element);
+    // The surface follows the editor's size, the view follows the work area (both change when chrome shows or hides).
+    this.resizeObserver.observe(this.glCanvas);
     this.workspaceOff = controller.workspace.subscribe(() => this.watchSession());
     this.element.addEventListener('pointerdown', this.onPointerDown);
     this.element.addEventListener('pointermove', this.onPointerMove);
@@ -187,12 +199,21 @@ export class CanvasView implements CanvasHost {
   /** Cumulative view diagnostics for performance tests and host-side audits. */
   get performanceCounters(): CanvasPerformanceCounters { return { ...this.performanceCounterValue }; }
 
+  /** Where the work area (view origin) sits on the canvas surface, and the surface size, in CSS points. */
+  private surface(rect: DOMRect): { x: number; y: number; width: number; height: number } {
+    const outer = this.glCanvas.getBoundingClientRect();
+    if (outer.width <= 0 || outer.height <= 0) return { x: 0, y: 0, width: rect.width, height: rect.height };
+    return { x: rect.left - outer.left, y: rect.top - outer.top, width: outer.width, height: outer.height };
+  }
+
   private syncGeometry(): void {
     const rect = this.element.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const size = { width: rect.width, height: rect.height };
     const viewport = this.session.viewport;
-    viewport.fitMargin = Math.min(rect.width, rect.height) < 500 ? 32 : 96;
+    // The work area already keeps clear of the floating chrome, so Fit needs less of its own margin than a docked pane.
+    viewport.fitMargin = Math.min(rect.width, rect.height) < 500 ? 24 : 64;
+    this.workspace = null;
     if (viewport.viewSize.width !== size.width || viewport.viewSize.height !== size.height || viewport.backingScale !== dpr) {
       viewport.resize(size, dpr, this.session.document);
     }
@@ -235,6 +256,7 @@ export class CanvasView implements CanvasHost {
     setFilterViewPreviewEnabled(session, !this.software && !!this.gpu);
     const document = session.document;
     const rect = this.element.getBoundingClientRect();
+    const surface = this.surface(rect);
     const dpr = window.devicePixelRatio || 1;
     // Navigation is transient: cap fill rate at one device pixel per CSS point, then redraw at the
     // real backing scale as soon as the gesture becomes idle. Document/view coordinates stay on
@@ -242,8 +264,8 @@ export class CanvasView implements CanvasHost {
     const renderScale = this.navigationInteraction ? Math.min(1, dpr) : dpr;
     this.performanceCounterValue.lastRenderScale = renderScale;
     if (renderScale < dpr) this.performanceCounterValue.reducedResolutionFrames++;
-    const width = Math.max(1, Math.round(rect.width * renderScale));
-    const height = Math.max(1, Math.round(rect.height * renderScale));
+    const width = Math.max(1, Math.round(surface.width * renderScale));
+    const height = Math.max(1, Math.round(surface.height * renderScale));
     const viewport = session.viewport;
     if (viewport.viewSize.width !== rect.width || viewport.viewSize.height !== rect.height || viewport.backingScale !== dpr) {
       viewport.resize({ width: rect.width, height: rect.height }, dpr, document);
@@ -251,7 +273,7 @@ export class CanvasView implements CanvasHost {
     const gpu = this.gpu;
     if (gpu) {
       if (!document) {
-        gpu.present(null, width, height, { x: 0, y: 0, width: 0, height: 0 }, renderScale, false, 1);
+        gpu.present(null, width, height, { x: 0, y: 0, width: 0, height: 0 }, renderScale, false, 1, undefined, undefined, this.workspaceColor());
       } else {
         const docRect = viewport.documentRect(document);
         // While cropping, the frame may reach past the canvas; show what lies there too (renderBounds).
@@ -259,7 +281,7 @@ export class CanvasView implements CanvasHost {
         const bounds = crop ? rectUnion({ x: 0, y: 0, width: document.width, height: document.height }, crop) : { x: 0, y: 0, width: document.width, height: document.height };
         const shown = { x: docRect.x + bounds.x * viewport.pointsPerPixel, y: docRect.y + bounds.y * viewport.pointsPerPixel,
           width: bounds.width * viewport.pointsPerPixel, height: bounds.height * viewport.pointsPerPixel };
-        const device = { x: shown.x * renderScale, y: shown.y * renderScale,
+        const device = { x: (shown.x + surface.x) * renderScale, y: (shown.y + surface.y) * renderScale,
           width: shown.width * renderScale, height: shown.height * renderScale };
         const x0 = Math.max(0, Math.floor(device.x)), y0 = Math.max(0, Math.floor(device.y));
         const x1 = Math.min(width, Math.ceil(device.x + device.width)), y1 = Math.min(height, Math.ceil(device.y + device.height));
@@ -269,7 +291,7 @@ export class CanvasView implements CanvasHost {
           const view: ViewSpec = {
             width: x1 - x0, height: y1 - y0, scale: renderScale * ppp, snap: viewport.zoom >= 2,
             viewToDoc: { a: 1 / (renderScale * ppp), b: 0, c: 0, d: 1 / (renderScale * ppp),
-              tx: (x0 / renderScale - docRect.x) / ppp, ty: (y0 / renderScale - docRect.y) / ppp },
+              tx: (x0 / renderScale - surface.x - docRect.x) / ppp, ty: (y0 / renderScale - surface.y - docRect.y) / ppp },
             cache: true,
           };
           const previewDocument = documentWithPixelMovePreview(session, documentWithPixelFilterPreview(session,
@@ -278,10 +300,11 @@ export class CanvasView implements CanvasHost {
         }
         const proof = session.proofColors && session.proofLut ? { lut: session.proofLut, gamutWarning: session.gamutWarning } : undefined;
         gpu.present(composite, width, height, device, renderScale, session.showsPixelGrid && viewport.zoom >= 8,
-          renderScale * ppp, { x: x0, y: y0 }, proof);
+          renderScale * ppp, { x: x0, y: y0 }, proof, this.workspaceColor());
         if (composite) gpu.releaseTarget(composite);
       }
     }
+    this.overlayOrigin = { x: surface.x, y: surface.y };
     this.drawOverlay(width, height, dpr, time);
     const cpuMs = performance.now() - cpuStart;
     this.performanceCounterValue.maximumFrameCpuMs = Math.max(this.performanceCounterValue.maximumFrameCpuMs, cpuMs);
@@ -298,7 +321,8 @@ export class CanvasView implements CanvasHost {
     const session = this.session;
     const document = session.document;
     if (!document) return;
-    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Overlay painters draw in view points; the work area's origin sits inside the larger surface.
+    context.setTransform(dpr, 0, 0, dpr, this.overlayOrigin.x * dpr, this.overlayOrigin.y * dpr);
     this.drawSnapGuides(context, session, document);
     this.drawTransformHandles(context, session);
     let animate = false;
@@ -312,7 +336,29 @@ export class CanvasView implements CanvasHost {
     if (animate) setTimeout(() => this.redrawOverlayOnly(), 120);
   }
 
+  /** The theme's canvas background (--cmp-canvas-bg), re-read when the theme changes or the editor resizes. */
+  private workspace: { theme: string; color: readonly [number, number, number] } | null = null;
+  private workspaceColor(): readonly [number, number, number] {
+    const theme = this.controller.theme;
+    if (this.workspace?.theme === theme) return this.workspace.color;
+    let color: readonly [number, number, number] = [27 / 255, 27 / 255, 27 / 255];
+    const value = getComputedStyle(this.element).getPropertyValue('--cmp-canvas-bg').trim();
+    if (value) {
+      const probe = document.createElement('canvas').getContext('2d');
+      if (probe) {
+        probe.fillStyle = '#1b1b1b';
+        probe.fillStyle = value;
+        probe.fillRect(0, 0, 1, 1);
+        const [r, g, b] = probe.getImageData(0, 0, 1, 1).data;
+        color = [r! / 255, g! / 255, b! / 255];
+      }
+    }
+    this.workspace = { theme, color };
+    return color;
+  }
+
   private overlayFrame = 0;
+  private overlayOrigin = { x: 0, y: 0 };
   private redrawOverlayOnly(): void {
     this.performanceCounterValue.overlayRedrawRequests++;
     if (this.overlayFrame || this.destroyed) return;
@@ -325,7 +371,8 @@ export class CanvasView implements CanvasHost {
   }
 
   private accent(): string {
-    return getComputedStyle(this.element).getPropertyValue('--cmp-accent').trim() || '#0a84ff';
+    const style = getComputedStyle(this.element);
+    return style.getPropertyValue('--cmp-canvas-accent').trim() || style.getPropertyValue('--cmp-accent').trim() || '#0a84ff';
   }
 
   private drawSnapGuides(context: CanvasRenderingContext2D, session: EditorSession, document: CanvasDocument): void {

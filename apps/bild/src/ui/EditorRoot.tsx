@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState, type CSSProperties } from 'react';
 import styles from './editor.module.css';
 import type { EditorController } from './controller';
 import { useSessionSelector, useUi, useWorkspaceSelector } from './hooks';
@@ -11,7 +11,7 @@ import { DialogHost, dismissDialog } from './Dialogs';
 import { buildMenus, shortcutMap, shortcutOf } from './menus';
 import { Icon } from './icons';
 import { modifiersOf } from './canvas/CanvasView';
-import type { Tool } from '../core/session';
+import { TOOLS, type Tool } from '../core/session';
 import { markUiRender } from './performance';
 
 type Layout = 'desktop' | 'compact' | 'compactLandscape';
@@ -19,6 +19,20 @@ type Layout = 'desktop' | 'compact' | 'compactLandscape';
 function layoutFor(width: number, height: number): Layout {
   if (width >= 768 && height >= 500) return 'desktop';
   return width > height ? 'compactLandscape' : 'compact';
+}
+
+/** The one-column tool palette needs this much height below the top bar and options bar; shorter editors get two columns. */
+function railNeedsTwoColumns(height: number): boolean {
+  // Touch screens get larger chrome (editor.module.css, pointer: coarse).
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  return height < (coarse ? 132 : 116) + TOOLS.length * (coarse ? 40 : 34) + 72;
+}
+
+/** Tab (and Shift+Tab) toggle the chrome only when the keyboard is on the editor or the canvas, never inside a control. */
+function isChromeKeyTarget(target: EventTarget | null, root: HTMLElement): boolean {
+  const element = target as HTMLElement | null;
+  if (!element || element === root) return true;
+  return !!element.closest?.('.compositor-canvas-host') && !isTextTarget(element);
 }
 
 const TOOL_KEYS: Record<string, Tool> = {
@@ -37,7 +51,13 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
   markUiRender('EditorRoot');
   const root = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState<Layout>('desktop');
+  const [railTwo, setRailTwo] = useState(false);
+  const [barWidth, setBarWidth] = useState<'full' | 'dense' | 'narrow'>('full');
   const sheet = useUi(controller, (s) => s.sheet);
+  const chromeHidden = useUi(controller, (s) => s.chromeHidden);
+  const panelsOpen = useUi(controller, (s) => s.panelsOpen);
+  const layersWidth = useUi(controller, (s) => s.layersWidth);
+  const theme = useUi(controller, (s) => s.theme);
 
   useEffect(() => {
     const element = root.current!;
@@ -45,6 +65,8 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
       const rect = element.getBoundingClientRect();
       const next = layoutFor(rect.width, rect.height);
       setLayout(next);
+      setRailTwo(next === 'desktop' && railNeedsTwoColumns(rect.height));
+      setBarWidth(rect.width < 900 ? 'narrow' : rect.width < 1180 ? 'dense' : 'full');
       controller.ui.setState({ compact: next !== 'desktop' });
     };
     update();
@@ -64,19 +86,58 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
     const focusIn = () => { holds = true; };
     const focusOut = (event: FocusEvent) => {
       const next = event.relatedTarget as Node | null;
-      if (next ? !element.contains(next) : (event.target as Element).isConnected) holds = false;
+      if (next) { if (!element.contains(next)) holds = false; return; }
+      // Focus went nowhere: a click outside keeps the target connected; a removed control (current Chrome reports
+      // the focusout before React detaches it) does not. Decide once the removal is done.
+      const target = event.target as Element;
+      queueMicrotask(() => { if (target.isConnected) holds = false; });
     };
     const refocus = () => {
       if (holds && element.isConnected && (!document.activeElement || document.activeElement === document.body)) element.focus({ preventScroll: true });
     };
     element.addEventListener('focusin', focusIn);
     element.addEventListener('focusout', focusOut);
-    const later = () => queueMicrotask(refocus);
+    // Only when focus went nowhere: during Tab navigation (or a click into the host page) the microtask would run
+    // mid-transition, see the body focused and pull the focus back into the editor.
+    const later = (event: FocusEvent) => { if (!event.relatedTarget) queueMicrotask(refocus); };
     element.addEventListener('focusout', later);
-    const unwatch = controller.workspace.subscribe(() => queueMicrotask(refocus));
-    return () => {
-      element.removeEventListener('focusin', focusIn); element.removeEventListener('focusout', focusOut); element.removeEventListener('focusout', later); unwatch();
+    // A mouse click on a chrome button gives the keyboard to the editor (the canvas), as in Photoshop: shortcuts, Space
+    // and Tab keep working after using the toolbar (a text field being edited is left, as with any click). Dialogs and menus keep normal focus; keyboard users still Tab in.
+    const keepFocus = (event: MouseEvent) => {
+      const button = event.button === 0 ? (event.target as Element).closest?.('button') : null;
+      if (!button || !element.contains(button) || button.closest('[role=dialog], [role=alertdialog], [role=menu]')) return;
+      event.preventDefault();
+      if (document.activeElement !== element) element.focus({ preventScroll: true });
     };
+    element.addEventListener('mousedown', keepFocus);
+    // After React has committed (the focused control may only disappear then), once per frame.
+    let frame = 0;
+    const unwatch = controller.workspace.subscribe(() => {
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; refocus(); });
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      element.removeEventListener('focusin', focusIn); element.removeEventListener('focusout', focusOut); element.removeEventListener('focusout', later);
+      element.removeEventListener('mousedown', keepFocus); unwatch();
+    };
+  }, [controller]);
+
+  // An embedding page's theme switch (html[data-theme="light|dark"]) wins over the mount option, live.
+  useEffect(() => {
+    const html = document.documentElement;
+    const initial = controller.theme;
+    const sync = () => {
+      const value = html.getAttribute('data-theme');
+      const next = value === 'light' || value === 'dark' ? value : initial;
+      if (controller.theme !== next) {
+        controller.ui.setState({ theme: next });
+        controller.canvasView?.redraw();
+      }
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(html, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
   }, [controller]);
 
   // Engine errors left on a session (brush, retouch, transform, bake: EditorSession+Brush.brushError) become alerts.
@@ -116,6 +177,15 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
       const session = controller.session;
       const view = controller.canvasView;
       if (isTextTarget(event.target)) return;
+      // Photoshop: Tab shows or hides the tools, options bar and panels; Shift+Tab only the panels.
+      if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey && isChromeKeyTarget(event.target, element)) {
+        if (event.shiftKey) controller.togglePanels();
+        else controller.toggleChrome();
+        event.preventDefault();
+        return;
+      }
+      // Inside the chrome Tab moves the focus (keyboard access); the View menu only shows the shortcut.
+      if (event.key === 'Tab') return;
       const shortcut = shortcutOf(event);
       const modified = event.metaKey || event.ctrlKey || event.altKey;
       // ⌘V goes through the browser's paste event, which carries clipboard images without a prompt.
@@ -203,15 +273,22 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
     return () => { element.removeEventListener('keydown', onKeyDown); element.removeEventListener('keyup', onKeyUp); element.removeEventListener('paste', onPaste); };
   }, [controller]);
 
-  const className = `${styles.root} ${controller.theme === 'light' ? styles.light : ''} ${layout === 'compact' ? styles.compact : layout === 'compactLandscape' ? styles.compactLandscape : ''}`;
+  const desktop = layout === 'desktop';
+  const showsPanels = desktop && panelsOpen && !chromeHidden;
+  const className = ['fw-image-editor', styles.root, theme === 'light' ? styles.light : '',
+    layout === 'compact' ? styles.compact : layout === 'compactLandscape' ? styles.compactLandscape : '',
+    chromeHidden ? styles.chromeHidden : '', !showsPanels ? styles.panelsClosed : '', railTwo && !chromeHidden ? styles.railTwo : '']
+    .filter(Boolean).join(' ');
+  // The canvas pane is first so the floating chrome paints over the canvas; the chrome follows in reading order.
   return (
-    <div ref={root} className={className} tabIndex={-1} lang={controller.locale} data-testid="compositor-editor" data-layout={layout}>
-      <TopBar controller={controller} compact={layout !== 'desktop'} />
-      <ContextBar controller={controller} />
-      <ToolRail controller={controller} />
+    <div ref={root} className={className} tabIndex={-1} lang={controller.locale} data-testid="compositor-editor" data-layout={layout} data-theme={theme}
+      data-chrome={chromeHidden ? 'hidden' : showsPanels ? 'all' : 'no-panels'} style={{ '--cmp-panel-w': `${layersWidth}px` } as CSSProperties}>
       <CanvasPane controller={controller} />
-      {layout === 'desktop' ? <LayersPanel controller={controller} /> : null}
-      {layout === 'desktop' ? <StatusBar controller={controller} /> : null}
+      <TopBar controller={controller} compact={!desktop} width={barWidth} />
+      {!chromeHidden ? <ContextBar controller={controller} /> : null}
+      {!chromeHidden ? <ToolRail controller={controller} /> : null}
+      {showsPanels ? <LayersPanel controller={controller} /> : null}
+      {desktop && !chromeHidden ? <div className={styles.statusDock}><StatusBar controller={controller} /></div> : null}
       {layout !== 'desktop' && sheet === 'layers' ? (
         <>
           <div className={styles.sheetBackdrop} onClick={() => controller.ui.setState({ sheet: null })} />

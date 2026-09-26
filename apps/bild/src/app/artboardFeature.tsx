@@ -212,7 +212,7 @@ function paintArtboards(context: CanvasRenderingContext2D, session: EditorSessio
   const draft = drafts.get(session);
   if (!document || (!artboards.length && !draft)) return;
   const style = getComputedStyle(context.canvas);
-  const accent = style.getPropertyValue('--cmp-accent').trim() || '#0a84ff';
+  const accent = style.getPropertyValue('--cmp-canvas-accent').trim() || '#0a84ff';
   const text = style.getPropertyValue('--cmp-text').trim() || 'rgba(255,255,255,0.88)';
   const secondary = style.getPropertyValue('--cmp-text-secondary').trim() || 'rgba(255,255,255,0.55)';
   const selected = selectedArtboard(session);

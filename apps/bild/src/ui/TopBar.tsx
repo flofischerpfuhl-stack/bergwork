@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import styles from './editor.module.css';
 import type { EditorController } from './controller';
-import { useUi, useWorkspaceSelector } from './hooks';
+import { useSessionSelector, useUi, useWorkspaceSelector } from './hooks';
 import { Icon } from './icons';
 import { buildMenus, shortcutLabel, type Menu, type MenuEntry, type MenuItem } from './menus';
 import { isProjectFile } from './projectFiles';
@@ -19,9 +19,15 @@ export function MenuPopup({ items, anchor, onClose, controller, flipRight }: {
   useLayoutEffect(() => {
     const element = ref.current;
     if (!element) return;
+    // Menus stay inside the editor's box, not the window: an embedding app may put its own title bar around it.
+    const editor = element.closest('.fw-image-editor')?.getBoundingClientRect() ?? { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+    // A menu fits below its anchor (and never slides up over its own title); only anchors near the bottom (panel
+    // footers) let it use the editor's full height.
+    const below = editor.bottom - anchor.y - 8;
+    element.style.maxHeight = `${Math.max(120, below >= 240 ? below : editor.bottom - editor.top - 16)}px`;
     const rect = element.getBoundingClientRect();
-    const x = flipRight !== undefined && anchor.x + rect.width > innerWidth - 4 ? flipRight - rect.width : anchor.x;
-    setPosition({ x: Math.max(4, Math.min(x, innerWidth - rect.width - 4)), y: Math.max(4, Math.min(anchor.y, innerHeight - rect.height - 4)) });
+    const x = flipRight !== undefined && anchor.x + rect.width > editor.right - 4 ? flipRight - rect.width : anchor.x;
+    setPosition({ x: Math.max(editor.left + 4, Math.min(x, editor.right - rect.width - 4)), y: Math.max(editor.top + 4, Math.min(anchor.y, editor.bottom - rect.height - 4)) });
     element.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
   }, [anchor.x, anchor.y, flipRight]);
   useEffect(() => {
@@ -73,7 +79,44 @@ export function MenuPopup({ items, anchor, onClose, controller, flipRight }: {
   );
 }
 
-export function TopBar({ controller, compact }: { controller: EditorController; compact: boolean }) {
+/** Undo and Redo beside the tabs (Fernwork PDF's top bar); isolated so history changes redraw only these two buttons. */
+function HistoryButtons({ controller }: { controller: EditorController }) {
+  markUiRender('HistoryButtons');
+  useWorkspaceSelector(controller, (workspace) => workspace.selectedId);
+  const session = controller.session;
+  useSessionSelector(session, (current) => `${current.canUndo ? 1 : 0}${current.canRedo ? 1 : 0}|${current.history.undoName}|${current.history.redoName}`);
+  const t = controller.t;
+  const undo = session.history.canUndo ? `${t('Undo')} ${t(session.history.undoName)}` : t('Undo');
+  const redo = session.history.canRedo ? `${t('Redo')} ${t(session.history.redoName)}` : t('Redo');
+  return (
+    <span className={styles.chromeGroup}>
+      <button type="button" className={styles.chromeButton} disabled={!session.canUndo} data-testid="toolbar-undo"
+        aria-label={t('Undo')} title={`${undo} (${shortcutLabel('mod+z')})`} onClick={() => session.undo()}><Icon name="undo" size={16} /></button>
+      <button type="button" className={styles.chromeButton} disabled={!session.canRedo} data-testid="toolbar-redo"
+        aria-label={t('Redo')} title={`${redo} (${shortcutLabel('mod+shift+z')})`} onClick={() => session.redo()}><Icon name="redo" size={16} /></button>
+    </span>
+  );
+}
+
+/** Shows or hides the panel stack (Fernwork PDF's Layers button); Shift+Tab does the same. */
+function PanelsButton({ controller, label }: { controller: EditorController; label: boolean }) {
+  markUiRender('PanelsButton');
+  const open = useUi(controller, (s) => s.panelsOpen && !s.chromeHidden);
+  const t = controller.t;
+  return (
+    <button type="button" className={`${styles.chromeButton} ${label ? styles.chromeButtonText : ''} ${open ? styles.chromeButtonOn : ''}`}
+      aria-pressed={open} aria-label={label ? undefined : t('Panels')} data-testid="toggle-panels"
+      title={`${t('Show or hide the panels')} (${shortcutLabel('shift+tab')})`} onClick={() => controller.togglePanels()}>
+      <Icon name="layers" size={16} />{label ? t('Panels') : null}
+    </button>
+  );
+}
+
+/**
+ * `compact`: the phone layouts. `width` narrows the desktop bar: 'dense' drops the file buttons (they are in the File
+ * menu) and the Panels label; 'narrow' (tablets) folds the menus into one menu button as on phones.
+ */
+export function TopBar({ controller, compact, width = 'full' }: { controller: EditorController; compact: boolean; width?: 'full' | 'dense' | 'narrow' }) {
   markUiRender('TopBar');
   useWorkspaceSelector(controller, (workspace) => JSON.stringify([
     workspace.selectedId, workspace.canSwitch,
@@ -96,14 +139,15 @@ export function TopBar({ controller, compact }: { controller: EditorController; 
     controller.ui.setState({ openMenu: openMenu === title ? null : title });
   };
   const current = menus.find((m) => m.title === openMenu);
-  const allItems: MenuEntry[] = compact ? menus.flatMap((m, i) => [...(i ? ['separator' as const] : []), { label: m.title, enabled: true, submenu: m.items.filter((x): x is MenuItem => x !== 'separator') }]) : [];
+  const menuButton = compact || width === 'narrow';
+  const allItems: MenuEntry[] = menuButton ? menus.flatMap((m, i) => [...(i ? ['separator' as const] : []), { label: m.title, enabled: true, submenu: m.items.filter((x): x is MenuItem => x !== 'separator') }]) : [];
   return (
     <div className={styles.topBar} role="toolbar" aria-label="Editor">
-      {compact ? (
+      {menuButton ? (
         <button type="button" className={styles.iconButton} aria-label={t('Menu')} aria-haspopup="menu" data-testid="compact-menu"
           onClick={(event) => open('__all', event.currentTarget)}><Icon name="menu" /></button>
       ) : (
-        <nav className={styles.menuBar} aria-label={t('Menu bar')}>
+        <nav className={styles.menuBar} aria-label={t('Menu bar')} data-testid="menu-bar">
           {menus.map((menu) => (
             <button key={menu.title} type="button" className={`${styles.menuTitle} ${openMenu === menu.title ? styles.menuTitleOpen : ''}`}
               aria-haspopup="menu" aria-expanded={openMenu === menu.title} data-testid={`menu-${menu.title}`}
@@ -114,7 +158,8 @@ export function TopBar({ controller, compact }: { controller: EditorController; 
           ))}
         </nav>
       )}
-      <button type="button" className={styles.iconButton} aria-label={t('New canvas')} title={`${t('New canvas')} (${shortcutLabel('mod+alt+n')}) · ${t('Drop images here for new tabs')}`}
+      {!menuButton ? <span className={styles.chromeDivider} aria-hidden /> : null}
+      <button type="button" className={compact ? styles.iconButton : styles.chromeButton} aria-label={t('New canvas')} title={`${t('New canvas')} (${shortcutLabel('mod+alt+n')}) · ${t('Drop images here for new tabs')}`}
         disabled={!workspace.canSwitch} onClick={() => { workspace.newCanvas(); }} data-testid="new-canvas" data-new-tab
         onDragOver={(event) => { if ([...event.dataTransfer.types].includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
         onDrop={(event) => {
@@ -125,7 +170,7 @@ export function TopBar({ controller, compact }: { controller: EditorController; 
             const tab = workspace.addTab();
             void controller.importFiles([file], tab);
           }
-        }}><Icon name="plus" /></button>
+        }}><Icon name="plus" size={compact ? 18 : 16} /></button>
       <div className={styles.tabs} role="tablist" aria-label={t('Project tabs')}>
         {workspace.tabs.map((tab) => {
           const active = tab.id === workspace.selectedId;
@@ -152,20 +197,33 @@ export function TopBar({ controller, compact }: { controller: EditorController; 
           );
         })}
       </div>
-      <div className={styles.zoomGroup}>
-        {!compact ? (
-          <>
-            <button type="button" className={styles.iconButton} disabled={!document} onClick={() => session.fit()} title={`${t('Fit Canvas')} (${shortcutLabel('mod+0')})`} data-testid="fit">{t('Fit')}</button>
-            <button type="button" className={styles.iconButton} disabled={!document} onClick={() => session.zoomTo(1)} title={`${t('Actual Pixels')} (${shortcutLabel('mod+1')})`}>100%</button>
-          </>
-        ) : null}
-        <button type="button" className={styles.iconButton} disabled={!document} aria-label={t('Zoom out')} onClick={() => session.zoomTo(session.viewport.zoom / 1.25)}><Icon name="zoomOut" /></button>
-        <button type="button" className={styles.iconButton} disabled={!document} aria-label={t('Zoom in')} onClick={() => session.zoomTo(session.viewport.zoom * 1.25)}><Icon name="zoomIn" /></button>
-        {compact ? (
+      {compact ? (
+        // Phones: zoom and the Layers sheet here; the desktop status bar holds zoom.
+        <div className={styles.zoomGroup}>
+          <button type="button" className={styles.iconButton} disabled={!document} aria-label={t('Zoom out')} onClick={() => session.zoomTo(session.viewport.zoom / 1.25)}><Icon name="zoomOut" /></button>
+          <button type="button" className={styles.iconButton} disabled={!document} aria-label={t('Zoom in')} onClick={() => session.zoomTo(session.viewport.zoom * 1.25)}><Icon name="zoomIn" /></button>
           <button type="button" className={styles.iconButton} aria-label={t('Layers')} data-testid="open-layers"
             onClick={() => controller.ui.setState((s) => ({ sheet: s.sheet === 'layers' ? null : 'layers' }))}><Icon name="layers" /></button>
-        ) : null}
-      </div>
+        </div>
+      ) : (
+        <>
+          {width === 'full' ? <span className={styles.chromeGroup}>
+            <button type="button" className={styles.chromeButton} disabled={!workspace.canSwitch} data-testid="toolbar-open"
+              aria-label={t('Open')} title={`${t('Open Project…')} (${shortcutLabel('mod+o')})`} onClick={() => void controller.chooseAndOpen()}>
+              <Icon name="open" size={16} /></button>
+            <button type="button" className={styles.chromeButton} disabled={!document || !workspace.canSwitch} data-testid="toolbar-save"
+              aria-label={t('Save')} title={`${t('Save')} (${shortcutLabel('mod+s')})`} onClick={() => void controller.save()}>
+              <Icon name="save" size={16} /></button>
+            <button type="button" className={styles.chromeButton} disabled={!document || !workspace.canSwitch} data-testid="toolbar-export"
+              aria-label={t('Export As…')} title={`${t('Export As…')} (${shortcutLabel('mod+alt+shift+w')})`} onClick={() => controller.showDialog({ kind: 'export' })}>
+              <Icon name="export" size={16} /></button>
+          </span> : null}
+          {width === 'full' ? <span className={styles.chromeDivider} aria-hidden /> : null}
+          <HistoryButtons controller={controller} />
+          <span className={styles.chromeDivider} aria-hidden />
+          <PanelsButton controller={controller} label={width === 'full'} />
+        </>
+      )}
       {openMenu && anchor ? (
         <MenuPopup controller={controller} anchor={anchor} items={openMenu === '__all' ? allItems : current?.items ?? []}
           onClose={() => controller.ui.setState({ openMenu: null })} />

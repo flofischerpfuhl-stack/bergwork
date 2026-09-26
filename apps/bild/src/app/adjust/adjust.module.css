@@ -24,7 +24,7 @@
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
 }
 .tab:hover { color: var(--cmp-text); }
-.tabOn { background: var(--cmp-raised); color: var(--cmp-text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
+.tabOn { background: var(--cmp-control-active); color: var(--cmp-text); box-shadow: var(--cmp-raised-shadow); }
 .tabDot { width: 6px; height: 6px; border-radius: 50%; flex: none; border: 1px solid var(--cmp-text-tertiary); }
 .tabDotOn { background: var(--cmp-accent); border-color: var(--cmp-accent); }
 
@@ -34,7 +34,7 @@
 
 /* Channel Mixer, Threshold */
 .total { font-size: 12px; font-variant-numeric: tabular-nums; }
-.totalWarning { color: #ff9f0a; }
+.totalWarning { color: var(--cmp-warning); }
 .thresholdMarker { position: absolute; top: 0; height: 130px; width: 0; border-left: 1px solid var(--cmp-accent); pointer-events: none; }
 
 /* Live filter rows in the Layers panel (styled like the effect rows) */

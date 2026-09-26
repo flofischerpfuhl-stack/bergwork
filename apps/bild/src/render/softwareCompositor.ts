@@ -176,11 +176,12 @@ export class SoftwareCompositor {
   present(composite: SoftwareSurface | null, width: number, height: number,
     canvasRect: { x: number; y: number; width: number; height: number }, pointScale: number,
     grid: boolean, pixelSize: number, compositeOrigin: { x: number; y: number } = { x: 0, y: 0 },
-    proof?: { readonly lut: CmykLut; readonly gamutWarning: boolean }): void {
+    proof?: { readonly lut: CmykLut; readonly gamutWarning: boolean },
+    workspace: readonly [number, number, number] = [27 / 255, 27 / 255, 27 / 255]): void {
     this.resize(width, height);
     const context = this.context;
     context.setTransform(1, 0, 0, 1, 0, 0);
-    context.fillStyle = 'rgb(27,27,27)'; context.fillRect(0, 0, width, height);
+    context.fillStyle = `rgb(${workspace.map((v) => Math.round(v * 255)).join(',')})`; context.fillRect(0, 0, width, height);
     if (canvasRect.width <= 0 || canvasRect.height <= 0) return;
     const left = Math.max(0, Math.floor(canvasRect.x)), top = Math.max(0, Math.floor(canvasRect.y));
     const right = Math.min(width, Math.ceil(canvasRect.x + canvasRect.width));

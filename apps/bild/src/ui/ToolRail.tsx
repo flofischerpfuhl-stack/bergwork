@@ -33,7 +33,7 @@ export function ToolRail({ controller }: { controller: EditorController }) {
           <button key={tool} type="button" className={`${styles.tool} ${session.tool === tool ? styles.toolOn : ''}`}
             aria-pressed={session.tool === tool} aria-label={label} title={label}
             disabled={!available} data-testid={`tool-${tool}`} onClick={() => void controller.activateTool(tool)}>
-            <Icon name={toolIcon(controller, tool)} size={19} />
+            <Icon name={toolIcon(controller, tool)} size={18} />
           </button>
         );
       })}
