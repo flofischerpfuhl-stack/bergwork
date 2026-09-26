@@ -392,7 +392,11 @@ function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportSta
   const warpStyle = source.text?.warp?.style;
   if (warpStyle === 'custom' || warpStyle === 'cylinder') issue(state, 'text-warp', 'A custom or cylinder text warp keeps the saved preview; it is not rendered after editing.', 'not-rendered', layerPath);
   else if (warpStyle && warpStyle !== 'none') issue(state, 'text-warp', 'Warped PSD text is re-rendered with Fernwork’s envelope for its style after editing.', 'approximated', layerPath);
-  if (source.text?.textPath) issue(state, 'text-path', 'PSD type on a path keeps its saved preview; after editing it is laid out as point text.', 'approximated', layerPath);
+  const textFrame = source.text?.textPath;
+  // ag-psd calls every Photoshop text frame a `textPath`: [-1,-1] is point text and
+  // [-2,-2]/type 1 is paragraph text's rectangular frame. Neither is text-on-path.
+  if (textFrame && textFrame.data.textRange.some((value) => value >= 0)) issue(state, 'text-path',
+    'PSD type on a custom path keeps its saved preview; after editing it is laid out as point text.', 'approximated', layerPath);
   if (source.placedLayer?.filter?.list.some((filter) => !smartFilter(filter))) issue(state, 'smart-filter',
     'An unsupported smart-object filter remains in the PSD preview.', 'editability-only', layerPath);
   if (source.knockout) issue(state, 'knockout', 'Knockout is rendered from the layer shape; its boundary is inferred from group nesting.',
@@ -1176,7 +1180,7 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     if (!isGroup && !BLEND_MODES.has(sourceMode)) issue(state, `blend-mode:${sourceMode}`,
       `Blend mode “${sourceMode}” is rendered as normal.`, 'not-rendered', layerPath);
     if (source.clipping && !clippingBaseId) issue(state, 'orphan-clipping',
-      'Clipping layer has no visible base in its group.', 'not-rendered', layerPath);
+      'Clipping layer has no representable visible base in its group.', 'not-rendered', layerPath);
     reportLayerFeatures(source, isGroup, state, layerPath);
     const opacity = Math.min(1, Math.max(0, source.opacity ?? 1));
     const fillOpacity = Math.min(1, Math.max(0, source.fillOpacity ?? 1));
@@ -1278,10 +1282,23 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
             Math.round(color.red * 255), Math.round(color.green * 255), Math.round(color.blue * 255), 255,
           ])) }));
       }
-      // Photoshop permits a whole group to be a clipping member. Keep the preceding base alive
-      // across that group; an unclipped group starts a new sibling stack but is not yet a live-mask base.
-      if (!source.clipping) clippingBaseId = null;
-      result.push(...importSiblings(source.children ?? [], id, layerPath, state));
+      // Photoshop also permits an unclipped group to be the base for following clipped siblings.
+      // When the group's alpha is exactly one visible paint descendant, preserve the fully live
+      // CPU/GPU clipping path by using that descendant; multi-paint group alpha still needs a native
+      // group-stack mask and remains reported as orphan clipping.
+      const importedChildren = importSiblings(source.children ?? [], id, layerPath, state);
+      result.push(...importedChildren);
+      if (!source.clipping) {
+        const childById = new Map(importedChildren.map((child) => [child.id, child]));
+        const effectivelyVisible = (child: Layer): boolean => {
+          for (let current: Layer | undefined = child; current && current.id !== id;
+            current = current.parentId ? childById.get(current.parentId) : undefined) if (!current.visible) return false;
+          return true;
+        };
+        const paint = importedChildren.filter((child) => effectivelyVisible(child) && child.kind !== 'group'
+          && !child.adjustment && !!child.raster);
+        clippingBaseId = paint.length === 1 ? paint[0]!.id : null;
+      }
     } else if (!source.clipping) {
       clippingBaseId = id;
     }
@@ -1450,8 +1467,9 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
   }));
   const bitsPerChannel = psd.bitsPerChannel ?? 8, colorMode = psd.colorMode ?? 3;
   if (bitsPerChannel !== 8) unsupported.push({ code: `bit-depth:${bitsPerChannel}`,
-    message: bitsPerChannel === 16 ? '16-bit layer channels and colour-managed CMS output are retained as RGBA16.'
-      : '32-bit floating channels use a bounded display conversion.', impact: 'approximated' });
+    message: bitsPerChannel === 1 ? 'Bitmap-mode pixels have no independent editable layer records.'
+      : bitsPerChannel === 16 ? '16-bit layer channels and colour-managed CMS output are retained as RGBA16.'
+        : '32-bit floating channels use a bounded display conversion.', impact: 'approximated' });
   if (colorMode !== 3) unsupported.push({ code: `color-mode:${colorMode}`,
     message: `PSD color mode ${colorMode} layer channels were converted independently to sRGB.`,
     impact: colorMode === 1 || colorMode === 4 ? 'editability-only' : 'approximated' });
