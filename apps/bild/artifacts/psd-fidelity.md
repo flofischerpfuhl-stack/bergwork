@@ -8,7 +8,8 @@ percentile. A file passes only when both limits for its primary feature folder p
 The runner is a measurement baseline: fidelity failures are reported but do not make the command itself fail.
 
 Overall: 300/300 parsed, 300/300 rendered, 248/300 passed (82.7%).
-The Product Plan A7 acceptance target of at least 90% is **not met** by this baseline.
+Target (PRODUCT-PLAN M15, owner decision 2026-09-26): every fixable deviation is fixed; see the root-cause table
+below and artifacts/psd-target.md. A 90% pass rate is a later TODO that needs an owner-approved text/effect tolerance.
 
 Twelfth-round input: 242/300 (80.7%). Current native result: 248/300 (82.7%), a net gain of 6 files.
 Primary-folder changes are: blend modes 28→28, adjustments 36→37, layers 32→32, effects 12→12,
