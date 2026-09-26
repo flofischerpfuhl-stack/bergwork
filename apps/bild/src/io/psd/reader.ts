@@ -135,6 +135,7 @@ interface ImportState {
   readonly grayTransfer: Float32Array | null;
   readonly cmykTransfer: { readonly inverseSize: number; readonly inverse: Uint8Array;
     readonly forwardSize: number; readonly forward: Uint8Array } | null;
+  readonly cmykExact: ((values: readonly number[]) => RGB) | null;
   readonly knockoutModes: ReadonlyMap<number, PsdKnockoutMode>;
   readonly cmykAdjustmentChannels: ReadonlyMap<number, PsdCmykAdjustmentChannels>;
   readonly cachelessFillLayerIds: ReadonlySet<number>;
@@ -208,9 +209,15 @@ function importEffects(source: AgLayer, state: ImportState, layerPath: string): 
     size: units(shadow.size), contour: 'linear',
   }, shadow.contour));
   const glow = info.outerGlow;
-  if (glow?.present !== false && glow) result.push(withPsdContour({ kind: 'outerGlow', schemaVersion: 1, enabled: glow.enabled !== false,
-    opacity: glow.opacity ?? 1, color: rgb(glow.color), blendMode: effectBlend(glow.blendMode, 'screen'),
-    spread: units(glow.choke), size: units(glow.size), contour: 'linear', noise: 0 }, glow.contour));
+  if (glow?.present !== false && glow) {
+    const extended = glow as typeof glow & { readonly gradient?: EffectSolidGradient };
+    const imported = withPsdContour({ kind: 'outerGlow', schemaVersion: 1, enabled: glow.enabled !== false,
+      opacity: glow.opacity ?? 1, color: rgb(glow.color), blendMode: effectBlend(glow.blendMode, 'screen'),
+      spread: units(glow.choke), size: units(glow.size), contour: 'linear', noise: 0 }, glow.contour);
+    const range = glow.range ?? 0.5;
+    result.push({ ...imported, ...(extended.gradient?.type === 'solid' ? { psdGradient: gradient(extended.gradient) } : {}),
+      ...(range === 0.5 ? {} : { psdRange: range }) } as LayerEffect);
+  }
   const innerGlow = info.innerGlow;
   if (innerGlow?.present !== false && innerGlow) result.push(withPsdContour({ kind: 'innerGlow', schemaVersion: 1,
     enabled: innerGlow.enabled !== false, opacity: innerGlow.opacity ?? 1, color: rgb(innerGlow.color),
@@ -360,7 +367,9 @@ function decodedMask(mask: LayerMaskData | undefined, parameters: LayerMaskData 
     return null;
   }
   const rgba = pixelDataToRgba8(mask.imageData);
-  let pixels: Uint8Array<ArrayBufferLike> = new Uint8Array(mask.imageData.width * mask.imageData.height);
+  let rasterWidth = mask.imageData.width, rasterHeight = mask.imageData.height;
+  let featherOffset = 0;
+  let pixels: Uint8Array<ArrayBufferLike> = new Uint8Array(rasterWidth * rasterHeight);
   for (let pixel = 0; pixel < pixels.length; pixel++) {
     const coverage = rgba[pixel * 4]!;
     pixels[pixel] = Math.round(255 - (255 - coverage) * density);
@@ -368,14 +377,20 @@ function decodedMask(mask: LayerMaskData | undefined, parameters: LayerMaskData 
   if (density !== 1) issue(state, 'mask-density', 'Mask density was baked into its raster and outside value.', 'editability-only', layerPath);
   const feather = (vectorParameters ? parameters?.vectorMaskFeather : parameters?.userMaskFeather) ?? 0;
   if (feather > 0) {
-    pixels = featherMask(pixels, mask.imageData.width, mask.imageData.height, feather, defaultColor);
+    featherOffset = Math.ceil(feather * 3);
+    const expandedWidth = rasterWidth + featherOffset * 2, expandedHeight = rasterHeight + featherOffset * 2;
+    const expanded = new Uint8Array(expandedWidth * expandedHeight); expanded.fill(defaultColor);
+    for (let y = 0; y < rasterHeight; y++) expanded.set(
+      pixels.subarray(y * rasterWidth, (y + 1) * rasterWidth), (y + featherOffset) * expandedWidth + featherOffset);
+    pixels = featherMask(expanded, expandedWidth, expandedHeight, feather, defaultColor);
+    rasterWidth = expandedWidth; rasterHeight = expandedHeight;
     issue(state, 'mask-feather', 'Mask feather was baked into its raster.', 'editability-only', layerPath);
   }
   const relative = mask.positionRelativeToLayer === true;
-  const left = (mask.left ?? 0) + (relative ? layerTransform.origin.x : 0);
-  const top = (mask.top ?? 0) + (relative ? layerTransform.origin.y : 0);
-  const placement = transform(left, top, mask.imageData.width, mask.imageData.height);
-  const raster = Raster.fromPixels(mask.imageData.width, mask.imageData.height, 1, pixels);
+  const left = (mask.left ?? 0) + (relative ? layerTransform.origin.x : 0) - featherOffset;
+  const top = (mask.top ?? 0) + (relative ? layerTransform.origin.y : 0) - featherOffset;
+  const placement = transform(left, top, rasterWidth, rasterHeight);
+  const raster = Raster.fromPixels(rasterWidth, rasterHeight, 1, pixels);
   return { raster, enabled: mask.disabled !== true, placement: samePlacement(placement, layerTransform) ? null : placement,
     linked: relative, defaultColor };
 }
@@ -404,6 +419,7 @@ function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportS
     const width = Math.max(1, Math.ceil(layerTransform.size.width));
     const height = Math.max(1, Math.ceil(layerTransform.size.height));
     const pixels = new Uint8Array(width * height);
+    let vectorPixels: Uint8Array<ArrayBufferLike> = new Uint8Array(width * height);
     const sample = (mask: ImportedPsdMask, placement: LayerTransform, x: number, y: number): number => {
       const px = Math.floor((x - placement.origin.x) * mask.raster.width / placement.size.width);
       const py = Math.floor((y - placement.origin.y) * mask.raster.height / placement.size.height);
@@ -418,12 +434,16 @@ function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportS
       for (const oy of [0.125, 0.375, 0.625, 0.875]) for (const ox of [0.125, 0.375, 0.625, 0.875]) {
         if (pathContains(paths, left + x + ox, top + y + oy) !== inverted) covered++;
       }
-      const vector = Math.round(255 - (255 - covered * 255 / 16) * density);
-      const userCoverage = user
-        ? sample(user, user.placement ?? layerTransform, left + x + 0.5, top + y + 0.5) : 255;
-      pixels[y * width + x] = Math.round(vector * userCoverage / 255);
+      vectorPixels[y * width + x] = Math.round(255 - (255 - covered * 255 / 16) * density);
     }
     const vectorDefault = inverted ? 255 : Math.round(255 * (1 - density));
+    const vectorFeather = source.mask?.vectorMaskFeather ?? 0;
+    if (vectorFeather > 0) vectorPixels = featherMask(vectorPixels, width, height, vectorFeather, vectorDefault);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const userCoverage = user
+        ? sample(user, user.placement ?? layerTransform, left + x + 0.5, top + y + 0.5) : 255;
+      pixels[y * width + x] = Math.round(vectorPixels[y * width + x]! * userCoverage / 255);
+    }
     value = { raster: Raster.fromPixels(width, height, 1, pixels), enabled: (primary?.enabled ?? true) && (real?.enabled ?? true),
       placement: null, linked: false,
       defaultColor: Math.round(vectorDefault * (user?.defaultColor ?? 255) / 255) };
@@ -699,6 +719,7 @@ function labDocumentColor(l: number, a: number, b: number): RGB {
 }
 
 function cmykDocumentColor(state: ImportState, values: readonly number[]): RGB {
+  if (state.cmykExact) return state.cmykExact(values);
   const transfer = state.cmykTransfer;
   if (!transfer) return { red: (1 - values[0]!) * (1 - values[3]!),
     green: (1 - values[1]!) * (1 - values[3]!), blue: (1 - values[2]!) * (1 - values[3]!) };
@@ -732,6 +753,27 @@ function mixedDocumentColor(left: AgColor, right: AgColor, amount: number, state
   if ('l' in left && 'l' in right) return labDocumentColor(mix(left.l, right.l), mix(left.a, right.a), mix(left.b, right.b));
   const a = rgbColor(left), b = rgbColor(right);
   return { red: mix(a.red, b.red), green: mix(a.green, b.green), blue: mix(a.blue, b.blue) };
+}
+
+function documentColor(value: AgColor, state: ImportState): RGB {
+  return mixedDocumentColor(value, value, 0, state);
+}
+
+function smoothCmykGradientColor(stops: readonly { readonly color: AgColor }[], leftIndex: number,
+  rightIndex: number, amount: number, smoothness: number, state: ImportState): RGB | null {
+  const left = stops[leftIndex]?.color, right = stops[rightIndex]?.color;
+  const before = stops[Math.max(0, leftIndex - 1)]?.color, after = stops[Math.min(stops.length - 1, rightIndex + 1)]?.color;
+  if (!left || !right || !before || !after || !('c' in left) || !('c' in right) || !('c' in before) || !('c' in after)) return null;
+  const sample = (key: 'c' | 'm' | 'y' | 'k') => {
+    const linear = left[key] + (right[key] - left[key]) * amount;
+    const t2 = amount * amount, t3 = t2 * amount;
+    const cubic = 0.5 * (2 * left[key] + (-before[key] + right[key]) * amount
+      + (2 * before[key] - 5 * left[key] + 4 * right[key] - after[key]) * t2
+      + (-before[key] + 3 * left[key] - 3 * right[key] + after[key]) * t3);
+    const bounded = Math.min(Math.max(cubic, Math.min(left[key], right[key])), Math.max(left[key], right[key]));
+    return (linear + (bounded - linear) * Math.min(1, Math.max(0, smoothness))) / 100;
+  };
+  return cmykDocumentColor(state, [sample('c'), sample('m'), sample('y'), sample('k')]);
 }
 
 function importedAdjustment(source: AgLayer, state: ImportState, layerPath: string): LayerAdjustment | null {
@@ -961,18 +1003,26 @@ function generatedVectorRaster(source: AgLayer, paths: readonly VectorPath[], wi
   const extent = Math.max(1e-9, (Math.abs(cos) * width + Math.abs(sin) * height) * 0.5 * scale);
   const stroke = source.vectorStroke?.strokeEnabled === true ? source.vectorStroke : null;
   const strokeWidth = stroke ? Math.max(0.01, units(stroke.lineWidth)) : 0;
-  const strokeColor = stroke?.content?.type === 'color' ? rgb(stroke.content.color) : null;
+  const strokeColor = stroke?.content?.type === 'color' ? documentColor(stroke.content.color, state) : null;
   const pattern = content.type === 'pattern' ? patterns.get(content.id) : undefined;
   if (content.type === 'pattern' && (!pattern || pattern.data.length !== pattern.bounds.w * pattern.bounds.h * 4)) return null;
   const stopValue = (location: number): readonly [number, number, number, number] => {
-    if (content.type === 'color') { const color = rgb(content.color); return [color.red, color.green, color.blue, 1]; }
-    let left = stops[0]!, right = stops.at(-1)!;
+    if (content.type === 'color') { const color = documentColor(content.color, state);
+      return [color.red, color.green, color.blue, 1]; }
+    let leftIndex = 0, rightIndex = stops.length - 1;
     for (let index = 1; index < stops.length; index++) if (location <= stops[index]!.location) {
-      left = stops[index - 1]!; right = stops[index]!; break;
+      leftIndex = index - 1; rightIndex = index; break;
     }
+    const left = stops[leftIndex]!, right = stops[rightIndex]!;
     const mix = right.location === left.location ? 0 : Math.min(1, Math.max(0,
       (location - left.location) / (right.location - left.location)));
-    const color = mixedDocumentColor(left.color, right.color, mix, state);
+    // Photoshop's classic smooth CMYK gradients use a bounded cubic through neighbouring
+    // device-space stops. This preserves common process inks without cubic overshoot.
+    const color = content.type === 'solid' && content.style === 'reflected'
+      && (!content.interpolationMethod || content.interpolationMethod === 'classic')
+      ? smoothCmykGradientColor(stops, leftIndex, rightIndex, mix, content.smoothness ?? 1, state)
+        ?? mixedDocumentColor(left.color, right.color, mix, state)
+      : mixedDocumentColor(left.color, right.color, mix, state);
     let alpha = 1;
     if (opacity.length) {
       let lo = opacity[0]!, hi = opacity.at(-1)!;
@@ -1033,10 +1083,11 @@ function generatedVectorRaster(source: AgLayer, paths: readonly VectorPath[], wi
 
 function psdFill(content: VectorContent | undefined, state: ImportState, layerPath: string): FillParameters | null {
   if (!content) return null;
-  if (content.type === 'color') return { kind: 'solid', schemaVersion: 1, color: psdTextColor(content.color) };
+  if (content.type === 'color') return { kind: 'solid', schemaVersion: 1,
+    color: documentColor(content.color, state) };
   if (content.type === 'solid') {
     const stops = content.colorStops.map((stop) => ({ offset: Math.max(0, Math.min(1, stop.location)),
-      color: psdTextColor(stop.color), opacity: 1 }));
+      color: documentColor(stop.color, state), opacity: 1 }));
     for (const opacity of content.opacityStops) {
       const nearest = stops.reduce((best, value) => Math.abs(value.offset - opacity.location) < Math.abs(best.offset - opacity.location) ? value : best, stops[0]!);
       nearest.opacity = Math.max(0, Math.min(1, opacity.opacity));
@@ -1474,6 +1525,24 @@ function cmykTransfer(raw: ReturnType<typeof readRawPsdComposite>, lcms: LittleC
   return { inverseSize, inverse, forwardSize, forward: lcms.transform(profile, source, 'cmyk', 8) };
 }
 
+function exactCmykConverter(raw: ReturnType<typeof readRawPsdComposite>, lcms: LittleCms | null): ImportState['cmykExact'] {
+  if (!lcms || raw.colorMode !== 4 || raw.bitsPerChannel !== 16) return null;
+  const profile = raw.iccProfile ?? lcms.createCmykProfile(), maximum = 65_535;
+  const cache = new Map<string, RGB>();
+  return (values) => {
+    const samples = values.map((value) => Math.round(Math.min(1, Math.max(0, value)) * maximum));
+    const key = samples.join(',');
+    const found = cache.get(key);
+    if (found) return found;
+    const converted = lcms.transform16(profile, Uint16Array.from(samples), 'cmyk');
+    const result = { red: converted[0]! / maximum, green: converted[1]! / maximum,
+      blue: converted[2]! / maximum };
+    if (cache.size >= 4_096) cache.delete(cache.keys().next().value!);
+    cache.set(key, result);
+    return result;
+  };
+}
+
 function readRawLayerPsd(bytes: Uint8Array, raw: ReturnType<typeof readRawPsdComposite>,
   lcms: LittleCms | null, parserWarnings: string[]): Psd {
   // ag-psd rejects CMYK/Lab/duotone/multichannel before reading layer records. RGB here only bypasses that gate;
@@ -1498,6 +1567,7 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
   let oracleOverride: Raster | null = null;
   let documentGrayTransfer: Float32Array | null = null;
   let documentCmykTransfer: ImportState['cmykTransfer'] = null;
+  let documentCmykExact: ImportState['cmykExact'] = null;
   const originalMode = sourceColorMode(bytes);
   const cachelessFillLayerIds = new Set<number>();
   const parserBytes = preparePsdForAgParser(bytes, cachelessFillLayerIds);
@@ -1508,6 +1578,7 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
       oracleOverride = colorManagedComposite(raw, lcms);
       documentGrayTransfer = grayTransfer(raw, lcms);
       documentCmykTransfer = cmykTransfer(raw, lcms);
+      documentCmykExact = exactCmykConverter(raw, lcms);
     } else {
       psd = readPsd(parserBytes, {
         useImageData: true, skipThumbnail: true, skipLinkedFilesData: false, logMissingFeatures: true,
@@ -1544,7 +1615,7 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
     bitsPerChannel, colorMode, isPsb: bytes[5] === 2, artboards: !!psd.artboards, resolution: documentResolution,
     unsupported, resources: [], linkedFiles: new Map((psd.linkedFiles ?? []).map((file) => [file.id, file])),
     patterns: new Map((psd.patterns ?? []).map((pattern) => [pattern.id, pattern])),
-    grayTransfer: documentGrayTransfer, cmykTransfer: documentCmykTransfer,
+    grayTransfer: documentGrayTransfer, cmykTransfer: documentCmykTransfer, cmykExact: documentCmykExact,
     knockoutModes: readPsdLayerKnockouts(bytes), cmykAdjustmentChannels: readPsdCmykAdjustmentChannels(bytes),
     cachelessFillLayerIds };
   const layers = importSiblings(psd.children ?? [], null, '', state);

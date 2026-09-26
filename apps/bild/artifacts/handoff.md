@@ -200,9 +200,9 @@ because no local SlimSAM model files were present; see `artifacts/benchmarks.md`
   read/write/read state/pixel checks are the compatibility evidence.
 - Non-destructive crop, Reveal All, artboard crop and embedded-layer crop: `09699b9` (`artifacts/crop.md`).
 
-**PSD read fidelity and M15.** Twelve fidelity rounds bring the native product render to **248/300 = 82.7%**. The
+**PSD read fidelity and M15.** Fifteen fidelity rounds bring the native product render to **259/300 = 86.3%**. The
 binding M14 rule never uses the PSD's saved composite as the render oracle. M15 replaces the old blanket 90% exit:
-the target is every fixable deviation, with the current measured ceiling **267/300 = 89.0%**. A later 90% target would
+the target is every fixable deviation, with the current measured ceiling **266/300 = 88.7%**. A later 90% target would
 need owner approval for a separate text/effect antialiasing tolerance. Evidence: `artifacts/psd-fidelity.md`,
 `artifacts/psd-target.md`; target documentation commit `4d13092`.
 

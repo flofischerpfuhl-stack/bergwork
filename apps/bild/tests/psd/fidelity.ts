@@ -176,14 +176,13 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
   const rendered = results.filter((result) => result.rendered).length;
   const passed = results.filter((result) => result.passed).length;
   const passRate = results.length ? passed / results.length * 100 : 0;
-  const roundFourteenChanges: readonly [string, string, string][] = [
-    ['adjustments/huesaturation_saturation_rgb.psd', '5.786 / 90', 'Overlapping targeted colour ranges select Photoshop’s strongest range instead of summing contradictory edits.'],
-    ['effects/group-stroke-off-canvas.psd', '18.616 / 255', 'Group effects trace an unbounded live descendant surface, including paint outside the document.'],
-    ['effects/stroke-effects.psd', '20.403 / 255', 'Vector effects trace editable path coverage rather than a stale or transparent paint cache.'],
-    ['mask-density-layervectormask.psd', '3.431 / 48', 'The analytic vector mask and independent user-mask channel are density-adjusted once and multiplied.'],
+  const roundFifteenChanges: readonly [string, string, string][] = [
+    ['colormodes/4x4_16bit_cmyk.psd', '1.813 / 30', 'Classic CMYK gradients use bounded cubic interpolation through neighbouring device-space stops and exact 16-bit CMS conversion.'],
+    ['layer_mask_data.psb', '2.476 / 58', 'Vector and user-mask feathering is separated, and bounded user-mask blur tails extend beyond their stored channel rectangle.'],
+    ['layer_mask_data.psd', '2.282 / 56', 'Vector and user-mask feathering is separated, and bounded user-mask blur tails extend beyond their stored channel rectangle.'],
   ];
   const lines = [
-    '# PSD native-fidelity report — fourteenth round', '',
+    '# PSD native-fidelity report — fifteenth round', '',
     `Corpus: psd-tools commit \`${commit}\`; ${results.length} PSD/PSB files. ag-psd 31.0.2 plus native non-RGB layer-channel decoding.`, '',
     'The oracle is each PSD’s embedded Photoshop composite. Metrics are absolute byte deltas over premultiplied RGB plus',
     'alpha (so undefined straight RGB below transparency is ignored): mean over all channels and the nearest-rank 99th',
@@ -192,19 +191,19 @@ export function fidelityMarkdown(results: readonly FidelityResult[], commit: str
     `Overall: ${parsed}/${results.length} parsed, ${rendered}/${results.length} rendered, ${passed}/${results.length} passed (${passRate.toFixed(1)}%).`,
     'Target (PRODUCT-PLAN M15, owner decision 2026-09-26): every fixable deviation is fixed; see the root-cause table',
     'below and artifacts/psd-target.md. A 90% pass rate is a later TODO that needs an owner-approved text/effect tolerance.', '',
-    `Fourteenth-round input: 252/300 (84.0%). Current native result: ${passed}/${results.length} (${passRate.toFixed(1)}%), a net gain of ${passed - 252} ${passed - 252 === 1 ? 'file' : 'files'}.`,
-    `Primary-folder changes are: blend modes 30→${summarize(results, 'blend-modes').passed}, adjustments 38→${summarize(results, 'adjustments').passed}, layers 32→${summarize(results, 'layers').passed}, effects 12→${summarize(results, 'effects').passed},`,
+    `Fifteenth-round input: 256/300 (85.3%). Current native result: ${passed}/${results.length} (${passRate.toFixed(1)}%), a net gain of ${passed - 256} ${passed - 256 === 1 ? 'file' : 'files'}.`,
+    `Primary-folder changes are: blend modes 30→${summarize(results, 'blend-modes').passed}, adjustments 39→${summarize(results, 'adjustments').passed}, layers 32→${summarize(results, 'layers').passed}, effects 14→${summarize(results, 'effects').passed},`,
     `path operations 12→${summarize(results, 'path-operations').passed}, masks 0→${summarize(results, 'masks').passed}, group clipping 1→${summarize(results, 'group-clipping').passed}, transparency 16→${summarize(results, 'transparency').passed}, colour modes 10→${summarize(results, 'colormodes').passed}, colour profiles`,
-    `1→${summarize(results, 'colorprofiles').passed}, gradients 4→${summarize(results, 'gradients').passed}, descriptors 5→${summarize(results, 'descriptors').passed}, and root 91→${summarize(results, 'root').passed}. The overlapping 16/32-bit and PSB tags changed`,
+    `1→${summarize(results, 'colorprofiles').passed}, gradients 4→${summarize(results, 'gradients').passed}, descriptors 5→${summarize(results, 'descriptors').passed}, and root 92→${summarize(results, 'root').passed}. The overlapping 16/32-bit and PSB tags changed`,
     `26→${summarize(results, '16/32-bit').passed} and 30→${summarize(results, 'PSB').passed} respectively. No primary-folder pass count regressed.`, '',
     '| Newly passing file | Before mean / p99 | After mean / p99 | Native change |',
     '|---|---:|---:|---|',
   ];
-  for (const [file, before, change] of roundFourteenChanges) {
+  for (const [file, before, change] of roundFifteenChanges) {
     const result = results.find((candidate) => candidate.file === file);
     if (result?.passed) lines.push(`| ${file} | ${before} | ${decimal(result.metrics?.mean)} / ${result.metrics?.p99 ?? '—'} | ${change} |`);
   }
-  if (!roundFourteenChanges.length) lines.push('| — | — | — | No threshold result changed. |');
+  if (!roundFifteenChanges.length) lines.push('| — | — | — | No threshold result changed. |');
   lines.push('', '## Thresholds and feature summary', '',
     '| Feature | Limits (mean / p99) | Files | Parsed | Rendered | Passed | Pass rate | Top failure causes |',
     '|---|---:|---:|---:|---:|---:|---:|---|');
@@ -305,9 +304,9 @@ export async function writeFidelityReport(results: readonly FidelityResult[], ou
   let markdown = fidelityMarkdown(results, commit);
   try {
     const existing = await readFile(output, 'utf8');
-    const triage = existing.match(/## (?:Eleventh|Twelfth|Thirteenth|Fourteenth)-round root-cause triage[\s\S]*?(?=\n## Known deviations and next work)/)?.[0]
-      ?.replace(/## (?:Eleventh|Twelfth|Thirteenth)-round root-cause triage/, '## Fourteenth-round root-cause triage');
-    if (triage && !markdown.includes('## Fourteenth-round root-cause triage')) markdown = markdown.replace(
+    const triage = existing.match(/## (?:Eleventh|Twelfth|Thirteenth|Fourteenth|Fifteenth)-round root-cause triage[\s\S]*?(?=\n## Known deviations and next work)/)?.[0]
+      ?.replace(/## (?:Eleventh|Twelfth|Thirteenth|Fourteenth)-round root-cause triage/, '## Fifteenth-round root-cause triage');
+    if (triage && !markdown.includes('## Fifteenth-round root-cause triage')) markdown = markdown.replace(
       '\n## Known deviations and next work', `\n${triage}\n\n## Known deviations and next work`);
   } catch { /* First corpus run has no hand-audited triage section to preserve. */ }
   await writeFile(output, markdown, 'utf8');

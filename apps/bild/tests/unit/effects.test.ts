@@ -82,6 +82,18 @@ describe('layer effects (PRODUCT-PLAN 6.7)', () => {
     expect(at(pass!, 1, 0)).toEqual([0, 0, 255, 64]);
   });
 
+  it('maps an imported Photoshop glow gradient over contour coverage', () => {
+    const effect = Object.assign({ kind: 'outerGlow' as const, schemaVersion: 1 as const, enabled: true, opacity: 1,
+      color: blue, blendMode: 'screen' as const, spread: 0, size: 2, contour: 'linear' as const, noise: 0 as const }, {
+      psdGradient: { stops: [
+        { offset: 0, color: red, opacity: 0.5 },
+        { offset: 1, color: blue, opacity: 1 },
+      ] }, psdRange: 0.5,
+    }) as LayerEffect;
+    const [pass] = renderEffectPasses(new Uint8Array([255]), 1, 1, [effect]);
+    expect(at(pass!, 1, 0)).toEqual([128, 0, 128, 96]);
+  });
+
   it('renders colour and gradient overlays from source alpha and marks them as Fill Opacity content', () => {
     const effects: LayerEffect[] = [
       { kind: 'colorOverlay', schemaVersion: 1, enabled: true, opacity: 0.4, color: green, blendMode: 'normal' },

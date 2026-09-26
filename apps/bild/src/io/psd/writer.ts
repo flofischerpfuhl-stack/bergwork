@@ -217,7 +217,13 @@ function effects(values: readonly LayerEffect[], state: State, path: string): La
       contour: effectContour(effect) }); break;
     case 'outerGlow': result.outerGlow = { present: true, enabled: effect.enabled, opacity: clamp01(effect.opacity),
       size: pixelsUnit(effect.size), choke: pixelsUnit(effect.spread), color: color(effect.color), blendMode: BLENDS[effect.blendMode],
-      source: 'edge', noise: 0, contour: effectContour(effect) }; break;
+      source: 'edge', noise: 0, contour: effectContour(effect),
+      ...((effect as typeof effect & { readonly psdGradient?: import('../../core/model').EffectGradient }).psdGradient
+        ? { gradient: gradient((effect as typeof effect & {
+            readonly psdGradient: import('../../core/model').EffectGradient }).psdGradient) }
+        : {}),
+      range: (effect as typeof effect & { readonly psdRange?: number }).psdRange ?? 0.5 } as NonNullable<LayerEffectsInfo['outerGlow']>
+        & { gradient?: EffectSolidGradient }; break;
     case 'colorOverlay': (result.solidFill ??= []).push({ present: true, enabled: effect.enabled,
       opacity: clamp01(effect.opacity), color: color(effect.color), blendMode: BLENDS[effect.blendMode ?? 'normal'] }); break;
     case 'gradientOverlay': (result.gradientOverlay ??= []).push({ present: true, enabled: effect.enabled,
