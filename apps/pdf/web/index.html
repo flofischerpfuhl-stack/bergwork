@@ -5,12 +5,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>berg:work PDF</title>
-  <link rel="icon" type="image/svg+xml" href="./bergwork-pdf-icon.svg">
+  <link rel="icon" type="image/svg+xml" href="./icon-dark.svg">
   <!-- main.js inserts the editor CSS in front of this link, so the berg:work theme always comes last. -->
   <link rel="stylesheet" href="./theme.css" id="bw-theme">
   <script type="module" src="./main.js"></script>
 </head>
 <body class="oo-pdf-workbench-route">
+  <!-- Title bar drawn by the app (the window has no system decorations). host.js wires dragging and the controls. -->
+  <header class="bw-titlebar" id="bw-titlebar">
+    <div class="bw-titlebar-brand">
+      <img class="bw-titlebar-icon bw-icon-on-dark" src="./icon-dark.svg" alt="" draggable="false">
+      <img class="bw-titlebar-icon bw-icon-on-light" src="./icon-light.svg" alt="" draggable="false">
+      <span class="bw-titlebar-wordmark">berg:work</span>
+      <span class="bw-titlebar-separator" aria-hidden="true">|</span>
+      <span class="bw-titlebar-product">PDF</span>
+    </div>
+    <div class="bw-titlebar-actions">
+      <div class="bw-settings" id="bw-settings"></div>
+      <div class="bw-window-controls" id="bw-window-controls" role="group" aria-label="Window"></div>
+    </div>
+  </header>
   <div id="pdf-workbench-root"></div>
 </body>
 </html>

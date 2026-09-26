@@ -7,6 +7,7 @@
 // The editor bundle fetches its workers, WASM and fonts from absolute /tools/vendor/... URLs, so the vendor
 // directories have to sit at exactly that path below the dist root. No dependencies; Node 22.
 import { cp, mkdir, readdir, rm, stat } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -50,11 +51,20 @@ if (!(await isDirectory(webDir))) {
   process.exit(1);
 }
 
-await rm(distDir, { recursive: true, force: true });
+// Empty dist/ rather than deleting it, so a static server running in it (browser preview) keeps working.
+await mkdir(distDir, { recursive: true });
+for (const entry of await readdir(distDir)) await rm(path.join(distDir, entry), { recursive: true, force: true });
 await mkdir(vendorTarget, { recursive: true });
 await cp(webDir, distDir, { recursive: true });
 for (const name of VENDOR_DIRS) {
   await cp(path.join(vendorSource, name), path.join(vendorTarget, name), { recursive: true });
+}
+
+// Licences view data (Settings → Licences); needs cargo, which every app build has.
+try {
+  execFileSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'collect-licenses.mjs')], { stdio: 'inherit' });
+} catch (error) {
+  console.warn(`build-frontend: licence list not generated (${error.message}); the Licences view will say so.`);
 }
 
 const { bytes, files } = await sizeOf(distDir);

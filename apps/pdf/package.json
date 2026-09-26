@@ -7,7 +7,9 @@
   "scripts": {
     "build:web": "node scripts/build-frontend.mjs",
     "tauri:dev": "node scripts/tauri.mjs dev",
-    "tauri:build": "node scripts/tauri.mjs build"
+    "tauri:build": "node scripts/tauri.mjs build",
+    "licenses": "node scripts/collect-licenses.mjs --notices",
+    "licenses:check": "node scripts/collect-licenses.mjs --check"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.5"

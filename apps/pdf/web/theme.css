@@ -2,10 +2,11 @@
  *
  * 1. Host page base: what Fernwork's site stylesheet gives the editor on fernwork.net (reset, form controls),
  *    expressed in the editor's own --pdf-* tokens. Fonts are system fonts: the app works offline.
- * 2. Accent: a neutral grey instead of Fernwork green. The editor sets its tokens on
+ * 2. Palette: the surfaces of VS Code's Dark Modern / Light Modern themes with a warm stone-grey accent
+ *    (the tone of the berg:work paper colours) instead of Fernwork green. The editor sets its tokens on
  *    `body.oo-pdf-workbench-route, .oo-pdf-shell` and `html[data-theme="light"] …`; the
  *    html[data-brand="bergwork"] prefix outranks both.
- * 3. Title bar: the app icon and window controls the editor places in its top row.
+ * 3. Title bar: icon, the berg:work wordmark and the window controls above the editor.
  */
 
 /* ── 1. Host page base ─────────────────────────────────────────────────── */
@@ -92,120 +93,474 @@
   /* Toasts: the editor stylesheet has neutral defaults for hosts without Fernwork's site stylesheet. */
 }
 
-/* ── 2. Accent: neutral grey ───────────────────────────────────────────── */
+/* ── 2. Palette ────────────────────────────────────────────────────────── */
 
-/* The accent also draws selection frames and handles on the white PDF page, so it stays a mid grey in both
-   themes; only --pdf-accent-strong (text on tinted chips) follows the panel colour. */
-html[data-brand="bergwork"] body.oo-pdf-workbench-route,
-html[data-brand="bergwork"] .oo-pdf-shell {
-  --pdf-accent: #71717a;
-  --pdf-accent-strong: #d4d4d8;
-  --pdf-accent-contrast: #ffffff;
-  --pdf-page-accent: #52525b;
-  --pdf-selected: rgba(161, 161, 170, 0.16);
-  --pdf-text-selection-bg: #d4d4d8;
-  --pdf-text-selection-text: #18181b;
+@font-face {
+  font-family: 'Bergschrift';
+  src: url('./fonts/Bergschrift-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
 }
 
+/* Dark: VS Code Dark Modern surfaces. The accent also draws selection frames and handles on the white PDF
+   page, so it stays a mid tone; --pdf-accent-strong is for text on tinted chips. */
+html[data-brand="bergwork"] body.oo-pdf-workbench-route,
+html[data-brand="bergwork"] .oo-pdf-shell {
+  --pdf-bg: #1f1f1f;
+  --pdf-panel: #181818;
+  --pdf-panel-2: #1f1f1f;
+  --pdf-panel-3: #2b2b2b;
+  --pdf-floating: #181818;
+  --pdf-input-bg: #313131;
+  --pdf-chip-bg: rgba(24, 24, 24, 0.9);
+  --pdf-empty-bg: rgba(24, 24, 24, 0.7);
+  --pdf-border: #2b2b2b;
+  --pdf-border-strong: #3c3c3c;
+  --pdf-muted: #9d9d9d;
+  --pdf-text: #cccccc;
+  --pdf-soft: rgba(255, 255, 255, 0.03);
+  --pdf-hover: rgba(255, 255, 255, 0.06);
+  --pdf-hover-strong: rgba(255, 255, 255, 0.1);
+  --pdf-checker-bg: #1f1f1f;
+  --pdf-checker-tile: #232323;
+  --pdf-accent: #6b6560;
+  --pdf-accent-strong: #d6d0c8;
+  --pdf-accent-contrast: #ffffff;
+  --pdf-page-accent: #57534e;
+  --pdf-selected: rgba(168, 162, 158, 0.16);
+  --pdf-text-selection-bg: #d6d0c8;
+  --pdf-text-selection-text: #1c1917;
+  --bw-titlebar-bg: #181818;
+}
+
+/* Light: VS Code Light Modern surfaces. */
 html[data-brand="bergwork"][data-theme="light"] body.oo-pdf-workbench-route,
 html[data-brand="bergwork"][data-theme="light"] .oo-pdf-shell {
-  --pdf-accent: #52525b;
-  --pdf-accent-strong: #27272a;
+  --pdf-bg: #ffffff;
+  --pdf-panel: #f8f8f8;
+  --pdf-panel-2: #ffffff;
+  --pdf-panel-3: #efefef;
+  --pdf-floating: #f8f8f8;
+  --pdf-input-bg: #ffffff;
+  --pdf-chip-bg: rgba(248, 248, 248, 0.92);
+  --pdf-empty-bg: rgba(248, 248, 248, 0.8);
+  --pdf-border: #e5e5e5;
+  --pdf-border-strong: #cecece;
+  --pdf-muted: #6f6f6f;
+  --pdf-text: #3b3b3b;
+  --pdf-soft: rgba(0, 0, 0, 0.03);
+  --pdf-hover: rgba(0, 0, 0, 0.05);
+  --pdf-hover-strong: rgba(0, 0, 0, 0.08);
+  --pdf-checker-bg: #eeeeee;
+  --pdf-checker-tile: #e8e8e8;
+  --pdf-accent: #57534e;
+  --pdf-accent-strong: #292524;
   --pdf-accent-contrast: #ffffff;
-  --pdf-page-accent: #52525b;
-  --pdf-selected: rgba(82, 82, 91, 0.12);
-  --pdf-text-selection-bg: #d4d4d8;
-  --pdf-text-selection-text: #18181b;
+  --pdf-page-accent: #57534e;
+  --pdf-selected: rgba(87, 83, 78, 0.12);
+  --pdf-text-selection-bg: #d6d0c8;
+  --pdf-text-selection-text: #1c1917;
+  --bw-titlebar-bg: #f8f8f8;
 }
 
 /* ── 3. Title bar ──────────────────────────────────────────────────────── */
 
-.bw-titlebar-icon {
+html[data-brand="bergwork"] body.oo-pdf-workbench-route {
+  --bw-wordmark: #ff5a4f;
+}
+
+html[data-brand="bergwork"][data-theme="light"] body.oo-pdf-workbench-route {
+  --bw-wordmark: #c81e1e;
+}
+
+.bw-titlebar {
+  position: relative;
+  z-index: 60000;
   display: flex;
   flex: none;
   align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
+  justify-content: space-between;
+  height: 38px;
+  padding: 0 12px 0 12px;
+  border-bottom: 1px solid var(--pdf-border);
+  background: var(--bw-titlebar-bg);
+  color: var(--pdf-text);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.bw-titlebar-icon img {
+.bw-titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  pointer-events: none;
+}
+
+.bw-titlebar-icon {
   width: 22px;
   height: 22px;
-  border-radius: 5px;
-  pointer-events: none;
   -webkit-user-drag: none;
-  user-select: none;
 }
 
+.bw-icon-on-light,
+html[data-theme="light"] .bw-icon-on-dark {
+  display: none;
+}
+
+html[data-theme="light"] .bw-icon-on-light {
+  display: block;
+}
+
+.bw-titlebar-wordmark {
+  color: var(--bw-wordmark);
+  font-family: 'Bergschrift', var(--font-ui);
+  font-size: 14px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  /* The display face sits high; nudge it onto the text line of "PDF". */
+  transform: translateY(1px);
+}
+
+.bw-titlebar-separator {
+  color: var(--pdf-border-strong);
+  font-size: 15px;
+  font-weight: 300;
+}
+
+.bw-titlebar-product {
+  color: var(--pdf-muted);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.bw-titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* Settings */
+.bw-settings {
+  position: relative;
+}
+
+.bw-titlebar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pdf-muted);
+  cursor: default;
+}
+
+.bw-titlebar-button:hover,
+.bw-titlebar-button.is-open {
+  background: var(--pdf-hover-strong);
+  color: var(--pdf-text);
+}
+
+.bw-titlebar-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.bw-settings-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60010;
+  display: grid;
+  gap: 8px;
+  width: 240px;
+  padding: 10px;
+  border: 1px solid var(--pdf-border);
+  border-radius: 12px;
+  background: var(--pdf-panel);
+  box-shadow: 0 16px 40px var(--pdf-shadow-strong);
+}
+
+.bw-settings-panel[hidden] {
+  display: none;
+}
+
+.bw-settings-title {
+  color: var(--pdf-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.bw-segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--pdf-border);
+  border-radius: 8px;
+  background: var(--pdf-panel-3);
+}
+
+.bw-segmented button {
+  min-height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pdf-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.bw-segmented button.is-active {
+  background: var(--pdf-panel);
+  color: var(--pdf-text);
+  box-shadow: 0 1px 3px var(--pdf-shadow);
+}
+
+.bw-settings-about {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--pdf-border);
+  color: var(--pdf-muted);
+  font-size: 12px;
+}
+
+.bw-settings-link {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pdf-text);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.bw-settings-link:hover {
+  background: var(--pdf-hover);
+}
+
+/* Window controls: macOS traffic lights on the right, close outermost. */
 .bw-window-controls {
   display: flex;
-  flex: none;
   align-items: center;
-  gap: 2px;
-  height: 36px;
-  margin-left: 4px;
+  gap: 8px;
 }
 
 .bw-window-controls[hidden] {
   display: none;
 }
 
-.bw-window-control {
+.bw-traffic {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 32px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--pdf-muted);
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 0.5px solid rgba(0, 0, 0, 0.18);
+  border-radius: 50%;
   cursor: default;
-  transition: background-color 0.1s ease, color 0.1s ease;
 }
 
-.bw-window-control:hover {
-  background: var(--pdf-hover);
-  color: var(--pdf-text);
+.bw-traffic-minimize { background: #febc2e; }
+.bw-traffic-maximize { background: #28c840; }
+.bw-traffic-close { background: #ff5f57; }
+
+.bw-window-inactive .bw-window-controls:not(:hover) .bw-traffic {
+  border-color: rgba(0, 0, 0, 0.12);
+  background: var(--pdf-border-strong);
 }
 
-.bw-window-control:active {
-  background: var(--pdf-hover-strong);
-}
-
-.bw-window-control:focus-visible {
+.bw-traffic:focus-visible {
   outline: 2px solid var(--pdf-accent);
-  outline-offset: -2px;
-}
-
-.bw-window-control-close:hover,
-.bw-window-control-close:focus-visible {
-  background: #c42b1c;
-  color: #ffffff;
-}
-
-.bw-window-control-close:active {
-  background: #b22a1d;
-  color: #ffffff;
+  outline-offset: 2px;
 }
 
 .bw-glyph {
+  display: none;
+  width: 8px;
+  height: 8px;
   fill: none;
-  stroke: currentColor;
-  stroke-width: 1;
-  shape-rendering: crispEdges;
+  stroke: rgba(0, 0, 0, 0.55);
+  stroke-width: 1.3;
+  stroke-linecap: round;
 }
 
-.bw-glyph-close {
-  shape-rendering: geometricPrecision;
+.bw-window-controls:hover .bw-glyph-minimize,
+.bw-window-controls:hover .bw-glyph-maximize,
+.bw-window-controls:hover .bw-glyph-close,
+.bw-traffic:focus-visible .bw-glyph {
+  display: block;
 }
 
-.bw-window-controls .bw-glyph-restore,
-.bw-window-controls.is-maximized .bw-glyph-maximize {
+.bw-window-controls:hover .bw-glyph-restore,
+.bw-window-maximized .bw-window-controls .bw-glyph-maximize {
   display: none;
 }
 
-.bw-window-controls.is-maximized .bw-glyph-restore {
+.bw-window-maximized .bw-window-controls:hover .bw-glyph-restore {
   display: block;
+}
+
+/* Rounded window (Linux: the window is transparent and the page draws the corners). Maximised windows stay
+   square, as on macOS. */
+html.bw-rounded-window:not(.bw-window-maximized),
+html.bw-rounded-window:not(.bw-window-maximized) body.oo-pdf-workbench-route {
+  background: transparent;
+}
+
+html.bw-rounded-window:not(.bw-window-maximized) body.oo-pdf-workbench-route {
+  border: 1px solid var(--pdf-border-strong);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--pdf-bg);
+}
+
+/* ── 4. Licences ───────────────────────────────────────────────────────── */
+
+.bw-licences-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--pdf-modal-overlay);
+}
+
+.bw-licences-backdrop[hidden] {
+  display: none;
+}
+
+.bw-licences {
+  display: flex;
+  flex-direction: column;
+  width: min(820px, 100%);
+  max-height: min(86vh, 900px);
+  border: 1px solid var(--pdf-border);
+  border-radius: 12px;
+  background: var(--pdf-panel);
+  box-shadow: 0 24px 60px var(--pdf-shadow-strong);
+  color: var(--pdf-text);
+}
+
+.bw-licences-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--pdf-border);
+}
+
+.bw-licences-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.bw-licences-search {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--pdf-border);
+  border-radius: 8px;
+  background: var(--pdf-input-bg);
+  color: var(--pdf-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.bw-licences-body {
+  overflow-y: auto;
+  padding: 8px 14px 16px;
+  font-size: 13px;
+}
+
+.bw-licences-intro {
+  margin: 6px 0 4px;
+  color: var(--pdf-muted);
+  line-height: 1.45;
+}
+
+.bw-licence-section h3 {
+  margin: 16px 0 6px;
+  color: var(--pdf-muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Versions and commit hashes keep their case. */
+.bw-licence-section h3 .bw-licence-note {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.bw-licence-entry {
+  border-bottom: 1px solid var(--pdf-border);
+}
+
+.bw-licence-entry summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 4px;
+  cursor: pointer;
+}
+
+.bw-licence-spdx {
+  color: var(--pdf-muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.bw-licence-link {
+  display: inline-block;
+  margin: 2px 4px 6px;
+  color: var(--pdf-text);
+  font-size: 12px;
+}
+
+.bw-licence-file {
+  margin: 6px 4px 2px;
+  color: var(--pdf-muted);
+  font-size: 11px;
+}
+
+.bw-licence-text {
+  max-height: 320px;
+  margin: 0 4px 10px;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--pdf-panel-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.bw-licence-missing {
+  margin: 4px 4px 10px;
+  color: var(--pdf-muted);
+  font-size: 12px;
 }

@@ -1,6 +1,10 @@
 {
   "bundle": {
-    "targets": ["deb", "rpm", "appimage"],
+    "targets": [
+      "deb",
+      "rpm",
+      "appimage"
+    ],
     "linux": {
       "deb": {
         "desktopTemplate": "linux/bergwork-pdf.desktop",
@@ -15,5 +19,22 @@
         }
       }
     }
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "berg:work PDF",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 900,
+        "minHeight": 600,
+        "center": true,
+        "resizable": true,
+        "decorations": false,
+        "shadow": true,
+        "transparent": true
+      }
+    ]
   }
 }

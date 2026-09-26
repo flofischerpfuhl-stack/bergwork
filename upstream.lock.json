@@ -28,9 +28,9 @@
         "tools/vendor/tesseract-5.0.4"
       ],
       "target": "apps/pdf/upstream",
-      "commit": "6f9537dc6303488b62fb339de42edfe747ed9632",
-      "digest": "5bce74e521487fed8ff38a7bc812e64660f9a459d2d4699f116a16790e110752",
-      "fileCount": 282
+      "commit": "b53aee611d0292b2b8c9e20f84ba9e2dad985ea2",
+      "digest": "228d6df6a23233c77d886b1b9e309916111263746bd822cb5ac02c0db697a642",
+      "fileCount": 283
     },
     "compositor-image": {
       "description": "Image editor web build from the compositor repository.",

@@ -1,20 +1,25 @@
-// berg:work host for the Fernwork PDF editor: the `shell` capability of `mount(element, { host })`.
+// berg:work host for the Fernwork PDF editor.
 //
-// The editor reports the active document through setTitle() and, when it supports titleBar, moves `leading`
-// (app icon) and `trailing` (window controls) into its own top row, which then acts as the window title bar.
-// Outside Tauri (plain browser, Playwright) every native call is a no-op and the window controls stay hidden.
+// The app draws its own title bar (index.html): icon, wordmark, settings and macOS-style window controls. The
+// editor keeps its floating top bar below it and receives the `shell` capability of `mount(element, { host })`,
+// through which it reports the active document for the native window title (task switcher, window lists). No
+// `setFullscreen`: the app has no fullscreen toggle. Outside Tauri (plain browser) the window controls only show
+// with `?preview`, without function.
+
+import { showLicences } from './licenses-view.js';
+import { setThemePreference, themePreference } from './theme-preference.js';
 
 const APP_NAME = 'berg:work PDF';
-const ICON_SRC = './bergwork-pdf-icon.svg';
-
 const SVG_NS = 'http://www.w3.org/2000/svg';
-// 10×10 glyphs in the Windows 11 caption style; stroked with currentColor.
+
+// Glyphs shown on the traffic lights while the pointer is over them (viewBox 0 0 10 10).
 const GLYPHS = {
-  minimize: 'M0 5.5h10',
-  maximize: 'M.5 .5h9v9h-9z',
-  restore: 'M2.5 2.5h7v7h-7z M2.5 .5h7v7',
-  close: 'M.5 .5l9 9 M9.5 .5l-9 9',
+  minimize: 'M2 5h6',
+  maximize: 'M3 3h4v4H3z',
+  restore: 'M2.5 4.5h3v3h-3z M4.5 2.5h3v3',
+  close: 'M3 3l4 4 M7 3L3 7',
 };
+const GEAR = '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>';
 
 /** The current Tauri window, or null in a plain browser. */
 function currentWindow() {
@@ -25,7 +30,7 @@ function currentWindow() {
   }
 }
 
-/** Runs a native window call and swallows rejections (e.g. a missing permission) after logging them. */
+/** Runs a native window call and logs (instead of throwing) a rejection such as a missing permission. */
 function call(win, method, ...args) {
   if (!win) return;
   Promise.resolve()
@@ -36,8 +41,6 @@ function call(win, method, ...args) {
 function glyph(name) {
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('viewBox', '0 0 10 10');
-  svg.setAttribute('width', '10');
-  svg.setAttribute('height', '10');
   svg.setAttribute('aria-hidden', 'true');
   svg.classList.add('bw-glyph', `bw-glyph-${name}`);
   const path = document.createElementNS(SVG_NS, 'path');
@@ -46,10 +49,10 @@ function glyph(name) {
   return svg;
 }
 
-function controlButton(kind, label, onClick, ...glyphs) {
+function trafficLight(kind, label, onClick, ...glyphs) {
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = `bw-window-control bw-window-control-${kind}`;
+  button.className = `bw-traffic bw-traffic-${kind}`;
   button.setAttribute('aria-label', label);
   button.title = label;
   button.append(...glyphs);
@@ -57,79 +60,133 @@ function controlButton(kind, label, onClick, ...glyphs) {
   return button;
 }
 
-function createIcon() {
-  const leading = document.createElement('div');
-  leading.className = 'bw-titlebar-icon';
-  const img = document.createElement('img');
-  img.src = ICON_SRC;
-  img.alt = '';
-  img.draggable = false;
-  leading.append(img);
-  return leading;
-}
-
-function createWindowControls(win) {
-  const controls = document.createElement('div');
-  controls.className = 'bw-window-controls';
-  controls.setAttribute('role', 'group');
-  controls.setAttribute('aria-label', 'Window');
-  if (!win) {
+/** Window controls on the right (close outermost), dragging and double-click maximise on the empty bar. */
+function wireTitleBar(win) {
+  const bar = document.getElementById('bw-titlebar');
+  const controls = document.getElementById('bw-window-controls');
+  if (!bar || !controls) return;
+  const preview = !win && new URLSearchParams(location.search).has('preview');
+  if (!win && !preview) {
     controls.hidden = true;
-    return controls;
+    return;
   }
-
-  const minimize = controlButton('minimize', 'Minimize', () => call(win, 'minimize'), glyph('minimize'));
-  const maximize = controlButton(
-    'maximize',
-    'Maximize',
-    () => call(win, 'toggleMaximize'),
-    glyph('maximize'),
-    glyph('restore'),
+  const maximize = trafficLight('maximize', 'Maximize', () => call(win, 'toggleMaximize'), glyph('maximize'), glyph('restore'));
+  controls.append(
+    trafficLight('minimize', 'Minimize', () => call(win, 'minimize'), glyph('minimize')),
+    maximize,
+    trafficLight('close', 'Close', () => call(win, 'close'), glyph('close')),
   );
-  const close = controlButton('close', 'Close', () => call(win, 'close'), glyph('close'));
-  controls.append(minimize, maximize, close);
+  // Inactive windows show grey lights, as on macOS.
+  window.addEventListener('blur', () => document.documentElement.classList.add('bw-window-inactive'));
+  window.addEventListener('focus', () => document.documentElement.classList.remove('bw-window-inactive'));
+  if (preview) return;
 
   const showMaximized = (maximized) => {
-    controls.classList.toggle('is-maximized', maximized);
+    // Maximised windows are square and without the outline (see theme.css).
+    document.documentElement.classList.toggle('bw-window-maximized', maximized);
     const label = maximized ? 'Restore' : 'Maximize';
     maximize.setAttribute('aria-label', label);
     maximize.title = label;
   };
   const refresh = () => {
-    Promise.resolve()
-      .then(() => win.isMaximized())
-      .then(showMaximized, () => {});
+    Promise.resolve().then(() => win.isMaximized()).then(showMaximized, () => {});
   };
   refresh();
   // Maximising, restoring and snapping all resize the window; re-read the state instead of guessing.
-  Promise.resolve()
-    .then(() => win.onResized(refresh))
-    .catch((error) => console.warn('[bergwork] cannot track the maximized state', error));
-  return controls;
+  Promise.resolve().then(() => win.onResized(refresh)).catch((error) => console.warn('[bergwork] cannot track the maximized state', error));
+
+  // Once a native drag starts the window manager owns the pointer and no dblclick arrives, so the second press
+  // of a double-click is recognised on mousedown (as Tauri's own drag regions do).
+  bar.addEventListener('mousedown', (event) => {
+    if (event.button !== 0 || event.target.closest('button, .bw-settings-panel')) return;
+    if (event.detail === 2) call(win, 'toggleMaximize');
+    else call(win, 'startDragging');
+  });
 }
 
-/** Builds the host object passed to `bundle.mount(element, { host })`. */
+/** Gear button with the app settings: theme and version. */
+function wireSettings() {
+  const host = document.getElementById('bw-settings');
+  if (!host) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'bw-titlebar-button';
+  button.setAttribute('aria-label', 'Settings');
+  button.setAttribute('aria-haspopup', 'true');
+  button.setAttribute('aria-expanded', 'false');
+  button.title = 'Settings';
+  button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${GEAR}</svg>`;
+
+  const panel = document.createElement('div');
+  panel.className = 'bw-settings-panel';
+  panel.hidden = true;
+  panel.setAttribute('role', 'group');
+  panel.setAttribute('aria-label', 'Settings');
+  panel.innerHTML = `
+    <div class="bw-settings-title">Theme</div>
+    <div class="bw-segmented" role="radiogroup" aria-label="Theme">
+      <button type="button" role="radio" data-theme-choice="system">System</button>
+      <button type="button" role="radio" data-theme-choice="light">Light</button>
+      <button type="button" role="radio" data-theme-choice="dark">Dark</button>
+    </div>
+    <div class="bw-settings-about">
+      <span><span class="bw-settings-app">${APP_NAME}</span> <span class="bw-settings-version"></span></span>
+      <button type="button" class="bw-settings-link" data-action="licences">Licences</button>
+    </div>`;
+
+  const showChoice = () => {
+    const current = themePreference();
+    panel.querySelectorAll('[data-theme-choice]').forEach((choice) => {
+      const on = choice.dataset.themeChoice === current;
+      choice.classList.toggle('is-active', on);
+      choice.setAttribute('aria-checked', String(on));
+    });
+  };
+  panel.addEventListener('click', (event) => {
+    if (event.target.closest('[data-action="licences"]')) {
+      setOpen(false);
+      void showLicences();
+      return;
+    }
+    const choice = event.target.closest('[data-theme-choice]');
+    if (!choice) return;
+    setThemePreference(choice.dataset.themeChoice);
+    showChoice();
+  });
+  const setOpen = (open) => {
+    panel.hidden = !open;
+    button.setAttribute('aria-expanded', String(open));
+    button.classList.toggle('is-open', open);
+    if (open) showChoice();
+  };
+  button.addEventListener('click', () => setOpen(panel.hidden));
+  document.addEventListener('pointerdown', (event) => {
+    if (!panel.hidden && !host.contains(event.target)) setOpen(false);
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !panel.hidden) setOpen(false);
+  });
+  Promise.resolve()
+    .then(() => globalThis.__TAURI__?.app?.getVersion?.())
+    .then((version) => { if (version) panel.querySelector('.bw-settings-version').textContent = version; }, () => {});
+  host.append(button, panel);
+}
+
+/** Wires the title bar and builds the host object passed to `bundle.mount(element, { host })`. */
 export function createShellHost() {
   const win = currentWindow();
-  const leading = createIcon();
-  const trailing = createWindowControls(win);
+  // Linux draws rounded corners in the page (transparent window); Windows 11 rounds undecorated windows itself.
+  if (win && /Linux/.test(navigator.userAgent)) document.documentElement.classList.add('bw-rounded-window');
+  wireTitleBar(win);
+  wireSettings();
   const setTitle = (title, { dirty = false } = {}) => {
     const windowTitle = title ? `${dirty ? '• ' : ''}${title} — ${APP_NAME}` : APP_NAME;
     document.title = windowTitle;
     call(win, 'setTitle', windowTitle);
   };
-  const startDrag = () => call(win, 'startDragging');
-  const toggleMaximize = () => call(win, 'toggleMaximize');
-
-  const host = {
+  return {
     capabilities: {
-      shell: {
-        version: 1,
-        setTitle,
-        titleBar: { leading, trailing, startDrag, toggleMaximize },
-      },
+      shell: { version: 1, setTitle },
     },
   };
-
-  return host;
 }

@@ -14,11 +14,19 @@ Fernwork browser tool.
 | `setTitle(title, { dirty })` | Called with the active document's name and its unsaved state instead of setting `document.title`. |
 | `setFullscreen?(fullscreen)` | With a shell but without this method the editor shows no fullscreen toggle. |
 | `titleBar?.leading`, `titleBar?.trailing` | DOM nodes the editor places first and last in its top row (app icon, window controls). The host keeps ownership; unmounting only detaches them. |
-| `titleBar?.startDrag()`, `titleBar?.toggleMaximize()` | Called on a primary-button press (a second press of a double-click toggles maximise) on empty space of the top row or the tab strip. |
+| `titleBar?.startDrag()`, `titleBar?.toggleMaximize()` | Called on a primary-button press (a second press of a double-click toggles maximise) on the empty space of the floating top bar. |
 
 Source: `vendor/build/src/pdf-tools-shell.jsx` (`normalizeShellHost`, `HostSlot`), covered by
 `test/e2e/pdf-floating-toolbar.spec.ts` in Fernwork. The editor stylesheet also carries zero-specificity toast
 defaults so a host page does not need Fernwork's site stylesheet.
+
+Since the floating-bars round (Fernwork, 2026-09-26) the top bar has Save (the `.bwpdf` project; the first Save
+asks for a target, later ones overwrite it), Save as (always asks) and Export (PDF), with `Ctrl+S`,
+`Ctrl+Shift+S` and `Ctrl+Shift+E`. `.fwdoc` projects still open. berg:work PDF does not use the `titleBar` slots:
+it draws its own title bar above the editor. Until the file capability below exists, berg:work provides
+`window.showSaveFilePicker` backed by Tauri commands, so these saves are durable native writes, and routes the
+editor's remaining downloads through the same save dialog (`apps/pdf/web/native-files.js`); files opened from
+the system reach the editor through the `oo-open-file-pdf` event. This is an interim bridge, not the contract.
 
 This document describes the host boundary that Fernwork's PDF editor should expose to berg:work. Source references are relative to the Fernwork repository unless another root is named, and line numbers refer to the working tree inspected on 2026-09-25. The implementation remains in Fernwork; berg:work consumes only the committed upstream build, as required by `upstream.lock.json:4-33` and `docs/ARCHITECTURE.md:19-40` in this repository.
 

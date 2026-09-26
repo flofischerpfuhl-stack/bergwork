@@ -7,8 +7,9 @@ Tauri 2 app around the Fernwork PDF editor. Internal builds only; there is no pu
 | Path | Owns |
 | --- | --- |
 | `upstream/` | Pinned editor build (not committed): the files listed for `fernwork-pdf` in `../../upstream.lock.json`, laid out as in Fernwork (`tools/vendor/pdf-tools`, `pdf-runtime`, `tesseract-5.0.4`). Recreate it with `npm run sync:install`. Never edited here. |
-| `web/` | Host page owned by berg:work: `index.html`, `main.js` (Fernwork's bootstrap without site navigation, service worker and file-open router), `host.js` (the host object passed to `mount`), `theme.css` (system light/dark, grey accent, title-bar controls). Plain ES modules, no bundler. |
-| `scripts/build-frontend.mjs` | Assembles `dist/` (not committed): `web/` at the root and the pinned build under `dist/tools/vendor/`, because the bundle still loads its workers, WASM and fonts from absolute `/tools/vendor/...` URLs. |
+| `web/` | Host page owned by berg:work: `index.html`, `main.js` (Fernwork's bootstrap without site navigation, service worker and file-open router), `host.js` (title bar, settings and the host object passed to `mount`), `native-files.js` (native open/save), `licenses-view.js`, `theme-preference.js`, `theme.css` (palette, title bar, licences dialog), `fonts/` and the title-bar icons. Plain ES modules, no bundler. |
+| `scripts/build-frontend.mjs` | Assembles `dist/` (not committed): `web/` at the root, the pinned build under `dist/tools/vendor/` (the bundle still loads its workers, WASM and fonts from absolute `/tools/vendor/...` URLs) and `licenses.json`. |
+| `scripts/collect-licenses.mjs` | Licence data for the app and `THIRD_PARTY_NOTICES.md` (see Licences). |
 | `scripts/tauri*.sh`, `scripts/tauri.mjs` | Tauri CLI entry points; on Linux they point the build at a rootless WebKitGTK prefix (see below). |
 | `src-tauri/` | Rust app, `tauri.conf.json` (window, CSP, bundles, file associations), capabilities, icons (copied from `branding/logos/generated/bergwork-pdf/tauri/`), Linux desktop template and MIME definition. |
 
@@ -42,22 +43,45 @@ prefix (Ubuntu 24.04 amd64 only). For the AppImage, `tauri-build.sh` puts `scrip
 `PATH`, so linuxdeploy's GTK plugin takes GTK modules, pixbuf loaders and GSettings schemas from the system rather
 than from the prefix, which holds only headers and link stubs.
 
-## Host and title bar
+## Host, title bar and files
 
-The editor is mounted with `mount(element, { host })`. `host.js` supplies the `shell` capability: `setTitle` sets
-the window title (`• name — berg:work PDF` for unsaved changes), and `titleBar` hands the editor the app icon and
-the window controls, which it places in its own top row; `startDrag` and `toggleMaximize` move and maximise the
-undecorated window. Outside Tauri all window calls do nothing and the controls stay hidden, so `dist/` can be
-opened in a normal browser for tests (serve it with `Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp`, as the app does).
+`web/index.html` draws berg:work's own title bar above the editor: the PDF mark (a variant per theme), the
+`berg:work` wordmark in Bergschrift (`web/fonts/`, OFL) in the site red, `| PDF`, a settings button (theme
+System/Light/Dark, version, licences) and macOS-style window controls on the right (close outermost). The bar
+is the window's drag area; a double click maximises. On Linux the window is transparent with rounded corners
+(`tauri.linux.conf.json`), square when maximised.
 
-The pinned build needs Fernwork `6f9537d` or later for this; older builds ignore the second argument and show
-no title bar. The editor has no fullscreen toggle in the app because the shell offers no `setFullscreen`.
+The editor is mounted with `mount(element, { host })`. `host.js` supplies only `shell.setTitle` (the window
+title, `• name — berg:work PDF` for unsaved changes); the document name is in the editor's own top bar, and the
+editor shows no fullscreen toggle because the shell offers no `setFullscreen`. The editor's `titleBar` slots are
+not used.
 
-The accent is a mid grey in both themes because it also draws selection frames and handles on the white page.
+Files (`web/native-files.js`, commands in `src-tauri/src/lib.rs`):
 
-The rest of the contract (native files, OCR, fonts) is drafted in `../../docs/PDF-HOST-CONTRACT.md` and has to
-land in Fernwork first.
+- Opening a PDF or `.bwpdf`/`.fwdoc` project from the file manager, or passing it on the command line, opens it
+  in the editor; a second launch forwards its files to the running window (single instance).
+- Save, Save as and Export use the native save dialog (`window.showSaveFilePicker` is provided for the editor),
+  so Save overwrites the chosen file afterwards. Other downloads the editor starts also go through the dialog.
+- The Rust side reads and writes only paths the user chose or the system passed in; writes go to a temporary
+  file that replaces the target.
+
+Outside Tauri all window and file calls fall back to the browser behaviour and the controls stay hidden, so
+`dist/` can be opened in a normal browser for tests (serve it with `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`, as the app does); `?preview` shows the window controls inert.
+
+The palette follows VS Code's Dark/Light Modern surfaces with a warm stone grey as accent (red would read as
+Close, blue does not fit berg:work); the page accent is a mid grey because it also draws selection frames and
+handles on the white page.
+
+## Licences
+
+`npm run licenses -w @bergwork/pdf` regenerates `THIRD_PARTY_NOTICES.md` (committed) from the pinned editor
+build's `licenses.json` and the Rust crates compiled into the app (`cargo metadata`, normal dependencies, host
+target). `build:web` writes the same data to `dist/licenses.json`, which the app shows under Settings →
+Licences. `npm run licenses:check -w @bergwork/pdf` fails when the notices are out of date.
+
+The rest of the host contract (native PDFium/OCR, fonts, printing, close with unsaved changes) is drafted in
+`../../docs/PDF-HOST-CONTRACT.md` and has to land in Fernwork first.
 
 ## Naming
 

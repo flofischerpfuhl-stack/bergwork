@@ -5,7 +5,10 @@
   "version": "0.1.0",
   "identifier": "app.bergwork.pdf",
   "build": {
-    "beforeDevCommand": { "script": "node scripts/build-frontend.mjs", "wait": true },
+    "beforeDevCommand": {
+      "script": "node scripts/build-frontend.mjs",
+      "wait": true
+    },
     "beforeBuildCommand": "node scripts/build-frontend.mjs",
     "frontendDist": "../dist"
   },
@@ -48,7 +51,7 @@
     "active": true,
     "targets": "all",
     "publisher": "berg:work",
-    "copyright": "© 2026 berg:work",
+    "copyright": "\u00a9 2026 berg:work",
     "license": "BUSL-1.1",
     "category": "Productivity",
     "shortDescription": "PDF editor that works offline",
@@ -62,16 +65,29 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["pdf"],
+        "ext": [
+          "pdf"
+        ],
         "name": "PDF document",
         "description": "PDF document",
         "role": "Editor",
         "mimeType": "application/pdf"
       },
       {
-        "ext": ["fwdoc"],
+        "ext": [
+          "bwpdf"
+        ],
+        "name": "berg:work PDF project",
+        "description": "berg:work PDF project",
+        "role": "Editor",
+        "mimeType": "application/vnd.fernwork.pdf-project+json"
+      },
+      {
+        "ext": [
+          "fwdoc"
+        ],
         "name": "Fernwork PDF project",
-        "description": "Fernwork PDF project",
+        "description": "Fernwork PDF project (older)",
         "role": "Editor",
         "mimeType": "application/vnd.fernwork.pdf-project+json"
       }

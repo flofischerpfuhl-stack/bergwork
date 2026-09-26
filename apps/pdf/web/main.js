@@ -4,28 +4,22 @@
 import * as PDFLib from './tools/vendor/pdf-runtime/pdf-lib.esm.min.js';
 import * as pdfjsLib from './tools/vendor/pdf-runtime/pdf.min.mjs';
 import { createShellHost } from './host.js';
+import { installNativeFiles, openDocumentsFromSystem } from './native-files.js';
+import { initTheme } from './theme-preference.js';
 
 globalThis.PDFLib = PDFLib;
 globalThis.pdfjsLib = pdfjsLib;
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('./tools/vendor/pdf-runtime/pdf.worker.min.mjs', import.meta.url).href;
 
-followSystemTheme();
+initTheme();
+installNativeFiles();
 
 const root = document.getElementById('pdf-workbench-root');
 document.body.classList.add('oo-pdf-workbench-route');
 await loadEditorCSS('./tools/vendor/pdf-tools/oo-pdf-tools.css');
 const bundle = await import('./tools/vendor/pdf-tools/oo-pdf-tools.js');
 bundle.mount(root, { host: createShellHost() });
-
-/** The editor CSS defaults to dark tokens and switches on html[data-theme="light"]; follow the OS setting. */
-function followSystemTheme() {
-  const dark = matchMedia('(prefers-color-scheme: dark)');
-  const apply = () => {
-    document.documentElement.dataset.theme = dark.matches ? 'dark' : 'light';
-  };
-  apply();
-  dark.addEventListener('change', apply);
-}
+openDocumentsFromSystem();
 
 /** Loads the editor stylesheet in front of theme.css, so the berg:work overrides come later in the cascade. */
 function loadEditorCSS(href) {
