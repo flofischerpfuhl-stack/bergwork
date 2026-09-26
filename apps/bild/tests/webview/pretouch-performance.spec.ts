@@ -101,6 +101,8 @@ test('moving pixels and regional retouch pointer latency', async ({ page }, info
     brush.beginBrushStroke(session, clonePath[0]!);
     const clone = runMoves((index) => { brush.extendBrushStroke(session, clonePath[index]!); }, 12);
     const cloneCommitStart = performance.now(); brush.finishBrushStroke(session);
+    const cloneCommitEventMs = performance.now() - cloneCommitStart;
+    await brush.waitForBrushStroke(session);
     const cloneCommitMs = performance.now() - cloneCommitStart;
     const cloneOutput = session.activeLayer!.raster!, clonePixel = cloneOutput.pixel(900, 660);
     const cloneSettings = { ...brush.DEFAULT_CLONE_SETTINGS, diameter: 320, hardness: 0.5, opacity: 1 };
@@ -137,7 +139,8 @@ test('moving pixels and regional retouch pointer latency', async ({ page }, info
     const renderer = String(extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
     handle.destroy();
     return { renderer, move, moveCommitMs, moveMaxDelta, retouch: retouchResults,
-      clone: { ...clone, commitMs: cloneCommitMs, pixel: clonePixel, expected: source.pixel(350, 510), differences: cloneDifferences },
+      clone: { ...clone, commitEventMs: cloneCommitEventMs, commitMs: cloneCommitMs, pixel: clonePixel,
+        expected: source.pixel(350, 510), differences: cloneDifferences },
       healing: { ...healing, commitEventMs: healCommitEventMs, commitMs: healCommitMs,
         changed: healChanged, differences: healDifferences } };
   });
@@ -152,6 +155,7 @@ test('moving pixels and regional retouch pointer latency', async ({ page }, info
     expect(result.move.event.p95).toBeLessThan(8);
     for (const value of Object.values(result.retouch)) expect(value.event.p95).toBeLessThan(8);
     expect(result.clone.event.p95).toBeLessThan(8);
+    expect(result.clone.commitEventMs).toBeLessThan(16);
     expect(result.healing.event.p95).toBeLessThan(8);
   }
 });

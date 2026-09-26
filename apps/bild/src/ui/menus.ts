@@ -7,6 +7,7 @@
 import { ADJUSTMENT_KINDS } from '../core/document';
 import type { EditorController } from './controller';
 import { profileHasFeature } from '../app/profiles';
+import { markUiRender } from './performance';
 
 export interface MenuItem {
   label: string;
@@ -27,6 +28,21 @@ export interface Menu { title: string; items: MenuEntry[] }
 /** Features whose module is registered at runtime (selection, brushes, adjustments…). */
 export interface FeatureRegistry {
   [command: string]: { enabled: () => boolean; run: () => void; checked?: () => boolean } | undefined;
+}
+
+const menuCache = new WeakMap<EditorController, { key: string; menus: Menu[] }>();
+
+/** Menu construction is sizeable on WebKit. Reuse it until command-visible editor state changes. */
+export function cachedMenus(controller: EditorController): Menu[] {
+  const session = controller.session, ui = controller.ui.getState();
+  const key = `${controller.workspace.selectedId}|${controller.workspace.revision}|${session.revision}|${ui.featureRevision}`
+    + `|${ui.chromeHidden ? 1 : 0}|${ui.panelsOpen ? 1 : 0}|${ui.compact ? 1 : 0}|${ui.sheet ?? ''}`;
+  const cached = menuCache.get(controller);
+  if (cached?.key === key) return cached.menus;
+  markUiRender('MenuModel');
+  const menus = buildMenus(controller, controller.features);
+  menuCache.set(controller, { key, menus });
+  return menus;
 }
 
 export function buildMenus(controller: EditorController, features: FeatureRegistry): Menu[] {

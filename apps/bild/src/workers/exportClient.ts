@@ -92,7 +92,9 @@ async function encodePngParallel(pixels: Uint8Array | Uint16Array, width: number
 }
 
 export function parallelPngBandRows(height: number): number {
-  const threads = Math.min(8, Math.max(2, (globalThis.navigator?.hardwareConcurrency ?? 4) - 1));
+  // Rendering is GPU/readback-bound while the workers filter and deflate; use the final logical
+  // core too, then stream ordered results without another main-thread assembly pass.
+  const threads = Math.min(8, Math.max(2, globalThis.navigator?.hardwareConcurrency ?? 4));
   return Math.ceil(height / Math.min(threads, Math.ceil(height / 64)));
 }
 

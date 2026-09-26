@@ -1,4 +1,4 @@
-import type { Layer } from '../document';
+import type { CanvasDocument, Layer } from '../document';
 import { maskTransform } from '../document';
 import {
   apply, invert, pixelToDocument, type Affine, type LayerTransform, type Point, type Rect, type Size,
@@ -57,6 +57,8 @@ export interface CloneSample {
   readonly offset: Size;
   /** Copy transparent source pixels too (Blur uses this upstream; Clone Stamp normally does not). */
   readonly replace?: boolean;
+  /** Immutable source captured at pointer-down; lets Clone Stamp replay exactly in a worker. */
+  readonly workerSource?: { readonly document: CanvasDocument; readonly activeLayerId: string; readonly allLayers: boolean };
 }
 
 export interface BeginStrokeOptions {

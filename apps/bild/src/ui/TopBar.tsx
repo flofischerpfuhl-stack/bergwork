@@ -3,7 +3,7 @@ import styles from './editor.module.css';
 import type { EditorController } from './controller';
 import { useSessionSelector, useUi, useWorkspaceSelector } from './hooks';
 import { Icon } from './icons';
-import { buildMenus, shortcutLabel, type Menu, type MenuEntry, type MenuItem } from './menus';
+import { cachedMenus, shortcutLabel, type Menu, type MenuEntry, type MenuItem } from './menus';
 import { isProjectFile } from './projectFiles';
 import { markUiRender } from './performance';
 
@@ -14,7 +14,6 @@ export function MenuPopup({ items, anchor, onClose, controller, flipRight }: {
 }) {
   markUiRender('MenuPopup');
   const ref = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState(anchor);
   const [submenu, setSubmenu] = useState<{ items: MenuEntry[]; anchor: { x: number; y: number }; flipRight: number } | null>(null);
   useLayoutEffect(() => {
     const element = ref.current;
@@ -27,7 +26,8 @@ export function MenuPopup({ items, anchor, onClose, controller, flipRight }: {
     element.style.maxHeight = `${Math.max(120, below >= 240 ? below : editor.bottom - editor.top - 16)}px`;
     const rect = element.getBoundingClientRect();
     const x = flipRight !== undefined && anchor.x + rect.width > editor.right - 4 ? flipRight - rect.width : anchor.x;
-    setPosition({ x: Math.max(editor.left + 4, Math.min(x, editor.right - rect.width - 4)), y: Math.max(editor.top + 4, Math.min(anchor.y, editor.bottom - rect.height - 4)) });
+    element.style.left = `${Math.max(editor.left + 4, Math.min(x, editor.right - rect.width - 4))}px`;
+    element.style.top = `${Math.max(editor.top + 4, Math.min(anchor.y, editor.bottom - rect.height - 4))}px`;
     element.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
   }, [anchor.x, anchor.y, flipRight]);
   useEffect(() => {
@@ -47,7 +47,7 @@ export function MenuPopup({ items, anchor, onClose, controller, flipRight }: {
   }, [onClose]);
   return (
     <>
-      <div ref={ref} className={styles.menuPopup} style={{ left: position.x, top: position.y }} role="menu" data-menu-popup>
+      <div ref={ref} className={styles.menuPopup} style={{ left: anchor.x, top: anchor.y }} role="menu" data-menu-popup>
         {items.map((item, index) => item === 'separator'
           ? <div key={index} className={styles.menuSeparator} role="separator" />
           : (
@@ -125,19 +125,20 @@ export function TopBar({ controller, compact, width = 'full' }: { controller: Ed
   const session = controller.session;
   const openMenu = useUi(controller, (s) => s.openMenu);
   const t = controller.t;
-  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
+  const anchorRef = useRef<{ x: number; y: number } | null>(null);
   // Feature modules warm up after start-up; opening a menu loads the rest at once and redraws it with their entries.
   const [, setFeaturesLoaded] = useState(0);
   const loadMenuFeatures = () => { void controller.loadAllFeatures?.().then(() => setFeaturesLoaded((value) => value + 1)); };
-  const menus: Menu[] = buildMenus(controller, controller.features);
+  const menus: Menu[] = cachedMenus(controller);
   const workspace = controller.workspace;
   const document = session.document;
   const open = (title: string, element: HTMLElement) => {
     loadMenuFeatures();
     const rect = element.getBoundingClientRect();
-    setAnchor({ x: rect.left, y: rect.bottom + 4 });
+    anchorRef.current = { x: rect.left, y: rect.bottom + 4 };
     controller.ui.setState({ openMenu: openMenu === title ? null : title });
   };
+  const anchor = anchorRef.current;
   const current = menus.find((m) => m.title === openMenu);
   const menuButton = compact || width === 'narrow';
   const allItems: MenuEntry[] = menuButton ? menus.flatMap((m, i) => [...(i ? ['separator' as const] : []), { label: m.title, enabled: true, submenu: m.items.filter((x): x is MenuItem => x !== 'separator') }]) : [];

@@ -4,7 +4,7 @@
  * with folders, masks, clipping indentation, and the footer buttons.
  */
 
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import styles from './editor.module.css';
 import { HistoryPanel } from './HistoryPanel';
 import type { EditorController } from './controller';
@@ -30,6 +30,10 @@ const ADJUSTMENT_ICONS: Record<AdjustmentKind, IconName> = {
 };
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const LAYER_ROW_HEIGHT = 54;
+const COMPACT_LAYER_ROW_HEIGHT = 62;
+const LAYER_VIRTUALIZE_AT = 100;
+const layerScrollPositions = new WeakMap<EditorSession, number>();
 
 const LOCKS: { key: keyof LayerLocks; icon: IconName; label: string }[] = [
   { key: 'transparency', icon: 'lockTransparency', label: 'Lock transparent pixels' },
@@ -170,13 +174,15 @@ interface DragState {
   maskFrom?: string; maskTarget?: string | null;
 }
 
-function LayerRow({ controller, session, entry, rows, drag, onDragStart, onContext, context = false, effectsOpen = false, onToggleEffects }: {
+function LayerRow({ controller, session, entry, rows, drag, onDragStart, onContext, context = false, effectsOpen = false, onToggleEffects,
+  position, setSize }: {
   controller: EditorController; session: EditorSession; entry: HierarchyEntry; rows: HierarchyEntry[]; drag: DragState | null;
   onDragStart: ((event: ReactPointerEvent, id: string) => void) | null; onContext: (id: string, x: number, y: number) => void;
   /** Shown only as the folder of a search match, not as a match itself. */
   context?: boolean;
   /** Whether the layer's effects are listed below it (the fx disclosure). */
   effectsOpen?: boolean; onToggleEffects?: (id: string) => void;
+  position?: number; setSize?: number;
 }) {
   markUiRender('LayerRow');
   const t = controller.t;
@@ -234,6 +240,7 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
   return (
     <div className={`${styles.layerRow} ${selected ? styles.layerRowSelected : ''} ${entry.visible ? '' : styles.layerRowDim} ${dropAbove ? styles.layerRowDropAbove : ''} ${dropInto ? styles.layerRowDropInto : ''} ${context ? styles.layerRowContext : ''}`}
       role="treeitem" aria-selected={selected} aria-level={entry.depth + 1} aria-expanded={layer.kind === 'group' ? !session.collapsedGroupIds.has(layer.id) : undefined}
+      aria-posinset={position} aria-setsize={setSize}
       data-layer-id={layer.id} data-testid="layer-row"
       onPointerDown={onRowPointerDown}
       onDoubleClick={(event) => {
@@ -562,6 +569,30 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
   const toggleEffects = (id: string) => setEffectsOpen((open) => { const next = new Set(open); if (!next.delete(id)) next.add(id); return next; });
   const layerStyles = controller.layerStyles;
   const layersContent = useRef<HTMLDivElement>(null);
+  const virtual = panelRows.length >= LAYER_VIRTUALIZE_AT && effectsOpen.size === 0
+    && !document?.layers.some((layer) => layer.filters.length > 0);
+  const rowHeight = inSheet ? COMPACT_LAYER_ROW_HEIGHT : LAYER_ROW_HEIGHT;
+  const [windowRange, setWindowRange] = useState({ start: 0, end: 30 });
+  const updateWindow = useCallback(() => {
+    const list = listRef.current;
+    if (!list || !virtual || list.clientHeight <= 0) return;
+    const overscan = 6;
+    const start = Math.max(0, Math.floor(list.scrollTop / rowHeight) - overscan);
+    const end = Math.min(panelRows.length, Math.ceil((list.scrollTop + list.clientHeight) / rowHeight) + overscan);
+    setWindowRange((current) => current.start === start && current.end === end ? current : { start, end });
+  }, [panelRows.length, rowHeight, virtual]);
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list || !virtual) return;
+    const remembered = layerScrollPositions.get(session);
+    const activeIndex = panelRows.findIndex((row) => row.kind === 'layer' && row.entry.layer.id === session.activeLayerId);
+    list.scrollTop = remembered ?? Math.max(0, activeIndex * rowHeight - list.clientHeight / 2);
+    updateWindow();
+    const observer = new ResizeObserver(updateWindow);
+    observer.observe(list);
+    return () => { layerScrollPositions.set(session, list.scrollTop); observer.disconnect(); };
+  }, [session, rowHeight, virtual, updateWindow]);
+  const shownRows = virtual ? panelRows.slice(windowRange.start, windowRange.end) : panelRows;
 
   const startDrag = (event: ReactPointerEvent, id: string) => {
     if (event.altKey && (event.target as HTMLElement).closest('[data-mask-thumb]')) { startMaskDrag(event, id); return; }
@@ -583,16 +614,19 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
       state.moved = true;
       state.copy = e.altKey;
       const elements = [...list.querySelectorAll<HTMLElement>('[data-layer-id]')];
-      let target: DragState['target'] = { index: elements.length, into: false };
-      for (let i = 0; i < elements.length; i++) {
-        const r = elements[i]!.getBoundingClientRect();
+      const visible = elements.map((element) => ({ element,
+        index: rows.findIndex((row) => row.layer.id === element.dataset.layerId) })).filter((item) => item.index >= 0);
+      let target: DragState['target'] = { index: visible.length ? visible[visible.length - 1]!.index + 1 : rows.length, into: false };
+      for (const item of visible) {
+        const r = item.element.getBoundingClientRect(), row = rows[item.index]!;
         if (e.clientY < r.top + r.height / 2) {
-          const row = rows[i]!;
           const into = row.layer.kind === 'group' && e.clientY > r.top + r.height * 0.25;
-          target = { index: i, into };
+          target = { index: item.index, into };
           break;
         }
-        if (rows[i]!.layer.kind === 'group' && e.clientY < r.bottom - r.height * 0.25) { target = { index: i, into: true }; break; }
+        if (row.layer.kind === 'group' && e.clientY < r.bottom - r.height * 0.25) {
+          target = { index: item.index, into: true }; break;
+        }
       }
       state.target = target;
       setDrag({ ...state });
@@ -732,8 +766,12 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
         </div>
       ) : null}
       {document && (panelRows.length || filtering) ? (
-        <div className={styles.layerList} ref={listRef} role="tree" aria-label={t('Layers')} aria-multiselectable data-testid="layers-list">
-          {panelRows.map((row) => {
+        <div className={styles.layerList} ref={listRef} role="tree" aria-label={t('Layers')} aria-multiselectable data-testid="layers-list"
+          data-virtualized={virtual || undefined}
+          onScroll={() => { if (virtual) { layerScrollPositions.set(session, listRef.current?.scrollTop ?? 0); updateWindow(); } }}>
+          {virtual && windowRange.start > 0 ? <div aria-hidden style={{ height: windowRange.start * rowHeight }} /> : null}
+          {shownRows.map((row, shownIndex) => {
+            const panelIndex = virtual ? windowRange.start + shownIndex : shownIndex;
             if (row.kind === 'artboard') return (
               <ArtboardRow key={`artboard-${row.artboard.id}`} controller={controller} session={session} artboard={row.artboard} count={row.count}
                 onContext={(id, x, y) => setArtboardMenu({ id, x, y })} />
@@ -744,12 +782,14 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
               <Fragment key={entry.layer.id}>
                 <LayerRow controller={controller} session={session} entry={entry} rows={rows} drag={drag}
                   onDragStart={found ? null : startDrag} onContext={(id, x, y) => setMenu({ id, x, y })}
-                  context={!!found && !found.matchingIds.has(entry.layer.id)} effectsOpen={open} onToggleEffects={toggleEffects} />
+                  context={!!found && !found.matchingIds.has(entry.layer.id)} effectsOpen={open} onToggleEffects={toggleEffects}
+                  position={panelIndex + 1} setSize={panelRows.length} />
                 {open ? <EffectRows controller={controller} session={session} entry={entry} /> : null}
                 {controller.layerSubRows.map((subRows, i) => <Fragment key={`sub-${i}`}>{subRows(session, entry)}</Fragment>)}
               </Fragment>
             );
           })}
+          {virtual && windowRange.end < panelRows.length ? <div aria-hidden style={{ height: (panelRows.length - windowRange.end) * rowHeight }} /> : null}
           {found && !found.matchingIds.size ? <div className={styles.panelNote} data-testid="layer-search-empty">{t('No matching layers')}</div> : null}
           {drag?.moved && drag.target?.index === rows.length ? <div style={{ height: 2, background: 'var(--cmp-accent)' }} /> : null}
         </div>
