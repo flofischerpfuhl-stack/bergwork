@@ -151,9 +151,9 @@ test('PSD cache-less generated fill matches on GPU and CPU within one output byt
   expect(result.maximum, JSON.stringify(result)).toBeLessThanOrEqual(1);
 });
 
-test('PSD profile-space adjustments agree between GPU and CPU within one byte', async ({ page }) => {
-  test.skip(PROFILE_ADJUSTMENTS.some((fixture) => !fs.existsSync(fixture)), 'PSD corpus not fetched');
-  for (const fixture of PROFILE_ADJUSTMENTS) {
+for (const fixture of PROFILE_ADJUSTMENTS) {
+  test(`PSD profile-space adjustment agrees between GPU and CPU within one byte: ${path.basename(fixture)}`, async ({ page }) => {
+    test.skip(!fs.existsSync(fixture), 'PSD corpus not fetched');
     await page.goto('/');
     const chooserPromise = page.waitForEvent('filechooser');
     await page.getByRole('button', { name: 'Open project' }).click();
@@ -202,8 +202,8 @@ test('PSD profile-space adjustments agree between GPU and CPU within one byte', 
     });
     expect(result.pixels).toBeGreaterThan(0);
     expect(result.maximum, `${path.basename(fixture)} ${JSON.stringify(result)}`).toBeLessThanOrEqual(1);
-  }
-});
+  });
+}
 
 test('PSD opaque-canvas declarations match on GPU and CPU for an empty layer stack', async ({ page }) => {
   await page.goto('/?harness=gpu');
