@@ -14,6 +14,10 @@
     "test:unit": "vitest run tests/unit",
     "psd:fidelity": "vitest run --config tests/psd/vitest.config.ts",
     "test:e2e": "playwright test",
+    "test:e2e:smoke": "node scripts/e2e-select.mjs --smoke",
+    "test:e2e:changed": "node scripts/e2e-select.mjs --changed",
+    "test:e2e:area": "node scripts/e2e-select.mjs",
+    "test:e2e:gate": "node scripts/e2e-select.mjs --gate",
     "test:perf": "vite build && node scripts/check-bundle-budget.mjs && vitest run tests/performance"
   },
   "dependencies": {
