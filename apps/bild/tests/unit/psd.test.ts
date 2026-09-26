@@ -344,6 +344,23 @@ describe('PSD colour modes and product wiring', () => {
     }));
   });
 
+  it('retains a bounded PSD mask feather tail beyond the stored channel rectangle', () => {
+    const layer: AgLayer = { name: 'Feathered bounded mask', top: 0, left: 0, bottom: 1, right: 3,
+      imageData: { width: 3, height: 1, data: new Uint8ClampedArray([
+        255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
+      ]) }, mask: { top: 0, left: 1, bottom: 1, right: 2, defaultColor: 0, userMaskFeather: 1,
+        imageData: { width: 1, height: 1, data: new Uint8ClampedArray([255, 255, 255, 255]) } } };
+    const imported = readPsdDocument(writePsdUint8Array({ width: 3, height: 1, children: [layer],
+      imageData: { width: 3, height: 1, data: new Uint8ClampedArray(12) } }, { generateThumbnail: false }));
+    const mask = imported.document.layers[0]!.mask!;
+    expect(mask.raster.width).toBe(7);
+    expect(mask.raster.height).toBe(7);
+    expect(mask.placement?.origin).toEqual({ x: -2, y: -3 });
+    const pixels = mask.raster.toPixels();
+    expect(pixels[3 * 7 + 3]).toBeGreaterThan(pixels[3 * 7 + 1]!);
+    expect(pixels[3 * 7 + 1]).toBeGreaterThan(0);
+  });
+
   it('uses the Little CMS default CMYK profile on the product-open path', async () => {
     const bytes = rawPsd(4, [new Uint8Array([255]), new Uint8Array([128]), new Uint8Array([64]), new Uint8Array([200])]);
     const lcms = await loadLittleCms();

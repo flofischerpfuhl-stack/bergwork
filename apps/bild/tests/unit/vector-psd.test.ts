@@ -61,4 +61,23 @@ describe('PRODUCT-PLAN A5 PSD vector import', () => {
       255, 0, 0, 255, 255, 0, 0, 127,
     ]));
   });
+
+  it('feathers the rebuilt vector component before combining its independent user mask', () => {
+    const mask = pixels(9, 5);
+    for (let index = 0; index < mask.data.length; index += 4) mask.data.set([255, 255, 255, 255], index);
+    const layer: AgLayer = { name: 'Feathered vector mask', left: 0, top: 0, right: 9, bottom: 5,
+      imageData: mask, vectorFill: { type: 'color', color: { r: 255, g: 0, b: 0 } },
+      vectorMask: { paths: [rectangle(3, 0, 6, 5)] },
+      mask: { top: 0, left: 0, right: 9, bottom: 5, defaultColor: 0, fromVectorData: true,
+        vectorMaskDensity: 0.5, vectorMaskFeather: 1, imageData: mask } };
+    const imported = readPsdDocument(writePsdUint8Array({ width: 9, height: 5, children: [layer],
+      imageData: pixels(9, 5) }, { generateThumbnail: false })).document.layers[0]!;
+    const coverage = imported.mask!.raster.toPixels();
+    const row = [...coverage.slice(2 * 9, 3 * 9)];
+    expect(row[0]).toBe(128);
+    expect(row[2]).toBeGreaterThan(128);
+    expect(row[3]).toBeGreaterThan(row[2]!);
+    expect(row[4]).toBeGreaterThan(row[3]!);
+    expect(row).toEqual([...row].reverse());
+  });
 });

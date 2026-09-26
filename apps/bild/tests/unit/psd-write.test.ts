@@ -213,8 +213,12 @@ describe('PRODUCT-PLAN A7 PSD writer', () => {
     const effects: LayerEffect[] = [
       { kind: 'dropShadow', schemaVersion: 1, enabled: true, opacity: 0.75, angle: 35, useGlobalLight: false,
         distance: 2, blur: 4, size: 4, spread: 12, color: red, blendMode: 'multiply', contour: 'linear', noise: 0, knockout: true },
-      { kind: 'outerGlow', schemaVersion: 1, enabled: true, opacity: 0.45, color: green,
-        blendMode: 'screen', spread: 8, size: 3, contour: 'linear', noise: 0 },
+      Object.assign({ kind: 'outerGlow' as const, schemaVersion: 1 as const, enabled: true, opacity: 0.45, color: green,
+        blendMode: 'screen' as const, spread: 8, size: 3, contour: 'linear' as const, noise: 0 as const }, {
+        psdRange: 0.43, psdGradient: { stops: [
+          { offset: 0, color: red, opacity: 1 }, { offset: 1, color: green, opacity: 0.25 },
+        ] },
+      }) as LayerEffect,
       { kind: 'colorOverlay', schemaVersion: 1, enabled: false, opacity: 0.3, color: blue, blendMode: 'color' },
       { kind: 'gradientOverlay', schemaVersion: 1, enabled: true, opacity: 0.55, blendMode: 'overlay', angle: 70,
         scale: 115, gradient: { reverse: false, stops: [

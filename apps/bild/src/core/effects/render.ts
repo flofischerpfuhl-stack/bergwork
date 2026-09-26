@@ -73,9 +73,12 @@ function gradientColor(gradient: EffectGradient, angle: number, scale: number, x
   const dx = Math.cos(radians), dy = -Math.sin(radians);
   const span = Math.max(1e-6, (Math.abs(dx) * Math.max(0, width - 1) + Math.abs(dy) * Math.max(0, height - 1))
     * Math.max(0.01, finite(scale, 100) / 100));
-  let t = 0.5 + ((x - (width - 1) / 2) * dx + (y - (height - 1) / 2) * dy) / span;
-  if (gradient.reverse) t = 1 - t;
-  t = clamp01(t);
+  const t = 0.5 + ((x - (width - 1) / 2) * dx + (y - (height - 1) / 2) * dy) / span;
+  return gradientSample(gradient, t);
+}
+
+function gradientSample(gradient: EffectGradient, input: number): { color: RGB; opacity: number } {
+  const t = clamp01(gradient.reverse ? 1 - input : input);
   const stops = gradient.stops.length ? [...gradient.stops].sort((a, b) => a.offset - b.offset) : [
     { offset: 0, color: { red: 0, green: 0, blue: 0 }, opacity: 1 },
     { offset: 1, color: { red: 1, green: 1, blue: 1 }, opacity: 1 },
@@ -302,11 +305,13 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
     } else if (effect.kind === 'outerGlow') {
       const size = Math.max(0, effect.size), spread = Math.max(0, Math.min(size, size * effect.spread / 100));
       const distances = solidDistances(), softness = Math.max(1e-6, size - spread);
+      const metadata = effect as typeof effect & { readonly psdGradient?: EffectGradient; readonly psdRange?: number };
       for (let i = 0; i < source.length; i++) {
         if (solid[i]) continue;
         const coverage = effectContour(effect,
           size <= 0 ? 0 : distances[i]! <= spread ? 1 : clamp01(1 - (distances[i]! - spread) / softness));
-        putPixel(rgba, i * 4, effect.color, coverage, i % outWidth - margin,
+        const fill = metadata.psdGradient ? gradientSample(metadata.psdGradient, coverage) : null;
+        putPixel(rgba, i * 4, fill?.color ?? effect.color, coverage * (fill?.opacity ?? 1), i % outWidth - margin,
           Math.floor(i / outWidth) - margin, width, height);
       }
       behind.push(pass(rgba, outWidth, outHeight, margin, 'behind', effect.blendMode, effect.opacity, false, stackOrder));
