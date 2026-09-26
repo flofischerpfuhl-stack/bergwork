@@ -6,6 +6,7 @@
  */
 
 import type { EncodeSpec } from '../io/exportEncode';
+import { pngLevel } from '../io/pngLevel';
 import type { ExportEncoder } from '../io/exportPipeline';
 import type { ExportWorkerRequest, ExportWorkerResponse } from './exportWorker';
 
@@ -80,7 +81,7 @@ async function encodePngParallel(pixels: Uint8Array | Uint16Array, width: number
       const to = Math.min(height, from + rowsPerBand), start = Math.max(0, from - 1);
       const slice = pixels.slice(start * width * 4, to * width * 4);
       const task = run({ id: nextId++, type: 'png-band', pixels: slice, width, from: from - start, to: to - start, channels,
-        level: spec.level, final: to === height }, job.signal);
+        level: pngLevel(spec, width, height), final: to === height }, job.signal);
       task.catch((error: unknown) => job.abort(error));
       tasks.push(task);
     }
@@ -131,7 +132,7 @@ export async function streamPngBands(
       const pixels = readBand(top, to - top);
       renderedBytes += pixels.byteLength;
       const task = runPngBand({ id: nextId++, type: 'png-band', pixels: transferable(pixels), width,
-        from: from - top, to: to - top, channels, level: spec.level, final: to === height }, job.signal);
+        from: from - top, to: to - top, channels, level: pngLevel(spec, width, height), final: to === height }, job.signal);
       task.catch((error: unknown) => job.abort(error));
       tasks.push(task);
       const before = writeTail;

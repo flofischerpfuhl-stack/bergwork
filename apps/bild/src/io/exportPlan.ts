@@ -159,9 +159,10 @@ export function resolveExportRequest(request: ExportRequest): Resolved {
   const quality = fraction(request.quality ?? DEFAULT_QUALITY[format], 'Quality');
   const speed = request.speed ?? 6;
   if (!Number.isInteger(speed) || speed < 0 || speed > 10) throw new ExportError('option', 'AVIF speed must be an integer from 0 to 10.');
-  // PNG filtering already removes most local redundancy. Fast deflate keeps the 46 MP export
-  // inside the interactive budget while remaining lossless; explicit levels are always honoured.
-  const level = request.compressionLevel ?? (format === 'png' ? 1 : 6);
+  // Explicit levels are always honoured. By default PNG uses level 6 and switches to fast deflate only for very large
+  // images (pngLevel), so everyday web exports keep their size while the 46 MP export stays inside its budget.
+  const level = request.compressionLevel ?? 6;
+  const fastLargePng = format === 'png' && request.compressionLevel === undefined;
   if (!Number.isInteger(level) || level < 0 || level > 9) throw new ExportError('option', 'Compression level must be 0…9.');
   if (request.lossless && format !== 'webp') throw new ExportError('option', 'Lossless is a WebP option (PNG and TIFF are always lossless).');
   if (request.cmyk && format !== 'tiff' && format !== 'jpeg') throw new ExportError('option', 'CMYK export is available for TIFF and JPEG only.');
@@ -172,7 +173,7 @@ export function resolveExportRequest(request: ExportRequest): Resolved {
   const alpha = !request.cmyk && formatHasAlpha(format) && (request.transparent ?? true);
   return {
     format, sizes, bitDepth, alpha, matte, metadata,
-    spec: { format, colorModel: request.cmyk ? 'cmyk' : 'rgb', alpha, quality, lossless: request.lossless ?? false, speed, level,
+    spec: { format, colorModel: request.cmyk ? 'cmyk' : 'rgb', alpha, quality, lossless: request.lossless ?? false, speed, level, fastLargePng,
       tiffCompression: request.tiffCompression ?? (request.cmyk ? 'lzw' : 'deflate'),
       info: metadata.info },
   };

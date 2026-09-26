@@ -66,10 +66,15 @@ const artboardRequest = (format: ExportRequest['format'], extra: Partial<ExportR
   ({ targets: [{ kind: 'artboard', id: 'post' }], format, sizes: [{ scale: 1 }, { scale: 2 }], ...extra });
 
 describe('export planning and naming', () => {
-  it('uses fast lossless PNG compression by default and honours explicit levels', async () => {
+  it('uses fast PNG compression only for very large default exports and honours explicit levels', async () => {
     const { resolveExportRequest } = await import('../../src/io/exportPlan');
-    expect(resolveExportRequest({ targets: [{ kind: 'document' }], format: 'png' }).spec.level).toBe(1);
-    expect(resolveExportRequest({ targets: [{ kind: 'document' }], format: 'png', compressionLevel: 7 }).spec.level).toBe(7);
+    const { pngLevel } = await import('../../src/io/pngLevel');
+    const png = resolveExportRequest({ targets: [{ kind: 'document' }], format: 'png' }).spec;
+    expect(png.level).toBe(6);
+    expect(pngLevel(png, 1920, 1080)).toBe(6);
+    expect(pngLevel(png, 8000, 6000)).toBe(1);
+    const explicit = resolveExportRequest({ targets: [{ kind: 'document' }], format: 'png', compressionLevel: 7 }).spec;
+    expect(pngLevel(explicit, 8000, 6000)).toBe(7);
     expect(resolveExportRequest({ targets: [{ kind: 'document' }], format: 'tiff' }).spec.level).toBe(6);
   });
 
@@ -293,8 +298,9 @@ describe('band-parallel PNG', () => {
     const result = await runPngExportToSink(document, request, bandRenderer, async (chunk) => { chunks.push(chunk.slice()); });
     const streamed = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
     let at = 0; for (const chunk of chunks) { streamed.set(chunk, at); at += chunk.length; }
+    // A default PNG request below FAST_PNG_PIXELS uses deflate level 6.
     const spec: EncodeSpec = { format: 'png', colorModel: 'rgb', alpha: true, quality: 1, lossless: false, speed: 6,
-      level: 1, tiffCompression: 'deflate', dpi: null, icc: null, info: null };
+      level: 6, tiffCompression: 'deflate', dpi: null, icc: null, info: null };
     const expected = await encodePngBandsAsync(pixels, width, height, spec, parallelPngBandRows(height));
     expect(streamed).toEqual(expected);
     expect(decodePng(streamed).data).toEqual(pixels);

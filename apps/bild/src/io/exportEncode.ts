@@ -5,6 +5,7 @@
  */
 
 import { Deflate, zlibSync } from 'fflate';
+import { pngLevel } from './pngLevel';
 import { encodeAvif } from './avif';
 import { encodeWebp } from './webp';
 import { withJpegDensity } from './jpegMeta';
@@ -27,6 +28,8 @@ export interface EncodeSpec {
   readonly speed: number;
   /** Deflate level for PNG and TIFF. */
   readonly level: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+  /** PNG with the default level: very large images switch to fast deflate (see pngLevel). */
+  readonly fastLargePng?: boolean;
   readonly tiffCompression: 'lzw' | 'deflate' | 'none';
   readonly dpi: number | null;
   readonly icc: Uint8Array | null;
@@ -41,7 +44,7 @@ export async function encodePixels(pixels: Uint8Array | Uint16Array, width: numb
       if (width * height >= 1_000_000) return encodePngBandsAsync(pixels, width, height, spec, Math.max(64, Math.ceil(2_000_000 / width)));
       const header = pngHeader(width, height, deep ? 16 : 8, spec);
       const filtered = pngFilterRows(pixels, width, 0, height, spec.alpha ? 4 : 3);
-      return concat([header, pngChunk('IDAT', zlibSync(filtered, { level: spec.level })), PNG_END]);
+      return concat([header, pngChunk('IDAT', zlibSync(filtered, { level: pngLevel(spec, width, height) })), PNG_END]);
     }
     case 'tiff':
       return encodeTiff(pixels, width, height, { alpha: spec.alpha, compression: spec.tiffCompression, level: spec.level,
@@ -315,7 +318,7 @@ export function encodePngBands(pixels: Uint8Array | Uint16Array, width: number, 
   const bands: PngBand[] = [];
   for (let y = 0; y < height; y += bandRows) {
     const to = Math.min(height, y + bandRows);
-    bands.push(pngCompressBand(pixels, width, y, to, channels, spec.level, to === height));
+    bands.push(pngCompressBand(pixels, width, y, to, channels, pngLevel(spec, width, height), to === height));
   }
   return assemblePng(pngHeader(width, height, pixels instanceof Uint16Array ? 16 : 8, spec), bands);
 }
@@ -359,7 +362,7 @@ export async function encodePngBandsAsync(pixels: Uint8Array | Uint16Array, widt
   const bands: PngBand[] = [];
   for (let y = 0; y < height; y += bandRows) {
     const to = Math.min(height, y + bandRows);
-    bands.push(await pngCompressBandAsync(pixels, width, y, to, channels, spec.level, to === height, native));
+    bands.push(await pngCompressBandAsync(pixels, width, y, to, channels, pngLevel(spec, width, height), to === height, native));
   }
   return assemblePng(pngHeader(width, height, pixels instanceof Uint16Array ? 16 : 8, spec), bands);
 }
