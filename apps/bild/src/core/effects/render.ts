@@ -171,6 +171,30 @@ function distanceBand(distance: number, low: number, high: number): number {
   return clamp01(high - distance + 0.5) * clamp01(distance - low + 0.5);
 }
 
+function boxBlur(values: Float32Array, width: number, height: number, radius: number): Float32Array {
+  if (radius <= 0) return values;
+  const horizontal = new Float32Array(values.length), output = new Float32Array(values.length);
+  for (let y = 0; y < height; y++) {
+    let sum = 0;
+    for (let x = -radius; x <= radius; x++) sum += values[y * width + Math.min(width - 1, Math.max(0, x))]!;
+    for (let x = 0; x < width; x++) {
+      horizontal[y * width + x] = sum / (radius * 2 + 1);
+      sum += values[y * width + Math.min(width - 1, x + radius + 1)]!
+        - values[y * width + Math.max(0, x - radius)]!;
+    }
+  }
+  for (let x = 0; x < width; x++) {
+    let sum = 0;
+    for (let y = -radius; y <= radius; y++) sum += horizontal[Math.min(height - 1, Math.max(0, y)) * width + x]!;
+    for (let y = 0; y < height; y++) {
+      output[y * width + x] = sum / (radius * 2 + 1);
+      sum += horizontal[Math.min(height - 1, y + radius + 1) * width + x]!
+        - horizontal[Math.max(0, y - radius) * width + x]!;
+    }
+  }
+  return output;
+}
+
 function edt1d(f: Float64Array, d: Float64Array, length: number, v: Int32Array, z: Float64Array): void {
   let k = 0; v[0] = 0; z[0] = -Infinity; z[1] = Infinity;
   for (let q = 1; q < length; q++) {
@@ -310,6 +334,8 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
       const distances = signedDistances(), highlight = new Uint8Array(rgba.length), shadow = new Uint8Array(rgba.length);
       const size = Math.max(0.5, effect.size + effect.soften), radians =
         (effect.useGlobalLight ? finite(options.globalLightAngle, DEFAULT_GLOBAL_LIGHT_ANGLE) : effect.angle) * Math.PI / 180;
+      const normals = effect.technique === 'smooth'
+        ? boxBlur(distances, outWidth, outHeight, Math.min(16, Math.max(1, Math.round(size / 8)))) : distances;
       const lx = Math.cos(radians), ly = -Math.sin(radians), altitude = effect.altitude * Math.PI / 180;
       const lightScale = Math.cos(altitude), depth = effect.depth / 100;
       for (let y = 0; y < outHeight; y++) for (let x = 0; x < outWidth; x++) {
@@ -320,10 +346,10 @@ export function renderEffectPasses(alpha: Uint8Array, width: number, height: num
         let profile = clamp01(1 - Math.abs(distance) / size);
         if (effect.technique === 'chiselHard') profile = profile > 0 ? 1 : 0;
         else if (effect.technique === 'chiselSoft') profile *= profile;
-        const left = distances[y * outWidth + Math.max(0, x - 1)]!;
-        const right = distances[y * outWidth + Math.min(outWidth - 1, x + 1)]!;
-        const top = distances[Math.max(0, y - 1) * outWidth + x]!;
-        const bottom = distances[Math.min(outHeight - 1, y + 1) * outWidth + x]!;
+        const left = normals[y * outWidth + Math.max(0, x - 1)]!;
+        const right = normals[y * outWidth + Math.min(outWidth - 1, x + 1)]!;
+        const top = normals[Math.max(0, y - 1) * outWidth + x]!;
+        const bottom = normals[Math.min(outHeight - 1, y + 1) * outWidth + x]!;
         const gx = right - left, gy = bottom - top, length = Math.max(1e-6, Math.hypot(gx, gy));
         let lighting = (gx / length * lx + gy / length * ly) * lightScale;
         if (effect.style === 'pillowEmboss' && outer) lighting = -lighting;

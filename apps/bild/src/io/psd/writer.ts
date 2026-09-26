@@ -394,8 +394,10 @@ function layerMask(layer: Layer, state: State) {
     right: Math.ceil(transform.origin.x + transform.size.width), bottom: Math.ceil(transform.origin.y + transform.size.height),
     defaultColor: layer.mask.defaultColor ?? (layer as Layer & { readonly psdMaskDefault?: number }).psdMaskDefault ?? 0,
     disabled: !layer.mask.enabled, positionRelativeToLayer: false, imageData: maskImage(raster, state.bits),
-    ...(layer.vectorMask?.density === undefined ? {} : { vectorMaskDensity: layer.vectorMask.density }),
-    ...(layer.vectorMask?.feather === undefined ? {} : { vectorMaskFeather: layer.vectorMask.feather }),
+    ...((layer as Layer & { readonly psdComposedVectorMask?: boolean }).psdComposedVectorMask
+      || layer.vectorMask?.density === undefined ? {} : { vectorMaskDensity: layer.vectorMask.density }),
+    ...((layer as Layer & { readonly psdComposedVectorMask?: boolean }).psdComposedVectorMask
+      || layer.vectorMask?.feather === undefined ? {} : { vectorMaskFeather: layer.vectorMask.feather }),
   };
 }
 
@@ -481,7 +483,8 @@ function common(layer: Layer, path: string, state: State): AgLayer {
     mask: layerMask(layer, state), left: placement.left, top: placement.top, right: placement.right, bottom: placement.bottom,
     ...(placement.data ? { imageData: placement.data } : {}) };
   if (layer.blendIf) output.blendingRanges = psdBlendIf(layer.blendIf);
-  if (layer.vectorMask) output.vectorMask = { invert: layer.vectorMask.inverted, disable: !layer.vectorMask.enabled,
+  const composedVectorMask = (layer as Layer & { readonly psdComposedVectorMask?: boolean }).psdComposedVectorMask === true;
+  if (layer.vectorMask && !composedVectorMask) output.vectorMask = { invert: layer.vectorMask.inverted, disable: !layer.vectorMask.enabled,
     notLink: false, fillStartsWithAllPixels: layer.vectorMask.inverted,
     paths: bezier(layer.vectorMask.paths, state.hooks.transform(layer)) };
   if (layer.filters.length && layer.kind !== 'embedded') notice(state, 'live-filters', 'Live filters were baked into the layer pixels; Photoshop filter parameters are unavailable.',
@@ -536,6 +539,7 @@ function convertLayer(layer: Layer, path: string, children: AgLayer[], state: St
     return output;
   }
   const output = common(layer, path, state), transform = state.hooks.transform(layer);
+  const composedVectorMask = (layer as Layer & { readonly psdComposedVectorMask?: boolean }).psdComposedVectorMask === true;
   if (layer.kind === 'adjustment') {
     const mapped = adjustment(layer.adjustment, state, path);
     if (mapped) { output.adjustment = mapped; delete output.imageData; }
@@ -556,7 +560,7 @@ function convertLayer(layer: Layer, path: string, children: AgLayer[], state: St
     else output.text = textData(layer, layer.renderedTransform ?? transform);
     if (layer.runs.some((run) => Object.keys(run.style.axes).length > 0)) notice(state, 'text-variable-axes',
       'Variable-font axis values remain in the rendered text pixels but are not encoded by ag-psd.', 'editability-only', path);
-  } else if (layer.kind === 'vector') {
+  } else if (layer.kind === 'vector' && !composedVectorMask) {
     const generated = (layer as Layer & { readonly psdGeneratedStyle?: typeof layer.style }).psdGeneratedStyle ?? layer.style;
     if (generated.fill) output.vectorFill = vectorPaint(generated.fill, state, path) ?? undefined;
     if (generated.stroke) output.vectorStroke = { strokeEnabled: true, fillEnabled: !!generated.fill,
@@ -569,7 +573,7 @@ function convertLayer(layer: Layer, path: string, children: AgLayer[], state: St
     if (generated.stroke?.startMarker && generated.stroke.startMarker !== 'none' || generated.stroke?.endMarker && generated.stroke.endMarker !== 'none') {
       notice(state, 'vector-markers', 'Vector line markers remain in rendered pixels but not in Photoshop shape metadata.', 'editability-only', path);
     }
-  } else if (layer.kind === 'fill') {
+  } else if (layer.kind === 'fill' && !composedVectorMask) {
     output.vectorFill = vectorPaint(layer.fill, state, path) ?? undefined;
     output.vectorMask = { fillStartsWithAllPixels: false, paths: bezier([{
       schemaVersion: 1, closed: true, fillRule: 'nonzero', points: [

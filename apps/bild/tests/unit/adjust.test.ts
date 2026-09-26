@@ -7,7 +7,7 @@ import {
 } from '../../src/core/adjustments';
 import { applyAdjustment, exposureValue } from '../../src/core/adjust/apply';
 import { autoLevels, curveValue, levelValue, sampleLevels } from '../../src/core/adjust/levels';
-import { beginHueTarget, dragHueTarget, hueBandWeight, sampleHueRange } from '../../src/core/adjust/hue';
+import { beginHueTarget, dragHueTarget, hueBandWeight, hueResponse, sampleHueRange } from '../../src/core/adjust/hue';
 import { adjustRaster, invertRaster, levelsHistogram } from '../../src/core/adjust/raster';
 import { rectangleSelection } from '../../src/core/selectionOps';
 import { EditorSession } from '../../src/core/session';
@@ -58,6 +58,19 @@ describe('adjustment pixel engines', () => {
     const band = { falloffStart: 315, rangeStart: 345, rangeEnd: 15, falloffEnd: 45 };
     expect(hueBandWeight(band, 0)).toBe(1); expect(hueBandWeight(band, 330)).toBeCloseTo(0.5);
     expect(hueBandWeight(band, 30)).toBeCloseTo(0.5); expect(hueBandWeight(band, 180)).toBe(0);
+  });
+
+  it('uses the strongest overlapping Photoshop colour range instead of summing contradictory edits', () => {
+    const settings = defaultHueSaturation();
+    const bands = { ...settings.bands,
+      Cyans: { falloffStart: 180, rangeStart: 200, rangeEnd: 240, falloffEnd: 260 },
+      Blues: { falloffStart: 180, rangeStart: 200, rangeEnd: 240, falloffEnd: 260 } };
+    const adjustments = { ...settings.adjustments,
+      Cyans: { hue: 0, saturation: 80, lightness: 0 },
+      Blues: { hue: 0, saturation: -80, lightness: 0 } };
+    const response = hueResponse({ ...settings, bands, adjustments });
+    expect(response[220]).toMatchObject({ shift: 0, saturation: 80, lightness: 0 });
+    expect(response[180]).toMatchObject({ shift: 0, saturation: 0, lightness: 0 });
   });
 
   it('HueSaturationTests.eyedroppers and targeted adjustment semantics', () => {

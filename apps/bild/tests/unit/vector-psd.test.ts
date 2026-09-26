@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { writePsdUint8Array, type BezierPath, type Layer as AgLayer, type Psd } from 'ag-psd';
 import { readPsdDocument } from '../../src/io/psd';
+import { cpuCompositeRegion } from '../../src/render/cpuRender';
 
 function rectangle(left: number, top: number, right: number, bottom: number): BezierPath {
   const knot = (x: number, y: number) => ({ linked: false, points: [x, y, x, y, x, y] });
@@ -42,5 +43,22 @@ describe('PRODUCT-PLAN A5 PSD vector import', () => {
     expect(imported.vectorMask).toMatchObject({ enabled: true, inverted: true, density: 0.6, feather: 2.5 });
     expect(imported.vectorMask?.paths[0]!.points[0]!.anchor.x).toBeCloseTo(5);
     expect(imported.vectorMask?.paths[0]!.points[0]!.anchor.y).toBeCloseTo(4);
+  });
+
+  it('multiplies editable vector coverage by the independent real user-mask channel', () => {
+    const maskPixels = (values: readonly number[]) => ({ width: 2, height: 1,
+      data: new Uint8ClampedArray(values.flatMap((value) => [value, value, value, 255])) });
+    const shape: AgLayer = { name: 'Two masks', left: 0, top: 0, right: 2, bottom: 1,
+      imageData: maskPixels([255, 255]), vectorFill: { type: 'color', color: { r: 255, g: 0, b: 0 } },
+      vectorMask: { paths: [rectangle(0, 0, 2, 1)] },
+      mask: { top: 0, left: 0, bottom: 1, right: 2, defaultColor: 0, fromVectorData: true,
+        vectorMaskDensity: 0.5, userMaskDensity: 0.5, imageData: maskPixels([255, 255]) },
+      realMask: { top: 0, left: 0, bottom: 1, right: 2, defaultColor: 0,
+        imageData: maskPixels([255, 0]) } };
+    const input: Psd = { width: 2, height: 1, children: [shape], imageData: pixels(2, 1) };
+    const document = readPsdDocument(writePsdUint8Array(input, { generateThumbnail: false })).document;
+    expect(cpuCompositeRegion(document, { x: 0, y: 0, width: 2, height: 1 })).toEqual(new Uint8Array([
+      255, 0, 0, 255, 255, 0, 0, 127,
+    ]));
   });
 });

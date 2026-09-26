@@ -381,7 +381,8 @@ function decodedMask(mask: LayerMaskData | undefined, parameters: LayerMaskData 
 }
 
 function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportState,
-  layerPath: string): { readonly mask: Layer['mask']; readonly defaultColor?: number } {
+  layerPath: string): { readonly mask: Layer['mask']; readonly defaultColor?: number;
+    readonly composedVector?: boolean } {
   const primary = decodedMask(source.mask, source.mask, layerTransform, state, layerPath);
   const real = decodedMask(source.realMask, source.mask, layerTransform, state, layerPath);
   if (!primary && !real) {
@@ -390,11 +391,45 @@ function maskFor(source: AgLayer, layerTransform: LayerTransform, state: ImportS
       'Vector-derived mask uses the layer pixel cache and is not editable.', 'editability-only', layerPath);
     return { mask: null };
   }
-  // When both records exist, channel -2 is Photoshop's rendered mask cache (already composing
-  // vector and real/user mask data); -3 is the editable user-mask source. Rendering both would
-  // square its coverage. Fall back to -3 only for files that omit the composed cache.
-  const value = primary ?? real!;
-  return { mask: value, defaultColor: value.defaultColor };
+  let value = primary ?? real!;
+  const rebuildVectorMask = source.mask?.fromVectorData === true
+    && ((source.mask.userMaskDensity ?? 1) < 1 || (source.mask.vectorMaskDensity ?? 1) < 1);
+  if (rebuildVectorMask && source.vectorMask?.paths.length) {
+    // Photoshop may store channel -2 as either a vector-mask preview or a user mask. Rebuild the
+    // editable vector component from its path and combine only the independent user channel (-3
+    // when -2 is vector-derived, otherwise -2). This avoids both squaring a composed preview and
+    // dropping vector coverage in files whose primary channel is the user mask.
+    const user = source.mask?.fromVectorData === true ? real : primary ?? real;
+    const left = Math.floor(layerTransform.origin.x), top = Math.floor(layerTransform.origin.y);
+    const width = Math.max(1, Math.ceil(layerTransform.size.width));
+    const height = Math.max(1, Math.ceil(layerTransform.size.height));
+    const pixels = new Uint8Array(width * height);
+    const sample = (mask: ImportedPsdMask, placement: LayerTransform, x: number, y: number): number => {
+      const px = Math.floor((x - placement.origin.x) * mask.raster.width / placement.size.width);
+      const py = Math.floor((y - placement.origin.y) * mask.raster.height / placement.size.height);
+      return px >= 0 && py >= 0 && px < mask.raster.width && py < mask.raster.height
+        ? mask.raster.pixel(px, py)[0]! : mask.defaultColor;
+    };
+    const paths = flattenedPaths(psdVectorPaths(source.vectorMask.paths, { x: 0, y: 0 }));
+    const density = source.mask?.vectorMaskDensity ?? 1;
+    const inverted = source.vectorMask.invert === true || source.vectorMask.fillStartsWithAllPixels === true;
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      let covered = 0;
+      for (const oy of [0.125, 0.375, 0.625, 0.875]) for (const ox of [0.125, 0.375, 0.625, 0.875]) {
+        if (pathContains(paths, left + x + ox, top + y + oy) !== inverted) covered++;
+      }
+      const vector = Math.round(255 - (255 - covered * 255 / 16) * density);
+      const userCoverage = user
+        ? sample(user, user.placement ?? layerTransform, left + x + 0.5, top + y + 0.5) : 255;
+      pixels[y * width + x] = Math.round(vector * userCoverage / 255);
+    }
+    const vectorDefault = inverted ? 255 : Math.round(255 * (1 - density));
+    value = { raster: Raster.fromPixels(width, height, 1, pixels), enabled: (primary?.enabled ?? true) && (real?.enabled ?? true),
+      placement: null, linked: false,
+      defaultColor: Math.round(vectorDefault * (user?.defaultColor ?? 255) / 255) };
+  }
+  return { mask: value, defaultColor: value.defaultColor,
+    ...(rebuildVectorMask && source.vectorMask?.paths.length ? { composedVector: true } : {}) };
 }
 
 function reportLayerFeatures(source: AgLayer, isGroup: boolean, state: ImportState, layerPath: string): void {
@@ -1161,6 +1196,11 @@ function legacyArtboard(source: AgLayer, state: ImportState): AgLayer['artboard'
   return { rect: { top, left, bottom, right }, backgroundType: 3 };
 }
 
+function canPropagateGroupFill(children: readonly AgLayer[]): boolean {
+  return children.every((child) => !child.adjustment && child.knockout !== true && !child.effects
+    && (!child.children || canPropagateGroupFill(child.children)));
+}
+
 function importSiblings(sources: readonly AgLayer[], parentId: string | null, parentPath: string,
   state: ImportState): Layer[] {
   const result: Layer[] = [];
@@ -1194,6 +1234,8 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     reportLayerFeatures(source, isGroup, state, layerPath);
     const opacity = Math.min(1, Math.max(0, source.opacity ?? 1));
     const fillOpacity = Math.min(1, Math.max(0, source.fillOpacity ?? 1));
+    const propagatedGroupFill = isGroup && sourceMode === 'pass through' && fillOpacity !== 1 && source.knockout !== true
+      && canPropagateGroupFill(source.children ?? []);
     const textData = !isGroup ? source.text : undefined;
     const editableText = textData?.text.replace(/\r/g, '\n') ?? '';
     const textBox = textData ? psdTextBox(textData, width, height) : null;
@@ -1208,11 +1250,18 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     const globalVectorPaths = vectorContent
       ? source.vectorMask?.paths.length ? psdVectorPaths(source.vectorMask.paths, { x: 0, y: 0 })
         : [rectanglePath(fillBounds.left, fillBounds.top, fillBounds.right, fillBounds.bottom)] : [];
-    const vectorBounds = vectorContent && !image ? pathBounds(globalVectorPaths) : null;
-    const vectorTransform = vectorBounds
+    const weakenedMask = (source.mask?.userMaskDensity ?? 1) < 1 || (source.mask?.vectorMaskDensity ?? 1) < 1;
+    const maskedVectorFill = vectorContent && !!source.vectorFill && source.vectorFill.type !== 'pattern'
+      && source.mask?.fromVectorData === true && weakenedMask;
+    const vectorBounds = vectorContent && !image && !maskedVectorFill ? pathBounds(globalVectorPaths) : null;
+    const vectorTransform = maskedVectorFill
+      ? transform(0, 0, state.documentWidth, state.documentHeight)
+      : vectorBounds
       ? transform(vectorBounds.x, vectorBounds.y, vectorBounds.width, vectorBounds.height) : editableTransform;
-    const vectorPaths = vectorContent ? localPaths(globalVectorPaths, vectorTransform.origin.x, vectorTransform.origin.y) : [];
-    const vectorRaster = vectorContent && !image
+    const vectorPaths = vectorContent ? maskedVectorFill
+      ? [rectanglePath(0, 0, state.documentWidth, state.documentHeight)]
+      : localPaths(globalVectorPaths, vectorTransform.origin.x, vectorTransform.origin.y) : [];
+    const vectorRaster = vectorContent && (!image || maskedVectorFill)
       ? generatedVectorRaster(source, vectorPaths, Math.round(vectorTransform.size.width), Math.round(vectorTransform.size.height),
         state.patterns, vectorTransform.origin, state) : null;
     const vectorStyle = vectorContent ? psdVectorStyle(source, state.resolution, state, layerPath) : null;
@@ -1238,15 +1287,17 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
     }
     let imported: Layer = newLayer({
       id, name: source.name ?? `Layer ${sourceIndex + 1}`, parentId, kind: isGroup ? 'group' : placed ? 'embedded' : textData ? 'text' : vectorContent ? 'vector' : adjustment ? 'adjustment' : 'pixel',
-      visible: source.hidden !== true, opacity, fillOpacity, blendMode: mappedMode, blendIf: psdBlendIf(source),
+      visible: source.hidden !== true, opacity, fillOpacity: propagatedGroupFill ? 1 : fillOpacity,
+      blendMode: mappedMode, blendIf: psdBlendIf(source),
       locks: importedLocks(source), colorLabel: importedColorLabel(source, state, layerPath),
       transform: state.colorMode !== 3 && image ? layerTransform : placement.transform,
       warp: state.colorMode !== 3 && image ? null : placement.warp,
       // A non-RGB PSD's layer cache is already expressed through the document
       // colour pipeline. The embedded source (commonly an RGB PNG) is not: using
       // it here changes Photoshop's CMYK/Gray blend operands before compositing.
-      raster: state.colorMode === 3 ? placedPixels ?? (image ? rasterFromPixelData(image) : vectorRaster)
-        : image ? rasterFromPixelData(image) : placedPixels ?? vectorRaster,
+      raster: state.colorMode === 3 ? placedPixels ?? (maskedVectorFill ? vectorRaster
+        : image ? rasterFromPixelData(image) : vectorRaster)
+        : maskedVectorFill ? vectorRaster : image ? rasterFromPixelData(image) : placedPixels ?? vectorRaster,
       ...(placed ? { content: placed } : {}),
       ...(textData ? { text: editableText, runs: psdTextRuns(textData, editableText),
         paragraphs: psdParagraphs(textData, editableText), box: textBox,
@@ -1279,6 +1330,8 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
         & { readonly psdArtboardRect: { readonly x: number; readonly y: number; readonly width: number; readonly height: number } };
     if (vectorRaster) imported = { ...imported, psdGeneratedStyle: vectorStyle } as Layer
       & { readonly psdGeneratedStyle: VectorStyle };
+    if (importedMaskResult.composedVector) imported = { ...imported, psdComposedVectorMask: true } as Layer
+      & { readonly psdComposedVectorMask: true };
     if (placed && state.colorMode !== 3 && image) imported = { ...imported, psdPreferLayerCache: true } as Layer
       & { readonly psdPreferLayerCache: true };
     if (source.effects && source.blendInteriorElements === true) imported = { ...imported,
@@ -1303,7 +1356,8 @@ function importSiblings(sources: readonly AgLayer[], parentId: string | null, pa
       // Keep the group itself as the live source: its surface can be the union of several descendants,
       // or just a group mask around a pass-through adjustment. Mapping a sole paint descendant loses
       // both cases (clipping-mask5.psd and passthrough_clipping_mask_adjustment.psd).
-      const importedChildren = importSiblings(source.children ?? [], id, layerPath, state);
+      const importedChildren = importSiblings(source.children ?? [], id, layerPath, state).map((child) =>
+        propagatedGroupFill && child.parentId === id ? { ...child, fillOpacity: child.fillOpacity * fillOpacity } : child);
       result.push(...importedChildren);
       if (!source.clipping) clippingBaseId = id;
     } else if (!source.clipping) {

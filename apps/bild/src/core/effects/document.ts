@@ -1,4 +1,5 @@
-import { newLayer, type CanvasDocument, type Layer } from '../document';
+import { descendantIds, newLayer, type CanvasDocument, type Layer } from '../document';
+import { compositeRegion } from '../composite';
 import { apply, concat, pixelToDocument, placing, samePlacement, scaling, translation, type LayerTransform, type Point } from '../geometry';
 import { mapPlacement, maskBackground, preparePlacement, prepareSampler, sampleMask } from '../resample';
 import { Raster, TILE } from '../raster';
@@ -57,6 +58,50 @@ interface ResolvedEffectSource {
   readonly rasterScale: number;
 }
 
+function shiftedTransform(value: LayerTransform, x: number, y: number): LayerTransform {
+  return { ...value, origin: { x: value.origin.x - x, y: value.origin.y - y } };
+}
+
+/** A group style traces the unbounded child surface, not the document-clipped group preview. */
+function groupEffectSource(document: CanvasDocument, group: Layer, hooks: EffectSourceHooks): ResolvedEffectSource | null {
+  const ids = descendantIds(document.layers, group.id);
+  const descendants = document.layers.filter((layer) => ids.has(layer.id));
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const layer of descendants) {
+    const raster = hooks.raster(layer);
+    if (!layer.visible || layer.kind === 'group' || layer.adjustment || !raster || raster.channels !== 4) continue;
+    const transform = hooks.transform(layer), map = pixelToDocument(transform, raster.width, raster.height);
+    for (const point of [{ x: 0, y: 0 }, { x: raster.width, y: 0 },
+      { x: raster.width, y: raster.height }, { x: 0, y: raster.height }]) {
+      const placed = apply(map, point);
+      left = Math.min(left, placed.x); top = Math.min(top, placed.y);
+      right = Math.max(right, placed.x); bottom = Math.max(bottom, placed.y);
+    }
+  }
+  if (!Number.isFinite(left)) return null;
+  left = Math.floor(left); top = Math.floor(top); right = Math.ceil(right); bottom = Math.ceil(bottom);
+  const width = Math.max(1, right - left), height = Math.max(1, bottom - top);
+  const originals = new Map(descendants.map((layer) => [layer.id, layer]));
+  const layers = descendants.map((layer) => ({ ...layer,
+    parentId: layer.parentId === group.id ? null : layer.parentId,
+    transform: shiftedTransform(hooks.transform(layer), left, top),
+    mask: layer.mask ? { ...layer.mask, placement: (hooks.maskPlacement(layer) ?? layer.mask.placement)
+      ? shiftedTransform((hooks.maskPlacement(layer) ?? layer.mask.placement)!, left, top) : null } : null,
+    effects: [],
+  }));
+  const local: CanvasDocument = { ...document, id: `${document.id}:${group.id}:effect-source`, width, height,
+    layers, selection: null };
+  const rendered = compositeRegion(local, { x: 0, y: 0, width, height }, {
+    transform: (layer) => layer.transform,
+    maskPlacement: (layer) => layer.mask?.placement ?? null,
+    raster: (layer) => hooks.raster(originals.get(layer.id) ?? layer),
+    maskRaster: (layer) => hooks.maskRaster(originals.get(layer.id) ?? layer),
+  }).rgba;
+  return { raster: Raster.fromPixels(width, height, 4, rendered), maskRaster: null,
+    transform: { ...group.transform, origin: { x: left, y: top }, size: { width, height },
+      rotation: 0, flipX: false, flipY: false }, maskPlacement: null, rasterScale: 1 };
+}
+
 function modulo(value: number, divisor: number): number { return ((value % divisor) + divisor) % divisor; }
 
 /** Pattern resources are document-owned raw RGBA8 inputs; imported PSD and user patterns share this path. */
@@ -100,6 +145,51 @@ function patternPasses(alpha: Uint8Array, width: number, height: number, transfo
   return output;
 }
 
+interface EffectFlatPath { readonly values: Float64Array; readonly evenOdd: boolean }
+
+function vectorEffectAlpha(layer: Layer, width: number, height: number): Uint8Array | null {
+  if (layer.kind !== 'vector' || !layer.paths.length) return null;
+  const paths: EffectFlatPath[] = layer.paths.filter((path) => path.closed && path.points.length > 1).map((path) => {
+    const values: number[] = [];
+    for (let index = 0; index < path.points.length; index++) {
+      const from = path.points[index]!, to = path.points[(index + 1) % path.points.length]!;
+      if (index === 0) values.push(from.anchor.x, from.anchor.y);
+      for (let step = 1; step <= 12; step++) {
+        const t = step / 12, u = 1 - t;
+        values.push(u ** 3 * from.anchor.x + 3 * u * u * t * from.out.x + 3 * u * t * t * to.in.x + t ** 3 * to.anchor.x,
+          u ** 3 * from.anchor.y + 3 * u * u * t * from.out.y + 3 * u * t * t * to.in.y + t ** 3 * to.anchor.y);
+      }
+    }
+    return { values: new Float64Array(values), evenOdd: path.fillRule === 'evenodd' };
+  });
+  if (!paths.length) return null;
+  const contains = (x: number, y: number): boolean => {
+    let winding = 0, parity = false;
+    for (const path of paths) {
+      let local = 0;
+      for (let index = 0, previous = path.values.length / 2 - 1; index < path.values.length / 2; previous = index++) {
+        const x0 = path.values[previous * 2]!, y0 = path.values[previous * 2 + 1]!;
+        const x1 = path.values[index * 2]!, y1 = path.values[index * 2 + 1]!;
+        if ((y0 > y) !== (y1 > y) && x < (x1 - x0) * (y - y0) / (y1 - y0) + x0) {
+          if (path.evenOdd) parity = !parity; else local += y1 > y0 ? 1 : -1;
+        }
+      }
+      winding += local;
+    }
+    return parity || winding !== 0;
+  };
+  const alpha = new Uint8Array(width * height), scaleX = layer.transform.size.width / width;
+  const scaleY = layer.transform.size.height / height;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    let covered = 0;
+    for (const oy of [0.25, 0.75]) for (const ox of [0.25, 0.75]) {
+      if (contains((x + ox) * scaleX, (y + oy) * scaleY)) covered++;
+    }
+    alpha[y * width + x] = covered * 255 / 4;
+  }
+  return alpha;
+}
+
 function effectAlpha(layer: Layer, source: ResolvedEffectSource): Uint8Array {
   const { raster } = source;
   const alpha = new Uint8Array(raster.width * raster.height);
@@ -110,6 +200,14 @@ function effectAlpha(layer: Layer, source: ResolvedEffectSource): Uint8Array {
     for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
       alpha[(row * TILE + y) * raster.width + col * TILE + x] = Math.round(tile[(y * width + x) * 4 + 3]! * 255 / raster.maximum);
     }
+  }
+  const vector = vectorEffectAlpha(layer, raster.width, raster.height);
+  if (vector) {
+    let difference = 0;
+    for (let index = 0; index < alpha.length; index++) difference += Math.abs(alpha[index]! - vector[index]!);
+    // Ordinary shape caches retain Photoshop's antialiasing and remain the better source. A large
+    // disagreement means the cached paint is transparent/gradient while the style still traces the path.
+    if (difference / alpha.length > 16) alpha.set(vector);
   }
   if (layer.crop) {
     for (let y = 0; y < raster.height; y++) for (let x = 0; x < raster.width; x++) {
@@ -187,10 +285,11 @@ export function documentWithLayerEffects(document: CanvasDocument, hooks: Effect
     if (!layer.visible || !layer.effects.some((effect) => effect.enabled)) {
       sourceKey += ';'; continue;
     }
-    const raster = hooks.raster(layer);
+    const groupSource = layer.kind === 'group' ? groupEffectSource(document, layer, hooks) : null;
+    const raster = groupSource?.raster ?? hooks.raster(layer);
     if (!raster || raster.channels !== 4) { sourceKey += `${raster?.serial ?? 0};`; continue; }
-    const transform = hooks.transform(layer);
-    const source: ResolvedEffectSource = {
+    const transform = groupSource?.transform ?? hooks.transform(layer);
+    const source: ResolvedEffectSource = groupSource ?? {
       raster,
       maskRaster: layer.mask?.enabled ? hooks.maskRaster(layer) ?? null : null,
       transform,
