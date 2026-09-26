@@ -1406,11 +1406,11 @@ function rawCompositeFallback(bytes: Uint8Array, parserError: unknown, rasterOve
     code: 'embedded-icc', message: 'An embedded profile was detected, but this synchronous compatibility preview uses its deterministic colour-mode conversion.',
     impact: 'approximated',
   });
-  const document: CanvasDocument = {
+  const document = {
     id: 'psd-document', width: raw.width, height: raw.height, resolution: 72, selection: null,
     layers: [newLayer({ id: 'psd-layer-1', name: 'Photoshop composite (flattened)', kind: 'pixel',
-      transform: transform(0, 0, raw.width, raw.height), raster })], resources: [],
-  };
+      transform: transform(0, 0, raw.width, raw.height), raster })], resources: [], psdColorMode: raw.colorMode,
+  } as CanvasDocument & { readonly psdColorMode: number };
   return { document, oracle: raster, unsupported, parserWarnings: [message],
     source: { width: raw.width, height: raw.height, bitsPerChannel: raw.bitsPerChannel,
       colorMode: raw.colorMode, isPsb: raw.isPsb } };
@@ -1575,8 +1575,10 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
   const document = {
     id: 'psd-document', width: psd.width, height: psd.height, resolution: resolution(psd),
     globalLightAngle: psd.imageResources?.globalAngle ?? 120, layers: documentLayers, resources: state.resources, selection: null,
-    psdOpaqueCanvas: opaqueCanvas, ...(documentCmykTransfer ? { psdCmykTransfer: documentCmykTransfer } : {}),
-  } as CanvasDocument & { readonly psdOpaqueCanvas: boolean; readonly psdCmykTransfer?: NonNullable<ImportState['cmykTransfer']> };
+    psdOpaqueCanvas: opaqueCanvas, psdColorMode: colorMode,
+    ...(documentCmykTransfer ? { psdCmykTransfer: documentCmykTransfer } : {}),
+  } as CanvasDocument & { readonly psdOpaqueCanvas: boolean; readonly psdColorMode: number;
+    readonly psdCmykTransfer?: NonNullable<ImportState['cmykTransfer']> };
   return { document, oracle, unsupported, parserWarnings,
     source: { width: psd.width, height: psd.height, bitsPerChannel, colorMode, isPsb: bytes[5] === 2 } };
 }

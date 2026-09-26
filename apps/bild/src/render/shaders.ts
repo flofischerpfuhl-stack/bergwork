@@ -41,6 +41,11 @@ precision highp sampler2D;
 uniform int uHasBlendIf;
 uniform vec4 uBlendIfSource[4];
 uniform vec4 uBlendIfDestination[4];
+uniform int uNativeCmyk;
+uniform sampler2D uCmykInverse;
+uniform sampler2D uCmykForward;
+uniform int uCmykInverseSize;
+uniform int uCmykForwardSize;
 
 float lum(vec3 c) { return dot(c, vec3(0.3, 0.59, 0.11)); }
 vec3 clipColor(vec3 c) {
@@ -166,6 +171,60 @@ vec4 composite(int mode, vec4 dst, vec4 src, ivec2 documentPixel, int seed) {
   return vec4(co, ao);
 }
 
+vec4 nativeCmykInverseFetch(ivec3 p) {
+  return texelFetch(uCmykInverse, ivec2(p.x + p.y * uCmykInverseSize, p.z), 0);
+}
+vec4 cmykInverseColor(vec3 color) {
+  int n = uCmykInverseSize;
+  vec3 p = clamp(color, 0.0, 1.0) * float(n - 1);
+  ivec3 lo = ivec3(floor(p)), hi = min(lo + ivec3(1), ivec3(n - 1));
+  vec3 f = fract(p); vec4 result = vec4(0.0);
+  for (int dz = 0; dz < 2; dz++) for (int dy = 0; dy < 2; dy++) for (int dx = 0; dx < 2; dx++) {
+    ivec3 q = ivec3(dx == 0 ? lo.x : hi.x, dy == 0 ? lo.y : hi.y, dz == 0 ? lo.z : hi.z);
+    float weight = (dx == 0 ? 1.0 - f.x : f.x) * (dy == 0 ? 1.0 - f.y : f.y)
+      * (dz == 0 ? 1.0 - f.z : f.z);
+    result += nativeCmykInverseFetch(q) * weight;
+  }
+  return result;
+}
+vec3 nativeCmykForwardFetch(ivec4 p) {
+  int n = uCmykForwardSize;
+  return texelFetch(uCmykForward, ivec2(p.x + p.y * n, p.z + p.w * n), 0).rgb;
+}
+vec3 cmykForwardColor(vec4 inks) {
+  int n = uCmykForwardSize;
+  vec4 p = clamp(inks, 0.0, 1.0) * float(n - 1);
+  ivec4 lo = ivec4(floor(p)), hi = min(lo + ivec4(1), ivec4(n - 1));
+  vec4 f = fract(p); vec3 result = vec3(0.0);
+  for (int dk = 0; dk < 2; dk++) for (int dy = 0; dy < 2; dy++) {
+    for (int dm = 0; dm < 2; dm++) for (int dc = 0; dc < 2; dc++) {
+      ivec4 q = ivec4(dc == 0 ? lo.x : hi.x, dm == 0 ? lo.y : hi.y,
+        dy == 0 ? lo.z : hi.z, dk == 0 ? lo.w : hi.w);
+      float weight = (dc == 0 ? 1.0 - f.x : f.x) * (dm == 0 ? 1.0 - f.y : f.y)
+        * (dy == 0 ? 1.0 - f.z : f.z) * (dk == 0 ? 1.0 - f.w : f.w);
+      result += nativeCmykForwardFetch(q) * weight;
+    }
+  }
+  return result;
+}
+/** PSD13/14 CPU oracle: these separable modes operate on inverted native process components. */
+vec4 compositeCmyk(int mode, vec4 dst, vec4 sampled, float coverage, float opacity, float fill) {
+  float factor = clamp(coverage, 0.0, 1.0) * clamp(opacity, 0.0, 1.0) * clamp(fill, 0.0, 1.0);
+  if (sampled.a <= 0.0 || factor <= 0.0) return dst;
+  float sourceAlpha = sampled.a * factor, backdropAlpha = clamp(dst.a, 0.0, 1.0);
+  vec4 source = cmykInverseColor(sampled.rgb / sampled.a);
+  vec4 backdrop = backdropAlpha > 0.0 ? cmykInverseColor(dst.rgb / backdropAlpha) : vec4(0.0);
+  float alpha = sourceAlpha + backdropAlpha - sourceAlpha * backdropAlpha;
+  vec4 cb = vec4(1.0) - backdrop, cs = vec4(1.0) - source, blended;
+  if (mode == 19) blended = abs(cb - cs);
+  else if (mode == 20) blended = cb + cs - 2.0 * cb * cs;
+  else blended = max(vec4(0.0), cb - cs);
+  vec4 ink = vec4(1.0) - blended;
+  vec4 nativeColor = alpha > 0.0 ? (source * sourceAlpha * (1.0 - backdropAlpha)
+    + backdrop * backdropAlpha * (1.0 - sourceAlpha) + ink * sourceAlpha * backdropAlpha) / alpha : vec4(0.0);
+  return vec4(cmykForwardColor(nativeColor) * alpha, alpha);
+}
+
 bool specialFillMode(int mode) {
   return mode == 4 || mode == 5 || mode == 9 || mode == 10 || mode == 15 || mode == 16 || mode == 18 || mode == 19;
 }
@@ -194,6 +253,9 @@ float hardMixFill(float s, float d, float fill) {
 }
 vec4 compositeFill(int mode, vec4 dst, vec4 sampled, float coverage, float opacity, float fill,
   ivec2 documentPixel, int seed) {
+  if (uNativeCmyk == 1 && (mode == 19 || mode == 20 || mode == 21)) {
+    return compositeCmyk(mode, dst, sampled, coverage, opacity, fill);
+  }
   if (!specialFillMode(mode) || fill >= 1.0) {
     return composite(mode, dst, sampled * (coverage * opacity * fill), documentPixel, seed);
   }

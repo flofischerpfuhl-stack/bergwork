@@ -31,6 +31,7 @@ import {
   UNPREMULTIPLY_FRAGMENT, VERTEX, WARP_MESH_FRAGMENT, FILTERED_LAYER_FRAGMENT,
 } from './shaders';
 import type { CmykLut } from '../core/color/cmyk';
+import type { PsdCmykTransfer } from '../core/adjust/apply';
 import { EffectLiveFilterHookAdapter } from './liveFilterPasses';
 import { defaultFilterSettings } from '../core/filters/settings';
 import { applyLiveFilters } from '../core/filters/live';
@@ -42,7 +43,6 @@ import {
 
 export { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
 import { DEFAULT_HOOKS, type CompositeHooks } from './hooks';
-import { cpuCompositeView } from './cpuRender';
 
 const residentViews = new WeakMap<Raster, { signature: string; raster: Raster }>();
 const residentUploadLods = new WeakMap<Raster, Raster>();
@@ -228,6 +228,9 @@ export interface GpuPerformanceCounters {
   readonly viewFilterLayers: number;
   readonly viewFilterPasses: number;
   readonly cpuLiveFilterFallbacks: number;
+  readonly nativeCmykFrames: number;
+  readonly nativeGrayFrames: number;
+  readonly cpuDocumentFallbacks: number;
 }
 
 /** GLSL for one adjustment kind plus how to fill its uniforms. Provided by the adjustment module. */
@@ -376,6 +379,14 @@ function blendIfDefinitions(): Uniforms {
   };
 }
 
+function nativeCmykDefinitions(): Uniforms {
+  return {
+    uNativeCmyk: { value: 0, type: 'i32' },
+    uCmykInverseSize: { value: 2, type: 'i32' },
+    uCmykForwardSize: { value: 2, type: 'i32' },
+  };
+}
+
 function blendIfValues(settings: BlendIfSettings | null | undefined): Record<string, unknown> {
   const channels = ['gray', 'red', 'green', 'blue'] as const;
   const values = (side: BlendIfSettings['source']) => new Float32Array(channels.flatMap((channel) => {
@@ -405,7 +416,9 @@ export class GpuCompositor {
   private lutSources = new Map<string, TextureSource>();
   private readonly proofSources = new Map<Uint8Array, TextureSource>();
   private readonly proofWarnings = new WeakMap<CmykLut, Uint8Array>();
-  private nativeCmykSource: TextureSource | null = null;
+  private readonly cmykTransferSources = new Map<PsdCmykTransfer,
+    { readonly inverse: TextureSource; readonly forward: TextureSource }>();
+  private activeCmykTransfer: PsdCmykTransfer | null = null;
   private brushState: BrushGpuState | null = null;
   private brushCompositeCache: BrushCompositeCache | null = null;
   private viewportCompositeCache: ViewportCompositeCache | null = null;
@@ -422,6 +435,7 @@ export class GpuCompositor {
     compositeRequests: 0, fullComposites: 0, unchangedFrameHits: 0, panReprojections: 0, panExposedPixels: 0,
     residentLodBuilds: 0, residentLodSourcePixels: 0,
     viewFilterLayers: 0, viewFilterPasses: 0, cpuLiveFilterFallbacks: 0,
+    nativeCmykFrames: 0, nativeGrayFrames: 0, cpuDocumentFallbacks: 0,
   };
   /** Set per composite: RGBA8 layers get half-float textures (see PRECISION_SENSITIVE_MODES). */
   private preciseTextures = false;
@@ -482,7 +496,10 @@ export class GpuCompositor {
     for (const lut of this.lutSources.values()) lut.destroy();
     for (const source of this.proofSources.values()) source.destroy();
     for (const tip of this.tipSources.values()) tip.destroy();
-    this.nativeCmykSource?.destroy();
+    for (const sources of this.cmykTransferSources.values()) {
+      this.destroySource(sources.inverse); this.destroySource(sources.forward);
+    }
+    this.cmykTransferSources.clear();
     this.tipSources.clear();
     this.destroyBrushState();
     for (const targets of this.brushTargetPool) for (const target of Object.values(targets)) target.destroy(true);
@@ -549,6 +566,7 @@ export class GpuCompositor {
     const sources: Record<string, [string, Uniforms, string[]]> = {
       layer: [LAYER_FRAGMENT, {
         ...blendIfDefinitions(),
+        ...nativeCmykDefinitions(),
         uTarget: { value: new Float32Array(2), type: 'vec2<f32>' },
         uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
         uDocToLayer: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
@@ -583,9 +601,10 @@ export class GpuCompositor {
         uHasClip: { value: 0, type: 'i32' },
         uSnap: { value: 0, type: 'i32' },
         uReplace: { value: 0, type: 'i32' },
-      }, ['uBackdrop', 'uLayer', 'uMask', 'uClip']],
+      }, ['uBackdrop', 'uLayer', 'uMask', 'uClip', 'uCmykInverse', 'uCmykForward']],
       filteredLayer: [FILTERED_LAYER_FRAGMENT, {
         ...blendIfDefinitions(),
+        ...nativeCmykDefinitions(),
         uFilterOffset: { value: new Float32Array(2), type: 'vec2<f32>' },
         uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
         uDocToLayer: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
@@ -596,9 +615,10 @@ export class GpuCompositor {
         uFillOpacity: { value: 1, type: 'f32' }, uMode: { value: 0, type: 'i32' },
         uDissolveSeed: { value: 0, type: 'i32' }, uHasMask: { value: 0, type: 'i32' },
         uHasClip: { value: 0, type: 'i32' }, uSnap: { value: 0, type: 'i32' },
-      }, ['uBackdrop', 'uLayer', 'uMask', 'uClip']],
+      }, ['uBackdrop', 'uLayer', 'uMask', 'uClip', 'uCmykInverse', 'uCmykForward']],
       warpMesh: [WARP_MESH_FRAGMENT, {
         ...blendIfDefinitions(),
+        ...nativeCmykDefinitions(),
         uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
         uLayerSize: { value: new Float32Array(2), type: 'vec2<f32>' },
         uLayerEdge: { value: new Float32Array(2), type: 'vec2<f32>' },
@@ -613,7 +633,7 @@ export class GpuCompositor {
         uMode: { value: 0, type: 'i32' }, uDissolveSeed: { value: 0, type: 'i32' },
         uHasMask: { value: 0, type: 'i32' }, uHasClip: { value: 0, type: 'i32' },
         uSnap: { value: 0, type: 'i32' }, uReplace: { value: 0, type: 'i32' },
-      }, ['uBackdrop', 'uLayer', 'uMask', 'uClip']],
+      }, ['uBackdrop', 'uLayer', 'uMask', 'uClip', 'uCmykInverse', 'uCmykForward']],
       mask: [MASK_FRAGMENT, {
         uHasPrevious: { value: 0, type: 'i32' },
         uDrawChunk: { value: 0, type: 'i32' },
@@ -752,6 +772,7 @@ export class GpuCompositor {
 
   private run(pass: Pass, target: RenderTexture | null, width: number, height: number, textures: Record<string, TextureSource>,
     uniforms: Record<string, unknown>, rect?: Rect): void {
+    this.bindNativeCmyk(pass, textures, uniforms);
     for (const [key, value] of Object.entries(uniforms)) {
       const current = pass.uniforms.uniforms[key];
       if (current instanceof Float32Array && value instanceof Float32Array) current.set(value);
@@ -786,6 +807,7 @@ export class GpuCompositor {
 
   private runWarpMesh(warp: Extract<NonNullable<Layer['warp']>, { kind: 'mesh' }>, view: ViewSpec,
     pass: Pass, target: RenderTexture, textures: Record<string, TextureSource>, uniforms: Record<string, unknown>): void {
+    this.bindNativeCmyk(pass, textures, uniforms);
     for (const [key, value] of Object.entries(uniforms)) {
       const current = pass.uniforms.uniforms[key];
       if (current instanceof Float32Array && value instanceof Float32Array) current.set(value);
@@ -798,6 +820,20 @@ export class GpuCompositor {
     mesh.state.blend = false;
     this.renderer.render({ container: mesh, target, clear: false });
     mesh.destroy({ children: false, texture: false, textureSource: false });
+  }
+
+  private bindNativeCmyk(pass: Pass, textures: Record<string, TextureSource>, uniforms: Record<string, unknown>): void {
+    if (!Object.hasOwn(pass.uniforms.uniforms, 'uNativeCmyk')) return;
+    const transfer = this.activeCmykTransfer;
+    if (!transfer) {
+      uniforms.uNativeCmyk = 0; uniforms.uCmykInverseSize = 2; uniforms.uCmykForwardSize = 2;
+      textures.uCmykInverse = this.white; textures.uCmykForward = this.white;
+      return;
+    }
+    const sources = this.cmykSources(transfer);
+    uniforms.uNativeCmyk = 1; uniforms.uCmykInverseSize = transfer.inverseSize;
+    uniforms.uCmykForwardSize = transfer.forwardSize;
+    textures.uCmykInverse = sources.inverse; textures.uCmykForward = sources.forward;
   }
 
   // MARK: Render targets
@@ -845,6 +881,30 @@ export class GpuCompositor {
   }
 
   // MARK: Textures
+
+  private cmykSources(transfer: PsdCmykTransfer): { readonly inverse: TextureSource; readonly forward: TextureSource } {
+    const cached = this.cmykTransferSources.get(transfer);
+    if (cached) return cached;
+    const inverse = new TextureSource({ width: transfer.inverseSize ** 2, height: transfer.inverseSize,
+      format: 'rgba8unorm', scaleMode: 'nearest', addressMode: 'clamp-to-edge' });
+    const forward = new TextureSource({ width: transfer.forwardSize ** 2, height: transfer.forwardSize ** 2,
+      format: 'rgba8unorm', scaleMode: 'nearest', addressMode: 'clamp-to-edge' });
+    this.uploadLookup(inverse, transfer.inverse, inverse.width, inverse.height);
+    this.uploadLookup(forward, transfer.forward, forward.width, forward.height);
+    const sources = { inverse, forward };
+    this.cmykTransferSources.set(transfer, sources);
+    return sources;
+  }
+
+  /** Four process components use RGBA storage, so K must never be treated as texture alpha. */
+  private uploadLookup(source: TextureSource, data: Uint8Array, width: number, height: number): void {
+    const gl = this.gl;
+    this.renderer.texture.bindSource(source, 0);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    this.performanceCounterValue.textureUploads++;
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    this.restoreUnpack();
+  }
 
   private uploadWhole(source: TextureSource, data: Uint8Array, width: number, height: number, channels: 1 | 4): void {
     const gl = this.gl;
@@ -1471,8 +1531,10 @@ export class GpuCompositor {
   // MARK: Compositing
 
   private compositeVisualState(document: CanvasDocument, hooks: CompositeHooks): CompositeVisualState {
+    const psd = document as CanvasDocument & { readonly psdColorMode?: number; readonly psdCmykTransfer?: PsdCmykTransfer };
     const documentValues: unknown[] = [document.width, document.height, document.layers, document.resources,
-      document.globalLightAngle, (document as CanvasDocument & { readonly psdOpaqueCanvas?: boolean }).psdOpaqueCanvas];
+      document.globalLightAngle, (document as CanvasDocument & { readonly psdOpaqueCanvas?: boolean }).psdOpaqueCanvas,
+      psd.psdColorMode, psd.psdCmykTransfer];
     const layerValues: unknown[] = [];
     const addTransform = (transform: LayerTransform | null) => {
       if (!transform) { layerValues.push(null); return; }
@@ -1532,27 +1594,10 @@ export class GpuCompositor {
     // Live filters change a layer's content; effects are then computed from the filtered alpha (Photoshop order).
     this.performanceCounterValue.compositeRequests++;
     this.activeDocument = document;
-    const nativeCmyk = (document as CanvasDocument & { readonly psdCmykTransfer?: unknown }).psdCmykTransfer
-      && document.layers.some((layer) => {
-        const mode = hooks.blendMode(layer); return mode === 'difference' || mode === 'exclusion' || mode === 'subtract';
-      });
-    if (nativeCmyk) {
-      // The CMYK path carries four process components plus alpha. Until WebGL has
-      // a second process-colour attachment, upload the exact native CPU result;
-      // this keeps canvas/export parity and avoids falling back to RGB blending.
-      const pixels = cpuCompositeView(document, view.width, view.height, view.viewToDoc, hooks);
-      let source = this.nativeCmykSource;
-      if (!source || source.width !== view.width || source.height !== view.height) {
-        source?.destroy();
-        source = new TextureSource({ width: view.width, height: view.height, format: 'rgba8unorm',
-          scaleMode: 'nearest', addressMode: 'clamp-to-edge' });
-        this.nativeCmykSource = source;
-      }
-      this.uploadWhole(source, pixels, view.width, view.height, 4);
-      const target = this.acquire(view.width, view.height);
-      this.run(this.pass('copy'), target, view.width, view.height, { uSource: source }, {});
-      return target;
-    }
+    const psd = document as CanvasDocument & { readonly psdColorMode?: number; readonly psdCmykTransfer?: PsdCmykTransfer };
+    this.activeCmykTransfer = psd.psdCmykTransfer ?? null;
+    if (psd.psdColorMode === 4 || this.activeCmykTransfer) this.performanceCounterValue.nativeCmykFrames++;
+    else if (psd.psdColorMode === 1) this.performanceCounterValue.nativeGrayFrames++;
     const activeBrush = hooks.brush ?? null;
     const cacheable = view.cache === true && !activeBrush;
     const visualState = cacheable ? this.compositeVisualState(document, hooks) : null;
