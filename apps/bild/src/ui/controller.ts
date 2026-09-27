@@ -32,7 +32,7 @@ import type { ExportSizeEstimate } from '../io/exportPipeline';
 import { zipSync } from 'fflate';
 import { encodePng } from '../io/png';
 import { sha256Hex } from '../io/sha256';
-import type { PsdReadResult, PsdWriteNotice } from '../io/psd';
+import { installPsdColorTransfer, type PsdReadResult, type PsdWriteNotice } from '../io/psd';
 import { uuid } from '../core/ids';
 import type { GpuCompositor } from '../render/gpuCompositor';
 import { capabilitiesOf, type FileSaveTarget, type HostCapabilityMap, type HostFileReference } from '../platform/hosts';
@@ -563,7 +563,11 @@ export class EditorController {
     for (const file of psd) {
       try {
         const { readPsdDocumentInBackground } = await import('../workers/psdClient');
-        const imported = await readPsdDocumentInBackground(new Uint8Array(await file.arrayBuffer()));
+        let imported = await readPsdDocumentInBackground(new Uint8Array(await file.arrayBuffer()));
+        if (importPsdAsLayers && imported.colorTransferReady) {
+          imported = { ...imported, document: installPsdColorTransfer(imported.document,
+            await imported.colorTransferReady) };
+        }
         if (importPsdAsLayers) psdIds.push(...this.importPsdLayers(imported, into, fileBaseName(file.name)));
         else this.openPsd(imported, fileBaseName(file.name), into.session.document ? null : into);
       } catch (error) {
@@ -599,8 +603,17 @@ export class EditorController {
 
   private openPsd(imported: PsdReadResult, name: string, target: ProjectTab | null): void {
     const active = [...imported.document.layers].reverse().find((layer) => layer.visible)?.id ?? null;
-    if (target) target.session.installProject(imported.document, active, name);
-    else this.installLoaded(imported.document, active, name);
+    const tab = target ?? this.installLoaded(imported.document, active, name);
+    if (target) tab.session.installProject(imported.document, active, name);
+    if (imported.colorTransferReady) void imported.colorTransferReady.then((result) => {
+      const current = tab.session.document;
+      if (!current) return;
+      const updated = installPsdColorTransfer(current, result);
+      if (updated === current) return;
+      tab.session.replaceDocument(updated);
+      tab.session.notify('document');
+    }, (error) => this.host.reportError({ code: 'psd-colour-transfer',
+      message: error instanceof Error ? error.message : String(error) }));
     this.psdNotices(imported);
   }
 
@@ -774,10 +787,11 @@ export class EditorController {
     }
   }
 
-  private installLoaded(document: CanvasDocument, activeLayerId: string | null, name: string): void {
+  private installLoaded(document: CanvasDocument, activeLayerId: string | null, name: string): ProjectTab {
     const tab = this.workspace.createTab(name);
     tab.session.installProject(document, activeLayerId, name);
     this.workspace.adopt(tab);
+    return tab;
   }
 
   /** Opens an unzipped `.comp` package directory (the macOS app's own project format) chosen as a folder. */

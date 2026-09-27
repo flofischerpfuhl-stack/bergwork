@@ -2,6 +2,7 @@ import type { Channels } from '../core/raster';
 import { Raster } from '../core/raster';
 import type { RasterFormat } from '../core/pixel/format';
 import type { PsdWriteFormat, PsdWriteNotice } from '../io/psd';
+import type { PsdColorTransferResult, PsdColorTransferSpec } from '../io/psd/reader';
 
 /** A raster crossing the PSD worker boundary as independently transferable 256 px tiles. */
 export interface PsdWireRaster {
@@ -30,12 +31,14 @@ export interface PsdWorkerTiming {
 
 export type PsdWorkerRequest =
   | { readonly id: number; readonly type: 'read'; readonly bytes: Uint8Array }
+  | { readonly id: number; readonly type: 'color-transfer'; readonly spec: PsdColorTransferSpec }
   | { readonly id: number; readonly type: 'write'; readonly document: PsdWireValue;
       readonly options: { readonly format?: PsdWriteFormat | 'auto'; readonly bitsPerChannel?: 8 | 16;
         readonly iccProfile?: Uint8Array | null } };
 
 export type PsdWorkerResponse =
   | { readonly id: number; readonly ok: true; readonly type: 'read'; readonly result: PsdWireValue; readonly timing: PsdWorkerTiming }
+  | { readonly id: number; readonly ok: true; readonly type: 'color-transfer'; readonly result: PsdColorTransferResult }
   | { readonly id: number; readonly ok: true; readonly type: 'write'; readonly bytes: Uint8Array; readonly format: PsdWriteFormat;
       readonly bitsPerChannel: 8 | 16; readonly notices: readonly PsdWriteNotice[]; readonly timing: PsdWorkerTiming }
   | { readonly id: number; readonly ok: false; readonly error: string };

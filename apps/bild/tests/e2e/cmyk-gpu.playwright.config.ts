@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const port = Number(process.env.E2E_PORT ?? 6157);
+const port = Number(process.env.E2E_PORT ?? 6159);
 
 export default defineConfig({
   testDir: '.',
@@ -10,7 +10,7 @@ export default defineConfig({
   workers: 1,
   timeout: 90_000,
   reporter: 'line',
-  outputDir: '/tmp/pw-out-cmykgpu',
+  outputDir: '/tmp/pw-out-cmykcold',
   use: { baseURL: `http://127.0.0.1:${port}`, headless: true },
   projects: [
     { name: 'perf-gpu', use: { ...devices['Desktop Chrome'], launchOptions: { args: [

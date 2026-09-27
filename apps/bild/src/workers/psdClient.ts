@@ -1,7 +1,8 @@
 /** Product PSD I/O. ag-psd, channel conversion, tiling and PSD writing all run in one lazy worker. */
 import type { CanvasDocument } from '../core/document';
 import {
-  readPsdDocumentManaged, writePsdDocument, type PsdReadResult, type PsdWriteOptions, type PsdWriteResult,
+  buildPsdColorTransfer, readPsdDocumentManaged, writePsdDocument,
+  type PsdColorTransferSpec, type PsdReadResult, type PsdWriteOptions, type PsdWriteResult,
 } from '../io/psd';
 import {
   packPsdValue, psdWireMetrics, psdWireTransfers, unpackPsdValue,
@@ -68,9 +69,20 @@ export async function readPsdDocumentInBackground(bytes: Uint8Array): Promise<Ps
   if (!responsePromise) return readPsdDocumentManaged(bytes);
   const response = await responsePromise;
   if (response.type !== 'read') throw new Error('PSD worker returned the wrong result kind.');
-  const mainStart = performance.now(), result = unpackPsdValue<PsdReadResult>(response.result);
+  const mainStart = performance.now(), base = unpackPsdValue<PsdReadResult>(response.result);
   remember(started, performance.now() - mainStart, bytes.byteLength, response.timing);
-  return result;
+  const deferred = base.deferredColorTransfer;
+  if (!deferred) return base;
+  const profile = deferred.profile.slice();
+  const spec = { ...deferred, profile } as PsdColorTransferSpec;
+  const colorResponse = send({ id: nextId++, type: 'color-transfer', spec }, [profile.buffer]);
+  const colorTransferReady = colorResponse
+    ? colorResponse.then((value) => {
+      if (value.type !== 'color-transfer') throw new Error('PSD worker returned the wrong colour transfer kind.');
+      return value.result;
+    })
+    : buildPsdColorTransfer(deferred);
+  return { ...base, colorTransferReady };
 }
 
 export async function writePsdDocumentInBackground(document: CanvasDocument,

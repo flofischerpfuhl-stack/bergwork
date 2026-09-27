@@ -48,6 +48,27 @@ export interface PsdReadResult {
   readonly unsupported: readonly PsdUnsupportedFeature[];
   readonly parserWarnings: readonly string[];
   readonly source: PsdSourceInfo;
+  /** Product-worker reads resolve this after the first editable frame is available. */
+  readonly colorTransferReady?: Promise<PsdColorTransferResult>;
+  /** Internal worker hand-off; callers should use `colorTransferReady`. */
+  readonly deferredColorTransfer?: PsdColorTransferSpec;
+}
+
+export type PsdColorTransferSpec =
+  | { readonly kind: 'gray'; readonly key: string; readonly profile: Uint8Array; readonly bitsPerChannel: 8 | 16 }
+  | { readonly kind: 'cmyk'; readonly key: string; readonly profile: Uint8Array;
+      readonly intent: 'perceptual'; readonly blackPointCompensation: false };
+
+export type PsdColorTransfer =
+  | { readonly kind: 'gray'; readonly table: Float32Array }
+  | { readonly kind: 'cmyk'; readonly table: { readonly inverseSize: number; readonly inverse: Uint8Array;
+      readonly forwardSize: number; readonly forward: Uint8Array } };
+
+export interface PsdColorTransferResult {
+  readonly key: string;
+  readonly transfer: PsdColorTransfer;
+  readonly cached: boolean;
+  readonly buildMs: number;
 }
 
 export const PSD_BLEND_MODES: readonly AgBlendMode[] = [
@@ -1487,25 +1508,41 @@ function colorManagedComposite(raw: ReturnType<typeof readRawPsdComposite>, lcms
   return Raster.fromPixels(raw.width, raw.height, 4, raw.rgba);
 }
 
-function grayTransfer(raw: ReturnType<typeof readRawPsdComposite>, lcms: LittleCms | null): Float32Array | null {
-  if (!lcms || raw.colorMode !== 1 || (raw.bitsPerChannel !== 8 && raw.bitsPerChannel !== 16)) return null;
-  const profile = raw.iccProfile ?? lcms.createGrayProfile([0.3127, 0.329], 2.2);
-  const size = raw.bitsPerChannel === 16 ? 65_536 : 256;
-  const source = raw.bitsPerChannel === 16
+const colorTransferCache = new Map<string, PsdColorTransfer>();
+
+function colorTransferSpec(raw: ReturnType<typeof readRawPsdComposite>, lcms: LittleCms | null): PsdColorTransferSpec | null {
+  if (!lcms || (raw.bitsPerChannel !== 8 && raw.bitsPerChannel !== 16)) return null;
+  if (raw.colorMode === 1) {
+    const profile = raw.iccProfile ?? lcms.createGrayProfile([0.3127, 0.329], 2.2);
+    const profileKey = raw.iccProfile ? sha256Hex(raw.iccProfile) : 'fernwork-default-gray-d65-g22-v1';
+    return { kind: 'gray', key: `gray:${raw.bitsPerChannel}:${profileKey}`, profile,
+      bitsPerChannel: raw.bitsPerChannel };
+  }
+  if (raw.colorMode === 4) {
+    const profile = raw.iccProfile ?? lcms.createCmykProfile();
+    const profileKey = raw.iccProfile ? sha256Hex(raw.iccProfile) : 'fernwork-default-cmyk-v1';
+    return { kind: 'cmyk', key: `cmyk:perceptual:0:33:17:${profileKey}`, profile,
+      intent: 'perceptual', blackPointCompensation: false };
+  }
+  return null;
+}
+
+function buildGrayTransfer(spec: Extract<PsdColorTransferSpec, { kind: 'gray' }>, lcms: LittleCms): Float32Array {
+  const size = spec.bitsPerChannel === 16 ? 65_536 : 256;
+  const source = spec.bitsPerChannel === 16
     ? Uint16Array.from({ length: size }, (_, value) => value)
     : Uint8Array.from({ length: size }, (_, value) => value);
-  const converted = raw.bitsPerChannel === 16
-    ? lcms.transform16(profile, source as Uint16Array, 'gray')
-    : lcms.transform(profile, source, 'gray', 8);
-  const maximum = raw.bitsPerChannel === 16 ? 65_535 : 255;
+  const converted = spec.bitsPerChannel === 16
+    ? lcms.transform16(spec.profile, source as Uint16Array, 'gray')
+    : lcms.transform(spec.profile, source, 'gray', 8);
+  const maximum = spec.bitsPerChannel === 16 ? 65_535 : 255;
   const transfer = new Float32Array(size);
   for (let value = 0; value < size; value++) transfer[value] = converted[value * 4]! / maximum;
   return transfer;
 }
 
-function cmykTransfer(raw: ReturnType<typeof readRawPsdComposite>, lcms: LittleCms | null): ImportState['cmykTransfer'] {
-  if (!lcms || raw.colorMode !== 4 || (raw.bitsPerChannel !== 8 && raw.bitsPerChannel !== 16)) return null;
-  const profile = raw.iccProfile ?? lcms.createCmykProfile(), inverseSize = 33;
+function buildCmykTransfer(spec: Extract<PsdColorTransferSpec, { kind: 'cmyk' }>, lcms: LittleCms): NonNullable<ImportState['cmykTransfer']> {
+  const inverseSize = 33;
   const inverse = new Uint8Array(inverseSize ** 3 * 4);
   for (let b = 0; b < inverseSize; b++) for (let g = 0; g < inverseSize; g++) for (let r = 0; r < inverseSize; r++) {
     const at = ((b * inverseSize + g) * inverseSize + r) * 4;
@@ -1513,7 +1550,7 @@ function cmykTransfer(raw: ReturnType<typeof readRawPsdComposite>, lcms: LittleC
     inverse[at + 1] = Math.round(g * 255 / (inverseSize - 1));
     inverse[at + 2] = Math.round(b * 255 / (inverseSize - 1)); inverse[at + 3] = 255;
   }
-  lcms.transformRgbToCmykInPlace(profile, inverse, 'perceptual', false);
+  lcms.transformRgbToCmykInPlace(spec.profile, inverse, spec.intent, spec.blackPointCompensation);
   const forwardSize = 17, samples = forwardSize ** 4, source = new Uint8Array(samples * 4);
   for (let k = 0; k < forwardSize; k++) for (let y = 0; y < forwardSize; y++) {
     for (let m = 0; m < forwardSize; m++) for (let c = 0; c < forwardSize; c++) {
@@ -1522,7 +1559,40 @@ function cmykTransfer(raw: ReturnType<typeof readRawPsdComposite>, lcms: LittleC
       source[at + 2] = Math.round(y * 255 / (forwardSize - 1)); source[at + 3] = Math.round(k * 255 / (forwardSize - 1));
     }
   }
-  return { inverseSize, inverse, forwardSize, forward: lcms.transform(profile, source, 'cmyk', 8) };
+  return { inverseSize, inverse, forwardSize, forward: lcms.transform(spec.profile, source, 'cmyk', 8) };
+}
+
+function buildPsdColorTransferSync(spec: PsdColorTransferSpec, lcms: LittleCms): PsdColorTransferResult {
+  const started = performance.now(), found = colorTransferCache.get(spec.key);
+  if (found) {
+    colorTransferCache.delete(spec.key); colorTransferCache.set(spec.key, found);
+    return { key: spec.key, transfer: found, cached: true, buildMs: performance.now() - started };
+  }
+  const transfer: PsdColorTransfer = spec.kind === 'gray'
+    ? { kind: 'gray', table: buildGrayTransfer(spec, lcms) }
+    : { kind: 'cmyk', table: buildCmykTransfer(spec, lcms) };
+  if (colorTransferCache.size >= 16) colorTransferCache.delete(colorTransferCache.keys().next().value!);
+  colorTransferCache.set(spec.key, transfer);
+  return { key: spec.key, transfer, cached: false, buildMs: performance.now() - started };
+}
+
+/** Builds immutable profile tables in the calling worker and reuses them across documents. */
+export async function buildPsdColorTransfer(spec: PsdColorTransferSpec): Promise<PsdColorTransferResult> {
+  const { loadLittleCms } = await import('../../wasm/lcms');
+  return buildPsdColorTransferSync(spec, await loadLittleCms());
+}
+
+/** Installs a completed table without changing layer pixels or unrelated immutable layer values. */
+export function installPsdColorTransfer(document: CanvasDocument, result: PsdColorTransferResult): CanvasDocument {
+  const metadata = document as CanvasDocument & { readonly psdColorTransferKey?: string };
+  if (metadata.psdColorTransferKey !== result.key) return document;
+  const layers = document.layers.map((layer) => !layer.adjustment ? layer : { ...layer,
+    adjustment: Object.assign({}, layer.adjustment, result.transfer.kind === 'gray'
+      ? { psdGrayTransfer: result.transfer.table }
+      : { psdCmykTransfer: result.transfer.table }) } as Layer);
+  return Object.assign({}, document, result.transfer.kind === 'gray'
+    ? { layers, psdGrayTransfer: result.transfer.table, psdProgressivePreview: undefined }
+    : { layers, psdCmykTransfer: result.transfer.table, psdProgressivePreview: undefined });
 }
 
 function exactCmykConverter(raw: ReturnType<typeof readRawPsdComposite>, lcms: LittleCms | null): ImportState['cmykExact'] {
@@ -1560,13 +1630,14 @@ function readRawLayerPsd(bytes: Uint8Array, raw: ReturnType<typeof readRawPsdCom
   return psd;
 }
 
-function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): PsdReadResult {
+function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null, deferColorTransfer = false): PsdReadResult {
   ensureCanvasFreeImageData();
   const parserWarnings: string[] = [];
   let psd: Psd;
   let oracleOverride: Raster | null = null;
   let documentGrayTransfer: Float32Array | null = null;
   let documentCmykTransfer: ImportState['cmykTransfer'] = null;
+  let deferredColorTransfer: PsdColorTransferSpec | null = null;
   let documentCmykExact: ImportState['cmykExact'] = null;
   const originalMode = sourceColorMode(bytes);
   const cachelessFillLayerIds = new Set<number>();
@@ -1576,8 +1647,13 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
       const raw = readRawPsdComposite(bytes);
       psd = readRawLayerPsd(parserBytes, raw, lcms, parserWarnings);
       oracleOverride = colorManagedComposite(raw, lcms);
-      documentGrayTransfer = grayTransfer(raw, lcms);
-      documentCmykTransfer = cmykTransfer(raw, lcms);
+      const transferSpec = colorTransferSpec(raw, lcms);
+      if (transferSpec && deferColorTransfer) deferredColorTransfer = transferSpec;
+      else if (transferSpec && lcms) {
+        const built = buildPsdColorTransferSync(transferSpec, lcms).transfer;
+        if (built.kind === 'gray') documentGrayTransfer = built.table;
+        else documentCmykTransfer = built.table;
+      }
       documentCmykExact = exactCmykConverter(raw, lcms);
     } else {
       psd = readPsd(parserBytes, {
@@ -1647,10 +1723,16 @@ function readPsdDocumentInternal(bytes: Uint8Array, lcms: LittleCms | null): Psd
     id: 'psd-document', width: psd.width, height: psd.height, resolution: resolution(psd),
     globalLightAngle: psd.imageResources?.globalAngle ?? 120, layers: documentLayers, resources: state.resources, selection: null,
     psdOpaqueCanvas: opaqueCanvas, psdColorMode: colorMode,
+    ...(deferredColorTransfer ? { psdColorTransferKey: deferredColorTransfer.key } : {}),
+    ...(deferredColorTransfer && oracle ? { psdProgressivePreview: oracle.width <= 1_024 && oracle.height <= 1_024
+      ? oracle : oracle.makeReducedCopy(Math.max(2, Math.ceil(Math.max(oracle.width, oracle.height) / 1_024))) } : {}),
+    ...(documentGrayTransfer ? { psdGrayTransfer: documentGrayTransfer } : {}),
     ...(documentCmykTransfer ? { psdCmykTransfer: documentCmykTransfer } : {}),
   } as CanvasDocument & { readonly psdOpaqueCanvas: boolean; readonly psdColorMode: number;
+    readonly psdColorTransferKey?: string; readonly psdGrayTransfer?: Float32Array;
+    readonly psdProgressivePreview?: Raster;
     readonly psdCmykTransfer?: NonNullable<ImportState['cmykTransfer']> };
-  return { document, oracle, unsupported, parserWarnings,
+  return { document, oracle, unsupported, parserWarnings, ...(deferredColorTransfer ? { deferredColorTransfer } : {}),
     source: { width: psd.width, height: psd.height, bitsPerChannel, colorMode, isPsb: bytes[5] === 2 } };
 }
 
@@ -1660,9 +1742,10 @@ export function readPsdDocument(bytes: Uint8Array): PsdReadResult {
 }
 
 /** Product open path: apply embedded/default gray or CMYK profiles independently to every decoded layer. */
-export async function readPsdDocumentManaged(bytes: Uint8Array): Promise<PsdReadResult> {
+export async function readPsdDocumentManaged(bytes: Uint8Array,
+  options: { readonly deferColorTransfer?: boolean } = {}): Promise<PsdReadResult> {
   const mode = sourceColorMode(bytes);
   if (mode !== 1 && mode !== 4) return readPsdDocumentInternal(bytes, null);
   const { loadLittleCms } = await import('../../wasm/lcms');
-  return readPsdDocumentInternal(bytes, await loadLittleCms());
+  return readPsdDocumentInternal(bytes, await loadLittleCms(), options.deferColorTransfer === true);
 }

@@ -248,6 +248,9 @@ export interface GpuPerformanceCounters {
   readonly nativeCmykFrames: number;
   readonly nativeGrayFrames: number;
   readonly cpuDocumentFallbacks: number;
+  readonly progressiveColorFrames: number;
+  readonly progressivePreviewFrames: number;
+  readonly cmykTransferUploads: number;
 }
 
 /** GLSL for one adjustment kind plus how to fill its uniforms. Provided by the adjustment module. */
@@ -369,6 +372,27 @@ uniform sampler2D uSource;
 void main() { finalColor = texelFetch(uSource, ivec2(vPos), 0); }
 `;
 
+const PROGRESSIVE_PREVIEW_FRAGMENT = /* glsl */ `#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 vPos;
+out vec4 finalColor;
+uniform sampler2D uSource;
+uniform mat3 uViewToDoc;
+uniform vec2 uDocumentSize;
+uniform vec2 uSourceSize;
+uniform int uOpaque;
+void main() {
+  vec2 p=(uViewToDoc*vec3(vPos,1.0)).xy;
+  if(p.x<0.0||p.y<0.0||p.x>=uDocumentSize.x||p.y>=uDocumentSize.y) {
+    finalColor=uOpaque!=0?vec4(1.0):vec4(0.0); return;
+  }
+  ivec2 q=clamp(ivec2(floor(p/uDocumentSize*uSourceSize)),ivec2(0),ivec2(uSourceSize)-1);
+  finalColor=texelFetch(uSource,q,0);
+  if(uOpaque!=0) { finalColor.rgb+=vec3(1.0-finalColor.a); finalColor.a=1.0; }
+}
+`;
+
 const REPROJECT_FRAGMENT = /* glsl */ `#version 300 es
 precision highp float;
 in vec2 vPos;
@@ -433,6 +457,7 @@ export class GpuCompositor {
   private lutSources = new Map<string, TextureSource>();
   private readonly proofSources = new Map<Uint8Array, TextureSource>();
   private readonly proofWarnings = new WeakMap<CmykLut, Uint8Array>();
+  private readonly progressiveSources = new Map<Raster, TextureSource>();
   private readonly cmykTransferSources = new Map<PsdCmykTransfer,
     { readonly inverse: TextureSource; readonly forward: TextureSource }>();
   private activeCmykTransfer: PsdCmykTransfer | null = null;
@@ -453,6 +478,7 @@ export class GpuCompositor {
     residentLodBuilds: 0, residentLodSourcePixels: 0,
     viewFilterLayers: 0, viewFilterPasses: 0, cpuLiveFilterFallbacks: 0,
     nativeCmykFrames: 0, nativeGrayFrames: 0, cpuDocumentFallbacks: 0,
+    progressiveColorFrames: 0, progressivePreviewFrames: 0, cmykTransferUploads: 0,
   };
   /** Set per composite: RGBA8 layers get half-float textures (see PRECISION_SENSITIVE_MODES). */
   private preciseTextures = false;
@@ -513,6 +539,8 @@ export class GpuCompositor {
     for (const rt of this.inUse) this.destroyTarget(rt);
     for (const lut of this.lutSources.values()) lut.destroy();
     for (const source of this.proofSources.values()) source.destroy();
+    for (const source of this.progressiveSources.values()) this.destroySource(source);
+    this.progressiveSources.clear();
     for (const tip of this.tipSources.values()) tip.destroy();
     for (const sources of this.cmykTransferSources.values()) {
       this.destroySource(sources.inverse); this.destroySource(sources.forward);
@@ -859,7 +887,9 @@ export class GpuCompositor {
   private bindNativeCmyk(pass: Pass, textures: Record<string, TextureSource>, uniforms: Record<string, unknown>): void {
     if (!Object.hasOwn(pass.uniforms.uniforms, 'uNativeCmyk')) return;
     const transfer = this.activeCmykTransfer;
-    if (!transfer) {
+    const mode = uniforms.uMode;
+    const processBlend = mode === BLEND_INDEX.difference || mode === BLEND_INDEX.exclusion || mode === BLEND_INDEX.subtract;
+    if (!transfer || !processBlend) {
       uniforms.uNativeCmyk = 0; uniforms.uCmykInverseSize = 2; uniforms.uCmykForwardSize = 2;
       textures.uCmykInverse = this.white; textures.uCmykForward = this.white;
       return;
@@ -925,9 +955,39 @@ export class GpuCompositor {
       format: 'rgba8unorm', scaleMode: 'nearest', addressMode: 'clamp-to-edge' });
     this.uploadLookup(inverse, transfer.inverse, inverse.width, inverse.height);
     this.uploadLookup(forward, transfer.forward, forward.width, forward.height);
+    this.performanceCounterValue.cmykTransferUploads++;
     const sources = { inverse, forward };
     this.cmykTransferSources.set(transfer, sources);
     return sources;
+  }
+
+  private progressiveSource(raster: Raster): TextureSource {
+    const cached = this.progressiveSources.get(raster);
+    if (cached) return cached;
+    const source = new TextureSource({ width: raster.width, height: raster.height,
+      format: 'rgba8unorm', scaleMode: 'nearest', addressMode: 'clamp-to-edge' });
+    this.uploadWhole(source, raster.toPixels(), raster.width, raster.height, 4);
+    this.progressiveSources.set(raster, source);
+    return source;
+  }
+
+  /** Cheap saved-composite frame while exact gray/CMYK process tables finish in the PSD worker. */
+  private progressivePreview(document: CanvasDocument, preview: Raster, view: ViewSpec): RenderTexture {
+    this.performanceCounterValue.progressivePreviewFrames++;
+    const pass = this.pass('progressivePreview', PROGRESSIVE_PREVIEW_FRAGMENT, { uniforms: {
+      uViewToDoc: { value: new Float32Array(IDENTITY9), type: 'mat3x3<f32>' },
+      uDocumentSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+      uSourceSize: { value: new Float32Array(2), type: 'vec2<f32>' },
+      uOpaque: { value: 0, type: 'i32' },
+    }, textures: ['uSource'] });
+    const target = this.acquire(view.width, view.height);
+    this.run(pass, target, view.width, view.height, { uSource: this.progressiveSource(preview) }, {
+      uViewToDoc: mat3(view.viewToDoc), uDocumentSize: new Float32Array([document.width, document.height]),
+      uSourceSize: new Float32Array([preview.width, preview.height]),
+      uOpaque: (document as CanvasDocument & { readonly psdOpaqueCanvas?: boolean }).psdOpaqueCanvas ? 1 : 0,
+    });
+    this.performanceCounterValue.fullComposites++;
+    return target;
   }
 
   /** Four process components use RGBA storage, so K must never be treated as texture alpha. */
@@ -1565,10 +1625,11 @@ export class GpuCompositor {
   // MARK: Compositing
 
   private compositeVisualState(document: CanvasDocument, hooks: CompositeHooks): CompositeVisualState {
-    const psd = document as CanvasDocument & { readonly psdColorMode?: number; readonly psdCmykTransfer?: PsdCmykTransfer };
+    const psd = document as CanvasDocument & { readonly psdColorMode?: number; readonly psdGrayTransfer?: Float32Array;
+      readonly psdCmykTransfer?: PsdCmykTransfer; readonly psdProgressivePreview?: Raster };
     const documentValues: unknown[] = [document.width, document.height, document.layers, document.resources,
       document.globalLightAngle, (document as CanvasDocument & { readonly psdOpaqueCanvas?: boolean }).psdOpaqueCanvas,
-      psd.psdColorMode, psd.psdCmykTransfer];
+      psd.psdColorMode, psd.psdGrayTransfer, psd.psdCmykTransfer, psd.psdProgressivePreview];
     const layerValues: unknown[] = [];
     const addTransform = (transform: LayerTransform | null) => {
       if (!transform) { layerValues.push(null); return; }
@@ -1628,10 +1689,17 @@ export class GpuCompositor {
     // Live filters change a layer's content; effects are then computed from the filtered alpha (Photoshop order).
     this.performanceCounterValue.compositeRequests++;
     this.activeDocument = document;
-    const psd = document as CanvasDocument & { readonly psdColorMode?: number; readonly psdCmykTransfer?: PsdCmykTransfer };
+    const psd = document as CanvasDocument & { readonly psdColorMode?: number; readonly psdGrayTransfer?: Float32Array;
+      readonly psdCmykTransfer?: PsdCmykTransfer; readonly psdProgressivePreview?: Raster };
     this.activeCmykTransfer = psd.psdCmykTransfer ?? null;
-    if (psd.psdColorMode === 4 || this.activeCmykTransfer) this.performanceCounterValue.nativeCmykFrames++;
-    else if (psd.psdColorMode === 1) this.performanceCounterValue.nativeGrayFrames++;
+    if (this.activeCmykTransfer) this.performanceCounterValue.nativeCmykFrames++;
+    else if (psd.psdColorMode === 4) this.performanceCounterValue.progressiveColorFrames++;
+    else if (psd.psdColorMode === 1 && psd.psdGrayTransfer) this.performanceCounterValue.nativeGrayFrames++;
+    else if (psd.psdColorMode === 1) this.performanceCounterValue.progressiveColorFrames++;
+    if (psd.psdProgressivePreview && ((psd.psdColorMode === 4 && !this.activeCmykTransfer)
+      || (psd.psdColorMode === 1 && !psd.psdGrayTransfer))) {
+      return this.progressivePreview(document, psd.psdProgressivePreview, view);
+    }
     const activeBrush = hooks.brush ?? null;
     const cacheable = view.cache === true && !activeBrush;
     const visualState = cacheable ? this.compositeVisualState(document, hooks) : null;

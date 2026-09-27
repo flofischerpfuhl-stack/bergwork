@@ -368,6 +368,9 @@ describe('PSD colour modes and product wiring', () => {
     const imported = await readPsdDocumentManaged(bytes);
     expect(imported.document.layers[0]?.raster?.toPixels()).toEqual(expected);
     expect((imported.document as CanvasDocument & { readonly psdColorMode?: number }).psdColorMode).toBe(4);
+    const repeated = await readPsdDocumentManaged(bytes);
+    expect((repeated.document as CanvasDocument & { readonly psdCmykTransfer?: unknown }).psdCmykTransfer)
+      .toBe((imported.document as CanvasDocument & { readonly psdCmykTransfer?: unknown }).psdCmykTransfer);
   });
 
   it('A3/A7: preserves 16-bit Little CMS output for PSD layer channels', async () => {

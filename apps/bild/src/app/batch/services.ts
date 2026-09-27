@@ -9,6 +9,7 @@ import { makeTransform } from '../../core/geometry';
 import { uuid } from '../../core/ids';
 import { EditorSession } from '../../core/session';
 import { fileBaseName } from '../../io/imageImport';
+import { installPsdColorTransfer } from '../../io/psd';
 import { readArchive } from '../../io/project';
 import { decodeImageAssetInBackground } from '../../workers/imageDecodeClient';
 import { readPsdDocumentInBackground } from '../../workers/psdClient';
@@ -17,7 +18,11 @@ import type { EditorController } from '../../ui/controller';
 
 /** Decodes one queued file into a document of its own (the image as one layer, like opening it). */
 export async function openBatchFile(controller: EditorController, name: string, blob: Blob): Promise<CanvasDocument> {
-  if (/\.ps[db]$/i.test(name)) return (await readPsdDocumentInBackground(new Uint8Array(await blob.arrayBuffer()))).document;
+  if (/\.ps[db]$/i.test(name)) {
+    const imported = await readPsdDocumentInBackground(new Uint8Array(await blob.arrayBuffer()));
+    return imported.colorTransferReady
+      ? installPsdColorTransfer(imported.document, await imported.colorTransferReady) : imported.document;
+  }
   if (/\.(fwimg|zip)$/i.test(name)) {
     const limits = controller.limits;
     return (await readArchive(blob, (data) => decodeImageAssetInBackground(data, limits.maxPixels,

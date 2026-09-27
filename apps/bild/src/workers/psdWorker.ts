@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import { readPsdDocumentManaged, writePsdDocument, type PsdWriteOptions } from '../io/psd';
+import { buildPsdColorTransfer, readPsdDocumentManaged, writePsdDocument, type PsdWriteOptions } from '../io/psd';
 import {
   packPsdValue, psdWireMetrics, psdWireTransfers, unpackPsdValue,
   type PsdWorkerRequest, type PsdWorkerResponse,
@@ -18,13 +18,19 @@ async function run(request: PsdWorkerRequest): Promise<void> {
   try {
     if (request.type === 'read') {
       const codecStart = performance.now();
-      const result = await readPsdDocumentManaged(request.bytes);
+      const result = await readPsdDocumentManaged(request.bytes, { deferColorTransfer: true });
       const codecMs = performance.now() - codecStart, tileStart = performance.now();
       const packed = packPsdValue(result, false), tileMs = performance.now() - tileStart;
       const metrics = psdWireMetrics(packed);
       const response: PsdWorkerResponse = { id: request.id, ok: true, type: 'read', result: packed,
         timing: { operation: 'read', codecMs, tileMs, ...metrics } };
       scope.postMessage(response, psdWireTransfers(packed));
+      return;
+    }
+    if (request.type === 'color-transfer') {
+      const result = await buildPsdColorTransfer(request.spec);
+      // Keep the immutable cached arrays in this long-lived worker; structured clone copies only ~467 KiB.
+      scope.postMessage({ id: request.id, ok: true, type: 'color-transfer', result } satisfies PsdWorkerResponse);
       return;
     }
     const tileStart = performance.now();
