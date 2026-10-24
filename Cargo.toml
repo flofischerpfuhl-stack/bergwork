@@ -2,7 +2,7 @@
 resolver = "2"
 members = ["apps/pdf/src-tauri", "crates/*"]
 # berg:work Image keeps its own Cargo.lock until its Tauri shell joins this workspace.
-exclude = ["apps/bild/src-tauri"]
+exclude = ["apps/image/src-tauri"]
 
 [workspace.package]
 version = "0.0.0"

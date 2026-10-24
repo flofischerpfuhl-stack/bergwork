@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Materialises the editor builds that berg:work takes over from Fernwork (today the PDF editor; the image editor lives in apps/bild).
+// Materialises the editor builds that berg:work takes over from Fernwork (today the PDF editor; the image editor lives in apps/image).
 //
 // The editors are developed upstream; berg:work pins one upstream commit per editor in upstream.lock.json and
 // never edits the materialised files. See docs/ARCHITECTURE.md § Upstream editors.

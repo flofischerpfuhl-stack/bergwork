@@ -3,7 +3,7 @@
 Brand home for the desktop spin-offs of Fernwork:
 
 - **berg:work PDF**: the Fernwork PDF editor as its own app.
-- **berg:work Image**: the image editor, developed in this repository (`apps/bild/`).
+- **berg:work Image**: the image editor, developed in this repository (`apps/image/`).
 
 Sister brand of Himmel:CAD, with the same visual language; the faux-Cyrillic wordmark replaces
 Himmel:CAD's faux-Japanese Kamikaze face.
@@ -12,7 +12,7 @@ Himmel:CAD's faux-Japanese Kamikaze face.
 
 Monorepo; the architecture and the rules for the upstream editors are in `docs/ARCHITECTURE.md`.
 
-- `apps/bild/`: berg:work Image, the image editor's source with its own `package.json` (see `apps/bild/README.md`).
+- `apps/image/`: berg:work Image, the image editor's source with its own `package.json` (see `apps/image/README.md`).
 - `apps/pdf/`: berg:work PDF. It pins the Fernwork PDF editor build (`upstream.lock.json`,
   `npm run sync:install|check|status|update`).
 - `packages/ui/`: the design base (tokens, fonts, components) both apps are moving to; demo page included.
@@ -27,7 +27,7 @@ Monorepo; the architecture and the rules for the upstream editors are in `docs/A
 
 - The PDF editor works in Fernwork's browser build. Its Tauri app (`apps/pdf/`) builds for Linux (.deb, .rpm,
   AppImage); it has no native file access yet.
-- The image editor runs in the browser (`apps/bild`, `npm run dev`) and has an internal Tauri build (`apps/bild/src-tauri`).
+- The image editor runs in the browser (`apps/image`, `npm run dev`) and has an internal Tauri build (`apps/image/src-tauri`).
 - Neither app has a public build. Pricing and final first-release scope have not been announced.
 
 ## Licence

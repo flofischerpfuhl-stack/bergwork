@@ -5,7 +5,7 @@ come from the Himmel:CAD Builder UI lab (`HimmelCAD/apps/builder-ui-lab`, rules 
 `HimmelCAD/docs/ui-redesign/UI-REVIEW-REFERENCE.md`, cited below as §); colours and type are berg:work's.
 
 ```sh
-npm run dev --workspace @bergwork/ui        # demo page (Musterseite) on http://127.0.0.1:5230
+npm run dev --workspace @bergwork/ui        # demo page on http://127.0.0.1:5230
 npm run typecheck --workspace @bergwork/ui
 ```
 
@@ -51,4 +51,4 @@ light desktop does not flash dark; `useAppearance` keeps it in step afterwards.
 - Phone layout of the side panels (bottom sheets) and collapse stages of the status bar beyond hiding the
   middle rail.
 - A console for messages (the Builder reports in a console, not in toasts).
-- Wiring into the editors: berg:work Image (`apps/bild`) and the PDF editor still use their own UI.
+- Wiring into the editors: berg:work Image (`apps/image`) and the PDF editor still use their own UI.
