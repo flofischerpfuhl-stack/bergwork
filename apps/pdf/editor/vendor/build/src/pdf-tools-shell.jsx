@@ -39110,7 +39110,7 @@ function ToolOptionsBar({
         <>
           {tool === 'redact' && (
             <>
-              <span className="oo-pdf-context-note" role="note">Export permanently removes content inside marked areas. Red outlines show the characters it removes.</span>
+              <span className="oo-pdf-context-note" role="note">Export permanently removes content inside marked areas. Dark bars show the characters it removes.</span>
               <label className="oo-pdf-check inline"><input type="checkbox" checked={shapeStyle.redactSnapToText !== false} onChange={(event) => patchShape({ redactSnapToText: event.target.checked })} /> Snap to text lines</label>
               {onFindRedactions && <button type="button" onClick={() => setRedactSearchOpen(true)}><Icon name="search" /><span>Find and redact</span></button>}
               <RedactSearchDialog open={redactSearchOpen} onClose={() => setRedactSearchOpen(false)} onFind={onFindRedactions} onMark={onMarkRedactions} />

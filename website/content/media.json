@@ -29,11 +29,11 @@
     "section": "Redact content",
     "kind": "image",
     "file": "pdf-redaction.png",
-    "alt": "The Find and redact dialog listing 21 matches of a coordinate prefix on two pages, each with its context.",
-    "caption": "Find and redact: 21 matches on 2 pages, each shown in context before it is marked. Export removes the characters, not just covers them.",
+    "alt": "A contact line in which the surname is covered by dark bars in two places, with the hint “2 marks redacted on export · 12 characters”.",
+    "caption": "Find and redact: every match of “Keller” is listed in context, then marked. Export deletes the characters from the PDF, not just covers them.",
     "width": 2560,
     "height": 1600,
-    "what": "web app, smoke.pdf; Markup › Redact › Find and redact, query “5 401”."
+    "what": "web app, smoke.pdf; Markup › Redact › Find and redact “Keller”, mark both matches, close the dialog."
   },
   {
     "id": "pdf-ocr",
@@ -54,8 +54,8 @@
     "kind": "video",
     "file": "pdf-workflow.mp4",
     "poster": "pdf-workflow-poster.jpg",
-    "alt": "A recording of berg:work PDF: a heading is edited, 21 coordinates are found and marked for redaction, the pages are shown and the PDF is saved.",
-    "caption": "One take in the web app: edit a heading, find and mark 21 redactions, check the pages, save. Waiting times are cut; everything else runs at real speed.",
+    "alt": "A recording of berg:work PDF: a heading is edited, a surname is found and marked for redaction in two places, the pages are shown and the PDF is saved.",
+    "caption": "One take in the web app: edit a heading, find and redact a name, check the pages, save. Waiting times are cut; everything else runs at real speed.",
     "width": 1920,
     "height": 1080,
     "what": "website/media/capture-pdf.mjs, recorded headless at 1920 × 1080 with a drawn pointer."

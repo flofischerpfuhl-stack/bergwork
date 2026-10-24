@@ -70,9 +70,19 @@ const shot = (page, name) => page.screenshot({ path: path.join(out, `${name}.png
   await page.getByRole('menuitem', { name: /Redact/ }).or(page.getByRole('button', { name: /^Redact$/ })).first().click();
   await page.waitForTimeout(800);
   await page.getByRole('button', { name: 'Find and redact' }).click();
-  await page.getByRole('dialog', { name: 'Find and redact' }).getByRole('searchbox').fill('5 401');
+  await page.getByRole('dialog', { name: 'Find and redact' }).getByRole('searchbox').fill('Keller');
   await page.getByRole('button', { name: 'Find matches' }).click();
-  await page.waitForTimeout(2500);
+  await page.getByText(/matches on \d+ page/).waitFor({ timeout: 30000 });
+  await page.getByRole('button', { name: /^Mark \d+ for redaction/ }).click();
+  await page.waitForTimeout(1500);
+  await page.getByRole('dialog', { name: 'Find and redact' }).getByRole('button', { name: 'Close' }).click();
+  await page.waitForTimeout(800);
+  // The contact line in the middle of the window.
+  await page.mouse.move(640, 450);
+  await page.mouse.wheel(0, 420);
+  await page.waitForTimeout(600);
+  await page.mouse.move(1180, 420);
+  await page.waitForTimeout(1200);
   await shot(page, 'pdf-redaction');
   await context.close();
 }
@@ -146,7 +156,7 @@ if (!process.argv.includes('--no-video')) {
   await glide(page, page.getByRole('button', { name: 'Find and redact' }));
   await page.getByRole('button', { name: 'Find and redact' }).click();
   await page.waitForTimeout(500);
-  await page.getByRole('dialog', { name: 'Find and redact' }).getByRole('searchbox').pressSequentially('5 401', { delay: 110 });
+  await page.getByRole('dialog', { name: 'Find and redact' }).getByRole('searchbox').pressSequentially('Keller', { delay: 110 });
   await glide(page, page.getByRole('button', { name: 'Find matches' }));
   await page.getByRole('button', { name: 'Find matches' }).click();
   clock.start();

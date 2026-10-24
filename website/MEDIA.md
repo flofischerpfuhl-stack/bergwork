@@ -16,9 +16,9 @@ for f in website/src/media/*.png; do magick "$f" -quality 82 "${f%.png}.webp"; d
 | --- | --- | --- |
 | `pdf-text-edit.png` | Edit PDF, the heading selected, Font open in the properties panel. | `/pdf/` |
 | `pdf-page-organiser.png` | Pages drawer, four pages, page 2 selected (light appearance). | `/pdf/` |
-| `pdf-redaction.png` | Find and redact with 21 matches listed in context. | `/pdf/` |
+| `pdf-redaction.png` | Find and redact “Keller”: both matches marked, dark bars and the hint on the page. | `/pdf/` |
 | `pdf-ocr.png` | OCR done on the sample scan, recognised text in the panel (light appearance). | `/pdf/` |
-| `pdf-workflow.mp4` + `pdf-workflow-poster.jpg` | Edit a heading, find and mark redactions, pages, save. | `/`, `/pdf/` |
+| `pdf-workflow.mp4` + `pdf-workflow-poster.jpg` | Edit a heading, find and redact a name, pages, save. | `/`, `/pdf/` |
 | `image-background-removal.png` | The backpack cut out with its layer mask. | `/image/` |
 | `image-layers-masks.png` | Cut-out over the placed mine illustration, Curves above. | `/image/` |
 | `image-adjustment-layers.png` | The Curves dialog with an S-curve. | `/image/` |
