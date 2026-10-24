@@ -12,6 +12,7 @@ import { markUiRender } from './performance';
 
 const importExportDialog = () => import('./ExportDialog');
 const ExportDialog = lazy(() => importExportDialog().then((module) => ({ default: module.ExportDialog })));
+const CommandPalette = lazy(() => import('./CommandPalette').then((module) => ({ default: module.CommandPalette })));
 const ProofSetupDialog = lazy(() => import('./ProofSetupDialog').then((module) => ({ default: module.ProofSetupDialog })));
 const AboutDialog = lazy(() => import('./LicensesView').then((module) => ({ default: module.AboutDialog })));
 const LicensesView = lazy(() => import('./LicensesView').then((module) => ({ default: module.LicensesView })));
@@ -104,6 +105,9 @@ export function DialogHost({ controller }: { controller: EditorController }) {
     <Suspense fallback={<div className={styles.dialog} role="dialog"><p className={styles.dialogMessage}>{controller.t('Working…')}</p></div>}>
       <ExportDialog controller={controller} close={close} />
     </Suspense>
+  );
+  else if (dialog.kind === 'commandPalette') content = (
+    <Suspense fallback={null}><CommandPalette controller={controller} close={close} /></Suspense>
   );
   else if (dialog.kind === 'proofSetup') content = (
     <Suspense fallback={<div className={styles.dialog} role="dialog"><p className={styles.dialogMessage}>{controller.t('Working…')}</p></div>}>

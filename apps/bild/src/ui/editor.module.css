@@ -780,3 +780,13 @@
 @container (max-width: 200px) { .panelTab { font-size: 11.5px; } }
 /* The colour picker with the colour module's column (recent colours, swatches, readouts) beside the fields. */
 .floatingPanelWide { width: min(660px, var(--cmp-panel-room)); }
+
+/* Search Commands (CommandPaletteView.swift): a field over the ranked list, anchored near the top like a launcher. */
+.palette { width: min(560px, 100%); height: min(440px, 100%); padding: 0; gap: 0; align-self: start; margin-top: 8vh; overflow: hidden; }
+.paletteSearch {
+  flex: none; height: 48px; padding: 0 16px; border: 0; border-bottom: 1px solid var(--cmp-border); background: transparent;
+  color: var(--cmp-text); font: 500 16px/1 var(--cmp-font); outline: none;
+}
+.paletteList { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px; }
+.paletteChosen { background: var(--cmp-control-hover); }
+.paletteDisabled { color: var(--cmp-text-tertiary); }

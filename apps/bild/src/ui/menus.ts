@@ -244,6 +244,9 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
     {
       title: t('View'),
       items: [
+        { label: t('Search Commands…'), shortcut: 'mod+f', aliases: ['mod+k'], enabled: true,
+          run: () => controller.showDialog({ kind: 'commandPalette' }), testId: 'menu-search-commands' },
+        'separator',
         { label: t('Fit Canvas'), shortcut: 'mod+0', enabled: !!document, run: () => session.fit() },
         { label: t('Actual Pixels'), shortcut: 'mod+1', enabled: !!document, run: () => session.zoomTo(1) },
         { label: t('Zoom In'), shortcut: 'mod+=', enabled: !!document, run: () => session.zoomTo(session.viewport.zoom * 1.25) },

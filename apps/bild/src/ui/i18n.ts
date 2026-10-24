@@ -8,6 +8,7 @@ import { OBJSEL_DE } from '../app/objsel/strings';
 import { BRUSH_DE } from '../app/brush/strings';
 import { TEXT_PATH_DE } from '../app/text/strings';
 import { BATCH_DE } from '../app/batch/strings';
+import { PARITY_DE } from './parityStrings';
 
 export type Locale = 'de' | 'en';
 
@@ -18,6 +19,7 @@ const de: Record<string, string> = {
   ...BRUSH_DE,
   ...TEXT_PATH_DE,
   ...BATCH_DE,
+  ...PARITY_DE,
   'Layers': 'Ebenen', 'Blend': 'Modus', 'Opacity': 'Deckkraft', 'No layers yet': 'Noch keine Ebenen',
   'Create a canvas or import an image.': 'Erstelle eine Leinwand oder importiere ein Bild.',
   'Import an image or add a blank layer.': 'Importiere ein Bild oder füge eine leere Ebene hinzu.',

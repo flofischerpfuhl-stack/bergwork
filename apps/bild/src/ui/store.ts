@@ -14,6 +14,8 @@ export type Dialog =
   | { kind: 'canvasSize' }
   | { kind: 'imageSize' }
   | { kind: 'newCanvas' }
+  /** View > Search Commands… (Compositor 1.4.6). */
+  | { kind: 'commandPalette' }
   /** A dialog registered by a feature module under `controller.dialogs[name]`. */
   | { kind: 'custom'; name: string };
 
