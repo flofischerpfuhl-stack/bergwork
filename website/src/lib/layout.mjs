@@ -55,11 +55,11 @@ function header(current, home = false) {
   </header>`;
 }
 
-// Pinned on every page until a public build exists: the site describes products that are not released.
+// Pinned on every page until a desktop release exists: the web apps are public, the desktop apps are not.
 function previewNote() {
   return `<aside class="preview-note" aria-label="Preview notice">
     <strong>Preview</strong>
-    <span>In development. Nothing is released yet.</span>
+    <span>Web apps are public; no desktop release yet.</span>
     <a href="/download/">Release status <span aria-hidden="true">→</span></a>
   </aside>`;
 }
@@ -69,7 +69,7 @@ function footer() {
     <div class="footer-grid">
       <div>
         <a class="footer-wordmark" href="/">berg:work</a>
-        <p>PDF and image editing, being prepared as separate desktop applications.</p>
+        <p>PDF and image editing in the browser; desktop apps for Linux and Windows in development.</p>
       </div>
       <nav aria-label="Products">
         <h2>Products</h2>

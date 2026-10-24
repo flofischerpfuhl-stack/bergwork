@@ -49,11 +49,11 @@ export function render({ assets, releases }) {
     current: 'download',
     path: '/download/',
     title: 'Download status',
-    description: 'There are no public berg:work builds yet. Linux and Windows are planned first.',
-    body: `<header class="page-band page-band--red"><div><p class="kicker">Release status</p><h1>Downloads.</h1><p>There is no public download yet. There are no prices or announced release dates.</p></div></header>
+    description: 'Both berg:work editors run in the browser. There are no desktop downloads yet; Linux and Windows are planned first.',
+    body: `<header class="page-band page-band--red"><div><p class="kicker">Release status</p><h1>Downloads.</h1><p>Nothing to install: both editors run in the browser. There is no desktop download yet, and there are no prices or announced release dates.</p><p><a class="button button--cream" href="/app/pdf/">Open berg:work PDF</a> <a class="button button--cream" href="/app/image/">Open berg:work Image</a></p></div></header>
     <section class="download-section ruled-section" aria-label="Product release status">
-      ${pdfReleases.length ? releaseCard(config.products.pdf, pdfReleases, assets.markPdf) : noRelease(config.products.pdf, 'The first release is planned to put the working browser PDF editor in a desktop app with native file opening and saving. Its final scope is not fixed.', assets.markPdf)}
-      ${imageReleases.length ? releaseCard(config.products.image, imageReleases, assets.markImage) : noRelease(config.products.image, 'The first release is planned as a Linux and Windows desktop app based on the current internal build. Its final scope is not fixed.', assets.markImage)}
+      ${pdfReleases.length ? releaseCard(config.products.pdf, pdfReleases, assets.markPdf) : noRelease(config.products.pdf, 'An internal Linux desktop build wraps the web app with native file opening and saving. Its first-release scope is not fixed.', assets.markPdf)}
+      ${imageReleases.length ? releaseCard(config.products.image, imageReleases, assets.markImage) : noRelease(config.products.image, 'An internal desktop build exists for Linux and Windows. Its first-release scope is not fixed.', assets.markImage)}
     </section>`,
   };
 }

@@ -2,20 +2,28 @@
 
 Missing files are deliberately omitted from the built pages. The build prints one warning per missing slot.
 
-Screenshots are **2560 × 1600 PNG** captured from a **1280 × 800 window at 2×**. Videos are **1920 × 1080 H.264 MP4**, no more than **30 seconds** and **8 MB**, with a PNG poster frame. Use only redistributable/public fixtures and remove personal data, recent-file paths and private certificate names.
+Screenshots are **2560 × 1600 PNG** (plus a WebP next to it) of the published web apps at **1280 × 800 and 2×**. Videos are **1920 × 1080 H.264 MP4** of one continuous session, **about 30–40 seconds** and under **8 MB**, with a JPEG poster frame; waiting times (a model loading, a preview rendering) are cut, everything else keeps its real speed, and a drawn pointer shows where the mouse is. Only the site's own sample files are used: `apps/pdf/scripts/fixtures/smoke.pdf` and `scanned-page.pdf`, `website/media/backpack.png` (generated for the site) and the site's mine illustration.
 
-| File | Format and size | Exact shot and dataset | Page |
-| --- | --- | --- | --- |
-| `pdf-text-edit.png` | PNG, 2560×1600 | Public rich-text fixture; edit two words in a mixed-format heading with page, frame, Layers and text controls visible. | `/pdf/` |
-| `pdf-page-organiser.png` | PNG, 2560×1600 | Public multi-page fixture; show a live reorder insertion marker and one rotated thumbnail. | `/pdf/` |
-| `pdf-redaction.png` | PNG, 2560×1600 | Redaction E2E fixture; show a selected match, preview and other-match count before applying. | `/pdf/` |
-| `pdf-sign-ocr.png` | PNG, 2560×1600 | Public OCR scan fixture; select a recognised word and show a visible-signature preview without private certificate data. | `/pdf/` |
-| `pdf-workflow.mp4` + `pdf-workflow-poster.png` | H.264 MP4, 1920×1080, ≤30s, ≤8MB; PNG poster | Public fixtures; open, edit text, reorder, preview a redaction and export in one deliberate take. | `/pdf/` |
-| `image-layers-masks.png` | PNG, 2560×1600 | Synthetic campaign artwork; named group, pixel/vector/clipping masks, colour labels and layer search. | `/image/` |
-| `image-adjustment-layers.png` | PNG, 2560×1600 | Adjustment E2E scene; Curves, Basic adjustment and expanded sharpen/blur live-filter stack. | `/image/` |
-| `image-background-removal.png` | PNG, 2560×1600 | Redistributable product photo; local subject mask in Refine Edge with boundary visible. | `/image/` |
-| `image-large-document.png` | PNG, 2560×1600 | Documented 200 MP / 20-layer acceptance fixture in Linux Tauri; show dimensions, layer count and an adjustment. | `/image/` |
-| `image-workflow.mp4` + `image-workflow-poster.png` | H.264 MP4, 1920×1080, ≤30s, ≤8MB; PNG poster | Core-task campaign: place photo/SVG, styled text, four artboards, export WebP and PNG. | `/image/` |
+All media are produced by scripts, headless:
+
+```bash
+node website/media/capture-pdf.mjs https://bergwork.app/app/pdf/ website/src/media
+node website/media/capture-image.mjs https://bergwork.app/app/image/ website/src/media
+for f in website/src/media/*.png; do magick "$f" -quality 82 "${f%.png}.webp"; done
+```
+
+| File | Shot | Page |
+| --- | --- | --- |
+| `pdf-text-edit.png` | Edit PDF, the heading selected, Font open in the properties panel. | `/pdf/` |
+| `pdf-page-organiser.png` | Pages drawer, four pages, page 2 selected (light appearance). | `/pdf/` |
+| `pdf-redaction.png` | Find and redact with 21 matches listed in context. | `/pdf/` |
+| `pdf-ocr.png` | OCR done on the sample scan, recognised text in the panel (light appearance). | `/pdf/` |
+| `pdf-workflow.mp4` + `pdf-workflow-poster.jpg` | Edit a heading, find and mark redactions, pages, save. | `/`, `/pdf/` |
+| `image-background-removal.png` | The backpack cut out with its layer mask. | `/image/` |
+| `image-layers-masks.png` | Cut-out over the placed mine illustration, Curves above. | `/image/` |
+| `image-adjustment-layers.png` | The Curves dialog with an S-curve. | `/image/` |
+| `image-export.png` | Export As with preview and estimated size. | `/image/` |
+| `image-workflow.mp4` + `image-workflow-poster.jpg` | Import, remove background, place a backdrop, Curves, export. | `/`, `/image/` |
 
 ## Add a file
 

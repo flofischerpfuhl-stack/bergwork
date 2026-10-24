@@ -47,7 +47,8 @@ function pngSize(buffer) {
 }
 
 async function staticChecks() {
-  const htmlFiles = await filesBelow(dist, '.html');
+  // The web apps under /app/ are separate products with their own tests (apps/*); these gates cover the site's pages.
+  const htmlFiles = (await filesBelow(dist, '.html')).filter((file) => !path.relative(dist, file).startsWith(`app${path.sep}`));
   try {
     execFileSync('npx', ['-y', 'html-validate@9', ...htmlFiles], { cwd: root, stdio: 'pipe' });
     record('HTML validity', true, `${htmlFiles.length} pages`);

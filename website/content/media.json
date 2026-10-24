@@ -5,11 +5,11 @@
     "section": "Edit text in place",
     "kind": "image",
     "file": "pdf-text-edit.png",
-    "alt": "A PDF text frame being edited in place with its formatting controls visible.",
-    "caption": "Edit existing PDF text and preserve mixed formatting.",
+    "alt": "berg:work PDF with a heading selected in Edit PDF and its font, size and style in the properties panel.",
+    "caption": "Edit PDF: the heading is a live text object. Font, size, style and colour come from the PDF itself.",
     "width": 2560,
     "height": 1600,
-    "what": "Open the public rich-text fixture. Select a mixed-format heading, edit two words, and keep the page, text frame, Layers panel and text controls visible."
+    "what": "web app, apps/pdf/scripts/fixtures/smoke.pdf; Edit PDF, select the heading, open Font (website/media/capture-pdf.mjs)."
   },
   {
     "id": "pdf-page-organiser",
@@ -17,11 +17,11 @@
     "section": "Organise pages",
     "kind": "image",
     "file": "pdf-page-organiser.png",
-    "alt": "PDF page thumbnails being reordered in the page organiser.",
-    "caption": "Append, reorder, rotate and remove pages.",
+    "alt": "The page drawer with thumbnails of four pages, page 2 selected, and controls to move, duplicate, delete, rotate and export pages.",
+    "caption": "Pages: reorder by drag or Alt+arrow, duplicate, delete, rotate, add pages, export a page range.",
     "width": 2560,
     "height": 1600,
-    "what": "Use a public multi-page fixture. Show the page organiser during a reorder with the insertion marker visible and one rotated page thumbnail."
+    "what": "web app, light appearance, smoke.pdf; Pages drawer with page 2 selected."
   },
   {
     "id": "pdf-redaction",
@@ -29,23 +29,23 @@
     "section": "Redact content",
     "kind": "image",
     "file": "pdf-redaction.png",
-    "alt": "A PDF redaction preview showing which text will be removed.",
-    "caption": "Preview a redaction before applying it.",
+    "alt": "The Find and redact dialog listing 21 matches of a coordinate prefix on two pages, each with its context.",
+    "caption": "Find and redact: 21 matches on 2 pages, each shown in context before it is marked. Export removes the characters, not just covers them.",
     "width": 2560,
     "height": 1600,
-    "what": "Use the redaction E2E fixture. Show a selected match, the redaction preview and the count of other matches before applying."
+    "what": "web app, smoke.pdf; Markup › Redact › Find and redact, query “5 401”."
   },
   {
-    "id": "pdf-sign-ocr",
+    "id": "pdf-ocr",
     "page": "pdf",
-    "section": "Sign and recognise text",
+    "section": "Recognise text in scans",
     "kind": "image",
-    "file": "pdf-sign-ocr.png",
-    "alt": "A scanned PDF with recognised text selected and the signing panel open.",
-    "caption": "Select recognised text in scans and add a visible signature.",
+    "file": "pdf-ocr.png",
+    "alt": "A scanned, slightly rotated page next to the OCR panel reporting OCR done, with the recognised text and Make searchable.",
+    "caption": "OCR on an image-only scan: 2–4 seconds for this page in headless Chromium, on the device. Make searchable adds the text layer.",
     "width": 2560,
     "height": 1600,
-    "what": "Use the public OCR scan fixture. Select one recognised word and open the signing panel with a visible signature preview; do not expose private certificates."
+    "what": "web app, light appearance, apps/pdf/scripts/fixtures/scanned-page.pdf; Document tools › OCR › Run OCR."
   },
   {
     "id": "pdf-workflow",
@@ -53,12 +53,24 @@
     "section": "PDF workflow",
     "kind": "video",
     "file": "pdf-workflow.mp4",
-    "poster": "pdf-workflow-poster.png",
-    "alt": "A short PDF editing workflow.",
-    "caption": "Open, edit, organise, redact and export one PDF.",
+    "poster": "pdf-workflow-poster.jpg",
+    "alt": "A recording of berg:work PDF: a heading is edited, 21 coordinates are found and marked for redaction, the pages are shown and the PDF is saved.",
+    "caption": "One take in the web app: edit a heading, find and mark 21 redactions, check the pages, save. Waiting times are cut; everything else runs at real speed.",
     "width": 1920,
     "height": 1080,
-    "what": "Record one continuous workflow using public fixtures: open a PDF, edit text, reorder a page, preview a redaction and export. Keep pointer movement deliberate."
+    "what": "website/media/capture-pdf.mjs, recorded headless at 1920 × 1080 with a drawn pointer."
+  },
+  {
+    "id": "image-background-removal",
+    "page": "image",
+    "section": "Local background removal",
+    "kind": "image",
+    "file": "image-background-removal.png",
+    "alt": "A red backpack cut out on a transparent background; the layer shows its photo and the new layer mask.",
+    "caption": "Remove Background with the fast model (4.6 MB, runs in the browser): a layer mask, the pixels stay. Thin leather straps come out partly transparent with this model.",
+    "width": 2560,
+    "height": 1600,
+    "what": "web app, website/media/backpack.png (generated for these pictures); Filter › Remove Background › OK."
   },
   {
     "id": "image-layers-masks",
@@ -66,11 +78,11 @@
     "section": "Layers and masks",
     "kind": "image",
     "file": "image-layers-masks.png",
-    "alt": "The image editor showing grouped layers, masks and clipping masks.",
-    "caption": "Layers, groups, masks and clipping masks in the internal build.",
+    "alt": "The cut-out backpack over a mountain illustration, with a Curves adjustment layer above both in the layers panel.",
+    "caption": "Three layers: a placed illustration, the masked photo and a Curves adjustment above them.",
     "width": 2560,
     "height": 1600,
-    "what": "Open a synthetic campaign artwork. Show a named group, pixel mask, vector mask, clipping mask, colour labels and the layer-search field."
+    "what": "web app; after the background removal: File › Place Embedded (mine-dusk), Move Layer Down, Layer › New Adjustment Layer › Curves."
   },
   {
     "id": "image-adjustment-layers",
@@ -78,35 +90,23 @@
     "section": "Adjustment layers",
     "kind": "image",
     "file": "image-adjustment-layers.png",
-    "alt": "A curves adjustment layer and live filter stack in the image editor.",
-    "caption": "Adjustment layers and a reorderable live filter stack.",
+    "alt": "The Curves dialog of an adjustment layer with an S-shaped curve and live preview.",
+    "caption": "Curves as an adjustment layer: the photo stays untouched, the curve can be edited again any time.",
     "width": 2560,
     "height": 1600,
-    "what": "Use the adjustment E2E scene. Show Curves above a Basic adjustment and an expanded live-filter stack with at least sharpen and blur."
+    "what": "web app; the Curves adjustment layer with two points dragged into an S-curve."
   },
   {
-    "id": "image-background-removal",
+    "id": "image-export",
     "page": "image",
-    "section": "Local selection models",
+    "section": "Export",
     "kind": "image",
-    "file": "image-background-removal.png",
-    "alt": "A product photograph with a locally generated subject mask being refined.",
-    "caption": "Local subject selection followed by Refine Edge.",
+    "file": "image-export.png",
+    "alt": "The Export As dialog with a preview of the composition, PNG selected, bit depth, size, metadata and an estimated file size.",
+    "caption": "One export dialog for PNG, JPEG, WebP, AVIF and TIFF, with a preview and the expected file size before writing anything.",
     "width": 2560,
     "height": 1600,
-    "what": "Use a redistributable product photo. Show the generated subject mask in Refine Edge with the before/after boundary visible; name the active local model in the panel if the UI exposes it."
-  },
-  {
-    "id": "image-large-document",
-    "page": "image",
-    "section": "Large documents",
-    "kind": "image",
-    "file": "image-large-document.png",
-    "alt": "A 200-megapixel image document with 20 layers open in the Linux desktop build.",
-    "caption": "The measured 200-megapixel, 20-layer acceptance document.",
-    "width": 2560,
-    "height": 1600,
-    "what": "Run the documented 200 MP / 20-layer acceptance fixture in the Linux Tauri build. Show the full layer count, document dimensions and an active adjustment without terminal windows."
+    "what": "web app; File › Export As on the composition, after the preview rendered."
   },
   {
     "id": "image-workflow",
@@ -114,11 +114,11 @@
     "section": "Image workflow",
     "kind": "video",
     "file": "image-workflow.mp4",
-    "poster": "image-workflow-poster.png",
-    "alt": "A short image editing workflow in the internal desktop build.",
-    "caption": "Build and export a four-artboard campaign graphic.",
+    "poster": "image-workflow-poster.jpg",
+    "alt": "A recording of berg:work Image: a photo is imported, its background removed, an illustration placed behind it, Curves applied and the export dialog opened.",
+    "caption": "One take in the web app: import, remove the background, place a backdrop, adjust with Curves, export. Waiting times (the model, the preview) are cut; everything else runs at real speed.",
     "width": 1920,
     "height": 1080,
-    "what": "Record the core-task campaign workflow: place a photo and SVG, add styled text, create four artboards, then export WebP and PNG from the single export dialog."
+    "what": "website/media/capture-image.mjs, recorded headless at 1920 × 1080 with a drawn pointer."
   }
 ]

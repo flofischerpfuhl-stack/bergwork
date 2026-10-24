@@ -13,7 +13,7 @@ export function render() {
       <div class="section-heading section-heading--wide">
         <p class="kicker">Image editor</p>
         <h2 id="image-phases-title">Image editor.</h2>
-        <p>The product plan has five phases. Phase 2 features are implemented in the current internal build, but its PSD-fidelity target and some performance work remain open.</p>
+        <p>The product plan has five phases. Phase 2 features are implemented in the current internal build, but its PSD-fidelity target and some performance work remain open. The editor also runs as a web app at <a href="/app/image/">bergwork.app/app/image/</a>.</p>
       </div>
       <ol class="phase-list">
         <li><div>${status('Complete', 'works')}<span class="phase-index">00</span></div><div><h3>Set the direction</h3><p>Choose the product identity, measure the desktop apps, verify the text/vector engine, measure PSD fidelity and create tests for core workflows.</p></div></li>
@@ -28,18 +28,18 @@ export function render() {
       <div class="section-heading section-heading--wide">
         <p class="kicker">PDF editor</p>
         <h2 id="pdf-roadmap-title">PDF editor.</h2>
-        <p>The browser editor works. Its separate desktop application is planned.</p>
+        <p>The editor runs as a web app at bergwork.app. A desktop build for Linux exists internally.</p>
       </div>
       <div class="roadmap-columns">
-        <article>${status('Works', 'works')}<h3>Browser editor</h3><p>Text editing, page organisation, redaction, signing, OCR, forms, text markup, stamps, compression, security and metadata tools have implementation or test evidence.</p></article>
+        <article>${status('Works', 'works')}<h3>Web app</h3><p>Text editing, page organisation, redaction, signing, OCR, forms, text markup, stamps, compression, security and metadata tools have implementation or test evidence. Public at <a href="/app/pdf/">bergwork.app/app/pdf/</a>.</p></article>
         <article>${status('Open', 'progress')}<h3>Editor work</h3><p>Paragraph-wide reflow, automatic mobile editing zoom, default snapping, some responsive toolbar labels, nested-path rotation and large-file performance remain open.</p></article>
-        <article>${status('Planned', 'planned')}<h3>Desktop shell</h3><p>Wrap the working editor as a separate application and add native open/save integration. The shell has not started and its release scope is not fixed.</p></article>
+        <article>${status('Internal build', 'progress')}<h3>Desktop app</h3><p>A Tauri 2 app for Linux with its own window, native open and save, and files opened from the file manager. Windows packaging is configured but not built; the release scope is not fixed.</p></article>
       </div>
     </section>
 
     <section class="status-panel">
-      <div><p class="kicker">Release status</p><h2>No public builds.</h2></div>
-      <div><p>Linux and Windows are planned first. macOS is not planned for the first release because there is no test device.</p><a class="button button--red" href="/download/">Download status</a></div>
+      <div><p class="kicker">Release status</p><h2>Web apps only.</h2></div>
+      <div><p>Both editors are public as web apps; there are no desktop downloads yet. Linux and Windows are planned first. macOS is not planned for the first release because there is no test device.</p><a class="button button--red" href="/download/">Download status</a></div>
     </section>`,
   };
 }

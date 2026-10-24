@@ -6,8 +6,8 @@ export function render({ assets, media }) {
   return {
     current: 'image',
     path: '/image/',
-    title: 'Image editor — current internal build',
-    description: 'What works in the current internal berg:work Image build, the measured gaps, roadmap phases and explicit non-goals.',
+    title: 'Image editor — web app, features, measured limits',
+    description: 'berg:work Image in the browser: layers, masks, adjustment layers, background removal on the device and one export dialog, with screenshots and a recording from the published web app, measured limits and non-goals.',
     body: `<header class="page-band page-band--red">
       <div>
         ${productMark(assets.markImage, 'large')}
@@ -16,14 +16,14 @@ export function render({ assets, media }) {
         <p>Layered image editing that runs in the browser: files are opened and saved on your device, nothing is uploaded. The desktop app builds for Linux and Windows and is not publicly distributed yet.</p>
         <a class="button button--ink" href="/app/image/">Open berg:work Image in the browser</a>
       </div>
-      ${status('Internal build', 'progress')}
+      ${status('Web app: works', 'works')}
     </header>
 
     <section class="feature-section ruled-section" aria-labelledby="image-works-title">
       <div class="section-heading">
-        <p class="kicker">Works in the current internal build</p>
+        <p class="kicker">Works in the web app and the internal desktop build</p>
         <h2 id="image-works-title">Current build.</h2>
-        <p>These features have test evidence in the current internal build.</p>
+        <p>These features have test evidence. The pictures below are screenshots of the published web app: a generated product photo, its background removed on the device, the site's own mountain illustration placed behind it, Curves above both.</p>
       </div>
       <div class="feature-grid feature-grid--dense">
         <article><h3>Layers and masks</h3><p>Groups, pixel and vector masks, clipping masks, opacity and fill opacity, locks, colour labels and layer search.</p></article>
@@ -37,23 +37,24 @@ export function render({ assets, media }) {
         <article><h3>Import</h3><p>PNG, JPEG, TIFF, HEIC, WebP, AVIF and GIF. Tagged PNG, JPEG and TIFF files use ICC conversion.</p></article>
         <article><h3>Export</h3><p>One export flow for PNG, JPEG, WebP, AVIF and TIFF, including per-artboard or per-layer output at 1×, 2× and 3×.</p></article>
       </div>
+      ${renderMedia(media.get('image-background-removal'))}
       ${renderMedia(media.get('image-layers-masks'))}
       ${renderMedia(media.get('image-adjustment-layers'))}
-      ${renderMedia(media.get('image-background-removal'))}
+      ${renderMedia(media.get('image-export'))}
     </section>
 
     <section class="evidence-strip" aria-labelledby="measured-title">
       <div class="section-heading">
         <p class="kicker">Measured, with limits</p>
         <h2 id="measured-title">Measured limits.</h2>
-        <p>Large documents and local models work with the limits stated below.</p>
+        <p>Large documents and local models work with the limits stated below. The first two figures come from the internal desktop build; the last from the published web app (24 October 2026, laptop, empty cache).</p>
       </div>
       <div class="evidence-grid">
         <article><p class="big-number">200 MP</p><h3>20-layer workflow completed</h3><p>The save, reopen and pixel checks completed in Chromium and the Linux desktop build. Latency targets at this size remain open.</p></article>
         <article><p class="big-number">67%</p><h3>Native PSD fidelity</h3><p>PSD reading is partial and below the 90% Phase 2 target. PSD writing is planned for Phase 3.</p></article>
         <article><p class="big-number">14–22 s</p><h3>Object-selection time</h3><p>Local object selection works, but its current processing step is slow.</p></article>
+        <article><p class="big-number">0.9 MB</p><h3>Until the web app is ready</h3><p>Transferred on a first visit, usable after 1–2 seconds; a 1536 × 1024 photo was open as a layer about 2 seconds later.</p></article>
       </div>
-      ${renderMedia(media.get('image-large-document'))}
     </section>
 
     <section class="phase-summary ruled-section" aria-labelledby="image-roadmap-title">
