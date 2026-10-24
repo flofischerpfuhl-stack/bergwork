@@ -1,0 +1,65 @@
+/* Brush preset picker and Brush Settings panel (PRODUCT-PLAN 6.3). Built from the editor's --cmp-* tokens: capsule
+   controls, the raised popover of the shape/text options, the swatch panel's footer. */
+
+.presetButton {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 6px 0 3px; border-radius: 8px;
+  border: 1px solid var(--cmp-border); background: var(--cmp-panel-2); color: var(--cmp-text); font: 11px/1 var(--cmp-font);
+  font-variant-numeric: tabular-nums;
+}
+.presetButton:hover { background: var(--cmp-control-hover); }
+.presetButtonOpen { background: var(--cmp-control-active); }
+.presetButton canvas { width: 20px; height: 20px; display: block; }
+.presetButtonSize { min-width: 18px; text-align: right; color: var(--cmp-text-secondary); }
+
+.popover {
+  position: fixed; z-index: 56; display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 6px; white-space: normal; overflow-y: auto;
+  border-radius: 12px; background: var(--cmp-panel); border: 1px solid var(--cmp-border); box-shadow: var(--cmp-shadow);
+  color: var(--cmp-text); font: 12px/1.3 var(--cmp-font); width: 372px;
+}
+.popoverHeader { display: flex; align-items: center; gap: 8px; }
+.popoverTitle { margin: 0; font: 600 12px/1.2 var(--cmp-font); flex: 1 1 auto; }
+.search {
+  display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--cmp-border);
+  background: var(--cmp-panel-3); color: var(--cmp-text-secondary);
+}
+.search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--cmp-text); font: 12px/1 var(--cmp-font); outline: none; }
+.search:focus-within { border-color: var(--cmp-accent); box-shadow: 0 0 0 2px var(--cmp-accent-soft); }
+
+.grid {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; overflow-y: auto; min-height: 0; max-height: 330px;
+  padding: 2px; margin: 0 -2px;
+}
+.tile {
+  display: flex; flex-direction: column; gap: 3px; padding: 5px 5px 4px; border-radius: 8px; border: 1px solid transparent;
+  background: var(--cmp-control); color: var(--cmp-text); text-align: left; min-width: 0; cursor: default;
+}
+.tile:hover { background: var(--cmp-control-hover); }
+.tileOn, .tileOn:hover { border-color: var(--cmp-accent); background: var(--cmp-accent-soft); }
+.tileArt { display: flex; align-items: center; gap: 4px; height: 34px; }
+.tileArt canvas { display: block; flex: none; }
+.tileTip { width: 30px; height: 30px; }
+.tileStroke { width: 70px; height: 34px; min-width: 0; flex: 1 1 auto !important; object-fit: contain; }
+.tileName { display: flex; align-items: baseline; gap: 4px; font-size: 11px; line-height: 1.2; min-width: 0; }
+.tileName span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tileSize { flex: none; color: var(--cmp-text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; }
+.renameInput {
+  width: 100%; height: 18px; padding: 0 4px; border-radius: 4px; border: 1px solid var(--cmp-accent); background: var(--cmp-surface);
+  color: var(--cmp-text); font: 11px/1 var(--cmp-font); outline: none;
+}
+.empty { padding: 18px 4px; text-align: center; color: var(--cmp-text-tertiary); font-size: 11px; grid-column: 1 / -1; }
+.status { margin: 0; font-size: 11px; line-height: 1.35; color: var(--cmp-text-secondary); }
+.statusError { color: var(--cmp-danger); }
+.footer { display: flex; align-items: center; margin: 0 -6px; border-top: 1px solid var(--cmp-border); color: var(--cmp-text-secondary); }
+.footer button { padding: 8px; }
+
+/* Brush Settings panel */
+.settings { width: min(380px, calc(100% - 16px)); }
+.section { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--cmp-border); }
+.section:first-of-type { border-top: 0; padding-top: 0; }
+.sectionTitle { margin: 0; font: 600 11px/1.2 var(--cmp-font); color: var(--cmp-text-secondary); }
+.settings :global(input[type='range']) { flex: 1 1 90px; min-width: 60px; width: auto; }
+.settings .label { width: 112px; }
+.settings .field { width: 76px; flex: none; display: flex; }
+.preview {
+  width: 100%; height: 56px; display: block; border-radius: 6px; background: var(--cmp-surface); border: 1px solid var(--cmp-border);
+}

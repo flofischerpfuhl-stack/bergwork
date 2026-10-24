@@ -1,0 +1,74 @@
+{
+  "commands": [
+    {
+      "command": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "exit_code": 0,
+      "log": "/workspace/artifacts/gate-logs/claude.gate-0.log",
+      "sha256": "887fd0cfd5ee84b198f9fe786d3368e8ba1338f8d13c7897af03276625e063a3"
+    },
+    {
+      "command": [
+        "npm",
+        "run",
+        "build"
+      ],
+      "exit_code": 0,
+      "log": "/workspace/artifacts/gate-logs/claude.gate-1.log",
+      "sha256": "71b09baf216bac6e372595f7ecd8bd8da236b30b9589fef465aea3951a7e60f3"
+    },
+    {
+      "command": [
+        "npm",
+        "run",
+        "test:unit"
+      ],
+      "exit_code": 0,
+      "log": "/workspace/artifacts/gate-logs/claude.gate-2.log",
+      "sha256": "0c58e840f5b8d1d1a5bd2988d1c86a3a0594fc3ac40b19e3513e023ac946b010"
+    },
+    {
+      "command": [
+        "npm",
+        "run",
+        "test:e2e"
+      ],
+      "exit_code": 0,
+      "log": "/workspace/artifacts/gate-logs/claude.gate-3.log",
+      "sha256": "5457ed04822cd673ebfa0230e3866c46b0f75c5f68bd22a1272072ebff47a6b3"
+    },
+    {
+      "command": [
+        "npm",
+        "run",
+        "test:perf"
+      ],
+      "exit_code": 0,
+      "log": "/workspace/artifacts/gate-logs/claude.gate-4.log",
+      "sha256": "66d21ce9e946bc07ca924df7c640abe9f867ca105e1ba070607947c3ebf642fb"
+    },
+    {
+      "command": [
+        "node",
+        "/workspace/node_modules/@playwright/test/cli.js",
+        "test",
+        "--config",
+        "/acceptance/playwright.config.cjs"
+      ],
+      "exit_code": 0,
+      "log": "/workspace/artifacts/gate-logs/claude.gate-5.log",
+      "sha256": "35145e3ed93d6dc5deeebb4d79f9fe5bbcae210c70add998428eb5349edc699d"
+    }
+  ],
+  "contract_unchanged": true,
+  "screenshots": [
+    "artifacts/screenshots/common-desktop-1440x900.png",
+    "artifacts/screenshots/common-phone-390x844.png",
+    "artifacts/screenshots/common-tablet-768x1024.png",
+    "artifacts/screenshots/common-phone-landscape-844x390.png"
+  ],
+  "passed": true
+}

@@ -1,0 +1,55 @@
+/* Phase-2 adjustment panels, live filter rows and the brush mode bar. Colours and sizes come from editor.module.css tokens. */
+
+/* Basic: Lightroom-style groups */
+.group { display: flex; flex-direction: column; gap: 6px; padding-top: 2px; }
+.group + .group { border-top: 1px solid var(--cmp-hairline); padding-top: 10px; }
+.groupHeader { display: flex; align-items: center; justify-content: space-between; min-height: 18px; }
+.groupTitle { margin: 0; font: 600 11px/1.2 var(--cmp-font); color: var(--cmp-text-secondary); letter-spacing: 0.02em; }
+.groupReset { border: 0; background: none; padding: 1px 4px; border-radius: 4px; color: var(--cmp-text-secondary); font: 11px/1.2 var(--cmp-font); cursor: pointer; }
+.groupReset:hover { color: var(--cmp-text); background: var(--cmp-control-hover); }
+
+/* White-balance sliders show their colour direction under the track (Lightroom). */
+.temperatureTrack, .tintTrack { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
+.temperatureTrack::after, .tintTrack::after {
+  content: ''; position: absolute; left: 8px; right: 8px; bottom: -2px; height: 3px; border-radius: 2px; pointer-events: none;
+}
+.temperatureTrack::after { background: linear-gradient(to right, #3f7fd9, #cfcfcf 50%, #e2b23b); }
+.tintTrack::after { background: linear-gradient(to right, #3fae4f, #cfcfcf 50%, #c74fc4); }
+
+/* Colour panel tabs */
+.tabs { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--cmp-control); }
+.tab {
+  flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 26px; padding: 0 8px;
+  border: 0; border-radius: 7px; background: transparent; color: var(--cmp-text-secondary); font: 500 12px/1 var(--cmp-font);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+}
+.tab:hover { color: var(--cmp-text); }
+.tabOn { background: var(--cmp-control-active); color: var(--cmp-text); box-shadow: var(--cmp-raised-shadow); }
+.tabDot { width: 6px; height: 6px; border-radius: 50%; flex: none; border: 1px solid var(--cmp-text-tertiary); }
+.tabDotOn { background: var(--cmp-accent); border-color: var(--cmp-accent); }
+
+/* Color Lookup */
+.lutBox { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--cmp-control); min-width: 0; }
+.lutName { flex: 1 1 auto; min-width: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Channel Mixer, Threshold */
+.total { font-size: 12px; font-variant-numeric: tabular-nums; }
+.totalWarning { color: var(--cmp-warning); }
+.thresholdMarker { position: absolute; top: 0; height: 130px; width: 0; border-left: 1px solid var(--cmp-accent); pointer-events: none; }
+
+/* Live filter rows in the Layers panel (styled like the effect rows) */
+.filterRow {
+  display: flex; align-items: center; height: 24px; margin-bottom: 2px; padding-right: 8px; border-bottom: 1px solid var(--cmp-hairline);
+  font-size: 11px; color: var(--cmp-text-secondary); cursor: default; user-select: none; touch-action: none;
+}
+.filterRow .filterEye { height: 22px; }
+.filterHeader { color: var(--cmp-text); }
+.filterRowOff .filterName { opacity: 0.5; text-decoration: line-through; }
+.filterRowDragging { opacity: 0.5; }
+.filterDropAbove { box-shadow: inset 0 2px 0 var(--cmp-accent); }
+.filterDropBelow { box-shadow: inset 0 -2px 0 var(--cmp-accent); }
+.filterName { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.filterIcon { flex: none; display: grid; place-items: center; width: 18px; margin-right: 4px; color: var(--cmp-text-secondary); }
+.filterDisclosure { flex: none; width: 16px; height: 22px; border: 0; background: transparent; color: var(--cmp-text-secondary); padding: 0; display: grid; place-items: center; }
+.filterEdit { flex: none; border: 0; background: transparent; color: var(--cmp-text-tertiary); padding: 0 2px; font-size: 11px; }
+.filterRow:hover .filterEdit { color: var(--cmp-text-secondary); }

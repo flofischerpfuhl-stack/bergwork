@@ -1,0 +1,112 @@
+{
+  "browser": "chromium",
+  "recordedAt": "2026-09-23T23:18:32.939Z",
+  "sheet": {
+    "sha256": "1349069eba083c0c4618488b7dd7ee560ed1253e4948988cfc5818acc5e3977e",
+    "width": 960,
+    "height": 680,
+    "pngSha256": "574d02814ec4fd4b9d6bc500d4c254e752af50fd685de587b8c7159c5fd73dae",
+    "unresolvedCodepoints": []
+  },
+  "performance": {
+    "runs": 50,
+    "characterCount": 500,
+    "samplesMs": [
+      6.899999998509884,
+      7.300000000745058,
+      6.699999999254942,
+      6.400000002235174,
+      5.5,
+      7.399999998509884,
+      8.100000001490116,
+      5.399999998509884,
+      5.600000001490116,
+      5.699999999254942,
+      5.399999998509884,
+      6,
+      5.099999997764826,
+      5.400000002235174,
+      5.299999997019768,
+      5.400000002235174,
+      5,
+      5,
+      6.300000000745058,
+      6.599999997764826,
+      7.5,
+      5.600000001490116,
+      5.199999999254942,
+      4.899999998509884,
+      8,
+      4.900000002235174,
+      5,
+      5.199999999254942,
+      5.399999998509884,
+      5.100000001490116,
+      5,
+      5.100000001490116,
+      5,
+      5.399999998509884,
+      5.100000001490116,
+      5.199999999254942,
+      6.5,
+      9.099999997764826,
+      5.300000000745058,
+      6.699999999254942,
+      7.600000001490116,
+      8.899999998509884,
+      9.400000002235174,
+      8.300000000745058,
+      5.299999997019768,
+      5.100000001490116,
+      5.699999999254942,
+      5.5,
+      5.5,
+      5.300000000745058
+    ],
+    "medianMs": 5.5,
+    "p95Ms": 8.899999998509884,
+    "maxMs": 9.400000002235174
+  },
+  "memory": {
+    "wasmHeapBytes": 134217728,
+    "registeredFontBytes": 3535716,
+    "registeredFontCount": 3
+  },
+  "worker": {
+    "sha256": "96042aa8f83ff9a5bb8328489cb59fbba619f69344ef7e9713f18a6acdb79d9f",
+    "matchesMainThread": true
+  },
+  "lazyLoad": {
+    "loadedBeforeImport": false,
+    "resources": [
+      {
+        "name": "http://127.0.0.1:5199/node_modules/.vite/deps/canvaskit-wasm.js?v=b735e7ab",
+        "transferSize": 550686,
+        "encodedBodySize": 550386,
+        "decodedBodySize": 550386
+      },
+      {
+        "name": "http://127.0.0.1:5199/node_modules/canvaskit-wasm/bin/canvaskit.wasm?import&url",
+        "transferSize": 755,
+        "encodedBodySize": 455,
+        "decodedBodySize": 455
+      },
+      {
+        "name": "http://127.0.0.1:5199/node_modules/canvaskit-wasm/bin/canvaskit.wasm",
+        "transferSize": 7317645,
+        "encodedBodySize": 7317345,
+        "decodedBodySize": 7317345
+      }
+    ],
+    "payload": {
+      "standard": {
+        "rawBytes": 7438222,
+        "gzipBytes": 2998127
+      },
+      "full": {
+        "rawBytes": 8366618,
+        "gzipBytes": 3352465
+      }
+    }
+  }
+}

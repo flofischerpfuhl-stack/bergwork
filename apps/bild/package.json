@@ -1,0 +1,48 @@
+{
+  "name": "fernwork-compositor-port",
+  "version": "0.0.0",
+  "private": true,
+  "license": "BUSL-1.1",
+  "type": "module",
+  "engines": { "node": ">=22.18.0 <23" },
+  "scripts": {
+    "dev": "vite",
+    "tauri:dev": "node scripts/tauri.mjs dev",
+    "tauri:build": "node scripts/tauri.mjs build",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build",
+    "notices": "node scripts/notices.mjs",
+    "check:licenses": "node scripts/check-licenses.mjs",
+    "test:unit": "vitest run tests/unit",
+    "psd:fidelity": "vitest run --config tests/psd/vitest.config.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:smoke": "node scripts/e2e-select.mjs --smoke",
+    "test:e2e:changed": "node scripts/e2e-select.mjs --changed",
+    "test:e2e:area": "node scripts/e2e-select.mjs",
+    "test:e2e:gate": "node scripts/e2e-select.mjs --gate",
+    "test:perf": "vite build && node scripts/check-bundle-budget.mjs && vitest run tests/performance"
+  },
+  "dependencies": {
+    "canvaskit-wasm": "0.42.0",
+    "ag-psd": "31.0.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "pixi.js": "8.21.0",
+    "zustand": "5.0.15",
+    "immer": "11.1.18",
+    "idb": "8.0.3",
+    "fflate": "0.8.3",
+    "onnxruntime-web": "1.30.0"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vite": "8.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/node": "22.20.1",
+    "vitest": "5.0.1",
+    "@playwright/test": "1.63.0",
+    "@tauri-apps/cli": "2.11.5"
+  }
+}

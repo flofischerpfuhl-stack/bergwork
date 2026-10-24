@@ -1,0 +1,91 @@
+/* Colour panel, recent colours and swatches (PRODUCT-PLAN 6.1/6.4). Uses the editor's --cmp-* variables. */
+
+.panel { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.section { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-bottom: 1px solid var(--cmp-border); }
+.sectionHeader { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 22px; }
+/* Keeps its natural width; the scope switch wraps below it in a narrow panel instead of overlapping. */
+.sectionTitle { font: 600 11px/1 var(--cmp-font); color: var(--cmp-text-secondary); text-transform: none; flex: 1 0 auto; }
+
+.chipsRow { display: flex; align-items: center; gap: 8px; }
+.chips { position: relative; width: 46px; height: 46px; flex: none; }
+.chip {
+  position: absolute; width: 30px; height: 30px; padding: 0; border-radius: 4px; border: 1px solid rgba(0, 0, 0, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.85); cursor: pointer;
+}
+.chipFront { left: 0; top: 0; z-index: 1; }
+.chipBack { left: 15px; top: 15px; }
+.chipTarget { outline: 2px solid var(--cmp-accent); outline-offset: 1px; }
+.miniButton {
+  width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--cmp-text-secondary);
+  display: grid; place-items: center; flex: none;
+}
+.miniButton:hover:not(:disabled) { background: var(--cmp-control-hover); color: var(--cmp-text); }
+.miniButton:disabled { color: var(--cmp-text-tertiary); }
+.miniButtonOn { background: var(--cmp-accent); color: var(--cmp-accent-contrast); }
+
+.sliderRow { display: grid; grid-template-columns: 14px minmax(0, 1fr) 44px; align-items: center; gap: 6px; }
+.sliderLabel { font: 600 11px/1 var(--cmp-font); color: var(--cmp-text-secondary); text-align: center; }
+.range {
+  -webkit-appearance: none; appearance: none; width: 100%; min-width: 0; height: 12px; margin: 0; border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.55); outline: none; cursor: pointer; background-color: transparent;
+}
+.range:focus-visible { box-shadow: 0 0 0 2px var(--cmp-accent-soft); }
+.range::-webkit-slider-runnable-track { height: 10px; background: transparent; border: 0; }
+.range::-moz-range-track { height: 10px; background: transparent; border: 0; }
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 8px; height: 14px; margin-top: -2px; border-radius: 3px; background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.75); box-shadow: 0 0 1px rgba(0, 0, 0, 0.6);
+}
+.range::-moz-range-thumb { width: 6px; height: 12px; border-radius: 3px; background: #fff; border: 1px solid rgba(0, 0, 0, 0.75); }
+.range:disabled { opacity: 0.4; cursor: default; }
+.number {
+  width: 44px; height: 22px; padding: 0 5px; border-radius: 6px; border: 1px solid var(--cmp-border); background: var(--cmp-surface);
+  color: var(--cmp-text); font: 12px/1 var(--cmp-font); text-align: right; font-variant-numeric: tabular-nums;
+}
+.number:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent); }
+.number:disabled { color: var(--cmp-text-tertiary); }
+.hexRow { display: flex; align-items: center; gap: 6px; }
+.hexInput {
+  width: 78px; height: 22px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--cmp-border); background: var(--cmp-surface);
+  color: var(--cmp-text); font: 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-transform: uppercase;
+}
+.hexInput:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent); }
+.readout { display: grid; grid-template-columns: 38px repeat(4, minmax(0, 1fr)); align-items: baseline; gap: 4px; font-size: 11px; }
+.readoutLabel { color: var(--cmp-text-secondary); font-weight: 600; }
+.readoutValue { font-variant-numeric: tabular-nums; color: var(--cmp-text); }
+.note { margin: 0; font-size: 10.5px; line-height: 1.35; color: var(--cmp-text-tertiary); }
+
+.grid { display: flex; flex-wrap: wrap; gap: 3px; }
+.swatch {
+  width: 17px; height: 17px; padding: 0; border-radius: 3px; border: 1px solid rgba(0, 0, 0, 0.55); flex: none; cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.swatch:hover { transform: scale(1.12); }
+.swatch:focus-visible { outline: 2px solid var(--cmp-accent); outline-offset: 1px; }
+.swatchSelected { outline: 2px solid var(--cmp-accent); outline-offset: 1px; }
+.empty { font-size: 11px; color: var(--cmp-text-tertiary); }
+
+.group { display: flex; flex-direction: column; gap: 5px; }
+.groupHeader {
+  display: flex; align-items: center; gap: 4px; border: 0; background: none; padding: 2px 0; color: var(--cmp-text);
+  font: 600 11px/1.2 var(--cmp-font); text-align: left; cursor: pointer; min-width: 0;
+}
+.groupHeader span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.groupSelected { color: var(--cmp-accent); }
+.groupCount { color: var(--cmp-text-tertiary); font-weight: 400; margin-left: auto; font-variant-numeric: tabular-nums; }
+.renameRow { display: flex; align-items: center; gap: 6px; }
+.renameRow input {
+  flex: 1; min-width: 0; height: 22px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--cmp-accent); background: var(--cmp-surface);
+  color: var(--cmp-text); font: 12px/1 var(--cmp-font);
+}
+/* Pinned to the bottom of the panel like the Layers footer, also while the swatches scroll. */
+.footer {
+  display: flex; align-items: center; gap: 2px; padding: 4px 8px; border-top: 1px solid var(--cmp-border); color: var(--cmp-text-secondary);
+  margin: auto -12px -12px; position: sticky; bottom: 0; background: var(--cmp-bg); z-index: 1;
+}
+.status { font-size: 11px; color: var(--cmp-text-secondary); margin: 0; }
+
+/* Inside the colour picker: a fourth column beside the fields, no taller than the colour field. */
+.pickerExtras { display: flex; flex-direction: column; gap: 6px; width: 196px; max-height: 222px; overflow-y: auto; flex: none; }
+.pickerRow { display: flex; align-items: center; gap: 6px; }
+.pickerExtras .sectionTitle { flex: none; }

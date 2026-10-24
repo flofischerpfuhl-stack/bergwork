@@ -1,0 +1,320 @@
+{
+  "version": 1,
+  "smoke": [
+    "tests/e2e/feature-loading.spec.ts",
+    "tests/e2e/editor-workflows.spec.ts",
+    "tests/e2e/export-dialog.spec.ts",
+    "tests/e2e/painting.spec.ts",
+    "tests/e2e/adjustments.spec.ts",
+    "tests/e2e/psd-save.spec.ts"
+  ],
+  "areas": {
+    "workspace-files": {
+      "sourceGlobs": [
+        "src/main.tsx",
+        "src/app/standalone.ts",
+        "src/app/embeddedFeature.ts",
+        "src/core/document.ts",
+        "src/core/session.ts",
+        "src/core/workspace.ts",
+        "src/core/importQueue.ts",
+        "src/core/transfer.ts",
+        "src/core/clipboard.ts",
+        "src/io/project.ts",
+        "src/io/compPackage.ts",
+        "src/io/embedded.ts",
+        "src/platform/**",
+        "src/core/canvasPresets.ts"
+      ],
+      "specs": [
+        "tests/e2e/editor-workflows.spec.ts",
+        "tests/e2e/embedded.spec.ts",
+        "tests/e2e/journal.spec.ts",
+        "tests/e2e/large-save.spec.ts",
+        "tests/e2e/own-files.spec.ts",
+        "tests/e2e/qa-fwimg.spec.ts",
+        "tests/e2e/recovery.spec.ts",
+        "tests/e2e/workspace.spec.ts",
+        "tests/e2e/new-canvas.spec.ts",
+        "tests/e2e/image-commands.spec.ts"
+      ]
+    },
+    "psd": {
+      "sourceGlobs": [
+        "src/io/psd/**",
+        "src/workers/psd*.ts"
+      ],
+      "specs": [
+        "tests/e2e/cmyk-gpu.performance.spec.ts",
+        "tests/e2e/cmyk-gpu.spec.ts",
+        "tests/e2e/perfio2-psd.spec.ts",
+        "tests/e2e/psd-open.spec.ts",
+        "tests/e2e/psd-save.spec.ts"
+      ]
+    },
+    "raw": {
+      "sourceGlobs": [
+        "src/app/rawFeature.tsx",
+        "src/io/avif.ts",
+        "src/io/dng.ts",
+        "src/io/gif.ts",
+        "src/io/heic.ts",
+        "src/io/imageImport.ts",
+        "src/io/jpeg.ts",
+        "src/io/jpegMeta.ts",
+        "src/io/png.ts",
+        "src/io/tiff.ts",
+        "src/workers/imageDecode*.ts"
+      ],
+      "specs": [
+        "tests/e2e/heic.spec.ts",
+        "tests/e2e/import-formats.spec.ts",
+        "tests/e2e/qa-import-formats.spec.ts",
+        "tests/e2e/qa-import-precision.spec.ts",
+        "tests/e2e/raw-dng.spec.ts"
+      ]
+    },
+    "export-batch": {
+      "sourceGlobs": [
+        "src/app/batch/**",
+        "src/io/batch.ts",
+        "src/io/deflateJoin.ts",
+        "src/io/export*.ts",
+        "src/io/pdf.ts",
+        "src/io/pngStream.ts",
+        "src/io/svg.ts",
+        "src/io/tiffEncode.ts",
+        "src/io/webp.ts",
+        "src/io/zipStream.ts",
+        "src/workers/export*.ts"
+      ],
+      "specs": [
+        "tests/e2e/batch.spec.ts",
+        "tests/e2e/export-artboards.spec.ts",
+        "tests/e2e/export-dialog.spec.ts",
+        "tests/e2e/export-performance.spec.ts",
+        "tests/e2e/export-stream.spec.ts",
+        "tests/e2e/perfio.spec.ts"
+      ]
+    },
+    "canvas-view": {
+      "sourceGlobs": [
+        "src/app/artboardFeature.tsx",
+        "src/app/canvasOpsFeature.tsx",
+        "src/app/guidesFeature.tsx",
+        "src/core/artboardCommands.ts",
+        "src/core/canvasOps.ts",
+        "src/core/straighten.ts",
+        "src/core/trim.ts",
+        "src/render/**",
+        "src/ui/CanvasPane.tsx",
+        "src/ui/canvas/**",
+        "src/wasm/**",
+        "src/workers/kernel*.ts",
+        "src/workers/ops*.ts",
+        "src/core/imageCommands.ts"
+      ],
+      "specs": [
+        "tests/e2e/artboard-tool.spec.ts",
+        "tests/e2e/canvaskit.spec.ts",
+        "tests/e2e/crop.spec.ts",
+        "tests/e2e/csp-webgl.spec.ts",
+        "tests/e2e/gpu-chunks.spec.ts",
+        "tests/e2e/gpu-compositor.spec.ts",
+        "tests/e2e/gpu-vs-cpu.spec.ts",
+        "tests/e2e/guides.spec.ts",
+        "tests/e2e/qa-guides.spec.ts",
+        "tests/e2e/software-render.spec.ts",
+        "tests/e2e/visual-tour.spec.ts",
+        "tests/e2e/floating-chrome.spec.ts",
+        "tests/e2e/popover-layout.spec.ts",
+        "tests/e2e/image-commands.spec.ts"
+      ]
+    },
+    "painting": {
+      "sourceGlobs": [
+        "src/app/brush/**",
+        "src/app/paintingFeature.tsx",
+        "src/core/brush/**",
+        "src/core/raster.ts"
+      ],
+      "specs": [
+        "tests/e2e/a6b-brush.spec.ts",
+        "tests/e2e/brush-presets.spec.ts",
+        "tests/e2e/gpu-brush.spec.ts",
+        "tests/e2e/painting.spec.ts",
+        "tests/e2e/popover-layout.spec.ts"
+      ]
+    },
+    "retouch": {
+      "sourceGlobs": [
+        "src/app/retouchFeature.tsx",
+        "src/core/heal.ts",
+        "src/core/healCoverageWorker.ts"
+      ],
+      "specs": [
+        "tests/e2e/retouch.spec.ts"
+      ]
+    },
+    "selection": {
+      "sourceGlobs": [
+        "src/app/objsel/**",
+        "src/app/selectionFeature.tsx",
+        "src/app/subjectFeature.tsx",
+        "src/core/refine/**",
+        "src/core/selection.ts",
+        "src/core/selectionOps.ts",
+        "src/workers/objectSelect*.ts",
+        "src/workers/refine*.ts",
+        "src/workers/subject*.ts"
+      ],
+      "specs": [
+        "tests/e2e/objsel-ui.spec.ts",
+        "tests/e2e/objsel.spec.ts",
+        "tests/e2e/selection.spec.ts",
+        "tests/e2e/subject-quality.spec.ts",
+        "tests/e2e/subject.spec.ts"
+      ]
+    },
+    "adjustments-filters": {
+      "sourceGlobs": [
+        "src/app/adjust/**",
+        "src/app/adjustmentsFeature.tsx",
+        "src/core/filters/**",
+        "src/render/adjustPrograms.ts",
+        "src/render/gpuFilterPasses.ts",
+        "src/render/liveFilterPasses.ts"
+      ],
+      "specs": [
+        "tests/e2e/adjust-gpu.spec.ts",
+        "tests/e2e/adjust-p2-ui.spec.ts",
+        "tests/e2e/adjust-p2.spec.ts",
+        "tests/e2e/adjust-performance.spec.ts",
+        "tests/e2e/adjustments.spec.ts",
+        "tests/e2e/banding.spec.ts",
+        "tests/e2e/creative-filters.spec.ts",
+        "tests/e2e/filter-gpu.spec.ts"
+      ]
+    },
+    "layers-styles": {
+      "sourceGlobs": [
+        "src/app/layerStylesFeature.tsx",
+        "src/core/align.ts",
+        "src/core/effects/**",
+        "src/core/layerSearch.ts",
+        "src/core/locks.ts",
+        "src/ui/HistoryPanel.tsx",
+        "src/ui/LayersPanel.tsx",
+        "src/ui/Thumbnail.tsx"
+      ],
+      "specs": [
+        "tests/e2e/effects-performance.spec.ts",
+        "tests/e2e/effects.spec.ts",
+        "tests/e2e/history-panel.spec.ts",
+        "tests/e2e/layer-panel-locks.spec.ts",
+        "tests/e2e/layer-style-ui.spec.ts",
+        "tests/e2e/qa-blend-modes.spec.ts",
+        "tests/e2e/qa-history.spec.ts",
+        "tests/e2e/qa-locks.spec.ts"
+      ]
+    },
+    "text-vector": {
+      "sourceGlobs": [
+        "src/app/text/**",
+        "src/app/textFeature.tsx",
+        "src/app/vector/**",
+        "src/app/vectorFeature.tsx",
+        "src/core/text/**",
+        "src/text/**"
+      ],
+      "specs": [
+        "tests/e2e/text-path.spec.ts",
+        "tests/e2e/text-tool.spec.ts",
+        "tests/e2e/text.spec.ts",
+        "tests/e2e/vector-engine.spec.ts",
+        "tests/e2e/vector-tools.spec.ts",
+        "tests/e2e/popover-layout.spec.ts"
+      ]
+    },
+    "transform-warp-crop": {
+      "sourceGlobs": [
+        "src/app/warpFeature.tsx",
+        "src/core/distort.ts"
+      ],
+      "specs": [
+        "tests/e2e/crop.spec.ts",
+        "tests/e2e/warp-tools.spec.ts"
+      ]
+    },
+    "colour-cmyk": {
+      "sourceGlobs": [
+        "src/app/color/**",
+        "src/app/profiles.ts",
+        "src/io/exportMetadata.ts",
+        "src/io/iccProfile.ts",
+        "src/io/jpegCmykEncode.ts",
+        "src/io/psd/writerIcc.ts",
+        "src/ui/ProofSetupDialog.tsx"
+      ],
+      "specs": [
+        "tests/e2e/cmyk-gpu.performance.spec.ts",
+        "tests/e2e/cmyk-gpu.spec.ts",
+        "tests/e2e/cmyk-export-perf.spec.ts",
+        "tests/e2e/cmyk.spec.ts",
+        "tests/e2e/colour-panel.spec.ts",
+        "tests/e2e/locale-numbers.spec.ts",
+        "tests/e2e/profiles.spec.ts",
+        "tests/e2e/qa-16bit.spec.ts"
+      ]
+    },
+    "ai": {
+      "sourceGlobs": [
+        "src/app/genaiFeature.tsx",
+        "src/core/genai/**",
+        "src/workers/genAi*.ts"
+      ],
+      "specs": [
+        "tests/e2e/genai.spec.ts"
+      ]
+    },
+    "ui-i18n": {
+      "sourceGlobs": [
+        "src/app/features.ts",
+        "src/app/panels.tsx",
+        "src/ui/**"
+      ],
+      "specs": [
+        "tests/e2e/feature-loading.spec.ts",
+        "tests/e2e/licenses.spec.ts",
+        "tests/e2e/locale-numbers.spec.ts",
+        "tests/e2e/perf-ui.spec.ts",
+        "tests/e2e/qa-german.spec.ts",
+        "tests/e2e/visual-tour.spec.ts",
+        "tests/e2e/floating-chrome.spec.ts",
+        "tests/e2e/popover-layout.spec.ts",
+        "tests/e2e/command-palette.spec.ts"
+      ]
+    },
+    "performance": {
+      "sourceGlobs": [
+        "src/platform/largeDocumentAcceptance.ts",
+        "src/platform/runtimeMemory.ts",
+        "src/ui/performance.ts"
+      ],
+      "specs": [
+        "tests/e2e/adjust-performance.spec.ts",
+        "tests/e2e/cmyk-gpu.performance.spec.ts",
+        "tests/e2e/cmyk-export-perf.spec.ts",
+        "tests/e2e/effects-performance.spec.ts",
+        "tests/e2e/export-performance.spec.ts",
+        "tests/e2e/large-save.spec.ts",
+        "tests/e2e/perf-ui.spec.ts",
+        "tests/e2e/perf-view.performance.spec.ts",
+        "tests/e2e/perfio-startup.spec.ts",
+        "tests/e2e/perfio.spec.ts",
+        "tests/e2e/perfio2-psd.spec.ts",
+        "tests/e2e/performance.spec.ts"
+      ]
+    }
+  }
+}

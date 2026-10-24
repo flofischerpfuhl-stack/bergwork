@@ -1,0 +1,112 @@
+{
+  "browser": "webkit",
+  "recordedAt": "2026-09-23T23:14:02.822Z",
+  "sheet": {
+    "sha256": "1349069eba083c0c4618488b7dd7ee560ed1253e4948988cfc5818acc5e3977e",
+    "width": 960,
+    "height": 680,
+    "pngSha256": "574d02814ec4fd4b9d6bc500d4c254e752af50fd685de587b8c7159c5fd73dae",
+    "unresolvedCodepoints": []
+  },
+  "performance": {
+    "runs": 50,
+    "characterCount": 500,
+    "samplesMs": [
+      8,
+      6,
+      5,
+      5,
+      5,
+      8,
+      7,
+      7,
+      5,
+      5,
+      8,
+      5,
+      5,
+      6,
+      5,
+      9,
+      8,
+      9,
+      9,
+      8,
+      7,
+      6,
+      5,
+      6,
+      7,
+      5,
+      6,
+      5,
+      6,
+      6,
+      4,
+      5,
+      5,
+      6,
+      5,
+      5,
+      5,
+      7,
+      6,
+      5,
+      6,
+      4,
+      5,
+      4,
+      5,
+      7,
+      4,
+      5,
+      6,
+      5
+    ],
+    "medianMs": 6,
+    "p95Ms": 9,
+    "maxMs": 9
+  },
+  "memory": {
+    "wasmHeapBytes": 134217728,
+    "registeredFontBytes": 3535716,
+    "registeredFontCount": 3
+  },
+  "worker": {
+    "sha256": "96042aa8f83ff9a5bb8328489cb59fbba619f69344ef7e9713f18a6acdb79d9f",
+    "matchesMainThread": true
+  },
+  "lazyLoad": {
+    "loadedBeforeImport": false,
+    "resources": [
+      {
+        "name": "http://127.0.0.1:5233/node_modules/canvaskit-wasm/bin/canvaskit.wasm?import&url",
+        "transferSize": 755,
+        "encodedBodySize": 455,
+        "decodedBodySize": 455
+      },
+      {
+        "name": "http://127.0.0.1:5233/node_modules/.vite/deps/canvaskit-wasm.js?v=a8199c8d",
+        "transferSize": 550686,
+        "encodedBodySize": 550386,
+        "decodedBodySize": 550386
+      },
+      {
+        "name": "http://127.0.0.1:5233/node_modules/canvaskit-wasm/bin/canvaskit.wasm",
+        "transferSize": 7317645,
+        "encodedBodySize": 7317345,
+        "decodedBodySize": 7317345
+      }
+    ],
+    "payload": {
+      "standard": {
+        "rawBytes": 7438222,
+        "gzipBytes": 2998127
+      },
+      "full": {
+        "rawBytes": 8366618,
+        "gzipBytes": 3352465
+      }
+    }
+  }
+}

@@ -1,0 +1,71 @@
+/* Type tool controls. Built from the editor's own tokens (editor.module.css): capsule controls, raised popovers. */
+
+.fontButton {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; width: 176px; height: 26px; padding: 0 22px 0 10px;
+  border-radius: 8px; border: 1px solid var(--cmp-border); background-color: var(--cmp-panel-2); color: var(--cmp-text);
+  font: 12px/1 var(--cmp-font); text-align: left; position: relative; overflow: hidden;
+}
+.fontButton:hover:not(:disabled) { background-color: var(--cmp-control-hover); }
+.fontButton:disabled { color: var(--cmp-text-tertiary); }
+.fontButton::after {
+  content: ''; position: absolute; right: 9px; top: 8px; width: 5px; height: 5px; border-right: 1.3px solid currentColor;
+  border-bottom: 1.3px solid currentColor; transform: rotate(45deg);
+}
+.fontName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.missingMark { color: var(--cmp-warning); flex: none; }
+
+.popover {
+  position: fixed; z-index: 56; display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 14px; white-space: normal; overflow-y: auto;
+  border-radius: 12px; background: var(--cmp-panel); border: 1px solid var(--cmp-border); box-shadow: var(--cmp-shadow);
+  color: var(--cmp-text); font: 12px/1.3 var(--cmp-font);
+}
+.fontPopover { width: 280px; padding: 8px; gap: 6px; }
+.search {
+  height: 26px; border: 0; border-radius: 7px; padding: 0 9px; background: var(--cmp-control); color: var(--cmp-text);
+  font: 12px/1 var(--cmp-font); outline: none;
+}
+.search:focus { box-shadow: 0 0 0 2px var(--cmp-accent-soft); }
+.fontList { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.fontGroup {
+  padding: 8px 8px 3px; color: var(--cmp-text-secondary); font: 600 10.5px/1 var(--cmp-font); text-transform: uppercase; letter-spacing: 0.04em;
+}
+.fontRow {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; min-height: 28px; padding: 5px 8px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--cmp-text); text-align: left; font-size: 15px; line-height: 1.2;
+}
+.fontRow:hover { background: var(--cmp-control-hover); }
+.fontRowActive, .fontRowActive:hover { background: var(--cmp-accent-soft); color: var(--cmp-text); }
+.fontRowCurrent { font-weight: 600; }
+.fontRowNote { margin-left: auto; font: 10.5px/1 var(--cmp-font); color: inherit; opacity: 0.7; flex: none; }
+.fontFooter { display: flex; flex-direction: column; gap: 6px; padding: 6px 4px 2px; border-top: 1px solid var(--cmp-border); }
+
+.panelPopover { width: 460px; }
+.warpPopover { width: 340px; }
+.pathPopover { width: 320px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 14px; align-items: center; }
+.cell { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; font-size: 11px; color: var(--cmp-text-secondary); }
+.cell > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.start { align-self: flex-start; }
+.cellWide { grid-column: 1 / -1; }
+.number {
+  width: 58px; height: 22px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--cmp-border); background: var(--cmp-surface);
+  color: var(--cmp-text); font: 12px/1 var(--cmp-font); text-align: right; font-variant-numeric: tabular-nums;
+}
+.number:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent); }
+.number:disabled { color: var(--cmp-text-tertiary); }
+.unit { width: 16px; flex: none; color: var(--cmp-text-tertiary); font-size: 10.5px; }
+.sectionTitle { margin: 2px 0 -2px; font: 600 11px/1 var(--cmp-font); color: var(--cmp-text-secondary); }
+.features { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 14px; }
+.swatch {
+  flex: none; width: 28px; height: 22px; padding: 0; border-radius: 6px; border: 1px solid var(--cmp-border);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.85);
+}
+.swatch:disabled { opacity: 0.4; }
+.alignButton { height: 20px; width: 28px; padding: 0; display: grid; place-items: center; }
+.missingList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.missingRow { display: flex; align-items: center; gap: 8px; }
+.missingText { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.missingName { font-weight: 600; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.missingMeta { color: var(--cmp-text-secondary); font-size: 11px; }
+.missingRow .replacement { max-width: 150px; }
+.sizeField { width: 46px !important; }

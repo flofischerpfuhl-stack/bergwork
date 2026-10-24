@@ -1,0 +1,68 @@
+/* Shape, Pen and Path Selection controls. Built from the editor's own tokens (editor.module.css): capsule controls, raised popovers. */
+
+.group { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.label { color: var(--cmp-text-secondary); font-size: 11px; flex: none; }
+.kind { width: 28px; padding: 0 !important; display: grid; place-items: center; }
+.kindIcon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+
+.paintButton {
+  flex: none; width: 30px; height: 24px; padding: 0; border-radius: 7px; border: 1px solid var(--cmp-border);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.85); position: relative; overflow: hidden; background-color: #fff;
+}
+.paintButton:disabled { opacity: 0.4; }
+.paintNone::after {
+  content: ''; position: absolute; left: -4px; right: -4px; top: 50%; height: 2px; background: var(--cmp-danger); transform: rotate(-35deg);
+}
+
+.number {
+  width: 48px; height: 26px; padding: 0 6px; border-radius: 7px; border: 1px solid var(--cmp-border); background: var(--cmp-panel-3);
+  color: var(--cmp-text); font: 12px/1 var(--cmp-font); text-align: right; font-variant-numeric: tabular-nums;
+}
+.number:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent); }
+.number:disabled { color: var(--cmp-text-tertiary); }
+.field { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--cmp-text-secondary); font-size: 11px; }
+.scrub { cursor: ew-resize; user-select: none; -webkit-user-select: none; touch-action: none; }
+.unit { color: var(--cmp-text-tertiary); font-size: 10.5px; min-width: 10px; }
+.narrow { width: 38px; }
+
+.iconButton {
+  flex: none; width: 28px; height: 26px; padding: 0; display: grid; place-items: center; border-radius: 7px; border: 1px solid transparent;
+  background: transparent; color: var(--cmp-text);
+}
+.iconButton:hover:not(:disabled) { background: var(--cmp-control-hover); }
+.iconButton:disabled { color: var(--cmp-text-tertiary); }
+.iconButtonOn { background: var(--cmp-control-active); border-color: var(--cmp-border); }
+
+.strokeButton {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 20px 0 8px; border-radius: 8px;
+  border: 1px solid var(--cmp-border); background-color: var(--cmp-panel-2); color: var(--cmp-text); position: relative;
+}
+.strokeButton:hover:not(:disabled) { background-color: var(--cmp-control-hover); }
+.strokeButton::after {
+  content: ''; position: absolute; right: 8px; top: 8px; width: 4px; height: 4px; border-right: 1.3px solid currentColor;
+  border-bottom: 1.3px solid currentColor; transform: rotate(45deg);
+}
+.strokeSample { width: 34px; height: 10px; display: block; }
+
+.select { max-width: 180px; text-overflow: ellipsis; }
+
+.popover {
+  position: fixed; z-index: 56; display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 14px; white-space: normal; overflow-y: auto;
+  border-radius: 12px; background: var(--cmp-panel); border: 1px solid var(--cmp-border); box-shadow: var(--cmp-shadow);
+  color: var(--cmp-text); font: 12px/1.3 var(--cmp-font); width: 330px;
+}
+.row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.rowLabel { width: 104px; flex: none; font-size: 11px; color: var(--cmp-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.popoverTitle { margin: 0; font: 600 12px/1.2 var(--cmp-font); }
+.segmentedFill { display: flex; flex: 1; min-width: 0; }
+.segmentedFill > button { flex: 1 1 auto; min-width: 0; padding: 0 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ramp {
+  flex: 1; min-width: 0; height: 18px; border-radius: 4px; border: 1px solid rgba(0, 0, 0, 0.35);
+}
+.stops { display: flex; flex-direction: column; gap: 6px; }
+.stop { display: flex; align-items: center; gap: 6px; }
+.stopRemove { width: 20px; height: 20px; border: 0; border-radius: 5px; background: transparent; color: var(--cmp-text-secondary); display: grid; place-items: center; padding: 0; }
+.stopRemove:hover { background: var(--cmp-control-hover); color: var(--cmp-text); }
+.well { flex: none; width: 36px; height: 22px; padding: 0; border-radius: 6px; border: 1px solid var(--cmp-border); box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.85); }
+.swatchRow { display: flex; gap: 6px; flex-wrap: wrap; }
+.miniSwatch { width: 18px; height: 18px; padding: 0; border-radius: 4px; border: 1px solid var(--cmp-border); }
