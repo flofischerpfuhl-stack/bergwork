@@ -38,7 +38,7 @@ import { defaultFilterSettings } from '../core/filters/settings';
 import { applyLiveFilters } from '../core/filters/live';
 import {
   COMBINE_FRAGMENT, DENOISE_FRAGMENT, FILTER_BLEND_FRAGMENT, LENS_FRAGMENT, NOISE_FRAGMENT, QUANTIZE_FRAGMENT, SELECTION_MIX_FRAGMENT,
-  filterHalo, gaussianFragment, gaussianSupport, gaussianWeights, liveViewFilter, previewViewFilter,
+  filterHalo, gaussianFragment, gaussianSupport, gaussianWeights, liveViewFilter, needsCpuLiveFilters, previewViewFilter,
   usesRecursiveGaussian, type PreviewLayer, type ViewFilter,
 } from './gpuFilterPasses';
 
@@ -2382,8 +2382,11 @@ export class GpuCompositor {
     const targetPerSource = Math.max(transform.size.width / Math.max(1, raster?.width ?? 1),
       transform.size.height / Math.max(1, raster?.height ?? 1)) * view.scale;
     // A highly magnified icon should not be blurred on a much larger upsampled grid. The bounded native-grid
-    // path is exact and stays cheap; production-size layers remain view-space and never enter the CPU here.
-    if (raster && !preview && filters.length && raster.width * raster.height <= 16_384 && targetPerSource > 1) {
+    // path is exact and stays cheap; production-size layers remain view-space and never enter the CPU here —
+    // unless the stack holds a filter without a view-space program, which the cached CPU stack renders in order
+    // rather than being dropped.
+    const cpuOnly = !preview && needsCpuLiveFilters(layer.filters);
+    if (raster && (cpuOnly || (!preview && filters.length && raster.width * raster.height <= 16_384 && targetPerSource > 1))) {
       this.performanceCounterValue.cpuLiveFilterFallbacks++;
       const filtered = applyLiveFilters(raster, layer.filters, layer.filterMask, transform);
       const plain = { ...layer, filters: [] };

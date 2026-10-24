@@ -453,14 +453,19 @@ function placedFilter(value: LiveFilter): AgFilter {
     case 'denoise': return { ...base, type: 'reduce noise', filter: { preset: 'Custom', removeJpegArtifact: false,
       reduceColorNoise: value.colour / 100, sharpenDetails: 0, channelDenoise: [{ channels: ['composite'],
         amount: value.luminance, preserveDetails: value.detail ?? 50 }] } };
-    case 'lensCorrection': throw new TypeError('Lens Correction has no Photoshop smart-filter descriptor mapping');
+    case 'lensCorrection': case 'vignette': case 'bloom': case 'tonalContrast': case 'progressiveBlur': case 'rgbSplit':
+      throw new TypeError(`${value.kind} has no Photoshop smart-filter descriptor mapping`);
   }
 }
+
+/** Live filters Photoshop has no smart-filter descriptor for: baked into the placed-layer pixels with a notice. */
+const UNMAPPED_PSD_FILTERS: ReadonlySet<LiveFilter['kind']> = new Set(['lensCorrection', 'vignette', 'bloom', 'tonalContrast',
+  'progressiveBlur', 'rgbSplit']);
 
 function placedFilters(filters: readonly LiveFilter[], mask: Layer['filterMask']): NonNullable<NonNullable<AgLayer['placedLayer']>['filter']> {
   return { enabled: true, validAtPosition: true, maskEnabled: !!mask?.enabled, maskLinked: mask?.linked ?? true,
     maskExtendWithWhite: (mask?.defaultColor ?? 255) >= 128,
-    list: filters.filter((filter) => filter.kind !== 'lensCorrection').map(placedFilter) };
+    list: filters.filter((filter) => !UNMAPPED_PSD_FILTERS.has(filter.kind)).map(placedFilter) };
 }
 
 function psdFilterEffectsMask(layer: Layer, placedId: string, transform: LayerTransform): NonNullable<AgLayer['filterEffectsMasks']> {
@@ -498,6 +503,10 @@ function common(layer: Layer, path: string, state: State): AgLayer {
   if (layer.kind === 'embedded' && layer.filters.some((filter) => filter.kind === 'lensCorrection')) notice(state, 'live-filter:lens-correction',
     'Lens Correction was baked into the placed-layer pixels because Photoshop has no equivalent smart-filter descriptor in this mapping.',
     'editability-only', path);
+  if (layer.kind === 'embedded' && layer.filters.some((filter) => filter.kind !== 'lensCorrection' && UNMAPPED_PSD_FILTERS.has(filter.kind))) {
+    notice(state, 'live-filter:creative', 'Vignette, Bloom / Glow, Tonal Contrast, Progressive Blur and RGB Split were baked into the '
+      + 'placed-layer pixels because Photoshop has no equivalent smart filter.', 'editability-only', path);
+  }
   if (layer.crop) notice(state, 'non-destructive-crop',
     'The non-destructive crop was baked into layer pixels because PSD has no equivalent editable layer crop.', 'editability-only', path);
   if (layer.warp && layer.kind !== 'embedded') notice(state, 'parametric-warp',

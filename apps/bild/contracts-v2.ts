@@ -193,6 +193,13 @@ export type FilterRecordV2 = (
   | { kind: 'smartSharpen'; schemaVersion: 1; enabled: boolean; amount: number; radius: number; threshold: number; reduceNoise: number }
   | { kind: 'highPass'; schemaVersion: 1; enabled: boolean; radius: number }
   | { kind: 'denoise'; schemaVersion: 1; enabled: boolean; luminance: number; colour: number; detail?: number }
+  | { kind: 'vignette'; schemaVersion: 1; enabled: boolean; color: RGBV2; amount: number; midpoint: number;
+      roundness: number; feather: number; highlights: number }
+  | { kind: 'bloom'; schemaVersion: 1; enabled: boolean; threshold: number; radius: number; amount: number }
+  | { kind: 'tonalContrast'; schemaVersion: 1; enabled: boolean; radius: number; amount: number;
+      shadows: number; midtones: number; highlights: number }
+  | { kind: 'progressiveBlur'; schemaVersion: 1; enabled: boolean; angle: number; start: number; end: number; radius: number }
+  | { kind: 'rgbSplit'; schemaVersion: 1; enabled: boolean; distance: number; blur: number; angle: number; radial: boolean }
   ) & { opacity?: number; blendMode?: string };
 
 export interface HueSaturationParametersV1 {

@@ -21,10 +21,20 @@ export function defaultLiveFilter(kind: LiveFilterKind): LiveFilter {
     case 'smartSharpen': return { kind, schemaVersion: 1, enabled: true, amount: 100, radius: 1, threshold: 0, reduceNoise: 10 };
     case 'highPass': return { kind, schemaVersion: 1, enabled: true, radius: 10 };
     case 'denoise': return { kind, schemaVersion: 1, enabled: true, luminance: 25, colour: 25, detail: 50 };
+    case 'vignette': {
+      const d = defaultFilterSettings();
+      return { kind, schemaVersion: 1, enabled: true, color: d.vignetteColor, amount: d.vignetteAmount, midpoint: d.vignetteMidpoint,
+        roundness: d.vignetteRoundness, feather: d.vignetteFeather, highlights: d.vignetteHighlights };
+    }
+    case 'bloom': return { kind, schemaVersion: 1, enabled: true, threshold: 50, radius: 24, amount: 40 };
+    case 'tonalContrast': return { kind, schemaVersion: 1, enabled: true, radius: 16, amount: 50, shadows: 40, midtones: 60, highlights: 30 };
+    case 'progressiveBlur': return { kind, schemaVersion: 1, enabled: true, angle: -90, start: 35, end: 100, radius: 20 };
+    case 'rgbSplit': return { kind, schemaVersion: 1, enabled: true, distance: 10, blur: 0, angle: 0, radial: false };
   }
 }
 
-function filterSettings(filter: LiveFilter): { kind: FilterKind; settings: ReturnType<typeof defaultFilterSettings> } {
+/** The destructive filter and settings a live filter runs as (also used to bake it). */
+export function liveFilterSettings(filter: LiveFilter): { kind: FilterKind; settings: ReturnType<typeof defaultFilterSettings> } {
   const base = defaultFilterSettings();
   switch (filter.kind) {
     case 'gaussianBlur': return { kind: 'Gaussian Blur', settings: { ...base, radius: filter.radius } };
@@ -39,12 +49,23 @@ function filterSettings(filter: LiveFilter): { kind: FilterKind; settings: Retur
     case 'highPass': return { kind: 'High Pass', settings: { ...base, radius: filter.radius } };
     case 'denoise': return { kind: 'Denoise', settings: { ...base, luminance: filter.luminance,
       colour: filter.colour, detail: filter.detail ?? 50 } };
+    case 'vignette': return { kind: 'Vignette', settings: { ...base, vignetteColor: filter.color, vignetteAmount: filter.amount,
+      vignetteMidpoint: filter.midpoint, vignetteRoundness: filter.roundness, vignetteFeather: filter.feather,
+      vignetteHighlights: filter.highlights } };
+    case 'bloom': return { kind: 'Bloom / Glow', settings: { ...base, bloomThreshold: filter.threshold,
+      bloomRadius: filter.radius, bloomAmount: filter.amount } };
+    case 'tonalContrast': return { kind: 'Tonal Contrast', settings: { ...base, tonalRadius: filter.radius, tonalAmount: filter.amount,
+      tonalShadows: filter.shadows, tonalMidtones: filter.midtones, tonalHighlights: filter.highlights } };
+    case 'progressiveBlur': return { kind: 'Progressive Blur', settings: { ...base, progressiveAngle: filter.angle,
+      progressiveStart: filter.start, progressiveEnd: filter.end, progressiveRadius: filter.radius } };
+    case 'rgbSplit': return { kind: 'RGB Split', settings: { ...base, rgbSplitDistance: filter.distance, rgbSplitBlur: filter.blur,
+      rgbSplitAngle: filter.angle, rgbSplitRadial: filter.radial } };
   }
 }
 
 export function applyLiveFilter(raster: Raster, filter: LiveFilter): Raster {
   if (!filter.enabled) return raster;
-  const converted = filterSettings(filter);
+  const converted = liveFilterSettings(filter);
   const filtered = applyFilter(converted.kind, raster, {
     origin: { x: 0, y: 0 }, size: { width: raster.width, height: raster.height }, rotation: 0,
     flipX: false, flipY: false, sampling: 'High quality',
@@ -69,6 +90,8 @@ export function applyLiveFilter(raster: Raster, filter: LiveFilter): Raster {
 }
 
 const cache = new WeakMap<Raster, WeakMap<object, Raster>>();
+/** Masked stacks keyed by raster, stack and mask; the transform places the mask, so a moved layer recomputes. */
+const maskedCache = new WeakMap<Raster, WeakMap<object, WeakMap<LayerMask, { transform: LayerTransform; result: Raster }>>>();
 function applyFilterMask(original: Raster, filtered: Raster, mask: LayerMask, transform: LayerTransform): Raster {
   if (!mask.enabled || mask.raster.channels !== 1) return filtered;
   const before = original.toPixelsNative(), after = filtered.toPixelsNative(), maximum = original.maximum;
@@ -103,10 +126,18 @@ export function applyLiveFilters(raster: Raster, filters: readonly LiveFilter[],
     byStack = cache.get(raster); if (!byStack) { byStack = new WeakMap(); cache.set(raster, byStack); }
     known = byStack.get(filters as object); if (known) return known;
   }
+  let byMask: WeakMap<LayerMask, { transform: LayerTransform; result: Raster }> | undefined;
+  if (filterMask && transform) {
+    let stacks = maskedCache.get(raster); if (!stacks) { stacks = new WeakMap(); maskedCache.set(raster, stacks); }
+    byMask = stacks.get(filters as object); if (!byMask) { byMask = new WeakMap(); stacks.set(filters as object, byMask); }
+    const entry = byMask.get(filterMask); if (entry?.transform === transform) return entry.result;
+  }
   let result = raster;
   for (const filter of filters) result = applyLiveFilter(result, filter);
-  if (filterMask && transform) result = applyFilterMask(raster, result, filterMask, transform);
-  else byStack?.set(filters as object, result);
+  if (filterMask && transform) {
+    result = applyFilterMask(raster, result, filterMask, transform);
+    byMask?.set(filterMask, { transform, result });
+  } else byStack?.set(filters as object, result);
   return result;
 }
 
@@ -166,7 +197,7 @@ export function bakeLiveFilters(session: EditorSession, layerId: string): boolea
   let raster = layer.raster, transform = layer.transform;
   for (const filter of layer.filters) {
     if (!filter.enabled) continue;
-    const converted = filterSettings(filter), made = applyFilter(converted.kind, raster, transform, converted.settings, { seed: 0x6d2b79f5 });
+    const converted = liveFilterSettings(filter), made = applyFilter(converted.kind, raster, transform, converted.settings, { seed: 0x6d2b79f5 });
     raster = made.raster; transform = made.transform;
   }
   let mask = layer.mask;

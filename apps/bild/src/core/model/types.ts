@@ -228,7 +228,19 @@ export type LiveFilter = (
       readonly amount: number; readonly radius: number; readonly threshold: number; readonly reduceNoise: number }
   | { readonly kind: 'highPass'; readonly schemaVersion: 1; readonly enabled: boolean; readonly radius: number }
   | { readonly kind: 'denoise'; readonly schemaVersion: 1; readonly enabled: boolean;
-      readonly luminance: number; readonly colour: number; readonly detail?: number }) & {
+      readonly luminance: number; readonly colour: number; readonly detail?: number }
+  // Compositor's creative filters (1.2–1.5); percentages and layer pixels as in FilterSettings.
+  | { readonly kind: 'vignette'; readonly schemaVersion: 1; readonly enabled: boolean; readonly color: RGB;
+      readonly amount: number; readonly midpoint: number; readonly roundness: number; readonly feather: number;
+      readonly highlights: number }
+  | { readonly kind: 'bloom'; readonly schemaVersion: 1; readonly enabled: boolean;
+      readonly threshold: number; readonly radius: number; readonly amount: number }
+  | { readonly kind: 'tonalContrast'; readonly schemaVersion: 1; readonly enabled: boolean; readonly radius: number;
+      readonly amount: number; readonly shadows: number; readonly midtones: number; readonly highlights: number }
+  | { readonly kind: 'progressiveBlur'; readonly schemaVersion: 1; readonly enabled: boolean;
+      readonly angle: number; readonly start: number; readonly end: number; readonly radius: number }
+  | { readonly kind: 'rgbSplit'; readonly schemaVersion: 1; readonly enabled: boolean;
+      readonly distance: number; readonly blur: number; readonly angle: number; readonly radial: boolean }) & {
         /** Photoshop smart-filter blending options; absent means normal at 100%. */
         readonly opacity?: number;
         readonly blendMode?: BlendMode;

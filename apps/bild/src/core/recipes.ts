@@ -306,6 +306,15 @@ export function isValidLiveFilter(value: unknown): value is LiveFilter {
     case 'unsharpMask': return finite(f.amount) && finite(f.radius) && finite(f.threshold);
     case 'smartSharpen': return finite(f.amount) && finite(f.radius) && finite(f.threshold) && finite(f.reduceNoise);
     case 'denoise': return finite(f.luminance) && finite(f.colour) && (f.detail === undefined || finite(f.detail));
+    case 'vignette': {
+      const color = f.color as Record<string, unknown> | null;
+      return isObject(color) && [color.red, color.green, color.blue].every((v) => finite(v) && v >= 0 && v <= 1)
+        && [f.amount, f.midpoint, f.roundness, f.feather, f.highlights].every(finite);
+    }
+    case 'bloom': return [f.threshold, f.radius, f.amount].every(finite);
+    case 'tonalContrast': return [f.radius, f.amount, f.shadows, f.midtones, f.highlights].every(finite);
+    case 'progressiveBlur': return [f.angle, f.start, f.end, f.radius].every(finite);
+    case 'rgbSplit': return [f.distance, f.blur, f.angle].every(finite) && typeof f.radial === 'boolean';
     default: return false;
   }
 }
