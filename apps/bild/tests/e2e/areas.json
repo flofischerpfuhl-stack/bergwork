@@ -187,6 +187,7 @@
         "tests/e2e/adjust-performance.spec.ts",
         "tests/e2e/adjustments.spec.ts",
         "tests/e2e/banding.spec.ts",
+        "tests/e2e/creative-filters.spec.ts",
         "tests/e2e/filter-gpu.spec.ts"
       ]
     },
