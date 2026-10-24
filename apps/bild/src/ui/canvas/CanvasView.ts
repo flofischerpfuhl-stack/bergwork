@@ -75,6 +75,8 @@ export class CanvasView implements CanvasHost {
   private active: { handler: ToolHandler; pointerId: number; session: EditorSession; navigation: boolean } | null = null;
   private pinch: { distance: number; zoom: number; mid: Point } | null = null;
   private panning: { last: Point; pointerId: number } | null = null;
+  /** ⌘/Ctrl + middle-button drag zooms around where it started (Compositor 1.4.9): right or up zooms in. */
+  private scrubZoom: { start: Point; zoom: number; pointerId: number } | null = null;
   private readonly hand = new HandTool();
   private lastModifiers: Modifiers = { shift: false, option: false, command: false, control: false };
   private lastPoint: Point | null = null;
@@ -510,6 +512,13 @@ export class CanvasView implements CanvasHost {
       return;
     }
     if (this.pointers.size > 1 || !this.session.document) return;
+    if (event.button === 1 && (event.ctrlKey || event.metaKey)) {
+      this.scrubZoom = { start: point, zoom: this.session.viewport.zoom, pointerId: event.pointerId };
+      this.beginNavigationInteraction();
+      this.element.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return;
+    }
     if (event.button === 1 || (event.button === 0 && event.pointerType === 'mouse' && false)) {
       this.panning = { last: point, pointerId: event.pointerId };
       this.beginNavigationInteraction();
@@ -569,6 +578,12 @@ export class CanvasView implements CanvasHost {
       }
       return;
     }
+    if (this.scrubZoom?.pointerId === event.pointerId && this.session.document) {
+      const delta = (point.x - this.scrubZoom.start.x) - (point.y - this.scrubZoom.start.y);
+      this.session.viewport.setZoom(this.scrubZoom.zoom * Math.pow(2, delta / 150), this.scrubZoom.start, this.session.document);
+      this.session.notify('view');
+      return;
+    }
     if (this.panning && this.panning.pointerId === event.pointerId) {
       this.session.viewport.translate(point.x - this.panning.last.x, point.y - this.panning.last.y);
       this.panning.last = point;
@@ -600,6 +615,7 @@ export class CanvasView implements CanvasHost {
       if (this.pointers.size < 2) { this.pinch = null; this.endNavigationInteraction(); }
       return;
     }
+    if (this.scrubZoom?.pointerId === event.pointerId) { this.scrubZoom = null; this.endNavigationInteraction(); return; }
     if (this.panning?.pointerId === event.pointerId) { this.panning = null; this.endNavigationInteraction(); return; }
     if (this.active && this.active.pointerId === event.pointerId) {
       this.stopAutoscroll();
@@ -660,6 +676,7 @@ export class CanvasView implements CanvasHost {
       this.redraw();
     }
     this.panning = null;
+    this.scrubZoom = null;
     this.endNavigationInteraction();
   };
 

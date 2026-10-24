@@ -24,8 +24,9 @@ import type { OpsRequest } from '../workers/opsProtocol';
 import type { ToolContext, ToolHandler } from '../ui/canvas/tools';
 import { selectedArtboard } from '../ui/artboardState';
 import { cropArtboard } from '../core/artboardCommands';
+import { DEFAULT_TRIM, trimRect, type TrimBasedOn, type TrimOptions } from '../core/imageCommands';
 
-const RATIOS: CropRatioChoice[] = ['Free', 'Original', '1:1', '4:3', '16:9'];
+const RATIOS: CropRatioChoice[] = ['Free', 'Original', '1:1', '4:3', '3:4', '16:9', '9:16'];
 const selectedArtboardCropTarget = (session: EditorSession): Rect | null => selectedArtboard(session)?.rect ?? null;
 
 /** Runs a document operation in the worker and installs the result as one undo step. */
@@ -228,6 +229,61 @@ function bytes(width: number, height: number): string {
   return value >= 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value >= 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} KB`;
 }
 
+/**
+ * Image › Trim (ImageTrim.swift, Compositor 1.2.3; Photoshop's Trim dialog): crops the canvas to what is left after
+ * transparent edges, or edges of the top-left / bottom-right pixel's colour, are trimmed away. Layers keep their pixels.
+ */
+async function trimCanvas(controller: EditorController, options: TrimOptions): Promise<boolean> {
+  const session = controller.session, document = session.document;
+  if (!document || !session.canStartProjectOperation || !session.services?.flatten) return false;
+  let rect: Rect | null;
+  try { rect = trimRect(await session.services.flatten(document), options); }
+  catch (error) { controller.reportError('operation-failed', error); return false; }
+  if (session.document !== document) return false;
+  if (!rect) { controller.alert(controller.t('Trim'), controller.t('Nothing would remain after trimming.')); return false; }
+  if (rect.x === 0 && rect.y === 0 && rect.width === document.width && rect.height === document.height) return false;
+  return applyDocumentOp(controller, session, 'Trim', (doc) => ({ op: 'crop', document: doc, rect, options: { deletePixels: false } }));
+}
+
+let rememberedTrim: TrimOptions = DEFAULT_TRIM;
+function TrimDialog({ controller, close }: { controller: EditorController; close: () => void }) {
+  const t = controller.t;
+  const [options, setOptions] = useState(rememberedTrim);
+  const sides = [['top', 'Top'], ['bottom', 'Bottom'], ['left', 'Left'], ['right', 'Right']] as const;
+  return (
+    <form className={styles.dialog} role="dialog" aria-modal aria-label={t('Trim')} data-testid="trim-dialog" onSubmit={(event) => {
+      event.preventDefault();
+      rememberedTrim = options;
+      close();
+      void trimCanvas(controller, options);
+    }}>
+      <h2 className={styles.dialogTitle}>{t('Trim')}</h2>
+      <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 6 }}>
+        <legend className={styles.secondary} style={{ marginBottom: 6 }}>{t('Based On')}</legend>
+        {([['transparent', 'Transparent Pixels'], ['topLeft', 'Top Left Pixel Color'], ['bottomRight', 'Bottom Right Pixel Color']] as const).map(([value, label]) => (
+          <label key={value} className={styles.check}>
+            <input type="radio" name="trim-based-on" checked={options.basedOn === value} data-testid={`trim-${value}`}
+              onChange={() => setOptions({ ...options, basedOn: value as TrimBasedOn })} />{t(label)}
+          </label>
+        ))}
+      </fieldset>
+      <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+        <legend className={styles.secondary} style={{ marginBottom: 6 }}>{t('Trim Away')}</legend>
+        {sides.map(([key, label]) => (
+          <label key={key} className={styles.check}>
+            <input type="checkbox" checked={options[key]} onChange={(e) => setOptions({ ...options, [key]: e.target.checked })} />{t(label)}
+          </label>
+        ))}
+      </fieldset>
+      <div className={styles.dialogButtons}>
+        <button type="button" className={styles.pill} onClick={close}>{t('Cancel')}</button>
+        <button type="submit" className={`${styles.pill} ${styles.pillPrimary}`} data-testid="trim-apply"
+          disabled={!(options.top || options.bottom || options.left || options.right)}>{t('OK')}</button>
+      </div>
+    </form>
+  );
+}
+
 function CanvasSizeDialog({ controller, close }: { controller: EditorController; close: () => void }) {
   const t = controller.t;
   const session = controller.session;
@@ -393,6 +449,13 @@ export function installCanvasOps(controller: EditorController): void {
     session.viewport.fit(next);
     session.notify('view');
   } };
+  const canTurn = () => !!controller.session.document && controller.session.canEditLayers && controller.workspace.canSwitch;
+  controller.features.rotateCanvasClockwise = { enabled: canTurn, run: () => controller.session.rotateCanvas(true) };
+  controller.features.rotateCanvasCounterclockwise = { enabled: canTurn, run: () => controller.session.rotateCanvas(false) };
+  controller.features.rotateCanvas180 = { enabled: canTurn, run: () => controller.session.rotateCanvas180() };
+  controller.dialogs.trim = (close) => <TrimDialog controller={controller} close={close} />;
+  controller.features.trim = { enabled: () => !!controller.session.document && controller.session.canStartProjectOperation && controller.workspace.canSwitch,
+    run: () => controller.showDialog({ kind: 'custom', name: 'trim' }) };
   controller.features.cropLayerToSelection = { enabled: () => {
     const session = controller.session;
     return session.activeLayer?.kind === 'embedded' && !!session.document?.selection && session.canEditAppearance;

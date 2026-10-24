@@ -29,6 +29,7 @@ import { artboardMembership } from './artboards';
 import { layerCropFromDocumentRect, translated } from './canvasOps';
 import { selectionBounds } from './selectionOps';
 import { Raster } from './raster';
+import { rotateCanvasDocument } from './imageCommands';
 import { CanvasViewport } from './viewport';
 import type { CmykLut, CmykProfile, ProofOptions } from './color/cmyk';
 import { defaultAdjustment } from './adjustments';
@@ -1710,6 +1711,56 @@ export class EditorSession {
           mask: l.mask?.placement ? { ...l.mask, placement: mirrored(l.mask.placement, horizontally, axis) } : l.mask })),
         selection: mirrorSelection ? mirrorSelection(document) : document.selection,
       };
+    });
+  }
+
+  /** Image › Image Rotation: the canvas a quarter turn (CanvasRotation.swift); layers are placed, not resampled. */
+  rotateCanvas(clockwise: boolean, name = clockwise ? 'Rotate Canvas 90° Clockwise' : 'Rotate Canvas 90° Counterclockwise'): void {
+    this.commitTransform();
+    const document = this.document;
+    if (!this.canEditLayers || !document) return;
+    if (document.layers.some((layer) => this.refuseLayerEdit(layer.id, 'position'))) return;
+    this.finishOpacityEdit();
+    this.edit(name, () => { this.document = rotateCanvasDocument(document, clockwise); });
+    if (this.document) this.viewport.fit(this.document);
+    this.notify('view');
+  }
+
+  /** Image › Image Rotation › 180°: two quarter turns in one undo step. */
+  rotateCanvas180(): void {
+    this.beginEdit('Rotate Canvas 180°');
+    try { this.rotateCanvas(true, 'Rotate Canvas 180°'); this.rotateCanvas(true, 'Rotate Canvas 180°'); } finally { this.endEdit(); }
+  }
+
+  /** Selected folders whose contents Ungroup Layers can release. */
+  get canUngroupLayers(): boolean {
+    return this.canEditLayers && !!this.document?.layers.some((l) => l.kind === 'group' && this.selectedLayerIds.has(l.id));
+  }
+
+  /**
+   * Layer › Ungroup Layers (⇧⌘G, Compositor 1.4.1): each selected folder's direct children take the folder's place in
+   * its parent, in their order, and the folder goes; the released layers end up selected.
+   */
+  ungroupLayers(): void {
+    const document = this.document;
+    if (!this.canUngroupLayers || !document) return;
+    const groups = document.layers.filter((l) => l.kind === 'group' && this.selectedLayerIds.has(l.id));
+    if (groups.some((group) => this.refuseLayerEdit(group.id, 'position'))) return;
+    this.commitTransform();
+    this.finishOpacityEdit();
+    this.edit('Ungroup Layers', () => {
+      let layers = document.layers.slice();
+      const released: string[] = [];
+      for (const group of groups) {
+        const children = layers.filter((l) => l.parentId === group.id).map((l) => ({ ...l, parentId: group.parentId }));
+        const index = layers.findIndex((l) => l.id === group.id);
+        const before = layers.slice(0, index).filter((l) => l.parentId !== group.id);
+        const after = layers.slice(index + 1).filter((l) => l.parentId !== group.id);
+        layers = [...before, ...children, ...after];
+        released.push(...children.map((l) => l.id));
+      }
+      this.setLayers(layers);
+      this.selectLayers(released, released.at(-1) ?? null);
     });
   }
 

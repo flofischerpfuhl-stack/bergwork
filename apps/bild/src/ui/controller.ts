@@ -8,6 +8,7 @@ import type { EditorHandleV2, ProjectManifestV2 } from '../../contracts-v2';
 import { documentLimits, type CanvasDocument, type DocumentLimits, type Layer } from '../core/document';
 import type { LayerEffect } from '../core/model/types';
 import { Raster, alphaBounds, cropRaster } from '../core/raster';
+import { folderImages } from './dropFiles';
 import type { EditorSession, NewCanvasOptions, RasterCommandKind, SessionServices, Tool } from '../core/session';
 import type { ReactNode } from 'react';
 import { setShortcutLocale, type FeatureRegistry, type MenuEntry } from './menus';
@@ -726,6 +727,25 @@ export class EditorController {
     });
     const failure = result.failures[0];
     if (failure) this.reportError('paste-failed', failure.error);
+  }
+
+  /** File › Import Folder as Layers… (Compositor 1.4.10): every image of a folder, in name order, as layers of this project. */
+  async chooseFolderAndImport(): Promise<void> {
+    const files = await new Promise<File[]>((resolve) => {
+      const input = globalThis.document.createElement('input');
+      input.type = 'file';
+      (input as HTMLInputElement & { webkitdirectory: boolean }).webkitdirectory = true;
+      input.style.display = 'none';
+      input.addEventListener('change', () => { resolve([...(input.files ?? [])]); input.remove(); });
+      input.addEventListener('cancel', () => { resolve([]); input.remove(); });
+      globalThis.document.body.append(input);
+      input.click();
+    });
+    // Only the folder's own images, as a drop does; webkitdirectory also lists subfolders' files.
+    const images = folderImages(files.filter((file) => ((file as File & { webkitRelativePath?: string }).webkitRelativePath ?? '').split('/').length <= 2));
+    if (!images.length) { if (files.length) this.alert(this.t('Import Folder as Layers'), this.t('This folder holds no images to import.')); return; }
+    try { await this.importFiles(images, this.workspace.current); }
+    catch (error) { this.reportError('import-failed', error, this.t('Import couldn’t finish')); }
   }
 
   async chooseAndImport(): Promise<void> {

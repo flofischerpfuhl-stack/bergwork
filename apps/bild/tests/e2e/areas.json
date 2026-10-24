@@ -23,7 +23,8 @@
         "src/io/project.ts",
         "src/io/compPackage.ts",
         "src/io/embedded.ts",
-        "src/platform/**"
+        "src/platform/**",
+        "src/core/canvasPresets.ts"
       ],
       "specs": [
         "tests/e2e/editor-workflows.spec.ts",
@@ -33,7 +34,9 @@
         "tests/e2e/own-files.spec.ts",
         "tests/e2e/qa-fwimg.spec.ts",
         "tests/e2e/recovery.spec.ts",
-        "tests/e2e/workspace.spec.ts"
+        "tests/e2e/workspace.spec.ts",
+        "tests/e2e/new-canvas.spec.ts",
+        "tests/e2e/image-commands.spec.ts"
       ]
     },
     "psd": {
@@ -108,7 +111,8 @@
         "src/ui/canvas/**",
         "src/wasm/**",
         "src/workers/kernel*.ts",
-        "src/workers/ops*.ts"
+        "src/workers/ops*.ts",
+        "src/core/imageCommands.ts"
       ],
       "specs": [
         "tests/e2e/artboard-tool.spec.ts",
@@ -123,7 +127,8 @@
         "tests/e2e/software-render.spec.ts",
         "tests/e2e/visual-tour.spec.ts",
         "tests/e2e/floating-chrome.spec.ts",
-        "tests/e2e/popover-layout.spec.ts"
+        "tests/e2e/popover-layout.spec.ts",
+        "tests/e2e/image-commands.spec.ts"
       ]
     },
     "painting": {
@@ -285,7 +290,8 @@
         "tests/e2e/qa-german.spec.ts",
         "tests/e2e/visual-tour.spec.ts",
         "tests/e2e/floating-chrome.spec.ts",
-        "tests/e2e/popover-layout.spec.ts"
+        "tests/e2e/popover-layout.spec.ts",
+        "tests/e2e/command-palette.spec.ts"
       ]
     },
     "performance": {

@@ -93,6 +93,17 @@ export class ProjectWorkspace {
     this.notify();
   }
 
+  /** Tabs can be dragged to reorder (Compositor 1.4.1): `id` moves to `index` among the tabs. */
+  moveTab(id: string, index: number): void {
+    const from = this.tabs.findIndex((t) => t.id === id);
+    const to = Math.max(0, Math.min(this.tabs.length - 1, Math.round(index)));
+    if (from < 0 || from === to) return;
+    const tabs = this.tabs.slice(), [tab] = tabs.splice(from, 1);
+    tabs.splice(to, 0, tab!);
+    this.tabs = tabs;
+    this.notify();
+  }
+
   createTab(name: string): ProjectTab { return new ProjectTab(name, this.services); }
 
   removeTab(id: string): void {

@@ -20,4 +20,16 @@ export const PARITY_DE: Readonly<Record<string, string>> = {
   'Enter a size up to 30,000 pixels at this resolution.': 'Eine Größe bis 30.000 Pixel bei dieser Auflösung eingeben.',
   'Paste an image here to open it as a canvas.': 'Füge hier ein Bild ein, um es als Leinwand zu öffnen.',
   'Pasted Image': 'Eingefügtes Bild',
+  // Image and Layer commands
+  'Trim…': 'Zuschneiden …', 'Trim': 'Zuschneiden', 'Based On': 'Basierend auf', 'Transparent Pixels': 'Transparenten Pixeln',
+  'Top Left Pixel Color': 'Farbe des Pixels oben links', 'Bottom Right Pixel Color': 'Farbe des Pixels unten rechts',
+  'Trim Away': 'Wegschneiden', 'Top': 'Oben', 'Bottom': 'Unten', 'Left': 'Links', 'Right': 'Rechts',
+  'Nothing would remain after trimming.': 'Nach dem Zuschneiden bliebe nichts übrig.',
+  'Image Rotation': 'Bilddrehung', '90° Clockwise': '90° im UZS', '90° Counterclockwise': '90° gegen UZS', '180°': '180°',
+  'Rotate Canvas 90° Clockwise': 'Arbeitsfläche 90° im UZS drehen', 'Rotate Canvas 90° Counterclockwise': 'Arbeitsfläche 90° gegen UZS drehen',
+  'Rotate Canvas 180°': 'Arbeitsfläche 180° drehen',
+  'Ungroup Layers': 'Gruppierung aufheben',
+  // Folders
+  'Import Folder as Layers…': 'Ordner als Ebenen importieren …', 'Import Folder as Layers': 'Ordner als Ebenen importieren',
+  'This folder holds no images to import.': 'In diesem Ordner sind keine Bilder zum Importieren.',
 };

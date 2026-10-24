@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import styles from './editor.module.css';
+import { droppedFiles } from './dropFiles';
 import type { EditorController } from './controller';
 import { useSessionSelector, useWorkspaceSelector } from './hooks';
 import { CanvasView } from './canvas/CanvasView';
@@ -45,20 +46,18 @@ export function CanvasPane({ controller }: { controller: EditorController }) {
       onDrop={(event) => {
         event.preventDefault();
         setDropping(false);
-        const files = [...event.dataTransfer.files];
         const rect = host.current!.getBoundingClientRect();
         const doc = controller.session.document;
         const point = doc ? controller.session.viewport.documentPoint({ x: event.clientX - rect.left, y: event.clientY - rect.top }, doc) : null;
-        if (event.altKey && controller.placeContentFiles) {
-          void controller.placeContentFiles(files, point);
-          return;
-        }
-        const archives = files.filter((f) => isProjectFile(f.name));
-        const images = files.filter((f) => !isProjectFile(f.name));
-        for (const archive of archives) void controller.openArchive(archive).catch((error) => controller.reportError('open-failed', error));
-        if (images.length) {
-          void controller.importFiles(images, controller.workspace.current, point);
-        }
+        const altKey = event.altKey;
+        void droppedFiles(event.dataTransfer).then(({ files, folders }) => {
+          if (altKey && controller.placeContentFiles) { void controller.placeContentFiles(files, point); return; }
+          const archives = files.filter((f) => isProjectFile(f.name));
+          const images = files.filter((f) => !isProjectFile(f.name));
+          for (const archive of archives) void controller.openArchive(archive).catch((error) => controller.reportError('open-failed', error));
+          // A folder's images stack where they were dropped as one import; without a canvas they make one.
+          if (images.length) void controller.importFiles(images, controller.workspace.current, folders ? null : point);
+        }).catch((error) => controller.reportError('import-failed', error));
       }}>
       {!session.document ? <NewCanvasSheet controller={controller} welcome /> : null}
       {failure ? <div className={styles.canvasMessage} role="alert">{failure}</div> : null}

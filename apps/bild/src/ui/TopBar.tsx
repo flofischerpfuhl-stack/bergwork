@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import styles from './editor.module.css';
+import { droppedFiles } from './dropFiles';
 import type { EditorController } from './controller';
 import { useSessionSelector, useUi, useWorkspaceSelector } from './hooks';
 import { Icon } from './icons';
@@ -126,6 +127,28 @@ export function TopBar({ controller, compact, width = 'full' }: { controller: Ed
   const openMenu = useUi(controller, (s) => s.openMenu);
   const t = controller.t;
   const anchorRef = useRef<{ x: number; y: number } | null>(null);
+  const tabStrip = useRef<HTMLDivElement>(null);
+  const workspaceForDrag = controller.workspace;
+  /** Dragging a tab sideways reorders the tabs (Compositor 1.4.1); the tab follows the pointer until it is let go. */
+  const startTabDrag = (event: React.PointerEvent<HTMLElement>, id: string) => {
+    if (event.button !== 0 || event.pointerType === 'touch' || !tabStrip.current) return;
+    const strip = tabStrip.current, startX = event.clientX;
+    const element = strip.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(id)}"]`);
+    let dragging = false;
+    const target = (x: number) => [...strip.querySelectorAll<HTMLElement>('[data-tab-id]')]
+      .filter((other) => other !== element).filter((other) => { const r = other.getBoundingClientRect(); return r.left + r.width / 2 < x; }).length;
+    const move = (e: PointerEvent) => {
+      if (!dragging && Math.abs(e.clientX - startX) < 6) return;
+      dragging = true;
+      if (element) { element.style.transform = `translateX(${e.clientX - startX}px)`; element.style.zIndex = '1'; element.dataset.dragging = 'true'; }
+    };
+    const up = (e: PointerEvent) => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+      if (element) { element.style.transform = ''; element.style.zIndex = ''; delete element.dataset.dragging; }
+      if (dragging && e.type === 'pointerup') workspaceForDrag.moveTab(id, target(e.clientX));
+    };
+    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  };
   // Feature modules warm up after start-up; opening a menu loads the rest at once and redraws it with their entries.
   const [, setFeaturesLoaded] = useState(0);
   const loadMenuFeatures = () => { void controller.loadAllFeatures?.().then(() => setFeaturesLoaded((value) => value + 1)); };
@@ -172,7 +195,7 @@ export function TopBar({ controller, compact, width = 'full' }: { controller: Ed
             void controller.importFiles([file], tab);
           }
         }}><Icon name="plus" size={compact ? 18 : 16} /></button>
-      <div className={styles.tabs} role="tablist" aria-label={t('Project tabs')}>
+      <div ref={tabStrip} className={styles.tabs} role="tablist" aria-label={t('Project tabs')}>
         {workspace.tabs.map((tab) => {
           const active = tab.id === workspace.selectedId;
           return (
@@ -181,14 +204,16 @@ export function TopBar({ controller, compact, width = 'full' }: { controller: Ed
               onDrop={(event) => {
                 event.preventDefault();
                 workspace.select(tab.id);
-                const files = [...event.dataTransfer.files];
-                // Projects open in their own tab (as on the canvas); images are imported into this one.
-                for (const archive of files.filter((f) => isProjectFile(f.name))) void controller.openArchive(archive).catch((error) => controller.reportError('open-failed', error));
-                const images = files.filter((f) => !isProjectFile(f.name));
-                if (images.length) void controller.importFiles(images, tab);
+                void droppedFiles(event.dataTransfer).then(({ files }) => {
+                  // Projects open in their own tab (as on the canvas); images, a folder's included, are imported into this one.
+                  for (const archive of files.filter((f) => isProjectFile(f.name))) void controller.openArchive(archive).catch((error) => controller.reportError('open-failed', error));
+                  const images = files.filter((f) => !isProjectFile(f.name));
+                  if (images.length) void controller.importFiles(images, tab);
+                });
               }}>
               <button type="button" role="tab" aria-selected={active} className={styles.tabLabel} title={tab.title}
-                disabled={!workspace.canSwitch && !active} onClick={() => workspace.select(tab.id)}>
+                disabled={!workspace.canSwitch && !active} onClick={() => workspace.select(tab.id)}
+                onPointerDown={(event) => startTabDrag(event, tab.id)}>
                 {tab.session.isModified && tab.session.document ? <span className={styles.tabDot} aria-label={t('Unsaved changes')} /> : null}
                 {tab.title}
               </button>

@@ -45,7 +45,7 @@ const toolOwners: Partial<Record<Tool, LazyFeature>> = {
 const keyOwners: Readonly<Record<string, LazyFeature>> = { q: 'objectSelection' };
 
 const commandGroups: [LazyFeature, string[]][] = [
-  ['canvas', ['canvasSize', 'imageSize']],
+  ['canvas', ['canvasSize', 'imageSize', 'trim', 'rotateCanvasClockwise', 'rotateCanvasCounterclockwise', 'rotateCanvas180']],
   ['selection', ['selectAll', 'deselect', 'inverse', 'loadLayerSelection', 'loadMaskSelection', 'expandSelection', 'contractSelection',
     'fillForeground', 'fillBackground', 'clearSelection', 'deleteKey', 'invert', 'copy', 'cut', 'copyMerged', 'paste', 'layerViaCopy', 'transformCommand']],
   ['retouch', ['contentAwareFill']],

@@ -293,12 +293,14 @@ export function applyCropSnap(rect: Rect, drag: CropDrag, point: Point, ratio: n
   return result;
 }
 
-export type CropRatioChoice = 'Free' | 'Original' | '1:1' | '4:3' | '16:9';
+export type CropRatioChoice = 'Free' | 'Original' | '1:1' | '4:3' | '3:4' | '16:9' | '9:16';
 export function cropRatioChoice(choice: CropRatioChoice, document: Pick<CanvasDocument, 'width' | 'height'>): number | null {
   if (choice === 'Original') return document.width / document.height;
   if (choice === '1:1') return 1;
   if (choice === '4:3') return 4 / 3;
+  if (choice === '3:4') return 3 / 4;
   if (choice === '16:9') return 16 / 9;
+  if (choice === '9:16') return 9 / 16;
   return null;
 }
 export function applyCropRatio(rect: Rect, ratio: number): Rect {
