@@ -13,7 +13,7 @@ export const SUBJECT_MODELS: Readonly<Record<SubjectModel, SubjectModelSpec>> = 
   fast: {
     kind: 'fast', inputSize: 320, byteLength: 4_574_861,
     sha256: '309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8',
-    defaultUrl: '/models/u2netp.onnx',
+    defaultUrl: `${import.meta.env.BASE_URL}models/u2netp.onnx`,
   },
   best: {
     kind: 'best', inputSize: 1024, byteLength: 199_681_624,

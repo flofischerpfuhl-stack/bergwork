@@ -3,6 +3,7 @@
 import * as ort from 'onnxruntime-web/webgpu';
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
 import ortModuleUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url';
+import { ortWasmReady } from './ortWasm';
 import { bestPromptMask, upscaleObjectMask } from '../core/objectSelect/postprocess';
 import { encodePrompts, prepareSlimSamImage } from '../core/objectSelect/preprocess';
 import type { ObjectSelectTiming } from '../core/objectSelect/types';
@@ -66,6 +67,7 @@ async function loadModels(id: number, urls: { readonly encoder: string; readonly
   const key = `${urls.encoder}|${urls.decoder}`;
   if (encoder && decoder && modelKey === key && (!forceWasm || backend === 'wasm')) return;
   progress(id, 'loading-model', 0);
+  await ortWasmReady(ort.env.wasm, ortWasmUrl);
   encoder?.release(); decoder?.release(); encoder = null; decoder = null; embeddings.clear();
   let webgpu: ort.InferenceSession.WebGpuExecutionProviderOption | null = null;
   if (!forceWasm) {

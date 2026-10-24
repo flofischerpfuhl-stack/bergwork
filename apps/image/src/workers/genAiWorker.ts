@@ -3,6 +3,7 @@
 import * as ort from 'onnxruntime-web/webgpu';
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.wasm?url';
 import ortModuleUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.mjs?url';
+import { ortWasmReady } from './ortWasm';
 import { accumulateTile, aiTiles, cropFixedTile, extractMask, extractRgba, finishTiles, padFixedTile } from '../core/genai/tiling';
 import { blendRgba, lanczosRgba } from '../core/genai/resample';
 import type { GenAiStage, GenAiWorkerRequest, GenAiWorkerResponse } from './genAiProtocol';
@@ -21,6 +22,7 @@ function progress(id: number, stage: GenAiStage, value: number): void { post({ i
 async function load(url: string, id: number, forceWasm = false): Promise<ort.InferenceSession> {
   if (session && modelUrl === url && (!forceWasm || backend === 'wasm')) return session;
   progress(id, 'loading-model', 0);
+  await ortWasmReady(ort.env.wasm, ortWasmUrl);
   session?.release(); session = null;
   if (!forceWasm && typeof navigator !== 'undefined' && 'gpu' in navigator) {
     try {

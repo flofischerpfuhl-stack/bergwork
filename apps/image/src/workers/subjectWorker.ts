@@ -3,6 +3,7 @@
 import * as ort from 'onnxruntime-web/webgpu';
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.wasm?url';
 import ortModuleUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.mjs?url';
+import { ortWasmReady } from './ortWasm';
 import { SUBJECT_MODELS } from '../core/subject/models';
 import {
   countMaskComponents, postprocessBiRefNet, postprocessU2Net, preprocessBiRefNet, preprocessU2Net,
@@ -54,6 +55,7 @@ async function loadModel(request: Extract<SubjectWorkerRequest, { op: 'infer' }>
   if (session && sessionKey === key) return { session, downloadMs: 0, modelLoadMs: 0, cacheHit: true };
 
   progress(request.id, 'loading-model', 0);
+  await ortWasmReady(ort.env.wasm, ortWasmUrl);
   const started = performance.now();
   session?.release(); session = null;
   if (!forceWasm && typeof navigator !== 'undefined' && 'gpu' in navigator) {

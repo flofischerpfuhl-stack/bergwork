@@ -20,11 +20,11 @@ export interface BundledFontDescriptor {
 
 export const BUNDLED_TEXT_FONTS: readonly BundledFontDescriptor[] = [
   { id: 'noto-sans-variable', family: 'Noto Sans', fullName: 'Noto Sans Regular', postscriptName: 'NotoSans-Regular',
-    style: 'Variable', weight: 400, url: '/fonts/NotoSans-Variable.ttf' },
+    style: 'Variable', weight: 400, url: `${import.meta.env.BASE_URL}fonts/NotoSans-Variable.ttf` },
   { id: 'noto-sans-arabic-variable', family: 'Noto Sans Arabic', fullName: 'Noto Sans Arabic Regular', postscriptName: 'NotoSansArabic-Regular',
-    style: 'Variable', weight: 400, url: '/fonts/NotoSansArabic-Variable.ttf' },
+    style: 'Variable', weight: 400, url: `${import.meta.env.BASE_URL}fonts/NotoSansArabic-Variable.ttf` },
   { id: 'noto-sans-devanagari-variable', family: 'Noto Sans Devanagari', style: 'Variable', weight: 400,
-    fullName: 'Noto Sans Devanagari Regular', postscriptName: 'NotoSansDevanagari-Regular', url: '/fonts/NotoSansDevanagari-Variable.ttf' },
+    fullName: 'Noto Sans Devanagari Regular', postscriptName: 'NotoSansDevanagari-Regular', url: `${import.meta.env.BASE_URL}fonts/NotoSansDevanagari-Variable.ttf` },
 ] as const;
 
 export interface MissingFont {

@@ -47,7 +47,7 @@ export function LicensesView({ controller, close }: { controller: EditorControll
   const [shown, setShown] = useState<{ title: string; text: string } | null>(null);
   useEffect(() => {
     let live = true;
-    fetch('/licenses.json').then((response) => {
+    fetch(`${import.meta.env.BASE_URL}licenses.json`).then((response) => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return response.json() as Promise<LicenseDocument>;
     }).then((value) => { if (live) setDocument(value); }).catch(() => { if (live) setError(true); });
