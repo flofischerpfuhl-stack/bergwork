@@ -9,57 +9,61 @@
  */
 
 .root {
-  /* Surfaces (Fernwork PDF dark tokens) */
-  --cmp-bg: #121212;
-  --cmp-surface: #0b0b0b;
-  --cmp-canvas-bg: #1b1b1b;
-  --cmp-raised: rgba(7, 7, 7, 0.97);
+  /* Every colour, font and radius comes from the berg:work design base (packages/ui, tokens.css): light and dark
+     follow the root's data-theme, sharp corners the page's data-corners. The --cmp-* names stay so the editor's
+     modules need no edits. */
+  --cmp-bg: var(--bw-void);
+  --cmp-surface: var(--bw-surface-sunken);
+  --cmp-canvas-bg: var(--bw-void);
   /* A hair short of opaque: Chrome treats an opaque scrolling box as covering its whole layer, shadow included, and
      then skips painting the canvas under the shadow (transparent seams next to the chrome). */
-  --cmp-panel: rgba(7, 7, 7, 0.97);
-  --cmp-panel-2: #0d0d0d;
-  --cmp-panel-3: #121212;
-  --cmp-control: rgba(255, 255, 255, 0.06);
-  --cmp-control-hover: rgba(255, 255, 255, 0.1);
-  --cmp-control-active: rgba(255, 255, 255, 0.16);
-  --cmp-border: rgba(255, 255, 255, 0.12);
-  --cmp-border-strong: rgba(255, 255, 255, 0.26);
-  --cmp-hairline: rgba(255, 255, 255, 0.07);
-  --cmp-text: #f5f5f5;
-  --cmp-text-secondary: #a1a1aa;
-  --cmp-text-tertiary: rgba(255, 255, 255, 0.34);
-  /* Fernwork green for the interface; canvas overlays (handles, snapping) keep a neutral blue. */
-  --cmp-accent: #15803d;
-  --cmp-accent-strong: #22c55e;
-  --cmp-accent-hover: #16a34a;
-  --cmp-accent-soft: color-mix(in srgb, var(--cmp-accent-hover) 22%, transparent);
-  --cmp-accent-tint: color-mix(in srgb, var(--cmp-accent-hover) 13%, var(--cmp-panel-2));
-  --cmp-accent-contrast: #ffffff;
+  --cmp-raised: color-mix(in srgb, var(--bw-surface-raised) 97%, transparent);
+  --cmp-panel: color-mix(in srgb, var(--bw-surface) 97%, transparent);
+  --cmp-panel-2: var(--bw-surface);
+  --cmp-panel-3: var(--bw-surface-raised);
+  --cmp-control: var(--bw-field);
+  --cmp-control-hover: var(--bw-hover);
+  --cmp-control-active: var(--bw-press);
+  --cmp-border: var(--bw-border);
+  --cmp-border-strong: var(--bw-border-strong);
+  --cmp-hairline: var(--bw-border-subtle);
+  --cmp-text: var(--bw-fg-strong);
+  --cmp-text-secondary: var(--bw-fg-muted);
+  --cmp-text-tertiary: var(--bw-fg-subtle);
+  /* The stone accent, used sparingly (primary buttons, slider fills); states are neutral frames (Builder §3).
+     Canvas overlays (handles, snapping) keep a neutral blue. */
+  --cmp-accent: var(--bw-accent);
+  --cmp-accent-strong: var(--bw-frame);
+  --cmp-accent-hover: var(--bw-accent-hover);
+  --cmp-accent-soft: var(--bw-selection);
+  --cmp-accent-tint: var(--bw-selection);
+  --cmp-accent-contrast: var(--bw-accent-on);
   --cmp-canvas-accent: #0a84ff;
-  --cmp-danger: #ef4444;
-  --cmp-warning: #f59e0b;
-  --cmp-success: #22c55e;
-  --cmp-raised-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-  --cmp-segment-on: var(--cmp-control-active);
-  --cmp-thumb-bg: #2a2a2a;
-  --cmp-preview-bg: #1f1f1f;
-  --cmp-checker-a: #2a2a2a;
-  --cmp-checker-b: #333333;
-  --cmp-toast-bg: rgba(0, 0, 0, 0.78);
-  --cmp-toast-text: #ffffff;
-  --cmp-plot-bg: var(--cmp-panel-3);
-  --cmp-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
-  --cmp-bar-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
-  --cmp-overlay: rgba(0, 0, 0, 0.58);
-  --cmp-font: 'Inter', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --cmp-danger: var(--bw-error);
+  --cmp-warning: var(--bw-warning);
+  --cmp-success: var(--bw-success);
+  --cmp-raised-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --cmp-segment-on: var(--bw-surface-raised);
+  --cmp-thumb-bg: var(--bw-surface-raised);
+  --cmp-preview-bg: var(--bw-surface-sunken);
+  --cmp-checker-a: var(--bw-checker-a);
+  --cmp-checker-b: var(--bw-checker-b);
+  --cmp-toast-bg: var(--bw-surface-raised);
+  --cmp-toast-text: var(--bw-fg-strong);
+  --cmp-plot-bg: var(--bw-surface-sunken);
+  --cmp-shadow: var(--bw-shadow-popover);
+  --cmp-bar-shadow: var(--bw-shadow-island);
+  --cmp-overlay: var(--bw-overlay);
+  --cmp-font: var(--bw-font-ui);
+  --cmp-font-mono: var(--bw-font-mono);
   /* Chrome geometry */
-  --cmp-inset: 10px;
-  --cmp-gap: 8px;
+  --cmp-inset: var(--bw-gap);
+  --cmp-gap: var(--bw-gap);
   --cmp-control-size: 32px;
   --cmp-bar: 44px;
   --cmp-status-bar: 38px;
-  --cmp-radius: 12px;
-  --cmp-radius-control: 8px;
+  --cmp-radius: var(--bw-radius-island);
+  --cmp-radius-control: var(--bw-radius-control);
   --cmp-rail-w: 44px;
   --cmp-target: 28px;
   --cmp-panel-w: 264px;
@@ -75,6 +79,7 @@
   overflow: hidden;
   background: var(--cmp-canvas-bg);
   color: var(--cmp-text);
+  /* 12 px: the editor's dense panels are laid out for it; menus and the title bar use the 13 px of the design base. */
   font: 12px/1.3 var(--cmp-font);
   font-feature-settings: 'cv11', 'ss01';
   -webkit-font-smoothing: antialiased;
@@ -87,41 +92,11 @@
 .root *, .root *::before, .root *::after { box-sizing: border-box; }
 .root input, .root select, .root textarea { user-select: text; -webkit-user-select: text; }
 .root :is(button, input, select, textarea, a, [role='tab'], [role='menuitem'], [role='treeitem']):focus-visible {
-  outline: 2px solid var(--cmp-accent-strong); outline-offset: 1px;
+  outline: 2px solid var(--bw-focus); outline-offset: 1px;
 }
 
 .light {
-  --cmp-bg: #eef2f7;
-  --cmp-surface: #ffffff;
-  --cmp-canvas-bg: #e2e6ec;
-  --cmp-raised: rgba(255, 255, 255, 0.97);
-  --cmp-panel: rgba(255, 255, 255, 0.97);
-  --cmp-panel-2: #f8fafc;
-  --cmp-panel-3: #eef2f7;
-  --cmp-control: rgba(15, 23, 42, 0.05);
-  --cmp-control-hover: rgba(15, 23, 42, 0.09);
-  --cmp-control-active: rgba(15, 23, 42, 0.14);
-  --cmp-border: rgba(15, 23, 42, 0.14);
-  --cmp-border-strong: rgba(15, 23, 42, 0.28);
-  --cmp-hairline: rgba(15, 23, 42, 0.08);
-  --cmp-text: #0f172a;
-  --cmp-text-secondary: #64748b;
-  --cmp-text-tertiary: rgba(15, 23, 42, 0.36);
-  --cmp-accent-strong: #15803d;
-  --cmp-accent-soft: color-mix(in srgb, var(--cmp-accent-hover) 16%, transparent);
-  --cmp-accent-tint: color-mix(in srgb, var(--cmp-accent-hover) 12%, var(--cmp-panel-2));
-  --cmp-warning: #b45309;
-  --cmp-success: #15803d;
-  --cmp-danger: #dc2626;
-  --cmp-raised-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
-  --cmp-segment-on: #ffffff;
-  --cmp-thumb-bg: #d7dce3;
-  --cmp-preview-bg: #e6e9ee;
-  --cmp-checker-a: #e6e6e6;
-  --cmp-checker-b: #d2d2d2;
-  --cmp-shadow: 0 16px 40px rgba(15, 23, 42, 0.2);
-  --cmp-bar-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
-  --cmp-overlay: rgba(15, 23, 42, 0.38);
+  /* The light colours come from the berg:work tokens through data-theme="light" on the root. */
   color-scheme: light;
 }
 
@@ -200,17 +175,19 @@
 .menuTitle:hover, .menuTitleOpen { background: var(--cmp-control-hover); }
 .chromeDivider { flex: none; width: 1px; height: 22px; margin: 0 4px; background: var(--cmp-border); }
 .menuPopup {
-  position: fixed; z-index: 70; min-width: 240px; overflow-y: auto; padding: 6px;
-  background: var(--cmp-panel); border: 1px solid var(--cmp-border); border-radius: var(--cmp-radius); box-shadow: var(--cmp-shadow);
+  /* The berg:work menu (Builder §8a): width from the content, 4 px padding, rows of 28 px with checks at the end. */
+  position: fixed; z-index: 70; min-width: 180px; max-width: 320px; overflow-y: auto; padding: 4px;
+  background: var(--cmp-raised); border: 1px solid var(--cmp-border); border-radius: var(--bw-radius-menu); box-shadow: var(--cmp-shadow);
 }
 .menuItem {
-  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 28px; padding: 4px 10px 4px 26px; border: 0;
-  border-radius: var(--cmp-radius-control); background: transparent; color: var(--cmp-text); font: 500 13px/1.2 var(--cmp-font); text-align: left; position: relative;
+  display: flex; align-items: center; gap: 16px; width: 100%; min-height: var(--bw-row); padding: 4px 34px 4px 8px; border: 0;
+  border-radius: var(--bw-radius-row); background: transparent; color: var(--bw-fg); font: 400 13px/1.2 var(--cmp-font); text-align: left; position: relative;
+  white-space: nowrap;
 }
-.menuItem:hover:not(:disabled), .menuItem:focus-visible { background: var(--cmp-control-hover); outline: none; }
+.menuItem:hover:not(:disabled), .menuItem:focus-visible { background: var(--bw-hover); color: var(--bw-fg-strong); outline: none; }
 .menuItem:disabled { color: var(--cmp-text-tertiary); }
-.menuItem .shortcut { margin-left: auto; color: var(--cmp-text-secondary); font-size: 12px; font-weight: 400; }
-.menuCheck { position: absolute; left: 9px; color: var(--cmp-accent-strong); }
+.menuItem .shortcut { margin-left: auto; color: var(--bw-fg-subtle); font-size: 12px; font-weight: 400; }
+.menuCheck { position: absolute; right: 10px; left: auto; color: var(--bw-fg-strong); }
 .menuSeparator { height: 1px; margin: 5px 8px; background: var(--cmp-border); }
 .compact .menuItem, .compactLandscape .menuItem { min-height: 42px; font-size: 15px; }
 
@@ -336,7 +313,8 @@
   border: 1px solid transparent; background: transparent; color: var(--cmp-text);
 }
 .tool:hover:not(:disabled) { background: var(--cmp-control-hover); }
-.toolOn, .toolOn:hover:not(:disabled) { background: var(--cmp-accent); border-color: var(--cmp-accent); color: var(--cmp-accent-contrast); }
+/* A selected tool is pressed: the darker control grey with a solid frame, never an accent fill (Builder §3). */
+.toolOn, .toolOn:hover:not(:disabled) { background: var(--bw-control-active); border-color: var(--bw-frame); color: var(--bw-fg-strong); }
 .tool:disabled { color: var(--cmp-text-tertiary); }
 .compact .rail {
   top: auto; bottom: calc(var(--cmp-inset) + env(safe-area-inset-bottom)); left: var(--cmp-inset); right: var(--cmp-inset); width: auto; height: 58px;

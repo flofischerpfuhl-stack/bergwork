@@ -1,6 +1,7 @@
 import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { bergworkResolve, bergworkRoot } from '../../vite.bergwork';
 
 const isolationHeaders = {
   'Cross-Origin-Opener-Policy': 'same-origin',
@@ -10,6 +11,7 @@ const isolationHeaders = {
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
   plugins: [react()],
+  resolve: bergworkResolve,
   base: './',
   // The shared public/ folder (bundled OFL fonts, U²-Netp model, …): root is src-tauri/frontend, so Vite would look there.
   publicDir: fileURLToPath(new URL('../../public', import.meta.url)),
@@ -18,7 +20,7 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     headers: isolationHeaders,
-    fs: { allow: [fileURLToPath(new URL('../..', import.meta.url))] },
+    fs: { allow: [fileURLToPath(new URL('../..', import.meta.url)), bergworkRoot] },
   },
   preview: { headers: isolationHeaders },
   worker: { format: 'es' },

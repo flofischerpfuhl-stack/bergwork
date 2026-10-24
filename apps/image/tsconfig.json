@@ -15,7 +15,10 @@
     "resolveJsonModule": true,
     "useDefineForClassFields": true,
     "types": ["vite/client", "node"],
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@bergwork/ui": ["../../packages/ui/src/index.ts"]
+    }
   },
-  "include": ["src", "tests", "contracts.ts", "vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
+  "include": ["src", "tests", "contracts.ts", "vite.config.ts", "vite.bergwork.ts", "vitest.config.ts", "playwright.config.ts"]
 }

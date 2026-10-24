@@ -1,6 +1,8 @@
-/** Standalone page: the ordinary Vite index mounts one editor with the browser host. */
+/**
+ * Standalone page: berg:work Image in its window — the berg:work title bar on top, the editor below, one product
+ * tooltip for both. The shell loads with the editor; mounting it never blocks on the editor's own start-up.
+ */
 export async function startStandalone(root: HTMLElement): Promise<void> {
-  const { mountEditor } = await import('../index');
-  const { createBrowserHost } = await import('../platform/browserHost');
-  await mountEditor(root, { host: createBrowserHost(), profile: 'lite', locale: navigator.language.startsWith('de') ? 'de' : 'en', theme: 'dark' });
+  const { renderShell } = await import('./shell');
+  renderShell(root);
 }

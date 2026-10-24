@@ -1368,6 +1368,18 @@ export class EditorController {
       exportImage: async ({ format, quality }) => this.exportBlob(format, quality === undefined ? {} : { quality }),
       getManifest: () => this.manifest(),
       getManifestV2: () => this.manifestV2(),
+      subscribeDocument: (listener) => {
+        let last = '';
+        const tell = () => {
+          const tab = this.workspace.current, document = tab.session.document;
+          const info = { title: tab.title, width: document?.width ?? null, height: document?.height ?? null,
+            modified: !!document && tab.session.isModified };
+          const key = JSON.stringify(info);
+          if (key !== last) { last = key; listener(info); }
+        };
+        tell();
+        return this.workspace.subscribe(tell);
+      },
       undo: async () => this.session.undo(),
       redo: async () => this.session.redo(),
       destroy,

@@ -322,8 +322,18 @@ export interface ProjectManifestV2 {
 }
 
 /** Additive host surface; the v1 `EditorHandle` remains source-compatible. */
+/** What a host shows about the open document (title bar, window title). */
+export interface DocumentInfoV2 {
+  title: string;
+  width: number | null;
+  height: number | null;
+  modified: boolean;
+}
+
 export interface EditorHandleV2 extends EditorHandle {
   getManifestV2(): ProjectManifestV2;
+  /** Calls `listener` now and whenever the current tab, its name, size or unsaved state changes; returns unsubscribe. */
+  subscribeDocument?(listener: (info: DocumentInfoV2) => void): () => void;
 }
 
 export type EditorProfileId = 'pro' | 'lite';

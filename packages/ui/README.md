@@ -51,4 +51,6 @@ light desktop does not flash dark; `useAppearance` keeps it in step afterwards.
 - Phone layout of the side panels (bottom sheets) and collapse stages of the status bar beyond hiding the
   middle rail.
 - A console for messages (the Builder reports in a console, not in toasts).
-- Wiring into the editors: berg:work Image (`apps/image`) and the PDF editor still use their own UI.
+- Editors: berg:work Image (`apps/image`) takes its colours, type, radii and spacing from these tokens and runs in
+  the berg:work title bar with the product tooltip; its panels, option bar and dialogs are still its own
+  components and move onto these step by step. The PDF editor does not use the design base yet.

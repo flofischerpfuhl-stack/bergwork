@@ -3,9 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
     <title>berg:work Image</title>
-    <style>html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #1b1b1b; }</style>
+    <link rel="icon" href="/src/app/bergwork-image.svg" />
+    <script>
+      // The appearance before first paint (same rule as @bergwork/ui applyAppearance), so a light desktop does not
+      // flash dark; the title bar's appearance menu takes over once the page runs.
+      try {
+        const a = JSON.parse(localStorage.getItem('bergwork.appearance') || 'null') || {};
+        const light = a.theme === 'light' || (a.theme !== 'dark' && matchMedia('(prefers-color-scheme: light)').matches);
+        document.documentElement.dataset.theme = light ? 'light' : 'dark';
+        document.documentElement.dataset.corners = a.corners === 'sharp' ? 'sharp' : 'round';
+      } catch {}
+    </script>
+    <style>html, body, #root { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #121110; }
+      html[data-theme='light'], html[data-theme='light'] body { background: #dedbd6; }</style>
   </head>
   <body>
     <div id="root"></div>

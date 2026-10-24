@@ -183,7 +183,8 @@ test('the color picker is a panel: canvas clicks sample into it, only OK commits
   await expect(picker).toBeVisible();
   // No modal backdrop: the canvas takes the click and samples the composite.
   const at = await canvasMapper(page, 100);
-  const p = at(50, 50);
+  // A part of the image the floating picker leaves uncovered (the picker sits next to the tools).
+  const p = at(92, 92);
   await page.mouse.click(p.x, p.y);
   await expect(page.getByTestId('color-hex')).toHaveValue('1428DC');
   expect(await palette()).toEqual(before);

@@ -6,6 +6,10 @@ and editing code grew from the MIT-licensed macOS editor Compositor; that origin
 repository and moved here with its history on 2026-10-24; the in-app name still reads "Fernwork Bildeditor" until
 the berg:work UI round.
 
+The web page (`index.html`, `src/app/shell.tsx`) is the berg:work window: the title bar of the design base
+(`packages/ui`, aliased in `vite.bergwork.ts`) above the editor; the editor's colours, type and radii come from the
+design base's tokens (`src/ui/editor.module.css`).
+
 This directory is a standalone npm project (own `package-lock.json`, Node 22): run the commands below inside
 `apps/image/`. Parity with Compositor is tracked in `parity.json`.
 

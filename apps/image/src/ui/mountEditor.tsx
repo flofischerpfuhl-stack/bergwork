@@ -4,6 +4,7 @@
  * leaves `root` empty.
  */
 
+import '@bergwork/ui/styles.css';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import type { EditorHandleV2, MountEditorV2 } from '../../contracts-v2';

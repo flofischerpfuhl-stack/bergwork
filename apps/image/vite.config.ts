@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import type { Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { gzipSync } from 'node:zlib';
+import { bergworkResolve } from './vite.bergwork';
 
 /** Build evidence and the source of truth for A10's generated bundle-budget gate. */
 function bundleReport(): Plugin {
@@ -47,6 +48,7 @@ const isolationHeaders = {
 
 export default defineConfig({
   plugins: [fullResponsesForWorkers(), react(), bundleReport()],
+  resolve: bergworkResolve,
   server: { host: '127.0.0.1', headers: isolationHeaders },
   preview: { headers: isolationHeaders },
   worker: { format: 'es' },
