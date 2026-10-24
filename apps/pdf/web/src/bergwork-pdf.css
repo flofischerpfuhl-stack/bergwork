@@ -67,6 +67,22 @@
   .oo-pdf-shell :is(input[type='checkbox'], input[type='radio'], input[type='range'], progress) {
     accent-color: var(--bw-accent);
   }
+
+  /* Buttons the editor leaves unstyled (dialog actions such as Find and redact): the design base's quiet button. */
+  body.oo-pdf-workbench-route button:not([class]) {
+    min-height: var(--bw-row);
+    padding: 0 10px;
+    border: 0;
+    border-radius: var(--bw-radius-control);
+    background: var(--bw-control);
+    color: var(--bw-fg);
+    font: 500 var(--bw-text) / 1 var(--bw-font-ui);
+  }
+
+  body.oo-pdf-workbench-route button:not([class]):hover:not(:disabled) { box-shadow: inset 0 0 0 100px var(--bw-hover); color: var(--bw-fg-strong); }
+  body.oo-pdf-workbench-route button:not([class]):active:not(:disabled) { box-shadow: inset 0 0 0 100px var(--bw-press); }
+  body.oo-pdf-workbench-route button:not([class]):disabled { opacity: 0.5; }
+  body.oo-pdf-workbench-route button:not([class]):focus-visible { outline: 2px solid var(--bw-focus); outline-offset: 1px; }
 }
 
 /* ── 2. Tokens ───────────────────────────────────────────────────────── */
@@ -179,6 +195,63 @@ body.oo-pdf-workbench-route button { font-family: var(--bw-font-ui); }
 }
 
 .oo-pdf-shell .oo-pdf-drawer-tool { font-weight: 500; }
+
+/* Island chrome (shell.chrome = 'islands', see the source fork's islandChrome): the top row splits into a left island
+   (document, tools) and a right island (file, history, panels), the bottom row into status islands (zoom and page,
+   pages, view), each spanning the window like berg:work Image's. The rows themselves are transparent and let pointer
+   events through to the page between the islands. */
+.oo-pdf-shell.has-floating-toolbar :is(.oo-pdf-topbar.is-islands, .oo-pdf-toolbar.is-statusbar) {
+  left: var(--bw-gap);
+  right: var(--bw-gap);
+  width: auto;
+  max-width: none;
+  justify-content: space-between;
+  gap: var(--bw-gap);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  pointer-events: none;
+}
+
+/* Pages lives here now: like the top row, the status row stays above the drawer's backdrop, so it closes the drawer. */
+.oo-pdf-shell.has-floating-toolbar .oo-pdf-toolbar.is-statusbar { z-index: 950; }
+
+.oo-pdf-shell .oo-pdf-island,
+.oo-pdf-shell :is(.oo-pdf-topbar.is-islands, .oo-pdf-toolbar.is-statusbar) > .oo-pdf-searchbox {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: var(--pdf-chrome-bar);
+  padding: 5px;
+  border: 1px solid var(--bw-border);
+  border-radius: var(--bw-radius-island);
+  background: var(--pdf-floating);
+  box-shadow: var(--bw-shadow-island);
+  pointer-events: auto;
+}
+
+.oo-pdf-shell .oo-pdf-topbar.is-islands > .oo-pdf-searchbox { flex: 1 1 320px; max-width: 420px; }
+
+.oo-pdf-shell.has-floating-toolbar .oo-pdf-toolbar.is-statusbar .oo-pdf-view-controls {
+  padding-left: 5px;
+  border-left: 1px solid var(--bw-border);
+}
+
+/* Tool options sit under the top row, at its start, as berg:work Image's option bar does. */
+.oo-pdf-shell.has-floating-toolbar:has(.oo-pdf-topbar.is-islands) .oo-pdf-contextbar {
+  top: calc(var(--bw-gap) + var(--pdf-chrome-bar) + var(--bw-gap-attached));
+  bottom: auto;
+  left: var(--bw-gap);
+  max-width: calc(100% - 2 * var(--bw-gap));
+  border-color: var(--bw-border);
+  border-radius: var(--bw-radius-island);
+  box-shadow: var(--bw-shadow-island);
+  transform: none;
+}
 
 /* Sharp corners: every radius in the editor's chrome follows, as the design base's do. Dots, handles, knobs and
    colour swatches stay round. */

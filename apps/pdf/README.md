@@ -54,7 +54,12 @@ double click maximises. On Linux the window is transparent with rounded corners 
 maximised. The editor follows `html[data-theme]` and `html[data-corners]`; `src/bergwork-pdf.css` restyles it from
 outside the source fork, so Fernwork's changes keep applying to `editor/`.
 
-The editor is mounted with `mount(element, { host })`. The host supplies only `shell.setTitle` (the window title,
+The editor is mounted with `mount(element, { host })` and `shell.chrome: 'islands'`: the fork's `islandChrome` lays the
+editor's controls out as berg:work Image does after the Builder UI — top left the document and the tools (Pan, Edit
+PDF, Insert, Markup, Guides), top right Save, Undo/Redo, Print, Document tools and Layers, at the bottom status islands
+for zoom and page, Pages and rotation, and Find/comments/link outlines; tool options sit under the top row. Phones and
+hosts without the option keep Fernwork's layout. The controls are shared JSX variables in `pdf-tools-shell.jsx`, so a
+Fernwork change to one of them reaches both layouts. The host supplies `shell.setTitle` (the window title,
 `• name — berg:work PDF` for unsaved changes, and the document in the title bar); the editor shows no fullscreen toggle
 because the shell offers no `setFullscreen`. The editor's `titleBar` slots are not used.
 

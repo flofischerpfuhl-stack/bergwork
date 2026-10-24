@@ -26735,11 +26735,14 @@ function App({ shell = null }) {
   const pageActionsDisabled = !activeDoc || activeSessionOpening || applyingEdits || normalizingRotation || pageStructureBusy || activeSafety.mutationBlocked;
   // Choosing the active tool again puts it down (back to Pan).
   const chooseTool = id => { selectTool(tool === id && id !== 'pan' ? 'pan' : id); closeChromeMenu(); };
+  // berg:work island chrome (see islandTopbar): the tools sit in the top row, so their menus open downwards.
+  const islandChrome = !phoneLayout && shell?.chrome === 'islands';
+  const toolMenuPlacement = islandChrome ? 'down' : 'up';
   const toolGroupButton = (id, label, toolIds, fallbackIcon, title) => {
     const current = toolIds.includes(tool) ? toolbarTool(tool) : null;
     return (
       <ChromePopoverButton id={id} label={label} title={title} iconName={current?.icon || fallbackIcon}
-        text={phoneLayout ? '' : current?.label || label} active={Boolean(current)} {...chromeMenuProps(id)}
+        text={phoneLayout ? '' : current?.label || label} active={Boolean(current)} placement={toolMenuPlacement} {...chromeMenuProps(id)}
         disabled={Boolean(!activeDoc || applyingEdits || normalizingRotation || documentLoadProgress)} className={`oo-pdf-tool-group-${id}`}>
         {toolIds.map(toolId => {
           const item = toolbarTool(toolId);
@@ -26750,25 +26753,24 @@ function App({ shell = null }) {
     );
   };
 
-  const canvasToolbar = (
-    <div ref={toolbarRef} className="oo-pdf-toolbar is-floating" role="toolbar" aria-label="PDF canvas tools">
-      <div className="oo-pdf-tool-strip">
-        {/* Phones keep Undo in the top bar: the bottom strip has no room. */}
-        {!phoneLayout && <>
-          <button className="oo-pdf-chrome-button" type="button" aria-label="Undo" title="Undo (Ctrl/⌘+Z)" onClick={undoDoc} disabled={!canUndo}>
-            <Icon name="undo-2" />
-          </button>
-          <button className="oo-pdf-chrome-button" type="button" aria-label="Redo" title="Redo (Ctrl/⌘+Shift+Z)" onClick={redoDoc} disabled={!canRedo}>
-            <Icon name="redo-2" />
-          </button>
-          <span className="oo-pdf-chrome-divider" aria-hidden="true" />
-        </>}
+  const historyButtons = (
+    <>
+      <button className="oo-pdf-chrome-button" type="button" aria-label="Undo" title="Undo (Ctrl/⌘+Z)" onClick={undoDoc} disabled={!canUndo}>
+        <Icon name="undo-2" />
+      </button>
+      <button className="oo-pdf-chrome-button" type="button" aria-label="Redo" title="Redo (Ctrl/⌘+Shift+Z)" onClick={redoDoc} disabled={!canRedo}>
+        <Icon name="redo-2" />
+      </button>
+    </>
+  );
+  const toolButtons = (
+    <>
         <button type="button" className={`oo-pdf-chrome-button ${phoneLayout ? '' : 'has-text'} ${tool === 'pan' ? 'is-active' : ''}`}
           aria-label="Pan" title="Pan: move the page (H)" aria-pressed={tool === 'pan'} disabled={toolDisabled('pan')} onClick={() => chooseTool('pan')}>
           <Icon name="hand" />{!phoneLayout && <span className="oo-pdf-chrome-button-text">Pan</span>}
         </button>
         <ChromePopoverButton id="select" label="Editable objects" title="Choose which kinds of objects Edit PDF can change"
-          iconName="pen-tool" text={phoneLayout ? '' : 'Edit PDF'} active={tool === 'select'} {...chromeMenuProps('select')}
+          iconName="pen-tool" text={phoneLayout ? '' : 'Edit PDF'} active={tool === 'select'} placement={toolMenuPlacement} {...chromeMenuProps('select')}
           disabled={toolDisabled('select')} panelLabel="Editable objects" className="oo-pdf-tool-group-select"
           primary={{
             label: 'Edit PDF',
@@ -26793,7 +26795,7 @@ function App({ shell = null }) {
         {toolGroupButton('markup', 'Markup', MARKUP_TOOL_IDS, 'highlighter', 'Highlight, underline, strike through or redact')}
         {!narrowPhone && (
           <ChromePopoverButton id="guides" label="Guides" title="Guides, rulers and snapping" iconName="ruler"
-            text={phoneLayout ? '' : 'Guides'} on={guidesVisible || rulersVisible || snapEnabled} {...chromeMenuProps('guides')}
+            text={phoneLayout ? '' : 'Guides'} on={guidesVisible || rulersVisible || snapEnabled} placement={toolMenuPlacement} {...chromeMenuProps('guides')}
             disabled={!activeDoc} panelLabel="Guides, rulers and snapping" className="oo-pdf-tool-group-guides">
             <ChromeMenuItem label="Drawing guides" iconName="guides" pressed={guidesVisible}
               title={guidesVisible ? 'Hide drawing guides' : 'Show drawing guides (drag from a ruler to add one)'} onClick={() => setGuidesVisible(value => !value)} />
@@ -26804,8 +26806,10 @@ function App({ shell = null }) {
               onClick={() => { closeChromeMenu(); setPanel('guides'); setDrawerOpen(true); }} />
           </ChromePopoverButton>
         )}
-      </div>
-      <div className="oo-pdf-view-controls" aria-label="View controls">
+    </>
+  );
+  const viewControls = (
+    <>
         <ZoomControl zoom={zoom} {...chromeMenuProps('zoom')} disabled={!activeDoc}
           wheelMode={wheelMode} onWheelModeChange={setWheelMode}
           onZoomIn={() => zoomAt(zoomRef.current * ZOOM_BUTTON_FACTOR)} onZoomOut={() => zoomAt(zoomRef.current / ZOOM_BUTTON_FACTOR)}
@@ -26816,6 +26820,20 @@ function App({ shell = null }) {
             closeChromeMenu();
           }} />
         <PageJump pageIndex={activePage} pageCount={activeDoc?.pages.length || 0} onGoToPage={goToPage} />
+    </>
+  );
+  const canvasToolbar = (
+    <div ref={toolbarRef} className="oo-pdf-toolbar is-floating" role="toolbar" aria-label="PDF canvas tools">
+      <div className="oo-pdf-tool-strip">
+        {/* Phones keep Undo in the top bar: the bottom strip has no room. */}
+        {!phoneLayout && <>
+          {historyButtons}
+          <span className="oo-pdf-chrome-divider" aria-hidden="true" />
+        </>}
+        {toolButtons}
+      </div>
+      <div className="oo-pdf-view-controls" aria-label="View controls">
+        {viewControls}
       </div>
     </div>
   );
@@ -26866,6 +26884,117 @@ function App({ shell = null }) {
           className={drawerOpen && drawerPanel === item.id ? 'is-active' : ''} onClick={() => openDrawerPanel(item.id)} />
       ))}
     </ChromePopoverButton>
+  );
+
+  const pageButtons = (
+    <>
+    <button className={`oo-pdf-chrome-button oo-pdf-topbar-pages-control has-text ${pagesPanelOpen ? 'is-on' : ''}`} type="button" aria-label="Pages" title="Pages: reorder, add, rotate, duplicate or delete pages" aria-pressed={pagesPanelOpen} onClick={togglePagesPanel}>
+      <Icon name="files" /><span className="oo-pdf-chrome-button-text">Pages</span>
+    </button>
+    {/* Not disabled by pending native commits: rotatePages drains the edit
+        queue itself (also after a rejected edit). A button that turns
+        disabled when a queued commit starts can flip between a click's
+        pointerdown and pointerup and silently drop the rotation. */}
+    <button className="oo-pdf-chrome-button oo-pdf-rotate-control" type="button" aria-label="Rotate page left" title="Rotate page left" onClick={() => rotateActivePage(-90)} disabled={pageActionsDisabled}>
+      <Icon name="rotate-ccw" />
+    </button>
+    <button className="oo-pdf-chrome-button oo-pdf-rotate-control" type="button" aria-label="Rotate page right" title="Rotate page right" onClick={() => rotateActivePage(90)} disabled={pageActionsDisabled}>
+      <Icon name="rotate-cw" />
+    </button>
+    </>
+  );
+  const searchBox = searchOpen ? (
+    <div className="oo-pdf-searchbox" role="search">
+      <Icon name="search" />
+      <input
+        ref={searchInputRef}
+        value={searchQuery}
+        type="search"
+        aria-label="Find in PDF"
+        placeholder="Find in PDF"
+        onChange={(event) => setSearchQuery(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            stepSearch(event.shiftKey ? -1 : 1);
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            setSearchOpen(false);
+          }
+        }}
+      />
+      <span className={`oo-pdf-search-count ${searchPending ? 'is-searching' : ''}`} role="status" aria-live="polite" aria-busy={searchPending}
+        title={searchPending ? 'Still searching the remaining pages' : undefined}>
+        {pdfSearchCountLabel({ query: searchQuery, matches: searchMatches, active: searchActive, loading: searchPending, failed: searchFailed })}
+      </span>
+      <button className="oo-pdf-icon-button small" type="button" aria-label="Previous match" onClick={() => stepSearch(-1)} disabled={!searchMatches.length}>
+        <Icon name="chevron-up" />
+      </button>
+      <button className="oo-pdf-icon-button small" type="button" aria-label="Next match" onClick={() => stepSearch(1)} disabled={!searchMatches.length}>
+        <Icon name="chevron-down" />
+      </button>
+      <button className="oo-pdf-icon-button small" type="button" aria-label="Close search" onClick={() => setSearchOpen(false)}>
+        <Icon name="x" />
+      </button>
+    </div>
+  ) : null;
+  const viewToggles = (
+    <>
+    <button className={`oo-pdf-chrome-button oo-pdf-topbar-find-control ${searchOpen ? 'is-on' : ''}`} type="button" aria-label="Find in PDF" aria-pressed={searchOpen} title="Find in PDF (Ctrl/⌘+F)" onClick={() => setSearchOpen(open => !open)} disabled={!activeDoc}>
+      <Icon name="search" />
+    </button>
+    <button className={`oo-pdf-chrome-button ${commentsVisible ? 'is-on' : ''}`} type="button"
+      aria-label={commentsVisible ? 'Hide comments' : 'Show comments'} aria-pressed={commentsVisible}
+      title={commentsVisible ? 'Hide comments' : 'Show comments'} onClick={() => setCommentsVisible(visible => !visible)} disabled={!activeDoc}>
+      <Icon name="message-square" />
+    </button>
+    <button className={`oo-pdf-chrome-button ${linksVisible ? 'is-on' : ''}`} type="button"
+      aria-label={linksVisible ? 'Hide link outlines' : 'Show link outlines'} aria-pressed={linksVisible}
+      title={linksVisible ? 'Hide link outlines' : 'Show link outlines (links stay clickable with Pan, or Ctrl+click)'} onClick={() => setLinksVisible(visible => !visible)} disabled={!activeDoc}>
+      <Icon name="link" />
+    </button>
+    </>
+  );
+  const printButton = (
+  <button className="oo-pdf-chrome-button oo-pdf-topbar-print-control" type="button" aria-label="Print" title={activeSafety.exportBlocked ? activeSafety.reason : 'Print (Ctrl/⌘+P)'} aria-keyshortcuts="Control+p Meta+p" onClick={printPdf} disabled={!activeDoc || activeSessionOpening || activeSafety.exportBlocked}>
+    <Icon name="printer" />
+  </button>
+  );
+  const layersButton = (
+  <button data-pdf-layers-trigger="true" className={`oo-pdf-chrome-button oo-pdf-desktop-layers-control ${phoneLayout ? '' : 'has-text'} ${inspectorOpen ? 'is-on' : ''}`} type="button" aria-label="Layers" aria-pressed={inspectorOpen} title="Properties and layers" onClick={toggleInspector}>
+    <Icon name="layers" />{!phoneLayout && <span className="oo-pdf-chrome-button-text">Layers</span>}
+  </button>
+  );
+
+  // berg:work island chrome (shell.chrome === 'islands', wider windows): the layout of berg:work Image after the
+  // Builder UI. Top left the document and what you do with it (the tools), top right files, history and panels;
+  // below, a status bar with zoom, the page and the view settings. The same controls as the default layout, laid out
+  // differently; Fernwork's top bar and canvas toolbar above stay as they are.
+  const islandTopbar = (
+    <header className="oo-pdf-topbar is-floating is-islands" onMouseDown={hostTitleBar ? handleTitleBarMouseDown : undefined}>
+      <div className="oo-pdf-island is-start" role="toolbar" aria-label="Document and tools">
+        {documentMenu}
+        <span className="oo-pdf-chrome-divider" aria-hidden="true" />
+        {toolButtons}
+      </div>
+      {searchBox}
+      <div className="oo-pdf-island is-end" role="group" aria-label="File and panels">
+        {saveControl}
+        {historyButtons}
+        {printButton}
+        <span className="oo-pdf-chrome-divider" aria-hidden="true" />
+        {toolsMenu}
+        {layersButton}
+      </div>
+    </header>
+  );
+  const islandStatusbar = (
+    <div ref={toolbarRef} className="oo-pdf-toolbar is-floating is-statusbar" role="toolbar" aria-label="View and pages">
+      <div className="oo-pdf-island oo-pdf-view-controls" aria-label="Zoom and page">{viewControls}</div>
+      <div className="oo-pdf-island" role="group" aria-label="Pages">{pageButtons}</div>
+      <div className="oo-pdf-island" role="group" aria-label="View">{viewToggles}</div>
+    </div>
   );
 
   return (
@@ -26935,6 +27064,7 @@ function App({ shell = null }) {
       <input ref={imageInputRef} className="sr-only" tabIndex={-1} type="file" accept={ACCEPT_IMAGE.join(',')} onChange={handleImageInput} />
       <input ref={signatureInputRef} className="sr-only" tabIndex={-1} type="file" accept={ACCEPT_IMAGE.join(',')} onChange={handleSignatureInput} />
 
+      {islandChrome ? islandTopbar : (
       <header
         className="oo-pdf-topbar is-floating"
         onMouseDown={hostTitleBar ? handleTitleBarMouseDown : undefined}
@@ -26946,19 +27076,7 @@ function App({ shell = null }) {
           {documentMenu}
           {saveControl}
           <span className="oo-pdf-chrome-divider oo-pdf-topbar-divider" aria-hidden="true" />
-          <button className={`oo-pdf-chrome-button oo-pdf-topbar-pages-control has-text ${pagesPanelOpen ? 'is-on' : ''}`} type="button" aria-label="Pages" title="Pages: reorder, add, rotate, duplicate or delete pages" aria-pressed={pagesPanelOpen} onClick={togglePagesPanel}>
-            <Icon name="files" /><span className="oo-pdf-chrome-button-text">Pages</span>
-          </button>
-          {/* Not disabled by pending native commits: rotatePages drains the edit
-              queue itself (also after a rejected edit). A button that turns
-              disabled when a queued commit starts can flip between a click's
-              pointerdown and pointerup and silently drop the rotation. */}
-          <button className="oo-pdf-chrome-button oo-pdf-rotate-control" type="button" aria-label="Rotate page left" title="Rotate page left" onClick={() => rotateActivePage(-90)} disabled={pageActionsDisabled}>
-            <Icon name="rotate-ccw" />
-          </button>
-          <button className="oo-pdf-chrome-button oo-pdf-rotate-control" type="button" aria-label="Rotate page right" title="Rotate page right" onClick={() => rotateActivePage(90)} disabled={pageActionsDisabled}>
-            <Icon name="rotate-cw" />
-          </button>
+          {pageButtons}
           {toolsMenu}
           <span className="oo-pdf-chrome-divider oo-pdf-topbar-divider" aria-hidden="true" />
           {/* A host window title bar needs blank space to drag the window by. */}
@@ -26970,42 +27088,7 @@ function App({ shell = null }) {
           {saveControl}
           <span className="oo-pdf-topbar-spacer" />
         </>}
-        {searchOpen && (
-          <div className="oo-pdf-searchbox" role="search">
-            <Icon name="search" />
-            <input
-              ref={searchInputRef}
-              value={searchQuery}
-              type="search"
-              aria-label="Find in PDF"
-              placeholder="Find in PDF"
-              onChange={(event) => setSearchQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  stepSearch(event.shiftKey ? -1 : 1);
-                }
-                if (event.key === 'Escape') {
-                  event.preventDefault();
-                  setSearchOpen(false);
-                }
-              }}
-            />
-            <span className={`oo-pdf-search-count ${searchPending ? 'is-searching' : ''}`} role="status" aria-live="polite" aria-busy={searchPending}
-              title={searchPending ? 'Still searching the remaining pages' : undefined}>
-              {pdfSearchCountLabel({ query: searchQuery, matches: searchMatches, active: searchActive, loading: searchPending, failed: searchFailed })}
-            </span>
-            <button className="oo-pdf-icon-button small" type="button" aria-label="Previous match" onClick={() => stepSearch(-1)} disabled={!searchMatches.length}>
-              <Icon name="chevron-up" />
-            </button>
-            <button className="oo-pdf-icon-button small" type="button" aria-label="Next match" onClick={() => stepSearch(1)} disabled={!searchMatches.length}>
-              <Icon name="chevron-down" />
-            </button>
-            <button className="oo-pdf-icon-button small" type="button" aria-label="Close search" onClick={() => setSearchOpen(false)}>
-              <Icon name="x" />
-            </button>
-          </div>
-        )}
+        {searchBox}
         <div className="oo-pdf-topbar-actions" role="group" aria-label="Edit and view">
           {phoneLayout && (
             <button className="oo-pdf-chrome-button" type="button" aria-label="Undo" title="Undo (Ctrl/⌘+Z)" onClick={undoDoc} disabled={!canUndo}>
@@ -27021,26 +27104,10 @@ function App({ shell = null }) {
           )}
           {!phoneLayout && <>
             <span className="oo-pdf-chrome-divider" aria-hidden="true" />
-            <button className={`oo-pdf-chrome-button oo-pdf-topbar-find-control ${searchOpen ? 'is-on' : ''}`} type="button" aria-label="Find in PDF" aria-pressed={searchOpen} title="Find in PDF (Ctrl/⌘+F)" onClick={() => setSearchOpen(open => !open)} disabled={!activeDoc}>
-              <Icon name="search" />
-            </button>
-            <button className={`oo-pdf-chrome-button ${commentsVisible ? 'is-on' : ''}`} type="button"
-              aria-label={commentsVisible ? 'Hide comments' : 'Show comments'} aria-pressed={commentsVisible}
-              title={commentsVisible ? 'Hide comments' : 'Show comments'} onClick={() => setCommentsVisible(visible => !visible)} disabled={!activeDoc}>
-              <Icon name="message-square" />
-            </button>
-            <button className={`oo-pdf-chrome-button ${linksVisible ? 'is-on' : ''}`} type="button"
-              aria-label={linksVisible ? 'Hide link outlines' : 'Show link outlines'} aria-pressed={linksVisible}
-              title={linksVisible ? 'Hide link outlines' : 'Show link outlines (links stay clickable with Pan, or Ctrl+click)'} onClick={() => setLinksVisible(visible => !visible)} disabled={!activeDoc}>
-              <Icon name="link" />
-            </button>
-            <button className="oo-pdf-chrome-button oo-pdf-topbar-print-control" type="button" aria-label="Print" title={activeSafety.exportBlocked ? activeSafety.reason : 'Print (Ctrl/⌘+P)'} aria-keyshortcuts="Control+p Meta+p" onClick={printPdf} disabled={!activeDoc || activeSessionOpening || activeSafety.exportBlocked}>
-              <Icon name="printer" />
-            </button>
+            {viewToggles}
+            {printButton}
           </>}
-          <button data-pdf-layers-trigger="true" className={`oo-pdf-chrome-button oo-pdf-desktop-layers-control ${phoneLayout ? '' : 'has-text'} ${inspectorOpen ? 'is-on' : ''}`} type="button" aria-label="Layers" aria-pressed={inspectorOpen} title="Properties and layers" onClick={toggleInspector}>
-            <Icon name="layers" />{!phoneLayout && <span className="oo-pdf-chrome-button-text">Layers</span>}
-          </button>
+          {layersButton}
           {phoneLayout && (
             <ChromePopoverButton id="more" label="More document actions" iconName="ellipsis" showChevron={false}
               placement="down" {...chromeMenuProps('more')} panelLabel="More document actions" className="oo-pdf-topbar-more">
@@ -27065,9 +27132,10 @@ function App({ shell = null }) {
         </div>
         {hostTitleBar?.trailing && <HostSlot className="oo-pdf-titlebar-trailing" node={hostTitleBar.trailing} />}
       </header>
+      )}
 
       <main className="oo-pdf-editor">
-        {canvasToolbar}
+        {islandChrome ? islandStatusbar : canvasToolbar}
         {!workspaceReady ? (
           <section className="oo-pdf-empty">
             <Icon name="file-text" />
@@ -43675,6 +43743,8 @@ function normalizeShellHost(shell) {
     version: 1,
     setTitle: typeof shell.setTitle === 'function' ? shell.setTitle.bind(shell) : undefined,
     setFullscreen: typeof shell.setFullscreen === 'function' ? shell.setFullscreen.bind(shell) : undefined,
+    // berg:work: 'islands' lays the chrome out as berg:work Image does (see islandChrome).
+    chrome: shell.chrome === 'islands' ? 'islands' : 'default',
     titleBar: titleBar ? {
       leading: titleBar.leading instanceof Node ? titleBar.leading : null,
       trailing: titleBar.trailing instanceof Node ? titleBar.trailing : null,
