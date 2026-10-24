@@ -5,7 +5,7 @@
 // upstream.lock.json; fork and pin always name the same Fernwork commit.
 //
 //   node apps/pdf/scripts/editor-fork.mjs init [--ref <rev>]   copy the sources at <rev> (default: the pinned commit)
-//   node apps/pdf/scripts/editor-fork.mjs status               Fernwork commits since the fork's base, per file
+//   node apps/pdf/scripts/editor-fork.mjs status [--ref <rev>]  Fernwork commits since the fork's base, per file
 //   node apps/pdf/scripts/editor-fork.mjs port [--ref <rev>]   apply Fernwork's changes since the base to the fork
 //   node apps/pdf/scripts/editor-fork.mjs check                fork and pin agree; every listed file exists
 //
@@ -98,12 +98,12 @@ async function init(ref) {
   if (commit !== entry.commit) console.log(`Pin the same commit: npm run sync:update -- ${UPSTREAM} --ref ${commit}`);
 }
 
-async function status() {
+async function status(ref) {
   const fork = await readFork();
   const { entry, repo } = await upstream();
-  const head = resolveCommit(repo, entry.ref);
+  const head = resolveCommit(repo, ref ?? entry.ref);
   const log = git(repo, ['log', '--oneline', `${fork.commit}..${head}`, '--', ...fork.files]).stdout.trim();
-  console.log(`editor fork at ${fork.commit.slice(0, 10)}, ${entry.ref} is ${head.slice(0, 10)}`);
+  console.log(`editor fork at ${fork.commit.slice(0, 10)}, ${ref ?? entry.ref} is ${head.slice(0, 10)}`);
   console.log(log ? log : 'No Fernwork changes to the forked files.');
   const added = sourceFiles(repo, head).filter((file) => !fork.files.includes(file));
   if (added.length) console.log(`Files the editor imports at ${head.slice(0, 10)} that the fork lacks:\n  ${added.join('\n  ')}`);
@@ -149,7 +149,7 @@ async function check() {
 const [command, ...rest] = process.argv.slice(2);
 const refIndex = rest.indexOf('--ref');
 const ref = refIndex >= 0 ? rest[refIndex + 1] : undefined;
-const commands = { init: () => init(ref), status, port: () => port(ref), check };
+const commands = { init: () => init(ref), status: () => status(ref), port: () => port(ref), check };
 if (!commands[command]) {
   console.error('usage: editor-fork.mjs init|status|port|check [--ref <rev>]');
   process.exit(2);
