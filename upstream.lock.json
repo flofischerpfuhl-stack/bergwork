@@ -31,43 +31,6 @@
       "commit": "cfd5c190913f233772421d77eb35d12f786dddc4",
       "digest": "910511b964ba4a6a0bab8241dd4964aa044283316f6b10f26482b1abc07a6f9e",
       "fileCount": 283
-    },
-    "compositor-image": {
-      "description": "Image editor web build from the compositor repository.",
-      "repo": "/home/oem/.local/share/fernwork-compositor-lab/workspaces/claude",
-      "ref": "integration",
-      "mode": "build",
-      "build": [
-        [
-          "npm",
-          "ci",
-          "--no-audit",
-          "--no-fund"
-        ],
-        [
-          "npm",
-          "run",
-          "build"
-        ]
-      ],
-      "sources": [
-        {
-          "from": "dist",
-          "to": "dist"
-        }
-      ],
-      "watch": [
-        "src",
-        "public",
-        "index.html",
-        "package.json",
-        "package-lock.json",
-        "vite.config.ts"
-      ],
-      "target": "apps/bild/upstream",
-      "commit": "6e7ec62912d4e68a86a0c718f145e07f1f07cf94",
-      "digest": "004db9e9d85d460020a0d1e17175b58ca119d9973979eae28df89b94781940c4",
-      "fileCount": 109
     }
   }
 }

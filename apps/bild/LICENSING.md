@@ -1,15 +1,16 @@
 # Licensing in plain language
 
-> **This repository** is the image editor of Fernwork (in the web app) and of berg:work Image (the desktop app). It is part
-> of the Licensed Work "Fernwork" and is licensed under the same terms as Fernwork; berg:work's licence uses the identical
-> terms. `LICENSE` and `CLA.md` are Fernwork's files, unchanged.
+> **This directory** is berg:work Image. Since 2026-10-24 it is part of the Licensed Work "berg:work" and covered by the
+> repository's [LICENSE](../../LICENSE) and [CLA.md](../../CLA.md), which use the same terms as Fernwork's. Third-party
+> components are listed in `THIRD_PARTY_NOTICES.md`, `MODEL_LICENSES.md` and `LICENSES/`; the Compositor origin in
+> `LICENSE.upstream`. The summary below was written for Fernwork and applies unchanged.
 
 Fernwork is **source-available** under the
-[Business Source License 1.1](LICENSE) with an Additional Use Grant. It is not
+[Business Source License 1.1](../../LICENSE) with an Additional Use Grant. It is not
 an Open Source license today, but every released version automatically becomes
 Open Source (AGPL-3.0-or-later) four years after its release.
 
-This page summarizes the [LICENSE](LICENSE). If the two ever differ, the
+This page summarizes the [LICENSE](../../LICENSE). If the two ever differ, the
 LICENSE applies.
 
 ## Free of charge
@@ -57,7 +58,7 @@ components.
 
 ## Contributing
 
-Contributions require agreeing to the [Contributor License Agreement](CLA.md).
+Contributions require agreeing to the [Contributor License Agreement](../../CLA.md).
 It lets us offer commercial licenses while keeping the code public. You keep
 your copyright, and every contribution that ships in a release is published
 under the public license of that release.

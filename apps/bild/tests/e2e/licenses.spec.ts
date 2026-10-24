@@ -28,7 +28,7 @@ test('About opens the complete offline licence inventory and full licence texts'
   await dialog.getByTestId('license-search').fill('');
   await dialog.getByTestId('own-license-text').click();
   await expect(dialog.getByTestId('license-text')).toContainText('Additional Use Grant');
-  await expect(dialog.getByTestId('license-text')).toContainText('Licensed Work:        Fernwork, including the web application');
+  await expect(dialog.getByTestId('license-text')).toContainText('Licensed Work:        berg:work, including berg:work PDF, berg:work Image');
 });
 
 test('the licences view and free-tier summary are German-localized', async ({ page }) => {

@@ -30,6 +30,5 @@ Tauri `src-tauri/icons/`), made from `icon-1024.png` with the Tauri CLI:
 
 - Website: `website/src/assets/icons/` holds copies from `generated/bergwork/`
   (`bergwork-mark.svg` = `icon.svg`; `favicon.ico` is the 16/32/48 subset of the icon).
-- berg:work Image: `generated/bergwork-image/tauri/` replaces `src-tauri/icons/` of the image editor
-  (compositor repo, branch `integration`) — not copied yet.
+- berg:work Image: `generated/bergwork-image/tauri/` replaces `apps/bild/src-tauri/icons/` — not copied yet.
 - berg:work PDF: `generated/bergwork-pdf/tauri/` is ready for the Tauri shell once it exists.

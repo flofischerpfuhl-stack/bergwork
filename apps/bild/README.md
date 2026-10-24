@@ -1,8 +1,13 @@
-# Fernwork Bildeditor
+# berg:work Image
 
-Fernwork Bildeditor is an offline-first image editor for the web and a Tauri 2 desktop shell. Its rendering and
-editing code grew from the MIT-licensed macOS editor Compositor; that origin is recorded in the About dialog and
-`LICENSE.upstream`, not used as the product name.
+The image editor of berg:work: an offline-first image editor for the web and a Tauri 2 desktop shell. Its rendering
+and editing code grew from the MIT-licensed macOS editor Compositor; that origin is recorded in the About dialog and
+`LICENSE.upstream`, not used as the product name. It was developed as "Fernwork Bildeditor" in the separate fwimg
+repository and moved here with its history on 2026-10-24; the in-app name still reads "Fernwork Bildeditor" until
+the berg:work UI round.
+
+This directory is a standalone npm project (own `package-lock.json`, Node 22): run the commands below inside
+`apps/bild/`. Parity with Compositor is tracked in `parity.json`.
 
 ## Run and build
 

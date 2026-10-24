@@ -17,7 +17,8 @@ interface LicenseEntry {
 interface LicenseDocument { version: number; entries: LicenseEntry[] }
 
 const licenseTexts = import.meta.glob('../../LICENSES/*.txt', { query: '?raw', import: 'default' }) as Record<string, () => Promise<string>>;
-const ownLicense = () => import('../../LICENSE?raw').then((module) => module.default);
+// berg:work's LICENSE at the repository root covers this app.
+const ownLicense = () => import('../../../../LICENSE?raw').then((module) => module.default);
 const categoryOrder: Category[] = ['bundled', 'optional-download', 'opt-in-host', 'tauri-runtime'];
 
 function categoryLabel(category: Category, t: EditorController['t']): string {
