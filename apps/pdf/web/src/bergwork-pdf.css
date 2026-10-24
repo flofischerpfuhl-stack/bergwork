@@ -253,6 +253,24 @@ body.oo-pdf-workbench-route button { font-family: var(--bw-font-ui); }
   transform: none;
 }
 
+/* Redaction preview: marked characters look like what they become, a dark bar, with the text still showing faintly
+   so it can be checked before export deletes it. Its label is a quiet hint in the design base's style, not an alarm.
+   (Fernwork outlines each glyph and labels each mark in red, which read as an error.) */
+.oo-pdf-shell .oo-pdf-redaction-glyph {
+  border: 0;
+  background: rgb(17 17 17 / 0.72);
+}
+
+.oo-pdf-shell .oo-pdf-redaction-count {
+  margin-top: -3px;
+  padding: 2px 6px;
+  border-radius: var(--bw-radius-row);
+  background: #262422;
+  color: #e7e3dd;
+  font: 500 10.5px / 1.3 var(--bw-font-ui);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+}
+
 /* Sharp corners: every radius in the editor's chrome follows, as the design base's do. Dots, handles, knobs and
    colour swatches stay round. */
 html[data-corners='sharp'] :is(.oo-pdf-shell, body.oo-pdf-workbench-route > :not(#root)) *:not(

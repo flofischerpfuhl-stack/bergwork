@@ -29749,6 +29749,43 @@ function PdfPageTileLayer({
   );
 }
 
+const REDACTION_LABEL_HEIGHT = 17;
+const REDACTION_LABEL_CHAR_WIDTH = 5.8;
+
+// berg:work: a hint, not a warning: what the mark does, then how much.
+function redactionLabelText(count, marks) {
+  const characters = count === 1 ? '1 character' : `${count} characters`;
+  return marks > 1 ? `${marks} marks redacted on export · ${characters}` : `Redacted on export · ${characters}`;
+}
+
+// berg:work: one label per mark sits above it, so marks on neighbouring lines
+// (a column of table cells) stacked their labels over each other and over the
+// text. Labels that would overlap merge into one above the topmost mark.
+function groupRedactionLabels(labels, zoom) {
+  const groups = [];
+  const box = (group) => {
+    const width = redactionLabelText(group.count, group.ids.length).length * REDACTION_LABEL_CHAR_WIDTH + 12;
+    return { left: group.x * zoom, right: group.x * zoom + width, top: group.y * zoom - REDACTION_LABEL_HEIGHT };
+  };
+  for (const label of [...labels].sort((a, b) => (a.y - b.y) || (a.x - b.x))) {
+    const own = box({ ...label, ids: [label.id] });
+    const hit = groups.find(group => {
+      const other = box(group);
+      return own.left < other.right && own.right > other.left && own.top < group.bottom * zoom;
+    });
+    if (hit) {
+      hit.count += label.count;
+      hit.ids.push(label.id);
+      hit.text = `${hit.text} ${label.text}`.trim();
+      hit.bottom = Math.max(hit.bottom, label.y + REDACTION_LABEL_HEIGHT / zoom);
+    } else {
+      groups.push({ x: label.x, y: label.y, count: label.count, ids: [label.id], text: label.text,
+        bottom: label.y + REDACTION_LABEL_HEIGHT / zoom });
+    }
+  }
+  return groups;
+}
+
 // Outlines every glyph that PDFium's redaction will remove on export, so a
 // mark that also touches a neighbouring line is visible before it is applied.
 function PdfPageRedactionPreview({ page, marks, zoom, pdfiumRuntime, pdfiumRevision }) {
@@ -29783,16 +29820,17 @@ function PdfPageRedactionPreview({ page, marks, zoom, pdfiumRuntime, pdfiumRevis
     };
   }, [glyphs, hasRedactions, page, redactions]);
   if (!preview) return null;
+  const labelGroups = groupRedactionLabels(preview.labels, zoom);
   return (
     <div className="oo-pdf-redaction-preview" aria-hidden="true" data-removed-glyphs={preview.boxes.length}>
       {preview.boxes.map(box => (
         <span key={box.index} className="oo-pdf-redaction-glyph"
           style={{ left: box.x * zoom, top: box.y * zoom, width: box.w * zoom, height: box.h * zoom }} />
       ))}
-      {preview.labels.map(label => (
-        <span key={label.id} className="oo-pdf-redaction-count" data-redaction-id={label.id} title={label.text}
-          style={{ left: label.x * zoom, top: label.y * zoom }}>
-          {label.count === 1 ? '1 character removed on export' : `${label.count} characters removed on export`}
+      {labelGroups.map(group => (
+        <span key={group.ids.join(' ')} className="oo-pdf-redaction-count" data-redaction-id={group.ids.join(' ')} title={group.text}
+          style={{ left: group.x * zoom, top: group.y * zoom }}>
+          {redactionLabelText(group.count, group.ids.length)}
         </span>
       ))}
     </div>

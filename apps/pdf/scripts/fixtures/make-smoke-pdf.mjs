@@ -51,6 +51,9 @@ corners.forEach(([x, y], index) => {
 });
 page.drawText('Existing building', { x: 245, y: 336, size: 9, font: regular, color: muted });
 
+// Contact details: the kind of personal data a redaction removes before the report goes out.
+page.drawText('Site contact: Maria Keller, +49 7121 555 0183, maria.keller@example.com', { x: 48, y: 180, size: 10, font: regular, color: ink });
+
 const form = doc.getForm();
 page.drawText('Checked by', { x: 48, y: 150, size: 10, font: bold, color: ink });
 const field = form.createTextField('checked_by');
