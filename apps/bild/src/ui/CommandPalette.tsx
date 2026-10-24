@@ -42,8 +42,8 @@ export function CommandPalette({ controller, close }: { controller: EditorContro
     queueMicrotask(entry.run);
   };
   return (
-    <div className={`${styles.dialog} ${styles.palette}`} role="dialog" aria-modal aria-label={t('Search Commands')} data-testid="command-palette">
-      <input autoFocus className={styles.paletteSearch} value={query} placeholder={t('Search commands and tools')}
+    <div className={`${styles.dialog} ${styles.commandPalette}`} role="dialog" aria-modal aria-label={t('Search Commands')} data-testid="command-palette">
+      <input autoFocus className={styles.commandSearch} value={query} placeholder={t('Search commands and tools')}
         aria-label={t('Search commands and tools')} role="combobox" aria-expanded aria-controls="cmp-palette-list"
         aria-activedescendant={results[selection] ? `cmp-palette-${selection}` : undefined} data-testid="command-palette-input"
         onChange={(event) => setQuery(event.target.value)}
@@ -54,14 +54,14 @@ export function CommandPalette({ controller, close }: { controller: EditorContro
             event.preventDefault();
           } else if (event.key === 'Enter') { run(results[selection]); event.preventDefault(); }
         }} />
-      <div ref={list} className={styles.paletteList} role="listbox" id="cmp-palette-list" aria-label={t('Commands')}>
+      <div ref={list} className={styles.commandList} role="listbox" id="cmp-palette-list" aria-label={t('Commands')}>
         {results.length ? results.map((entry, index) => (
           <button key={entry.id} type="button" role="option" id={`cmp-palette-${index}`} data-index={index}
             aria-selected={index === selection} aria-disabled={!entry.enabled} tabIndex={-1}
-            className={`${styles.menuItem} ${index === selection ? styles.paletteChosen : ''}`}
+            className={`${styles.menuItem} ${index === selection ? styles.commandChosen : ''}`}
             onPointerMove={() => { if (index !== selection) setSelection(index); }} onClick={() => run(entry)}>
             {entry.on ? <span className={styles.menuCheck}>✓</span> : null}
-            <span className={entry.enabled ? undefined : styles.paletteDisabled}>{entry.title}</span>
+            <span className={entry.enabled ? undefined : styles.commandDisabled}>{entry.title}</span>
             {entry.shortcut ? <span className={styles.shortcut}>{entry.shortcut}</span> : null}
           </button>
         )) : <p className={styles.dialogMessage} style={{ padding: 12 }}>{t('No commands match')}</p>}
