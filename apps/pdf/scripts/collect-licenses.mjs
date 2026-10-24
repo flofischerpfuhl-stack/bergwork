@@ -3,8 +3,10 @@
 // - berg:work PDF itself and the Fernwork PDF editor (Business Source License 1.1),
 // - the editor's third-party components, from the licence files and the optional `licenses.json` manifest that
 //   come with the pinned build (apps/pdf/upstream/tools/vendor/…),
+// - the host page's bundled packages (React, the design base's icons and fonts, the Bergschrift wordmark face),
 // - the Rust crates compiled into the app for the current target (cargo metadata, normal dependencies only),
-//   each with the licence files its source package contains.
+//   each with the licence files its source package contains. Without a Rust toolchain (the web build on
+//   bergwork.app, which ships no Rust) the list has no crates.
 //
 // Writes apps/pdf/dist/licenses.json (read by the app's Licences view) and, with --notices,
 // apps/pdf/THIRD_PARTY_NOTICES.md (committed; `--check` fails when it is out of date).
@@ -14,6 +16,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -102,8 +105,31 @@ function editorComponents() {
   return components;
 }
 
+/** npm packages the Vite build of web/ bundles, and the wordmark face from the design base. */
+const HOST_PACKAGES = ['react', 'react-dom', 'scheduler', 'lucide-react', '@fontsource-variable/inter', '@fontsource-variable/jetbrains-mono'];
+function hostComponents() {
+  // Resolved as the host build resolves them (Vite root web/, React deduplicated there).
+  const require = createRequire(path.join(appDir, 'web', 'index.html'));
+  const components = HOST_PACKAGES.map((name) => {
+    const manifestFile = require.resolve(`${name}/package.json`);
+    const manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
+    const licence = typeof manifest.license === 'string' ? manifest.license : manifest.license?.type ?? 'see text';
+    return { name, version: manifest.version, licence, texts: licenceFiles(path.dirname(manifestFile)) };
+  });
+  components.push({
+    name: 'Bergschrift (berg:work wordmark face)', licence: 'OFL-1.1',
+    texts: [{ file: 'Bergschrift-OFL.txt', text: readText(path.join(repoRoot, 'packages/ui/src/fonts/Bergschrift-OFL.txt')) }],
+  });
+  return components;
+}
+
 const lock = JSON.parse(readFileSync(path.join(repoRoot, 'upstream.lock.json'), 'utf8'));
-const { target, crates } = rustCrates();
+let target = 'web', crates = [];
+try {
+  ({ target, crates } = rustCrates());
+} catch (error) {
+  console.warn(`collect-licenses: no Rust crates listed (${String(error.message).split('\n')[0]})`);
+}
 const report = {
   generatedFor: target,
   app: {
@@ -117,6 +143,7 @@ const report = {
     commit: lock.upstreams['fernwork-pdf'].commit,
     components: editorComponents(),
   },
+  host: hostComponents(),
   rust: crates,
 };
 
@@ -136,6 +163,10 @@ if (writeNotices) {
     '',
     `Business Source License 1.1, see [LICENSE](../../LICENSE). Editor build: Fernwork \`${report.editor.commit.slice(0, 7)}\`.`,
     '',
+    '## Components of the host page',
+    '',
+    ...report.host.map((item) => `- ${item.name}${item.version ? ` ${item.version}` : ''}: ${item.licence}`),
+    '',
     '## Components of the editor build',
     '',
     ...report.editor.components.map((item) => `- ${item.name}${item.version ? ` ${item.version}` : ''}: ${item.licence}`),
@@ -150,11 +181,12 @@ if (writeNotices) {
     '',
   ];
   const seenTexts = new Map();
-  for (const item of [...report.editor.components, ...crates]) {
+  for (const item of [...report.host, ...report.editor.components, ...crates]) {
     for (const text of item.texts || []) {
       const key = text.text;
       if (!seenTexts.has(key)) seenTexts.set(key, []);
-      seenTexts.get(key).push(`${item.name}${item.version ? ` ${item.version}` : ''}`);
+      const user = `${item.name}${item.version ? ` ${item.version}` : ''}`;
+      if (!seenTexts.get(key).includes(user)) seenTexts.get(key).push(user);
     }
   }
   for (const [text, users] of seenTexts) {

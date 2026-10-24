@@ -13,10 +13,12 @@
     "build:editor": "node scripts/build-editor.mjs",
     "fork:status": "node scripts/editor-fork.mjs status",
     "fork:port": "node scripts/editor-fork.mjs port",
-    "fork:check": "node scripts/editor-fork.mjs check"
+    "fork:check": "node scripts/editor-fork.mjs check",
+    "dev": "vite"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.5",
+    "@vitejs/plugin-react": "6.1.1",
     "bidi-js": "1.0.3",
     "diff": "5.2.2",
     "esbuild": "0.24.2",
@@ -26,6 +28,7 @@
     "pdf-lib": "1.17.1",
     "pdfstudio": "0.4.0",
     "react": "19.2.5",
-    "react-dom": "19.2.5"
+    "react-dom": "19.2.5",
+    "vite": "8.3.0"
   }
 }

@@ -8,8 +8,8 @@ Tauri 2 app around the Fernwork PDF editor. Internal builds only; there is no pu
 | --- | --- |
 | `upstream/` | Pinned editor build (not committed): the files listed for `fernwork-pdf` in `../../upstream.lock.json`, laid out as in Fernwork (`tools/vendor/pdf-tools`, `pdf-runtime`, `tesseract-5.0.4`). Recreate it with `npm run sync:install`. Never edited here. |
 | `editor/` | Source fork of the editor's UI (the PDF Tools shell and every file it imports), committed, with Fernwork's paths (`assets/`, `vendor/build/src/`). `fork.json` names the Fernwork commit and the files. `scripts/editor-fork.mjs` creates, reports on and ports it (`npm run fork:status`, `fork:port`, `fork:check`); `scripts/build-editor.mjs` bundles it into `editor-dist/` (not committed). |
-| `web/` | Host page owned by berg:work: `index.html`, `main.js` (Fernwork's bootstrap without site navigation, service worker and file-open router), `host.js` (title bar, settings and the host object passed to `mount`), `native-files.js` (native open/save), `licenses-view.js`, `theme-preference.js`, `theme.css` (palette, title bar, licences dialog), `fonts/` and the title-bar icons. Plain ES modules, no bundler. |
-| `scripts/build-frontend.mjs` | Assembles `dist/` (not committed): `web/` at the root, the pinned build under `dist/tools/vendor/` with the fork's bundle, chunks and CSS in place of the pinned ones in `pdf-tools/` (the bundle still loads its workers, WASM and fonts from absolute `/tools/vendor/...` URLs) and `licenses.json`. |
+| `web/` | Host page owned by berg:work, built with Vite (`vite.config.ts`, root `web/`): `src/shell.tsx` (the design base's title bar from `@bergwork/ui` — mark, wordmark, document, about menu with version and licences, appearance menu, window buttons in the app — above the editor), `src/editor.ts` (loads the PDF.js and pdf-lib runtimes, the editor CSS and bundle from `tools/vendor/` and mounts it), `src/desktopWindow.ts` (Tauri window: drag, maximise, rounded corners on Linux), `src/bergwork-pdf.css` (the editor's `--pdf-*` tokens from the design base's `--bw-*` tokens, buttons, corners, licences dialog), `src/native-files.js` (native open/save), `src/licenses-view.js`, `public/` (pre-paint appearance script, icons). |
+| `scripts/build-frontend.mjs` | Assembles `dist/` (not committed): the Vite build of `web/` at the root, the pinned build under `dist/tools/vendor/` with the fork's bundle, chunks and CSS in place of the pinned ones in `pdf-tools/`, and `licenses.json`. The bundle finds `tools/vendor/` next to the page (`globalThis.__bergworkVendor`, set by `src/editor.ts`), so the same `dist/` runs in the app and at `/app/pdf/` on bergwork.app. |
 | `scripts/collect-licenses.mjs` | Licence data for the app and `THIRD_PARTY_NOTICES.md` (see Licences). |
 | `scripts/tauri*.sh`, `scripts/tauri.mjs` | Tauri CLI entry points; on Linux they point the build at a rootless WebKitGTK prefix (see below). |
 | `src-tauri/` | Rust app, `tauri.conf.json` (window, CSP, bundles, file associations), capabilities, icons (copied from `branding/logos/generated/bergwork-pdf/tauri/`), Linux desktop template and MIME definition. |
@@ -46,18 +46,19 @@ than from the prefix, which holds only headers and link stubs.
 
 ## Host, title bar and files
 
-`web/index.html` draws berg:work's own title bar above the editor: the PDF mark (a variant per theme), the
-`berg:work` wordmark in Bergschrift (`web/fonts/`, OFL) in the site red, `| PDF`, a settings button (theme
-System/Light/Dark, version, licences) and macOS-style window controls on the right (close outermost). The bar
-is the window's drag area; a double click maximises. On Linux the window is transparent with rounded corners
-(`tauri.linux.conf.json`), square when maximised.
+The window is the same as berg:work Image's (`apps/image/src/app/shell.tsx`): the design base's title bar with the
+PDF mark (a variant per theme), the `berg:work` wordmark in Bergschrift in the site red, `PDF`, the document name in
+the middle, an about menu (version, licences), the appearance menu (light/dark/system, round/sharp corners, stored as
+`bergwork.appearance` and shared with Image) and, in the app, the window buttons. The bar is the window's drag area; a
+double click maximises. On Linux the window is transparent with rounded corners (`tauri.linux.conf.json`), square when
+maximised. The editor follows `html[data-theme]` and `html[data-corners]`; `src/bergwork-pdf.css` restyles it from
+outside the source fork, so Fernwork's changes keep applying to `editor/`.
 
-The editor is mounted with `mount(element, { host })`. `host.js` supplies only `shell.setTitle` (the window
-title, `• name — berg:work PDF` for unsaved changes); the document name is in the editor's own top bar, and the
-editor shows no fullscreen toggle because the shell offers no `setFullscreen`. The editor's `titleBar` slots are
-not used.
+The editor is mounted with `mount(element, { host })`. The host supplies only `shell.setTitle` (the window title,
+`• name — berg:work PDF` for unsaved changes, and the document in the title bar); the editor shows no fullscreen toggle
+because the shell offers no `setFullscreen`. The editor's `titleBar` slots are not used.
 
-Files (`web/native-files.js`, commands in `src-tauri/src/lib.rs`):
+Files (`web/src/native-files.js`, commands in `src-tauri/src/lib.rs`):
 
 - Opening a PDF or `.bwpdf`/`.fwdoc` project from the file manager, or passing it on the command line, opens it
   in the editor; a second launch forwards its files to the running window (single instance).

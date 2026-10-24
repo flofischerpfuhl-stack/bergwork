@@ -1,0 +1,318 @@
+/* berg:work PDF on the design base. Loaded after @bergwork/ui and after the editor's oo-pdf-tools.css (editor.ts puts
+ * that first in <head>), and kept outside the source fork (apps/pdf/editor/), so Fernwork's changes keep applying.
+ *
+ * 1. Host page base: what Fernwork's site stylesheet gives the editor on fernwork.net (reset, form controls).
+ * 2. Tokens: the editor's --pdf-* tokens from the design base's --bw-* tokens. The design base switches light/dark
+ *    and round/sharp corners itself, so one mapping serves every appearance.
+ * 3. Components: type, islands, buttons and fields after the Builder rules (packages/ui/README.md).
+ * 4. Window: rounded corners in the transparent Linux window.
+ * 5. Licences dialog (licenses-view.js).
+ */
+
+/* ── 1. Host page base ───────────────────────────────────────────────── */
+
+/* In a cascade layer, so every editor rule wins over it, as on fernwork.net where the site stylesheet loads first. */
+@layer bergwork-host {
+  body.oo-pdf-workbench-route {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    color: var(--pdf-text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    --font-ui: var(--bw-font-ui);
+    --font-sans: var(--bw-font-ui);
+    --font-mono: var(--bw-font-mono);
+    --surface-color: var(--pdf-panel);
+    --red: var(--bw-error);
+    --amber: var(--bw-warning);
+  }
+
+  .oo-pdf-shell img, .oo-pdf-shell video, .oo-pdf-shell canvas { max-width: 100%; display: block; }
+  .oo-pdf-shell a { color: inherit; }
+
+  .oo-pdf-shell :is(input[type='text'], input[type='number'], input[type='password'], input[type='search'],
+    input[type='url'], input[type='email'], input[type='date'], textarea, select),
+  body.oo-pdf-workbench-route > :not(#root) :is(input[type='text'], input[type='number'], input[type='search'], textarea, select) {
+    width: 100%;
+    min-height: var(--bw-row);
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: var(--bw-radius-control);
+    outline: none;
+    background-color: var(--bw-field);
+    color: var(--bw-fg);
+    font-family: var(--bw-font-ui);
+    font-size: var(--bw-text);
+  }
+
+  .oo-pdf-shell :is(input[type='number'], input[inputmode='decimal'], input[inputmode='numeric']) {
+    font-family: var(--bw-font-mono);
+    font-size: var(--bw-text-mono);
+  }
+
+  .oo-pdf-shell textarea { min-height: 80px; padding: 6px 8px; resize: vertical; }
+
+  .oo-pdf-shell :is(input, textarea, select):hover { background-color: var(--bw-field-hover); }
+  .oo-pdf-shell :is(input, textarea, select):focus { border-color: var(--bw-frame); }
+
+  .oo-pdf-shell select {
+    appearance: none;
+    padding-right: 26px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+  }
+
+  .oo-pdf-shell :is(input[type='checkbox'], input[type='radio'], input[type='range'], progress) {
+    accent-color: var(--bw-accent);
+  }
+}
+
+/* ── 2. Tokens ───────────────────────────────────────────────────────── */
+
+/* html[data-theme] prefix: equals the editor's light-theme rules (html[data-theme="light"] …) and comes later, so it
+   outranks those and the dark defaults on `body.oo-pdf-workbench-route, .oo-pdf-shell`. */
+html[data-theme] body.oo-pdf-workbench-route,
+html[data-theme] .oo-pdf-shell {
+  --pdf-bg: var(--bw-void);
+  --pdf-panel: var(--bw-surface);
+  --pdf-panel-2: var(--bw-surface-raised);
+  --pdf-panel-3: var(--bw-control);
+  --pdf-floating: color-mix(in srgb, var(--bw-surface) 97%, transparent);
+  --pdf-input-bg: var(--bw-field);
+  --pdf-chip-bg: color-mix(in srgb, var(--bw-surface) 92%, transparent);
+  --pdf-empty-bg: color-mix(in srgb, var(--bw-surface) 80%, transparent);
+  --pdf-border: var(--bw-border);
+  --pdf-border-strong: var(--bw-border-strong);
+  --pdf-muted: var(--bw-fg-muted);
+  --pdf-text: var(--bw-fg);
+  --pdf-soft: color-mix(in srgb, var(--bw-hover) 60%, transparent);
+  --pdf-hover: var(--bw-hover);
+  --pdf-hover-strong: var(--bw-press);
+  --pdf-selected: var(--bw-selection);
+  --pdf-checker-bg: var(--bw-checker-b);
+  --pdf-checker-tile: var(--bw-checker-a);
+  --pdf-overlay: var(--bw-overlay);
+  --pdf-modal-overlay: var(--bw-overlay);
+  /* Warm stone instead of Fernwork green. The accent also draws selection frames and handles on the white page, so
+     it stays a mid tone there; --pdf-accent-strong is for text on tinted chips. */
+  --pdf-accent: var(--bw-accent-track);
+  --pdf-accent-strong: var(--bw-fg-strong);
+  --pdf-accent-contrast: var(--bw-accent-on);
+  --pdf-page-accent: #57534e;
+  --pdf-text-selection-bg: #d6d0c8;
+  --pdf-text-selection-text: #1c1917;
+  /* Form fields lie on the white page in both themes: a light stone tint. */
+  --pdf-form-field-bg: #ebe8e4;
+  --pdf-form-field-text: #1c1917;
+  --pdf-shadow: rgba(0, 0, 0, 0.3);
+  --pdf-shadow-strong: rgba(0, 0, 0, 0.45);
+  /* Floating chrome: the design base's island gap, control height and radius. */
+  --pdf-chrome-gap: var(--bw-gap);
+  --pdf-chrome-control: var(--bw-control-h);
+  --pdf-chrome-radius: var(--bw-radius-island);
+  font-family: var(--bw-font-ui);
+  font-size: var(--bw-text);
+}
+
+html[data-theme='light'] body.oo-pdf-workbench-route,
+html[data-theme='light'] .oo-pdf-shell {
+  --pdf-accent: #57534e;
+  --pdf-shadow: rgba(40, 32, 24, 0.12);
+  --pdf-shadow-strong: rgba(40, 32, 24, 0.2);
+}
+
+/* ── 3. Components ───────────────────────────────────────────────────── */
+
+.oo-pdf-shell button,
+body.oo-pdf-workbench-route button { font-family: var(--bw-font-ui); }
+
+/* The stage behind the pages is the void, as in berg:work Image; a checkerboard is for transparent pixels. */
+.oo-pdf-shell .oo-pdf-editor { background: var(--bw-void); }
+
+/* Values in mono (Builder: numbers line up). */
+.oo-pdf-shell :is(.oo-pdf-page-pill, .oo-pdf-zoom-level, .oo-pdf-thumb-number, .oo-pdf-snap-distance) {
+  font-family: var(--bw-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Chrome buttons follow the design base's frame convention: no frame is off, a solid frame is on. Quiet until hovered,
+   medium weight, no fill behind an idle button (Builder §4, §6). */
+.oo-pdf-shell .oo-pdf-chrome-button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--bw-fg);
+  font-size: var(--bw-text);
+  font-weight: 500;
+}
+
+.oo-pdf-shell .oo-pdf-chrome-button:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--bw-hover);
+  color: var(--bw-fg-strong);
+}
+
+.oo-pdf-shell .oo-pdf-chrome-button:active:not(:disabled) { background: var(--bw-press); }
+
+.oo-pdf-shell :is(.oo-pdf-chrome-button.is-on, .oo-pdf-chrome-button.is-active, .oo-pdf-chrome-button[aria-pressed='true'],
+  .oo-pdf-chrome-button[aria-expanded='true']),
+.oo-pdf-shell :is(.oo-pdf-chrome-button.is-on, .oo-pdf-chrome-button.is-active):hover:not(:disabled) {
+  border-color: var(--bw-frame);
+  background: var(--bw-control);
+  color: var(--bw-fg-strong);
+}
+
+.oo-pdf-shell .oo-pdf-chrome-button .oo-pdf-chrome-button-text { font-weight: inherit; }
+
+.oo-pdf-shell .oo-pdf-split-main { border-right-color: transparent; }
+
+.oo-pdf-shell .oo-pdf-doc-menu-button {
+  font-size: var(--bw-text);
+  font-weight: 600;
+}
+
+.oo-pdf-shell :is(.oo-pdf-page-pill, .oo-pdf-zoom-level) {
+  border-color: transparent;
+  background: var(--bw-field);
+  font-weight: 500;
+}
+
+.oo-pdf-shell .oo-pdf-drawer-tool { font-weight: 500; }
+
+/* Sharp corners: every radius in the editor's chrome follows, as the design base's do. Dots, handles, knobs and
+   colour swatches stay round. */
+html[data-corners='sharp'] :is(.oo-pdf-shell, body.oo-pdf-workbench-route > :not(#root)) *:not(
+  .oo-pdf-resize, .oo-pdf-rotate-handle, .oo-pdf-path-point, [class*='swatch'], [class*='switch'], [class*='dot'], [class*='radio']) {
+  border-radius: 0 !important;
+}
+
+/* ── 4. Window ───────────────────────────────────────────────────────── */
+
+/* Linux: the window is transparent and the page draws the corners; maximised windows stay square. */
+html.bw-rounded-window:not(.bw-window-maximized),
+html.bw-rounded-window:not(.bw-window-maximized) body,
+html.bw-rounded-window:not(.bw-window-maximized) #root {
+  background: transparent;
+}
+
+html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
+  border: 1px solid var(--bw-border-strong);
+  border-radius: var(--bw-radius-window);
+}
+
+/* ── 5. Licences ─────────────────────────────────────────────────────── */
+
+.bw-licences-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--bw-z-modal);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bw-overlay);
+}
+
+.bw-licences-backdrop[hidden] { display: none; }
+
+.bw-licences {
+  display: flex;
+  flex-direction: column;
+  width: min(820px, 100%);
+  max-height: min(86vh, 900px);
+  border: 1px solid var(--bw-border);
+  border-radius: var(--bw-radius-island);
+  background: var(--bw-surface);
+  box-shadow: var(--bw-shadow-popover);
+  color: var(--bw-fg);
+  font-family: var(--bw-font-ui);
+  font-size: var(--bw-text);
+}
+
+.bw-licences-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--bw-border-subtle);
+}
+
+.bw-licences-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+
+.bw-licences-head button {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--bw-radius-control);
+  background: transparent;
+  color: var(--bw-fg);
+  font: inherit;
+}
+
+.bw-licences-head button:hover { background: var(--bw-hover); }
+
+.bw-licences-search {
+  flex: 1;
+  height: var(--bw-row);
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--bw-radius-control);
+  outline: none;
+  background: var(--bw-field);
+  color: var(--bw-fg);
+  font: inherit;
+}
+
+.bw-licences-search:focus { border-color: var(--bw-frame); }
+
+.bw-licences-body { overflow-y: auto; padding: 4px 12px 16px; }
+
+.bw-licences-intro { margin: 8px 0 4px; color: var(--bw-fg-muted); line-height: 1.45; }
+
+.bw-licence-section h3 {
+  margin: 16px 0 6px;
+  color: var(--bw-fg-muted);
+  font-size: var(--bw-text-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Versions and commit hashes keep their case. */
+.bw-licence-section h3 .bw-licence-note { text-transform: none; letter-spacing: 0; }
+
+.bw-licence-entry { border-bottom: 1px solid var(--bw-border-subtle); }
+
+.bw-licence-entry summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: var(--bw-row);
+  align-items: center;
+  padding: 0 4px;
+  border-radius: var(--bw-radius-row);
+  cursor: default;
+}
+
+.bw-licence-entry summary:hover { background: var(--bw-hover); }
+
+.bw-licence-spdx { color: var(--bw-fg-muted); font-size: var(--bw-text-small); text-align: right; }
+
+.bw-licence-link { display: inline-block; margin: 2px 4px 6px; color: var(--bw-fg); font-size: var(--bw-text-small); }
+
+.bw-licence-file { margin: 6px 4px 2px; color: var(--bw-fg-muted); font-size: var(--bw-text-caption); }
+
+.bw-licence-text {
+  max-height: 320px;
+  margin: 0 4px 10px;
+  padding: 10px;
+  overflow: auto;
+  border-radius: var(--bw-radius-control);
+  background: var(--bw-surface-sunken);
+  font-family: var(--bw-font-mono);
+  font-size: var(--bw-text-caption);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.bw-licence-missing { margin: 4px 4px 10px; color: var(--bw-fg-muted); font-size: var(--bw-text-small); }

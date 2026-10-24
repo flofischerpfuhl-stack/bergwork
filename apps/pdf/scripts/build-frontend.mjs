@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Assembles apps/pdf/dist/, the frontendDist of the Tauri app:
 //
-//   dist/                      ← apps/pdf/web/* (host page, owned here)
+//   dist/                      ← apps/pdf/web/ built with Vite (host page on the design base, owned here)
 //   dist/tools/vendor/<name>/  ← apps/pdf/upstream/tools/vendor/<name>/ (pinned editor build, never edited)
 //   dist/tools/vendor/pdf-tools/{oo-pdf-tools.js,oo-pdf-tools.css,chunks/}
 //                              ← the editor built from berg:work's source fork (editor/, scripts/build-editor.mjs)
 //
-// The editor bundle fetches its workers, WASM and fonts from absolute /tools/vendor/... URLs, so the vendor
-// directories have to sit at exactly that path below the dist root. Node 22; the editor bundle needs the workspace's devDependencies (npm install).
+// The editor finds its workers, WASM and fonts below tools/vendor/ next to the page (web/src/editor.ts), so the same
+// dist/ serves the desktop app and the web app at /app/pdf/. Node 22 and the workspace's devDependencies (npm install).
 import { cp, mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -53,11 +53,9 @@ if (!(await isDirectory(webDir))) {
   process.exit(1);
 }
 
-// Empty dist/ rather than deleting it, so a static server running in it (browser preview) keeps working.
-await mkdir(distDir, { recursive: true });
-for (const entry of await readdir(distDir)) await rm(path.join(distDir, entry), { recursive: true, force: true });
+// Vite empties dist/ rather than deleting it, so a static server running in it (browser preview) keeps working.
+execFileSync('npx', ['vite', 'build', '--logLevel', 'warn'], { cwd: appDir, stdio: 'inherit', shell: process.platform === 'win32' });
 await mkdir(vendorTarget, { recursive: true });
-await cp(webDir, distDir, { recursive: true });
 for (const name of VENDOR_DIRS) {
   await cp(path.join(vendorSource, name), path.join(vendorTarget, name), { recursive: true });
 }

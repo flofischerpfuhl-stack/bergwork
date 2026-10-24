@@ -48,5 +48,20 @@ await esbuild.build({
   define: { 'process.env.NODE_ENV': '"production"', global: 'globalThis' },
   logLevel: 'warning',
 });
+// The editor addresses its workers, WebAssembly, fonts and runtimes as "/tools/vendor/…", the root of fernwork.net.
+// berg:work runs it at other paths (/app/pdf/ on bergwork.app), so each such literal starts at the host's vendor root
+// (web/src/editor.ts sets globalThis.__bergworkVendor) instead; without it, the path stays as it was.
+const FALLBACK = '(globalThis.__bergworkVendor??"/tools/vendor/")+"';
+let rewritten = 0;
+for (const entry of await fs.readdir(outDir, { recursive: true })) {
+  if (!entry.endsWith('.js')) continue;
+  const file = path.join(outDir, entry);
+  const code = await fs.readFile(file, 'utf8');
+  const next = code.replaceAll('"/tools/vendor/', () => { rewritten += 1; return FALLBACK; });
+  if (/["'`]\/tools\/vendor\//.test(next.replaceAll('??"/tools/vendor/")', ''))) {
+    throw new Error(`build-editor: ${entry} has a /tools/vendor/ path that is not a double-quoted literal; extend the rewrite.`);
+  }
+  if (next !== code) await fs.writeFile(file, next);
+}
 await fs.copyFile(path.join(sourceDir, 'pdf-tools-theme.css'), path.join(outDir, 'oo-pdf-tools.css'));
-console.log(`build-editor: ${path.relative(process.cwd(), outDir) || '.'}`);
+console.log(`build-editor: ${path.relative(process.cwd(), outDir) || '.'} (${rewritten} vendor paths follow the host)`);

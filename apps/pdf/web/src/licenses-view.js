@@ -86,8 +86,9 @@ async function build() {
     body.append(
       element('p', 'bw-licences-intro', `${data.app.name} and the ${data.editor.name} are source-available under the Business Source License 1.1. They include the components below; each is listed with its licence and the licence text it ships.`),
       section('berg:work PDF', [data.app]),
+      ...(data.host?.length ? [section('Window and design base', data.host)] : []),
       section(data.editor.name, data.editor.components, `(Fernwork ${String(data.editor.commit || '').slice(0, 7)})`),
-      section(`Native app: Rust crates (${data.rust.length})`, data.rust, data.generatedFor),
+      ...(data.rust.length ? [section(`Native app: Rust crates (${data.rust.length})`, data.rust, data.generatedFor)] : []),
     );
   } catch (error) {
     body.textContent = `The licence list could not be loaded (${error.message}).`;
