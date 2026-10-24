@@ -630,7 +630,7 @@ export class IndexedDbCommandJournalStore {
         }
       };
       request.onblocked = () => reject(new Error(
-        'PDF recovery storage upgrade is blocked. Close other Fernwork tabs and reopen this document.',
+        'PDF recovery storage upgrade is blocked. Close other berg:work PDF tabs and reopen this document.',
       ));
       request.onsuccess = () => {
         request.result.onversionchange = () => request.result.close();

@@ -2891,10 +2891,10 @@ async function loadFernworkPdfProjectFile(file) {
   const text = await file.text();
   const project = JSON.parse(text);
   if (project?.format !== FERNWORK_PDF_PROJECT_FORMAT) {
-    throw new Error('This is not a Fernwork PDF project.');
+    throw new Error('This is not a PDF project.');
   }
   if (project.version > FERNWORK_PDF_PROJECT_VERSION) {
-    throw new Error('This Fernwork PDF project was created by a newer version.');
+    throw new Error('This PDF project was created by a newer version.');
   }
   const docs = [];
   const importedDocumentKeys = [];
@@ -18287,7 +18287,7 @@ function App({ shell = null }) {
       return;
     }
     const panel = DRAWER_TOOLS.find(item => item.id === drawerPanel);
-    document.title = `${panel?.label || 'PDF Tools'} - PDF Tools | Fernwork`;
+    document.title = `${panel?.label || 'PDF Tools'} - berg:work PDF`;
   }, [drawerPanel, shell, activeTitleName, activeTitleDirty]);
 
   const discardAndCloseDoc = useCallback(async (id) => {
@@ -27578,7 +27578,7 @@ function ProtectedPdfDialog({ prompt, busy, onClose, onSubmit }) {
           <strong id="oo-pdf-password-title">Password required</strong>
           <button className="oo-pdf-icon-button" type="button" aria-label="Close" disabled={busy} onClick={onClose}><Icon name="x" /></button>
         </div>
-        <p><strong>{prompt.file?.name || 'Protected PDF'}</strong> is encrypted. Enter its password to open it locally in Fernwork.</p>
+        <p><strong>{prompt.file?.name || 'Protected PDF'}</strong> is encrypted. Enter its password to open it locally in berg:work PDF.</p>
         <label>Password
           <input
             autoFocus
@@ -28442,7 +28442,7 @@ async function formWidgetsForPage(doc, page) {
   return (await perSource.get(cacheKey)).map(widget => ({ ...widget, key: `${page.id}:${widget.annotationId}` }));
 }
 
-const PDF_XFA_REMOVED_NOTICE = 'The source form also contained XFA data. Fernwork filled the standard AcroForm fields; the exported PDF does not contain the XFA layer.';
+const PDF_XFA_REMOVED_NOTICE = 'The source form also contained XFA data. berg:work PDF filled the standard AcroForm fields; the exported PDF does not contain the XFA layer.';
 
 // Whether a page source is a hybrid XFA form (PDF.js reports it with the
 // document information).
@@ -40054,7 +40054,7 @@ function ToolDrawer(props) {
         <>
           {formHasXfa && doc && !dismissedXfaNoteDocIds.has(doc.id) && (
             <div className="oo-pdf-warning oo-pdf-choice-card" role="note" aria-label="XFA form data">
-              <span>This form also contains XFA data, an alternative form layer that some readers such as Adobe Acrobat show instead. Fernwork fills the standard AcroForm fields; the exported PDF will not contain the XFA layer.</span>
+              <span>This form also contains XFA data, an alternative form layer that some readers such as Adobe Acrobat show instead. berg:work PDF fills the standard AcroForm fields; the exported PDF will not contain the XFA layer.</span>
               <button className="oo-pdf-ghost-button" type="button" onClick={() => setDismissedXfaNoteDocIds(current => new Set([...current, doc.id]))}>Dismiss</button>
             </div>
           )}
@@ -40317,7 +40317,7 @@ function ToolDrawer(props) {
                 </details>
               ))}
               {signatureInspection.documentEdited && (
-                <div>This document has Fernwork edits. Reopen the last signed PDF without editing it before adding another certificate signature.</div>
+                <div>This document has berg:work PDF edits. Reopen the last signed PDF without editing it before adding another certificate signature.</div>
               )}
             </div>
           )}
@@ -40458,7 +40458,7 @@ function ToolDrawer(props) {
             </PanelField>
             <PanelField label="Pages"><input value={ocrRange} placeholder="All" onChange={(e) => setOcrRange(e.target.value)} /></PanelField>
           </div>
-          <PanelHint>The engine and all languages ship with Fernwork; nothing is uploaded.</PanelHint>
+          <PanelHint>The engine and all languages ship with the app; nothing is uploaded.</PanelHint>
         </PanelSection>
         {ocrText && (
           <PanelSection title="Recognised text">

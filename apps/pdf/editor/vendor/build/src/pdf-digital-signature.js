@@ -904,7 +904,7 @@ function rejectUnsupportedSignedDocument(pdfDocument) {
   }
   const perms = pdfDocument.catalog.get(PDFName.of('Perms'));
   if (perms) {
-    throw new Error('This PDF is certified with document permissions. Fernwork will not add a signature because that could violate the certification policy.');
+    throw new Error('This PDF is certified with document permissions. berg:work PDF will not add a signature because that could violate the certification policy.');
   }
   const hasRestrictedTransform = root => {
     const pending = [root];
@@ -933,7 +933,7 @@ function rejectUnsupportedSignedDocument(pdfDocument) {
     const reference = object.get(PDFName.of('Reference'));
     if (!reference) continue;
     if (hasRestrictedTransform(reference)) {
-      throw new Error('This PDF has DocMDP or FieldMDP signature restrictions. Fernwork will not add a signature that could violate them.');
+      throw new Error('This PDF has DocMDP or FieldMDP signature restrictions. berg:work PDF will not add a signature that could violate them.');
     }
   }
 }
