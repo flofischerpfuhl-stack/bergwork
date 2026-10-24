@@ -147,7 +147,7 @@
 }
 
 /* Floating chrome: one bar style for the top bar, options bar, tool palette and status bar. */
-.topBar, .header, .rail, .status {
+.topBar, .header, .rail {
   position: absolute;
   border: 1px solid var(--cmp-border);
   border-radius: var(--cmp-radius);
@@ -215,28 +215,31 @@
 }
 .tabClose:hover:not(:disabled) { color: var(--cmp-text); }
 
+/* The editor's shared controls in the design base's look (packages/ui): every option bar, feature panel and dialog
+   uses these classes, so they follow the Builder rules without each module changing its markup. */
 .iconButton {
   flex: none; display: inline-grid; place-items: center; min-width: var(--cmp-target); height: var(--cmp-target); padding: 0 6px;
-  border: 0; border-radius: var(--cmp-radius-control); background: transparent; color: var(--cmp-text); font: 600 12px/1 var(--cmp-font);
+  border: 1px solid transparent; border-radius: var(--bw-radius-control); background: transparent; color: var(--bw-fg); font: 500 12px/1 var(--cmp-font);
 }
-.iconButton:hover:not(:disabled) { background: var(--cmp-control-hover); }
-.iconButton:active:not(:disabled) { background: var(--cmp-control-active); }
-.iconButton:disabled { color: var(--cmp-text-tertiary); }
-.iconButtonOn { background: var(--cmp-control-active); }
-/* Fernwork PDF's chrome button: square, bordered, raised a step from the bar. */
+.iconButton:hover:not(:disabled) { background: var(--bw-hover); color: var(--bw-fg-strong); }
+.iconButton:active:not(:disabled) { background: var(--bw-press); }
+.iconButton:disabled { color: var(--bw-fg-subtle); }
+/* On: a solid frame on the pressed grey (§3). */
+.iconButtonOn, .iconButtonOn:hover:not(:disabled) { background: var(--bw-control-active); border-color: var(--bw-frame); color: var(--bw-fg-strong); }
+/* Bar buttons (top bar): quiet icon buttons like the Builder's function bar; a labelled one keeps its text. */
 .chromeButton {
   flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: var(--cmp-control-size); height: var(--cmp-control-size);
-  padding: 0; border: 1px solid var(--cmp-border); border-radius: var(--cmp-radius-control); background: var(--cmp-panel-2); color: var(--cmp-text);
-  font: 700 12px/1 var(--cmp-font); white-space: nowrap;
+  padding: 0; border: 1px solid transparent; border-radius: var(--bw-radius-control); background: transparent; color: var(--bw-fg);
+  font: 500 12.5px/1 var(--cmp-font); white-space: nowrap;
 }
 .chromeButtonText { padding: 0 11px; }
-.chromeButton:hover:not(:disabled) { background: var(--cmp-control-hover); }
-.chromeButton:active:not(:disabled) { background: var(--cmp-control-active); }
-.chromeButton:disabled { opacity: 0.4; }
-/* A toggle that is on: quieter than the active tool, which alone gets the filled accent. */
-.chromeButtonOn, .chromeButtonOn:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--cmp-accent-hover) 50%, var(--cmp-border)); background: var(--cmp-accent-tint); color: var(--cmp-accent-strong);
-}
+.chromeButton:hover:not(:disabled) { background: var(--bw-hover); color: var(--bw-fg-strong); }
+.chromeButton:active:not(:disabled) { background: var(--bw-press); }
+/* Disabled keeps its surface; only the content dims (§8a). */
+.chromeButton:disabled { color: var(--bw-fg-subtle); }
+.chromeButton:disabled > svg { opacity: 0.5; }
+/* A toggle that is on: the solid frame (§3). */
+.chromeButtonOn, .chromeButtonOn:hover:not(:disabled) { border-color: var(--bw-frame); background: var(--bw-control-active); color: var(--bw-fg-strong); }
 .chromeGroup { display: flex; align-items: center; gap: 4px; flex: none; }
 .zoomGroup { display: flex; align-items: center; gap: 2px; flex: none; }
 
@@ -253,49 +256,70 @@
   mask-image: linear-gradient(to right, black calc(100% - 14px), transparent);
 }
 .header::-webkit-scrollbar { display: none; }
-.headerTitle { font: 700 12.5px/1 var(--cmp-font); flex: none; }
+.headerTitle { font: 600 13px/1 var(--cmp-font); color: var(--bw-fg-strong); flex: none; }
 .compact .header, .compactLandscape .header { right: var(--cmp-inset); width: auto; max-width: none; gap: 8px; padding: 0 10px; }
-.field { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--cmp-text-secondary); font-size: 11.5px; font-weight: 600; }
+/* A labelled value: the label muted, the value a quiet field in JetBrains Mono (§8b): a fill without a frame, the frame
+   on hover, a neutral frame on focus. */
+.field { display: inline-flex; align-items: center; gap: 6px; flex: none; color: var(--bw-fg-muted); font-size: 12px; font-weight: 500; }
 .field input {
-  width: 58px; height: 26px; padding: 0 7px; border-radius: 7px; border: 1px solid var(--cmp-border); background: var(--cmp-panel-3);
-  color: var(--cmp-text); font: 500 12px/1 var(--cmp-font); text-align: right; font-variant-numeric: tabular-nums;
+  width: 62px; height: 26px; padding: 0 7px; border-radius: var(--bw-radius-row); border: 1px solid transparent; background: var(--bw-field);
+  color: var(--bw-fg-strong); font: 500 var(--bw-text-mono)/1 var(--bw-font-mono); text-align: right; font-variant-numeric: tabular-nums;
 }
+.field input:hover:not(:disabled) { border-color: var(--bw-border-strong); }
 .compact .field input, .compactLandscape .field input { height: 34px; width: 64px; font-size: 15px; }
-.field input:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent-hover); }
-.field input:disabled { color: var(--cmp-text-tertiary); }
-.check { display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 12px; font-weight: 500; }
-.check input { accent-color: var(--cmp-accent); width: 14px; height: 14px; margin: 0; }
-.compact .check input, .compactLandscape .check input { width: 22px; height: 22px; }
-.pill {
-  flex: none; height: 26px; padding: 0 11px; border-radius: var(--cmp-radius-control); border: 1px solid var(--cmp-border); background: var(--cmp-panel-2);
-  color: var(--cmp-text); font: 600 12px/1 var(--cmp-font);
+.field input:focus { outline: none; border-color: var(--bw-frame); background: var(--bw-field-hover); }
+.field input:disabled { color: var(--bw-fg-subtle); }
+/* A labelled on/off: the framed glyph (§3) — an empty frame when off, a solid frame with a check when on. */
+.check { display: inline-flex; align-items: center; gap: 7px; flex: none; font-size: 12.5px; font-weight: 400; color: var(--bw-fg); }
+.check input {
+  appearance: none; -webkit-appearance: none; display: inline-grid; place-items: center; width: 16px; height: 16px; margin: 0; flex: none;
+  border: 1.5px solid var(--bw-fg-subtle); border-radius: 4px; background: transparent; cursor: pointer;
 }
-.pill:hover:not(:disabled) { background: var(--cmp-control-hover); }
-.pill:disabled { color: var(--cmp-text-tertiary); }
-.pillPrimary, .pillPrimary:disabled { background: var(--cmp-accent); border-color: var(--cmp-accent); color: var(--cmp-accent-contrast); }
+.check input:checked {
+  border-color: var(--bw-fg-strong);
+  background: var(--bw-fg-strong) center / 11px 11px no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2 5 8.6l4.6-5.2' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.light .check input:checked, :global([data-theme='light']) .check input:checked { background-color: var(--bw-fg-strong); }
+:global([data-theme='dark']) .check input:checked {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2 5 8.6l4.6-5.2' fill='none' stroke='%23161514' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.check input:disabled { opacity: 0.4; cursor: default; }
+.compact .check input, .compactLandscape .check input { width: 22px; height: 22px; }
+/* Text buttons: the design base's button; the main action in the stone accent, a toggle that is on with the frame. */
+.pill {
+  flex: none; height: 28px; padding: 0 12px; border-radius: var(--bw-radius-control); border: 1px solid var(--bw-border); background: var(--bw-control);
+  color: var(--bw-fg-strong); font: 500 12.5px/1 var(--cmp-font);
+}
+.pill:hover:not(:disabled) { border-color: var(--bw-border-strong); }
+.pill:disabled { color: var(--bw-fg-subtle); }
+.pillPrimary, .pillPrimary:disabled { background: var(--bw-accent); border-color: transparent; color: var(--bw-accent-on); }
 .pillPrimary:disabled { opacity: 0.45; }
-.pillPrimary:hover:not(:disabled) { background: var(--cmp-accent-hover); }
-.pillOn, .pillOn:hover:not(:disabled) { background: var(--cmp-accent-tint); border-color: color-mix(in srgb, var(--cmp-accent-hover) 50%, var(--cmp-border)); color: var(--cmp-accent-strong); }
+.pillPrimary:hover:not(:disabled) { background: var(--bw-accent-hover); }
+.pillOn, .pillOn:hover:not(:disabled) { background: var(--bw-control-active); border-color: var(--bw-frame); color: var(--bw-fg-strong); }
 .compact .pill, .compactLandscape .pill { height: 36px; padding: 0 14px; font-size: 14px; }
+/* Fixed choices are dropdowns (§8b): a quiet field with a chevron. */
 .select {
-  height: 26px; padding: 0 24px 0 9px; border-radius: var(--cmp-radius-control); border: 1px solid var(--cmp-border); background-color: var(--cmp-panel-2);
-  color: var(--cmp-text); font: 500 12px/1 var(--cmp-font); appearance: none; -webkit-appearance: none;
+  height: 26px; padding: 0 24px 0 9px; border-radius: var(--bw-radius-row); border: 1px solid transparent; background-color: var(--bw-field);
+  color: var(--bw-fg-strong); font: 400 12.5px/1 var(--cmp-font); appearance: none; -webkit-appearance: none;
   background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
   background-position: calc(100% - 13px) 11px, calc(100% - 9px) 11px; background-size: 4px 4px; background-repeat: no-repeat;
 }
-.select:hover:not(:disabled) { background-color: var(--cmp-control-hover); }
+.select:hover:not(:disabled) { border-color: var(--bw-border-strong); }
+.select:focus-visible { outline: none; border-color: var(--bw-frame); }
 .compact .select, .compactLandscape .select { height: 36px; font-size: 14px; background-position: calc(100% - 13px) 16px, calc(100% - 9px) 16px; }
+/* Two or three choices with short labels (§8c), as the design base's segmented toggle. */
 .segmented {
-  display: inline-flex; flex: none; border-radius: var(--cmp-radius-control); background: var(--cmp-panel-3); border: 1px solid var(--cmp-border);
+  display: inline-flex; flex: none; border-radius: var(--bw-radius-row); background: var(--bw-field); border: 0;
   padding: 2px; gap: 2px;
 }
 .segment {
-  height: 20px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--cmp-text-secondary);
-  font: 600 12px/1 var(--cmp-font);
+  height: 22px; padding: 0 10px; border: 1px solid transparent; border-radius: calc(var(--bw-radius-row) - 2px); background: transparent; color: var(--bw-fg-muted);
+  font: 500 12px/1 var(--cmp-font);
 }
 .segment:hover { color: var(--cmp-text); }
 /* A chosen mode is a raised segment, not a filled accent (Fernwork PDF); only the active tool is green. */
-.segmentOn, .segmentOn:hover { background: var(--cmp-segment-on); color: var(--cmp-text); box-shadow: var(--cmp-raised-shadow); }
+.segmentOn, .segmentOn:hover { background: var(--bw-surface-raised); border-color: var(--bw-border); color: var(--bw-fg-strong); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); }
 .compact .segment, .compactLandscape .segment { height: 32px; padding: 0 12px; font-size: 14px; }
 .spacer { flex: 1 1 auto; }
 
@@ -308,14 +332,9 @@
 .rail::-webkit-scrollbar { display: none; }
 .railTwo .rail { display: grid; grid-template-columns: repeat(2, var(--cmp-control-size)); justify-content: center; gap: 2px 4px; padding: 5px 0 8px; }
 .railTwo .palette { grid-column: 1 / -1; justify-self: center; }
-.tool {
-  flex: none; width: var(--cmp-control-size); height: var(--cmp-control-size); display: grid; place-items: center; border-radius: var(--cmp-radius-control);
-  border: 1px solid transparent; background: transparent; color: var(--cmp-text);
-}
-.tool:hover:not(:disabled) { background: var(--cmp-control-hover); }
-/* A selected tool is pressed: the darker control grey with a solid frame, never an accent fill (Builder §3). */
-.toolOn, .toolOn:hover:not(:disabled) { background: var(--bw-control-active); border-color: var(--bw-frame); color: var(--bw-fg-strong); }
-.tool:disabled { color: var(--cmp-text-tertiary); }
+/* Tools are design-base icon buttons; the selected one is pressed (aria-pressed): the darker control grey, never an
+   accent fill (Builder §3). */
+.tool { width: var(--cmp-control-size); height: var(--cmp-control-size); }
 .compact .rail {
   top: auto; bottom: calc(var(--cmp-inset) + env(safe-area-inset-bottom)); left: var(--cmp-inset); right: var(--cmp-inset); width: auto; height: 58px;
   max-height: none; flex-direction: row; justify-content: flex-start; gap: 2px; padding: 0 6px; overflow-x: auto; overflow-y: hidden;
@@ -396,7 +415,8 @@
 .appearance :global(.bw-row) { padding: 0 4px; }
 /* A tab page of the panel (layers, history, colour) fills the body below the rail's tabs. */
 .panelPage { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 0 6px; }
-.appearanceRow { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--cmp-text-secondary); }
+/* A label and its control on one line (dialog rows): the Properties row look of the design base. */
+.appearanceRow { display: flex; align-items: center; gap: 8px; min-height: var(--bw-row); font-size: 12px; font-weight: 400; color: var(--bw-fg-muted); }
 .appearanceRow .select { flex: 1; min-width: 0; }
 .slider { flex: 1; min-width: 0; accent-color: var(--cmp-accent); height: 20px; }
 .compact .slider { height: 36px; }
@@ -482,33 +502,39 @@
   pointer-events: none; min-width: 0; padding: 0 var(--cmp-gap);
 }
 .chromeHidden .statusDock { display: none; }
+/* The status bar is a row of islands (Builder status bar): zoom, document facts, the tool hint. The row itself has no
+   surface; it clips sideways only (the islands' shadows may reach out). */
 .status {
-  position: relative; pointer-events: auto; height: var(--cmp-status-bar); max-width: 100%; display: flex; align-items: center; gap: 10px;
-  padding: 0 12px 0 4px; min-width: 0; overflow: hidden; color: var(--cmp-text-secondary); font-size: 11.5px; font-weight: 500;
-  font-variant-numeric: tabular-nums; white-space: nowrap;
+  position: relative; pointer-events: auto; height: var(--cmp-status-bar); max-width: 100%; display: flex; align-items: center; gap: var(--bw-gap-attached);
+  padding: 0; min-width: 0; overflow: clip; overflow-clip-margin: 16px; color: var(--bw-fg-muted); font-size: 12px; font-weight: 500;
+  white-space: nowrap; background: none; border: 0; box-shadow: none;
 }
-.status .iconButton { min-width: 28px; height: 28px; }
+.statusIsland {
+  display: inline-flex; align-items: center; gap: 2px; height: 100%; min-width: 0; padding: 0 4px; flex: none;
+  border: 1px solid var(--cmp-border); border-radius: calc(var(--bw-radius-control) + 3px); background: var(--cmp-panel); box-shadow: var(--bw-shadow-island);
+}
+.status .iconButton { min-width: 30px; height: 30px; }
 .statusZoom {
-  display: inline-flex; align-items: center; justify-content: center; min-width: 58px; height: 28px; padding: 0 8px; border-radius: var(--cmp-radius-control);
-  border: 1px solid var(--cmp-border); background: var(--cmp-panel-2); color: var(--cmp-text); font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center; min-width: 64px; height: 26px; padding: 0 8px; border-radius: var(--bw-radius-row);
+  background: var(--bw-field); color: var(--bw-fg-strong); font: 500 var(--bw-text-mono)/1 var(--bw-font-mono); font-variant-numeric: tabular-nums;
 }
-.statusFacts { display: flex; align-items: center; gap: 12px; flex: none; }
-.statusHint { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; max-width: 520px; }
-.root[data-bar-width='narrow'] .status { gap: 6px; padding-right: 8px; }
-.root[data-bar-width='narrow'] .statusFacts { gap: 7px; }
+.statusFacts { gap: 14px; padding: 0 12px; font-family: var(--bw-font-mono); font-size: var(--bw-text-small); font-variant-numeric: tabular-nums; }
+.statusHint { display: block; flex: 0 1 auto; line-height: calc(var(--cmp-status-bar) - 2px); padding: 0 12px; overflow: hidden; text-overflow: ellipsis; max-width: 520px; }
+.root[data-bar-width='narrow'] .statusFacts { gap: 8px; padding: 0 8px; }
 .root[data-bar-width='narrow'] .statusTabletOptional { display: none; }
 .compact .statusDock, .compactLandscape .statusDock { display: none; }
 
 /* Dialogs */
 .dialogBackdrop { position: absolute; inset: 0; z-index: 60; display: grid; place-items: center; background: var(--cmp-overlay); padding: 16px; }
+/* Dialogs: the design base's dialog — title, Properties-like rows, buttons with the main action last at the right. */
 .dialog {
-  width: min(460px, 100%); max-height: 100%; overflow: auto; padding: 22px; border-radius: var(--cmp-radius); background: var(--cmp-panel);
-  border: 1px solid var(--cmp-border); box-shadow: var(--cmp-shadow); display: flex; flex-direction: column; gap: 14px;
+  width: min(460px, 100%); max-height: 100%; overflow: auto; padding: 18px; border-radius: var(--bw-radius-island); background: var(--cmp-raised);
+  border: 1px solid var(--bw-border); box-shadow: var(--bw-shadow-popover); display: flex; flex-direction: column; gap: 12px;
 }
-.dialog .pill { height: 30px; padding: 0 14px; }
+.dialog .pill { height: 32px; padding: 0 14px; }
 .dialogWide { width: min(620px, 100%); }
-.dialogTitle { margin: 0; font: 700 15px/1.3 var(--cmp-font); letter-spacing: -0.005em; }
-.dialogMessage { margin: 0; color: var(--cmp-text-secondary); white-space: pre-wrap; font-size: 12.5px; line-height: 1.45; }
+.dialogTitle { margin: 0; color: var(--bw-fg-strong); font: 600 14px/1.3 var(--cmp-font); }
+.dialogMessage { margin: 0; color: var(--bw-fg-muted); white-space: pre-wrap; font-size: 12.5px; line-height: 1.45; }
 .dialogButtons { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .preview { height: 300px; background: var(--cmp-preview-bg); display: grid; place-items: center; overflow: hidden; border-radius: var(--cmp-radius-control); }
 .preview img { max-width: 100%; max-height: 100%; }

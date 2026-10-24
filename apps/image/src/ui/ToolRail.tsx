@@ -30,7 +30,7 @@ export function ToolRail({ controller }: { controller: EditorController }) {
         const available = controller.availableTools.has(tool);
         const label = controller.t(TOOL_LABELS[tool]);
         return (
-          <button key={tool} type="button" className={`${styles.tool} ${session.tool === tool ? styles.toolOn : ''}`}
+          <button key={tool} type="button" className={`bw-icon-button ${styles.tool}`}
             aria-pressed={session.tool === tool} aria-label={label} title={label}
             disabled={!available} data-testid={`tool-${tool}`} onClick={() => void controller.activateTool(tool)}>
             <Icon name={toolIcon(controller, tool)} size={18} />
