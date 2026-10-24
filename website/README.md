@@ -31,6 +31,12 @@ The build writes clean routes and the root `404.html` to `dist/`. The preview de
 node build.mjs --watch
 ```
 
+### Web apps
+
+`build.mjs` also builds the browser editors and copies them under `/app/`: berg:work Image from `apps/image` to `/app/image/` (Vite with `BERGWORK_BASE=/app/image/`). Missing dependencies are installed first (`npm ci` for the `packages/ui` workspace and in `apps/image`), so Workers Builds needs no extra install step; the first local build takes about a minute. `BERGWORK_SKIP_APPS=1 node build.mjs` builds the site alone. `_headers` gives `/app/image/*` its own CSP (WebAssembly, blob workers, inline style attributes, Hugging Face model downloads) and cross-origin isolation; the site's service worker leaves `/app/` alone. Files above the host's 25 MiB limit (ONNX Runtime's WebAssembly) ship gzip-compressed and are inflated by the editor.
+
+`serve.mjs` does not apply `_headers`; test the apps with `npx wrangler dev` from `website/`.
+
 `site.config.mjs` is the single source for the site name, canonical origin, contact address, colours and product names. `siteUrl` is `https://bergwork.app`; if it is ever emptied, the build warns and omits canonical URLs, `og:url` and `sitemap.xml`.
 
 ## Content evidence

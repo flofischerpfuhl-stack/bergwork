@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, watch } from 'node:fs';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
@@ -44,6 +45,43 @@ async function fingerprintAsset(source, preferredName) {
   return url;
 }
 
+/**
+ * The web apps on bergwork.app (berg:work Image at /app/image/) are built once per process into .apps/ and copied
+ * into dist/ on every site build. Dependencies are installed when missing (Workers Builds starts from a bare checkout):
+ * @bergwork/ui from the repo's workspace, the image editor from its own lockfile. BERGWORK_SKIP_APPS=1 leaves them out.
+ */
+const repo = path.resolve(root, '..');
+const appsCache = path.join(root, '.apps');
+const webApps = [{ name: 'image', dir: path.join(repo, 'apps', 'image'), base: '/app/image/' }];
+let appsBuilt = false;
+
+function run(command, args, cwd, env = {}) {
+  console.log(`$ (${path.relative(repo, cwd) || '.'}) ${command} ${args.join(' ')}`);
+  const result = spawnSync(command, args, { cwd, stdio: 'inherit', env: { ...process.env, ...env } });
+  if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed in ${cwd}`);
+}
+
+function buildWebApps() {
+  if (appsBuilt || process.env.BERGWORK_SKIP_APPS === '1') return;
+  if (!existsSync(path.join(repo, 'node_modules', 'lucide-react'))) run('npm', ['ci', '--workspace', 'packages/ui', '--no-audit', '--no-fund'], repo);
+  for (const app of webApps) {
+    if (!existsSync(path.join(app.dir, 'node_modules', 'vite'))) run('npm', ['ci', '--no-audit', '--no-fund'], app.dir);
+    run('npx', ['vite', 'build', '--outDir', path.join(appsCache, app.name), '--emptyOutDir'], app.dir, { BERGWORK_BASE: app.base });
+  }
+  appsBuilt = true;
+}
+
+async function copyWebApps() {
+  if (process.env.BERGWORK_SKIP_APPS === '1') return;
+  for (const app of webApps) {
+    // Source maps, the bundle report and Vite's manifest stay out of the deployment.
+    await cp(path.join(appsCache, app.name), path.join(dist, app.base.slice(1)), {
+      recursive: true,
+      filter: (source) => !/\.map$|bundle-report\.json$|[\\/]\.vite([\\/]|$)/.test(source),
+    });
+  }
+}
+
 async function writeText(relative, text) {
   const output = path.join(dist, relative);
   await ensureParent(output);
@@ -51,6 +89,7 @@ async function writeText(relative, text) {
 }
 
 async function build() {
+  buildWebApps();
   warnings.length = 0;
   copiedAssets.clear();
   await rm(dist, { recursive: true, force: true });
@@ -146,6 +185,7 @@ async function build() {
   sw = sw.replace('__CACHE_VERSION__', swVersion).replace('__PRECACHE__', JSON.stringify(precache));
   await writeText('sw.js', sw);
 
+  await copyWebApps();
   await cp(path.join(root, '_headers'), path.join(dist, '_headers'));
   await cp(path.join(root, '_redirects'), path.join(dist, '_redirects'));
   await writeText('robots.txt', `User-agent: *\nAllow: /\n`);

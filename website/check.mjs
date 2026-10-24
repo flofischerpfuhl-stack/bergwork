@@ -10,8 +10,9 @@ import { startServer } from './serve.mjs';
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.join(root, 'dist');
 const shots = path.join(root, '.check-out');
-const playwrightPath = '/home/oem/Dokumente/003_Projekte/17_fernwork/node_modules/playwright/index.mjs';
-const axePath = '/home/oem/Dokumente/003_Projekte/10_himmelcad/node_modules/axe-core/axe.min.js';
+// Playwright and axe-core come from sibling checkouts (the site has no dependencies); override per machine.
+const playwrightPath = process.env.PLAYWRIGHT_PATH ?? '/home/oem/Dokumente/003_Projekte/17_fernwork/node_modules/playwright/index.mjs';
+const axePath = process.env.AXE_PATH ?? '/home/oem/Dokumente/003_Projekte/10_himmelcad/node_modules/axe-core/axe.min.js';
 const routes = ['/', '/pdf/', '/image/', '/roadmap/', '/download/', '/legal/', '/privacy/', '/offline/', '/404.html'];
 const results = [];
 const failures = [];

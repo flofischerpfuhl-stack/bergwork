@@ -44,6 +44,8 @@ async function staleWhileRevalidate(request) {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin || event.request.method !== 'GET') return;
+  // The web apps under /app/ run cross-origin isolated and manage their own files; the site's cache stays out.
+  if (url.pathname.startsWith('/app/')) return;
   if (event.request.mode === 'navigate' || event.request.destination === 'document') {
     event.respondWith(networkFirst(event.request));
     return;

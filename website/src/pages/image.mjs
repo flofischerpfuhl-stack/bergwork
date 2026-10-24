@@ -13,7 +13,8 @@ export function render({ assets, media }) {
         ${productMark(assets.markImage, 'large')}
         <p class="kicker">${config.products.image}</p>
         <h1>${config.products.image}</h1>
-        <p>Layered image editing in an internal desktop build. The desktop app builds for Linux and Windows. It is not publicly distributed.</p>
+        <p>Layered image editing that runs in the browser: files are opened and saved on your device, nothing is uploaded. The desktop app builds for Linux and Windows and is not publicly distributed yet.</p>
+        <a class="button button--ink" href="/app/image/">Open berg:work Image in the browser</a>
       </div>
       ${status('Internal build', 'progress')}
     </header>
