@@ -42,7 +42,9 @@ Rules:
    changes since the old pin.
 
 The pinned upstream builds are not committed. `npm run sync:install` recreates them from `upstream.lock.json` and
-fails if the result does not match the locked digest. Per machine, an upstream checkout can be moved with
+fails if the result does not match the locked digest. Without an upstream checkout (Cloudflare's build of
+bergwork.app) it takes the pin from its mirror, the tag `upstream/fernwork-pdf/<commit>` of this repository, which
+`npm run sync:publish -- fernwork-pdf` creates and pushes after each new pin. Per machine, an upstream checkout can be moved with
 `BERGWORK_UPSTREAM_<NAME>` (for example `BERGWORK_UPSTREAM_FERNWORK_PDF`).
 
 ## Hardware and platforms

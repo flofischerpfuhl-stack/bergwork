@@ -28,6 +28,10 @@
         "tools/vendor/tesseract-5.0.4"
       ],
       "target": "apps/pdf/upstream",
+      "mirror": {
+        "url": "https://github.com/flofischerpfuhl-stack/bergwork.git",
+        "tagPrefix": "upstream/fernwork-pdf/"
+      },
       "commit": "f945b19398dbe9f73c6b6a1ee1f97c75d043a741",
       "digest": "e77180cc9d150b392f81787bff2292b82c0b0c595ae92cbb7ae7ab39b1971a10",
       "fileCount": 473

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { MANIFEST_NAME, checkOne, hashTree, install, readLock, update, upstreamRepo } from './sync-upstream.mjs';
+import { MANIFEST_NAME, checkOne, hashTree, install, publish, readLock, update, upstreamRepo } from './sync-upstream.mjs';
 
 const quiet = { log: console.log };
 
@@ -85,6 +85,24 @@ test('install refuses a build whose digest differs from the lock', () => withFix
   lock.upstreams.editor.digest = '0'.repeat(64);
   await fs.writeFile(path.join(root, 'upstream.lock.json'), JSON.stringify(lock));
   await assert.rejects(install(root, ['editor']), /not reproducible on this machine or the lock is stale/);
+}));
+
+test('without an upstream checkout, install takes the published pin from the mirror', () => withFixture(async ({ root }) => {
+  execFileSync('git', ['-C', root, 'init', '-q']);
+  await update(root, 'editor');
+  const lock = await readLock(root);
+  lock.upstreams.editor.mirror = { url: root, tagPrefix: 'upstream/editor/' };
+  await fs.writeFile(path.join(root, 'upstream.lock.json'), JSON.stringify(lock));
+  await publish(root, 'editor', { push: false });
+  const pinned = lock.upstreams.editor.commit;
+  const tagged = execFileSync('git', ['-C', root, 'ls-tree', '-r', '--name-only', `upstream/editor/${pinned}`], { encoding: 'utf8' });
+  assert.equal(tagged.trim(), 'vendor/bundle/app.js', 'the tag holds the installed tree without the manifest');
+  await fs.rename(path.join(root, '../upstream'), path.join(root, '../moved'));
+  await fs.rm(path.join(root, 'apps/x/upstream'), { recursive: true });
+  await install(root, []);
+  const target = path.join(root, 'apps/x/upstream');
+  assert.equal(await fs.readFile(path.join(target, 'vendor/bundle/app.js'), 'utf8'), 'one');
+  assert.deepEqual(await checkOne(root, 'editor', (await readLock(root)).upstreams.editor), { ok: true });
 }));
 
 test('an environment variable overrides the upstream checkout', () => {

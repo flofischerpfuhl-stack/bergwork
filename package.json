@@ -12,6 +12,7 @@
     "sync:check": "node scripts/sync-upstream.mjs check",
     "sync:status": "node scripts/sync-upstream.mjs status",
     "sync:update": "node scripts/sync-upstream.mjs update",
+    "sync:publish": "node scripts/sync-upstream.mjs publish",
     "test": "node --test scripts/*.test.mjs"
   }
 }

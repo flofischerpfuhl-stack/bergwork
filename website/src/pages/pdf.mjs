@@ -13,7 +13,8 @@ export function render({ assets, media }) {
         ${productMark(assets.markPdf, 'large')}
         <p class="kicker">${config.products.pdf}</p>
         <h1>${config.products.pdf}</h1>
-        <p>Edit PDF content and pages. The editor works in Fernwork's browser build. The separate desktop application has not been started.</p>
+        <p>Edit PDF content and pages in the browser: files are opened and saved on your device, nothing is uploaded. A desktop build for Linux exists internally and is not distributed yet.</p>
+        <a class="button button--ink" href="/app/pdf/">Open berg:work PDF in the browser</a>
       </div>
       ${status('Browser build: works', 'works')}
     </header>

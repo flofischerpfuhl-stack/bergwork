@@ -46,13 +46,36 @@ async function fingerprintAsset(source, preferredName) {
 }
 
 /**
- * The web apps on bergwork.app (berg:work Image at /app/image/) are built once per process into .apps/ and copied
- * into dist/ on every site build. Dependencies are installed when missing (Workers Builds starts from a bare checkout):
- * @bergwork/ui from the repo's workspace, the image editor from its own lockfile. BERGWORK_SKIP_APPS=1 leaves them out.
+ * The web apps on bergwork.app: berg:work Image at /app/image/ and berg:work PDF at /app/pdf/. Each is built once per
+ * process into .apps/<name>/ and copied into dist/ on every site build. Dependencies are installed when missing
+ * (Workers Builds starts from a bare checkout): the repo's workspaces for the design base and the PDF app, the image
+ * editor from its own lockfile, and the PDF editor's pinned build from its mirror tag when no Fernwork checkout is
+ * there (scripts/sync-upstream.mjs). BERGWORK_SKIP_APPS=1 leaves the apps out.
  */
 const repo = path.resolve(root, '..');
 const appsCache = path.join(root, '.apps');
-const webApps = [{ name: 'image', dir: path.join(repo, 'apps', 'image'), base: '/app/image/' }];
+const webApps = [
+  {
+    name: 'image',
+    base: '/app/image/',
+    build(out) {
+      const dir = path.join(repo, 'apps', 'image');
+      if (!existsSync(path.join(dir, 'node_modules', 'vite'))) run('npm', ['ci', '--no-audit', '--no-fund'], dir);
+      run('npx', ['vite', 'build', '--outDir', out, '--emptyOutDir'], dir, { BERGWORK_BASE: this.base });
+    },
+  },
+  {
+    name: 'pdf',
+    base: '/app/pdf/',
+    async build(out) {
+      const dir = path.join(repo, 'apps', 'pdf');
+      run('node', ['scripts/sync-upstream.mjs', 'install', 'fernwork-pdf'], repo);
+      run('node', ['scripts/build-frontend.mjs'], dir);
+      await rm(out, { recursive: true, force: true });
+      await cp(path.join(dir, 'dist'), out, { recursive: true });
+    },
+  },
+];
 let appsBuilt = false;
 
 function run(command, args, cwd, env = {}) {
@@ -61,13 +84,12 @@ function run(command, args, cwd, env = {}) {
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed in ${cwd}`);
 }
 
-function buildWebApps() {
+async function buildWebApps() {
   if (appsBuilt || process.env.BERGWORK_SKIP_APPS === '1') return;
-  if (!existsSync(path.join(repo, 'node_modules', 'lucide-react'))) run('npm', ['ci', '--workspace', 'packages/ui', '--no-audit', '--no-fund'], repo);
-  for (const app of webApps) {
-    if (!existsSync(path.join(app.dir, 'node_modules', 'vite'))) run('npm', ['ci', '--no-audit', '--no-fund'], app.dir);
-    run('npx', ['vite', 'build', '--outDir', path.join(appsCache, app.name), '--emptyOutDir'], app.dir, { BERGWORK_BASE: app.base });
+  if (!existsSync(path.join(repo, 'node_modules', '.package-lock.json'))) {
+    run('npm', ['ci', '--workspace', 'packages/ui', '--workspace', 'apps/pdf', '--no-audit', '--no-fund'], repo);
   }
+  for (const app of webApps) await app.build(path.join(appsCache, app.name));
   appsBuilt = true;
 }
 
@@ -89,7 +111,7 @@ async function writeText(relative, text) {
 }
 
 async function build() {
-  buildWebApps();
+  await buildWebApps();
   warnings.length = 0;
   copiedAssets.clear();
   await rm(dist, { recursive: true, force: true });

@@ -27,3 +27,13 @@
 /app/image/assets/*
   ! Cache-Control
   Cache-Control: public, max-age=31536000, immutable
+
+# berg:work PDF (built from apps/pdf by build.mjs): the desktop app's CSP and cross-origin isolation.
+/app/pdf/*
+  ! Content-Security-Policy
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; media-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; manifest-src 'self'; connect-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
+  Cross-Origin-Embedder-Policy: require-corp
+
+/app/pdf/assets/*
+  ! Cache-Control
+  Cache-Control: public, max-age=31536000, immutable

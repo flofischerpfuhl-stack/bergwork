@@ -9,9 +9,14 @@
 //   node scripts/sync-upstream.mjs update <name> [--ref <rev>]
 //                                                     pin a new upstream commit and print the upstream changes
 //   node scripts/sync-upstream.mjs status [name…]    show how far each pin is behind its upstream ref
+//   node scripts/sync-upstream.mjs publish <name>     store the installed pin as a tag in this repository (mirror)
 //
 // An upstream checkout can be overridden per machine with BERGWORK_UPSTREAM_<NAME>=<path>
 // (name upper-cased, dashes as underscores), for example BERGWORK_UPSTREAM_FERNWORK_PDF=D:\src\fernwork.
+//
+// Where no upstream checkout exists (Cloudflare's build of bergwork.app), `install` takes the pinned files from the
+// entry's `mirror`: a tag per pin (`<tagPrefix><commit>`) in a public repository, holding exactly the installed tree.
+// `publish` creates that tag from a verified install and pushes it; the digest check applies to both sources.
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -33,6 +38,7 @@ function run(command, args, options = {}) {
     stdio: options.inherit ? 'inherit' : 'pipe',
     cwd: options.cwd,
     input: options.input,
+    env: options.env ? { ...process.env, ...options.env } : undefined,
     shell: process.platform === 'win32' && options.shell,
   });
   if (result.error) throw result.error;
@@ -103,12 +109,29 @@ async function extractCommit(repo, commit, paths, dest) {
   run('tar', ['-x', '-f', '-', '-C', dest], { input: archive, encoding: 'buffer' });
 }
 
+const mirrorTag = (entry, commit) => `${entry.mirror.tagPrefix}${commit}`;
+
+async function exists(file) {
+  return fs.stat(file).then(() => true, () => false);
+}
+
 /** Produces the upstream files for `commit` in a fresh directory and returns that directory. */
 async function produce(root, name, entry, commit) {
   const repo = upstreamRepo(root, name, entry);
   const work = path.join(root, '.cache', 'upstream', name, commit);
   await fs.rm(work, { recursive: true, force: true });
   const out = path.join(work, 'out');
+  if (entry.mirror && !(await exists(repo))) {
+    // No upstream checkout here: the pinned tree from the mirror tag, fetched shallowly into a scratch repository.
+    const scratch = path.join(work, 'mirror');
+    await fs.mkdir(out, { recursive: true });
+    run('git', ['init', '-q', scratch]);
+    console.log(`[${name}] ${path.relative(root, repo) || repo} is missing; fetching ${mirrorTag(entry, commit)} from ${entry.mirror.url}`);
+    git(scratch, ['fetch', '-q', '--depth=1', entry.mirror.url, `refs/tags/${mirrorTag(entry, commit)}`]);
+    const archive = git(scratch, ['archive', '--format=tar', 'FETCH_HEAD'], { encoding: 'buffer' });
+    run('tar', ['-x', '-f', '-', '-C', out], { input: archive, encoding: 'buffer' });
+    return { work, out };
+  }
   if (entry.mode === 'committed') {
     await extractCommit(repo, commit, entry.sources.map((s) => s.from), path.join(work, 'src'));
   } else if (entry.mode === 'build') {
@@ -217,6 +240,32 @@ export async function status(root, names) {
   }
 }
 
+/** Stores the installed, verified pin as an orphan commit under the mirror tag and pushes the tag. */
+export async function publish(root, name, { push = true } = {}) {
+  const lock = await readLock(root);
+  const entry = lock.upstreams[name];
+  if (!entry?.mirror) throw new SyncError(`${name} has no mirror in upstream.lock.json`);
+  const checked = await checkOne(root, name, entry);
+  if (!checked.ok) throw new SyncError(`[${name}] ${checked.reason}`);
+  const target = path.join(root, entry.target);
+  const index = path.join(root, '.cache', 'upstream', `${name}.index`);
+  await fs.mkdir(path.dirname(index), { recursive: true });
+  await fs.rm(index, { force: true });
+  const env = { GIT_INDEX_FILE: index };
+  run('git', ['--work-tree', target, 'add', '-A', '-f', '.'], { cwd: root, env });
+  run('git', ['rm', '-q', '--cached', MANIFEST_NAME], { cwd: root, env });
+  const tree = run('git', ['write-tree'], { cwd: root, env }).trim();
+  await fs.rm(index, { force: true });
+  const commit = run('git', ['commit-tree', tree, '-m', `${name} ${entry.commit}\n\nThe pinned build of ${name} (${entry.fileCount} files, digest ${entry.digest}), installed by scripts/sync-upstream.mjs.`], { cwd: root }).trim();
+  const tag = mirrorTag(entry, entry.commit);
+  run('git', ['tag', '-f', tag, commit], { cwd: root });
+  console.log(`[${name}] tagged ${tag} (${commit.slice(0, 10)})`);
+  if (push) {
+    run('git', ['push', '-f', 'origin', `refs/tags/${tag}`], { cwd: root, inherit: true });
+    console.log(`[${name}] pushed ${tag}`);
+  }
+}
+
 function selectNames(lock, names) {
   const all = Object.keys(lock.upstreams);
   for (const name of names) if (!all.includes(name)) throw new SyncError(`unknown upstream: ${name}`);
@@ -229,10 +278,11 @@ async function main(argv) {
   const refAt = rest.indexOf('--ref');
   const ref = refAt >= 0 ? rest.splice(refAt, 2)[1] : undefined;
   const force = rest.includes('--force');
-  const names = rest.filter((arg) => arg !== '--force');
+  const names = rest.filter((arg) => arg !== '--force' && arg !== '--no-push');
   if (command === 'install') return install(root, names, { force });
   if (command === 'update' && names.length === 1) return update(root, names[0], ref);
   if (command === 'status') return status(root, names);
+  if (command === 'publish' && names.length === 1) return publish(root, names[0], { push: !rest.includes('--no-push') });
   if (command === 'check') {
     const lock = await readLock(root);
     let failed = false;
@@ -245,7 +295,7 @@ async function main(argv) {
     if (failed) process.exitCode = 1;
     return;
   }
-  throw new SyncError('usage: sync-upstream.mjs install|check|status [name…] | update <name> [--ref <rev>]');
+  throw new SyncError('usage: sync-upstream.mjs install|check|status [name…] | update <name> [--ref <rev>] | publish <name> [--no-push]');
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
