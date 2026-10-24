@@ -15,7 +15,7 @@ import {
   type LayerEffect, type LayerMask, type LiveFilter, BLEND_MODES,
   type DocumentLimits, type Guide, LITE_DOCUMENT_LIMITS,
 } from './document';
-import type { ColorLabel, LayerLocks } from './model';
+import type { ColorLabel, LayerLocks, RGB } from './model';
 import type { DocumentResource } from './model';
 import type { TextParagraphStyle, TextRunStyle } from './model';
 import {
@@ -139,6 +139,14 @@ export const derivedPlacements: ((session: EditorSession, layer: Layer, transfor
 export const derivedMaskSources: ((session: EditorSession, layer: Layer) => Raster | null)[] = [];
 /** UI-owned crop targets such as the currently selected artboard; the document canvas is the fallback. */
 export const cropTargetRects: ((session: EditorSession) => Rect | null)[] = [];
+
+export interface NewCanvasOptions { readonly resolution?: number; readonly background?: RGB | null }
+
+function solidRaster(width: number, height: number, color: RGB): Raster {
+  const pixels = new Uint8Array(width * height * 4), r = Math.round(color.red * 255), g = Math.round(color.green * 255), b = Math.round(color.blue * 255);
+  for (let offset = 0; offset < pixels.length; offset += 4) { pixels[offset] = r; pixels[offset + 1] = g; pixels[offset + 2] = b; pixels[offset + 3] = 255; }
+  return Raster.fromPixels(width, height, 4, pixels);
+}
 
 export class EditorSession {
   document: CanvasDocument | null = null;
@@ -469,13 +477,20 @@ export class EditorSession {
 
   // MARK: Documents
 
-  createDocument(width: number, height: number, emptyLayer = false): void {
+  /**
+   * `background` starts the canvas with an opaque Background layer of that colour instead of an empty layer
+   * (NewCanvasSheet: white or black, Compositor 1.4.6); `resolution` is stored with the document.
+   */
+  createDocument(width: number, height: number, emptyLayer = false, options: NewCanvasOptions = {}): void {
     if (this.isProjectBusy || this.isImporting || !(width >= 1 && width <= this.limits.maxSide && height >= 1 && height <= this.limits.maxSide)
       || width * height > this.limits.maxPixels) return;
     this.commitTransform();
     this.beginEdit('New Canvas');
-    const document: CanvasDocument = { id: uuid(), width, height, resolution: 72, layers: [], artboards: [], selection: null };
-    const layer = emptyLayer ? newLayer({ id: uuid(), name: `${this.label('Layer')} 1`, transform: makeTransform({ x: 0, y: 0 }, { width, height }) }) : null;
+    const resolution = options.resolution && options.resolution > 0 ? options.resolution : 72;
+    const document: CanvasDocument = { id: uuid(), width, height, resolution, layers: [], artboards: [], selection: null };
+    const transform = makeTransform({ x: 0, y: 0 }, { width, height }), fill = options.background;
+    const layer = fill ? newLayer({ id: uuid(), name: this.label('Background'), transform, raster: solidRaster(width, height, fill) })
+      : emptyLayer ? newLayer({ id: uuid(), name: `${this.label('Layer')} 1`, transform }) : null;
     this.document = layer ? { ...document, layers: [layer] } : document;
     this.setActiveLayer(layer?.id ?? null);
     this.renamingLayerId = null;
@@ -484,9 +499,9 @@ export class EditorSession {
   }
 
   /** File > New as a fresh project: clean history, one blank layer. */
-  createNewProject(width: number, height: number, name?: string): void {
+  createNewProject(width: number, height: number, name?: string, options: NewCanvasOptions = {}): void {
     this.clearProject();
-    this.createDocument(width, height, true);
+    this.createDocument(width, height, true, options);
     this.history.reset();
     if (name) this.projectName = name;
     this.changed();

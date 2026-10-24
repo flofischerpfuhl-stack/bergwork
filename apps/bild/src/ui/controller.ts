@@ -8,7 +8,7 @@ import type { EditorHandleV2, ProjectManifestV2 } from '../../contracts-v2';
 import { documentLimits, type CanvasDocument, type DocumentLimits, type Layer } from '../core/document';
 import type { LayerEffect } from '../core/model/types';
 import { Raster, alphaBounds, cropRaster } from '../core/raster';
-import type { EditorSession, RasterCommandKind, SessionServices, Tool } from '../core/session';
+import type { EditorSession, NewCanvasOptions, RasterCommandKind, SessionServices, Tool } from '../core/session';
 import type { ReactNode } from 'react';
 import { setShortcutLocale, type FeatureRegistry, type MenuEntry } from './menus';
 import type { IconName } from './icons';
@@ -550,9 +550,24 @@ export class EditorController {
 
   // MARK: Projects
 
-  newCanvasTab(width: number, height: number): void {
+  newCanvasTab(width: number, height: number, options: NewCanvasOptions = {}): void {
     const tab = this.workspace.newCanvas() ?? this.workspace.current;
-    tab.session.createNewProject(width, height);
+    tab.session.createNewProject(width, height, undefined, options);
+  }
+
+  /**
+   * Compositor 1.5: an image pasted on the New Canvas screen becomes the canvas. Opens it as its own project, in this
+   * tab when it is still empty, else in a new one. True when the clipboard held an image.
+   */
+  openPastedImage(event: ClipboardEvent): boolean {
+    const data = event.clipboardData;
+    const file = [...(data?.files ?? [])].find((f) => f.type.startsWith('image/'))
+      ?? [...(data?.items ?? [])].find((i) => i.kind === 'file' && i.type.startsWith('image/'))?.getAsFile();
+    if (!file || !this.workspace.canSwitch) return false;
+    const tab = this.session.document ? this.workspace.newCanvas() ?? this.workspace.current : this.workspace.current;
+    const named = file.name && file.name !== 'image.png' ? file : new File([file], `${this.t('Pasted Image')}.${file.type.split('/')[1] ?? 'png'}`, { type: file.type });
+    void this.importFiles([named], tab);
+    return true;
   }
 
   async importFiles(files: readonly File[], into: ProjectTab = this.workspace.current, point: { x: number; y: number } | null = null,

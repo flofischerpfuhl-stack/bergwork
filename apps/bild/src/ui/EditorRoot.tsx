@@ -265,6 +265,8 @@ export function EditorRoot({ controller }: { controller: EditorController }) {
     };
     const onPaste = (event: ClipboardEvent) => {
       if (isTextTarget(event.target) || controller.ui.getState().dialog) return;
+      // On the New Canvas screen a pasted image becomes the canvas (Compositor 1.5).
+      if (!controller.session.document && controller.openPastedImage(event)) { event.preventDefault(); return; }
       if (controller.pasteEvent?.(event)) event.preventDefault();
     };
     element.addEventListener('keydown', onKeyDown);
