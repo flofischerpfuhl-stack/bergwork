@@ -28,9 +28,9 @@
         "tools/vendor/tesseract-5.0.4"
       ],
       "target": "apps/pdf/upstream",
-      "commit": "cfd5c190913f233772421d77eb35d12f786dddc4",
-      "digest": "910511b964ba4a6a0bab8241dd4964aa044283316f6b10f26482b1abc07a6f9e",
-      "fileCount": 283
+      "commit": "f945b19398dbe9f73c6b6a1ee1f97c75d043a741",
+      "digest": "e77180cc9d150b392f81787bff2292b82c0b0c595ae92cbb7ae7ab39b1971a10",
+      "fileCount": 473
     }
   }
 }

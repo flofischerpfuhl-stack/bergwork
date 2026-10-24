@@ -9,9 +9,23 @@
     "tauri:dev": "node scripts/tauri.mjs dev",
     "tauri:build": "node scripts/tauri.mjs build",
     "licenses": "node scripts/collect-licenses.mjs --notices",
-    "licenses:check": "node scripts/collect-licenses.mjs --check"
+    "licenses:check": "node scripts/collect-licenses.mjs --check",
+    "build:editor": "node scripts/build-editor.mjs",
+    "fork:status": "node scripts/editor-fork.mjs status",
+    "fork:port": "node scripts/editor-fork.mjs port",
+    "fork:check": "node scripts/editor-fork.mjs check"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.11.5"
+    "@tauri-apps/cli": "2.11.5",
+    "bidi-js": "1.0.3",
+    "diff": "5.2.2",
+    "esbuild": "0.24.2",
+    "harfbuzzjs": "1.4.0",
+    "jszip": "3.10.1",
+    "node-forge": "1.4.0",
+    "pdf-lib": "1.17.1",
+    "pdfstudio": "0.4.0",
+    "react": "19.2.5",
+    "react-dom": "19.2.5"
   }
 }

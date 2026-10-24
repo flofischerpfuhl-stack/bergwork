@@ -1,0 +1,2857 @@
+[
+  {
+    "id": "archivo",
+    "label": "Archivo",
+    "family": "Archivo",
+    "category": "sans",
+    "aliases": [
+      "archivo"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-ARCHIVO.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Archivo-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "2acc4fc16c3c1648de0019bb93459700fc8b24cc2bf8152e3aa0719d9f328c76",
+        "bytes": 121644,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Archivo-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "993d338cca96b6b236f68412aa56c866de1d1b6eb59b8ea5dd5c77b8f37cdd2c",
+        "bytes": 133820,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Archivo-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "5d39da66770b216f17a1451d84f73cc6a8da9a7927880546f1f375b22b8afee5",
+        "bytes": 121572,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Archivo-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "c4f624bc0e0836dd9a131ccd33c7a952a8c1c59a245642b0acc5889facf02074",
+        "bytes": 133780,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "bebas-neue",
+    "label": "Bebas Neue",
+    "family": "Bebas Neue",
+    "category": "display",
+    "aliases": [
+      "bebasneue"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-BEBAS-NEUE.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "BebasNeue-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "08e4623805102d819f58601e46e345648846075e363b2ceb23313c2d1c83ec73",
+        "bytes": 61400,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "caladea",
+    "label": "Caladea",
+    "family": "Caladea",
+    "category": "serif",
+    "aliases": [
+      "caladea"
+    ],
+    "fits": [
+      {
+        "label": "Cambria",
+        "aliases": [
+          "cambria*"
+        ],
+        "reason": "Caladea uses Cambria-compatible advances"
+      }
+    ],
+    "like": [],
+    "license": {
+      "spdx": "Apache-2.0",
+      "file": "LICENSE-CALADEA.txt",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    },
+    "faces": [
+      {
+        "file": "Caladea-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "f1e899278b7b4491aba5b6a8253c4b04c050cc59b21865be5c37559a775153cd",
+        "bytes": 81600,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Caladea-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "ae3cb2dcbc925809dd29d2a44e9802211cab66be541bacbfc9c08c74b27c3742",
+        "bytes": 84492,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Caladea-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "4359a8e24f748b6447b1ff6d7a174febe70961d29f8bb8634b56dacd740a3deb",
+        "bytes": 83780,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Caladea-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "ccabaa7b7e2fdf253d2b1a5fa699dd8a3df8d835a9eb285ad82631a677eb76c0",
+        "bytes": 83356,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "carlito",
+    "label": "Carlito",
+    "family": "Carlito",
+    "category": "sans",
+    "aliases": [
+      "carlito"
+    ],
+    "fits": [
+      {
+        "label": "Calibri",
+        "aliases": [
+          "calibri*"
+        ],
+        "reason": "Carlito uses Calibri-compatible advances"
+      }
+    ],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-CARLITO.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Carlito-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "f6418f708baede9789daef5d458c0f53d2a888af9820e8062934e504fedc6595",
+        "bytes": 628032,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Carlito-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "bb5d20f79b82599ec72983597437373a80f2d2085fa91fc144fd74e876a594db",
+        "bytes": 682468,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Carlito-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "0b019225e58d702bfedcbd35c21696769f8ee115cb6343f84c2f240312450d1c",
+        "bytes": 615236,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Carlito-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "b32928186c119599e03ca6a1ffc680fdcb7fac95772f4b95d989cf6cd3861517",
+        "bytes": 808508,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "caveat",
+    "label": "Caveat",
+    "family": "Caveat",
+    "category": "handwriting",
+    "aliases": [
+      "caveat"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-CAVEAT.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Caveat-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "db9e4fa1ac526ec0b1772d7bc10ee6d03b3d79ffe900c0cc5954f5af292c947e",
+        "bytes": 266248,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Caveat-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "21096bea5e8a64884a77049ba151b9d2979a148f86344873427c220f26e763d8",
+        "bytes": 266644,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "cinzel",
+    "label": "Cinzel",
+    "family": "Cinzel",
+    "category": "display",
+    "aliases": [
+      "cinzel"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Trajan",
+        "aliases": [
+          "trajan*"
+        ],
+        "reason": "similar classical Roman capitals"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-CINZEL.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Cinzel-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "ca8894422ee43c2f9cda39e8d76bece97f326c3cfec212e2fee3fd077e00fe53",
+        "bytes": 77040,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Cinzel-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "3d77e6cb27eef49bcb3ec643dcf96bd6acbe4e49e65f058e0d745236b7469315",
+        "bytes": 77460,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "comic-neue",
+    "label": "Comic Neue",
+    "family": "Comic Neue",
+    "category": "handwriting",
+    "aliases": [
+      "comicneue"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Comic Sans",
+        "aliases": [
+          "comicsans*"
+        ],
+        "reason": "similar casual handwritten design"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-COMIC-NEUE.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "ComicNeue-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "a0ee5a37c8b27c4db0700137d928598b1e23b0089e1546a8961909176b779360",
+        "bytes": 57248,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "ComicNeue-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "3e7e5fccfd7e0788f317b43312151c1bd5cf058c9697a8d83eac3939050bd61e",
+        "bytes": 55716,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "ComicNeue-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "e06bfd1552f5c9464c5665733ffd69239b0593885dbb9e059688a5900f78cf98",
+        "bytes": 54392,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "ComicNeue-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "5c312c2a2fa64eee82f3b87fcfab8f3b12a5e59b043124401d322eb323cfbf16",
+        "bytes": 55928,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "cormorant-garamond",
+    "label": "Cormorant Garamond",
+    "family": "Cormorant Garamond",
+    "category": "display",
+    "aliases": [
+      "cormorantgaramond"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-CORMORANT-GARAMOND.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "CormorantGaramond-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "5ded3038e7de5324d629479a99f5b32335a0dce5dc438a1aea0c968bcc4f0bac",
+        "bytes": 774152,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "CormorantGaramond-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "597b5cbe05a28bf0111957ea587899e484c8ee5ae2c80cbb5f044a7b33179174",
+        "bytes": 454512,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "CormorantGaramond-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "ceeff9a4836b4bb4d88af2d1f608b9606f64634e06c0c4a08367f3461721db9d",
+        "bytes": 773340,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "CormorantGaramond-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "028e32bcdae61a419d7875f97dc875b5432bdeb4a85296893d6748407672a15f",
+        "bytes": 454384,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "crimson-pro",
+    "label": "Crimson Pro",
+    "family": "Crimson Pro",
+    "category": "serif",
+    "aliases": [
+      "crimsonpro"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Minion",
+        "aliases": [
+          "minion*"
+        ],
+        "reason": "similar old-style book serif"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-CRIMSON-PRO.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "CrimsonPro-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "b2bde5cc4ddd275057a4b1b4f1257c6c0237276851c6b52928bfdb471e04a2c4",
+        "bytes": 108008,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "CrimsonPro-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "8b0d98da68a0c9aee138f4b900fe1a25a90ec901edce1aa583686830176604b8",
+        "bytes": 109904,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "CrimsonPro-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "2e79b54dd239239a8eab621e75fc17c74c57a9aa6240600fa0573ac4093e330a",
+        "bytes": 108112,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "CrimsonPro-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "752222b0f7ac8d9df10c4069c66af0f5e09aaae88035f25b820ea3e29641f283",
+        "bytes": 109916,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "dancing-script",
+    "label": "Dancing Script",
+    "family": "Dancing Script",
+    "category": "handwriting",
+    "aliases": [
+      "dancingscript"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-DANCING-SCRIPT.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "DancingScript-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "7a7e1c03d0c1f8532cc802558861542cd4d5cb7e45a5fffeed5f1180f599bd4d",
+        "bytes": 83064,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "DancingScript-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "91ffadf7a32a739e63f2432175ffa880103b34dbc534dd9966bbf3a493960bad",
+        "bytes": 83388,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "dejavu-sans",
+    "label": "DejaVu Sans",
+    "family": "DejaVu Sans",
+    "category": "sans",
+    "aliases": [
+      "dejavusans",
+      "bitstreamverasans"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Verdana",
+        "aliases": [
+          "verdana*"
+        ],
+        "reason": "similar screen-oriented humanist sans"
+      },
+      {
+        "label": "Tahoma",
+        "aliases": [
+          "tahoma*"
+        ],
+        "reason": "similar screen-oriented humanist sans"
+      }
+    ],
+    "license": {
+      "spdx": "LicenseRef-DejaVu",
+      "file": "LICENSE-DEJAVU.txt",
+      "url": "https://dejavu-fonts.github.io/License.html"
+    },
+    "faces": [
+      {
+        "file": "DejaVuSans.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280",
+        "bytes": 759720,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "DejaVuSans-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "5c1247acef7f2b8522a31742c76d6adcb5569bacc0be7ceaa4dc39dd252ce895",
+        "bytes": 708920,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "DejaVuSans-Oblique.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "2d7b524ce7d51db78591b4e19c8185b89f3af0aa6534c5e524cf0c6f4ea673de",
+        "bytes": 637648,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "DejaVuSans-BoldOblique.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "58d78a24ddff9ab30427550d68f0b9b7dd28d6690f9f4b3e4ebac7105252e9b2",
+        "bytes": 645600,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "eb-garamond",
+    "label": "EB Garamond",
+    "family": "EB Garamond",
+    "category": "serif",
+    "aliases": [
+      "ebgaramond"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Garamond",
+        "aliases": [
+          "garamond*",
+          "adobegaramond*",
+          "agaramond*"
+        ],
+        "reason": "open Garamond revival"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-EB-GARAMOND.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "EBGaramond-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "4d5d6c254b2ea87ae5400ef2329362a7ac71e46b91cb47db2189a808ae9698f1",
+        "bytes": 519036,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "EBGaramond-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "f8a6247b72d66d7bbd487cdef96ca02356247abfe9712f05e14ec9597156f0df",
+        "bytes": 463724,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "EBGaramond-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "e5709147436eea76cd91b50091740dfd37356f33fabc058fdf4dd3fc950f0524",
+        "bytes": 521764,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "EBGaramond-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "ecc926fa295523f6e1247a8d14c4c956e70a642ece131bb83327eea249e7f20a",
+        "bytes": 467092,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "fira-sans",
+    "label": "Fira Sans",
+    "family": "Fira Sans",
+    "category": "sans",
+    "aliases": [
+      "firasans"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Gill Sans",
+        "aliases": [
+          "gillsans*"
+        ],
+        "reason": "similar humanist sans design"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-FIRA-SANS.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "FiraSans-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "c29556a2719bf613ef3d5e070e40d903a8965d9c081beca1375dc1e6e0f93c23",
+        "bytes": 456996,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "FiraSans-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "a4d8e149ecdd4874a0726eb0af894488b3b31c423d6b0017c8f415ed1b795b45",
+        "bytes": 489720,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "FiraSans-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "a4204f9a8029c1c55daa5385ac95936f74abea3e232770f1fb2862a19d1dfa13",
+        "bytes": 472396,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "FiraSans-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "1b96c16db9819bcaa9d588068bb397bb6e977c4874965d3d50d789a1943757eb",
+        "bytes": 506864,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "gelasio",
+    "label": "Gelasio",
+    "family": "Gelasio",
+    "category": "serif",
+    "aliases": [
+      "gelasio"
+    ],
+    "fits": [
+      {
+        "label": "Georgia",
+        "aliases": [
+          "georgia*"
+        ],
+        "reason": "Gelasio was designed with Georgia-compatible advances"
+      }
+    ],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-GELASIO.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Gelasio-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "c5a82e329e9bac0bccc64d54efbf257fdb3d3ae54a949c7475817beeb2ffd75a",
+        "bytes": 107748,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Gelasio-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "3f65fba4de3bc79e1ca33e9a92f7e3af314dfdcfbfd2dc9da8354f3e8947a8d6",
+        "bytes": 108116,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Gelasio-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "81694624d82b47b4a766919f46a831c330cb5c83ee5d932ef8bd6178fcc7129a",
+        "bytes": 108032,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Gelasio-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "3db9214d394f7e177ebcdfa51b794d95284f149e1bc7122614f44537c4bd1f34",
+        "bytes": 108216,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "ibm-plex-mono",
+    "label": "IBM Plex Mono",
+    "family": "IBM Plex Mono",
+    "category": "mono",
+    "aliases": [
+      "ibmplexmono"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-IBM-PLEX-MONO.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "IBMPlexMono-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "6a3412f058c7d8dfd9170c41e85ade48e5156ecb89356110ca57a0a27734af46",
+        "bytes": 135580,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "IBMPlexMono-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "ac27abd6450a64dd94467580a02fe6235156d5b92f2926ebbc8e7489df64e0be",
+        "bytes": 137784,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "IBMPlexMono-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "3362fc791b0652193328b862c1c5f23a789bc7288b1617fa63302f88689a2a34",
+        "bytes": 143920,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "IBMPlexMono-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "af4e05a761e98c1adf064c48a6352c9bec1a6ad70982cd2a544149323391f98e",
+        "bytes": 144512,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "ibm-plex-sans",
+    "label": "IBM Plex Sans",
+    "family": "IBM Plex Sans",
+    "category": "sans",
+    "aliases": [
+      "ibmplexsans"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-IBM-PLEX-SANS.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "IBMPlexSans-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "06d19b6e32dce87dfc58300cfc0500fe7157c3f55340615ae78becf136ee5a7c",
+        "bytes": 218232,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "IBMPlexSans-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "a48d4638e9803b19699232cce595638c2f4372966ecd471b4e55e0f78caad8b1",
+        "bytes": 233328,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "IBMPlexSans-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "b5d45fc85fb30f0cd6603bd31e95dbde98f74af72636a07bcbf67e08599633b4",
+        "bytes": 218344,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "IBMPlexSans-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "32778d3f356a29010b0b98143fe1b41ff6be9022a5268aecbd41b7dfe5a41c4e",
+        "bytes": 233368,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "ibm-plex-serif",
+    "label": "IBM Plex Serif",
+    "family": "IBM Plex Serif",
+    "category": "serif",
+    "aliases": [
+      "ibmplexserif"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-IBM-PLEX-SERIF.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "IBMPlexSerif-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "e882efa9c41949a528ac2369079ec5ef050c1c996bbd0bacce3c3326d44cf80d",
+        "bytes": 163068,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "IBMPlexSerif-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "534c02c295999dd86e770457ece1d43db0de9256dd98bf741426f63ae904209e",
+        "bytes": 163800,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "IBMPlexSerif-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "4b75b38be4673527231f49c48818d090c913d5042dd5c747b525bf6185d29ecb",
+        "bytes": 173004,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "IBMPlexSerif-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "2a32b76ac19c1942bf5942dbbd2a1566e5f1ae9833e421ebcf36d3522715e153",
+        "bytes": 173032,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "inter",
+    "label": "Inter",
+    "family": "Inter",
+    "category": "sans",
+    "aliases": [
+      "inter"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Helvetica Neue",
+        "aliases": [
+          "helveticaneue*"
+        ],
+        "reason": "similar modern neo-grotesque design"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-INTER.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Inter-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "c2836defe9da5127a652aed2bb0e329aff1271c85b154d103a8c3c5f5ef5a1d5",
+        "bytes": 341564,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Inter-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "4b0bdef43ef85c9a9c0696d5ed70ba4cdd37043e6a106663f192fd3f35368a26",
+        "bytes": 344992,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Inter-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "35223760401d534bae75ac517b56a132f1bd20a3607ac0b7e819d1802e7ae3dd",
+        "bytes": 343264,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Inter-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "ffff6bc89fcc6da7e362a78ffbcd72fe722ce94cb69974d5bb357bb650da582b",
+        "bytes": 346908,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "jost",
+    "label": "Jost",
+    "family": "Jost",
+    "category": "sans",
+    "aliases": [
+      "jost"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Futura",
+        "aliases": [
+          "futura*"
+        ],
+        "reason": "similar geometric sans design"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-JOST.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Jost-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "2026fd2a242ec60d70115d6f804dfcd74a85ad4a1722ebaa2d410e3500b65e7d",
+        "bytes": 61188,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Jost-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "803f89772c3df93bc056f52d9fd78a191a412c746502fc3b972958af19379c20",
+        "bytes": 65424,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Jost-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "70eef35777f0dcd83855955557ce86c7faa3c1a7c57441757a89bfd402b9532c",
+        "bytes": 61296,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Jost-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "7ef4263363fafb93adeed36f5598b03d1fdd93646fd2945c27546603d5c9f638",
+        "bytes": 65416,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "lato",
+    "label": "Lato",
+    "family": "Lato",
+    "category": "sans",
+    "aliases": [
+      "lato"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-LATO.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Lato-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "6f6940be0835c3ddec9199e5fc42be4cbc61ebcfd58c623fdf719366253f1780",
+        "bytes": 657212,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Lato-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "bf1b8130069b44b9148eeece35e5423bedac49777ba746615b826b8276574a7b",
+        "bytes": 657188,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Lato-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "8c863f833b12bc8486671d26e3a58b13b0f9eaff1d6b10398e7c107a9b7ee05a",
+        "bytes": 723544,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Lato-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "e2f9244fdcd20840f2480f91370cea885bf99230c49d153199fa64853ad74b69",
+        "bytes": 699008,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "liberation-mono",
+    "label": "Liberation Mono",
+    "family": "Liberation Mono",
+    "category": "mono",
+    "aliases": [
+      "liberationmono"
+    ],
+    "fits": [
+      {
+        "label": "Courier New",
+        "aliases": [
+          "couriernew*",
+          "cousine*",
+          "nimbusmon*",
+          "texgyrecursor*"
+        ],
+        "reason": "Liberation Mono uses Courier New-compatible advances"
+      }
+    ],
+    "like": [
+      {
+        "label": "Courier",
+        "aliases": [
+          "courier"
+        ],
+        "reason": "similar fixed-pitch design"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-LIBERATION.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "LiberationMono-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "395fa5ab8d40c8eba390ced528744ea75a7f69aabf3e68b6f925ca0e39a27370",
+        "bytes": 319624,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LiberationMono-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "626655e94dd82f3f42549daf995c921b0915fa8ab1f4b839559e8892ea41d240",
+        "bytes": 308068,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LiberationMono-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "a71b2c25c89da05cf0e7c4dbba8d473fdead0b181ae56165217747d2c1f39215",
+        "bytes": 281608,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LiberationMono-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "15eb161953e3ecc7fc05a3fec8a59e0f4e0a54a4e375736adf8e98d65981f813",
+        "bytes": 284184,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "liberation-sans",
+    "label": "Liberation Sans",
+    "family": "Liberation Sans",
+    "category": "sans",
+    "aliases": [
+      "liberationsans"
+    ],
+    "fits": [
+      {
+        "label": "Arial",
+        "aliases": [
+          "arial",
+          "arialmt",
+          "arialps*",
+          "arimo*",
+          "nimbussan*",
+          "texgyreheros*"
+        ],
+        "reason": "Liberation Sans uses Arial-compatible advances"
+      }
+    ],
+    "like": [
+      {
+        "label": "Helvetica",
+        "aliases": [
+          "helvetica"
+        ],
+        "reason": "similar neo-grotesque proportions"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-LIBERATION.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "LiberationSans-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "4659bc0c58c5028dd488ec928d41d9265db43d9b669fc14ca8b0832daca7b144",
+        "bytes": 410820,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LiberationSans-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "3973aa5054fb467dd5627245d3dc82e37bf16fe075756156a570455871351582",
+        "bytes": 414568,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LiberationSans-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "830c5fa600505fb4c1a271b4271c53c44bae43f492b2a240d0e98a3a7a380121",
+        "bytes": 415920,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LiberationSans-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "c80fa7f2ffa0e01d4d8dcd6a6d1e43eda665222d1b4db597dde1174c456006cf",
+        "bytes": 409108,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "liberation-sans-narrow",
+    "label": "Liberation Sans Narrow",
+    "family": "Liberation Sans Narrow",
+    "category": "sans",
+    "aliases": [
+      "liberationsansnarrow"
+    ],
+    "fits": [
+      {
+        "label": "Arial Narrow",
+        "aliases": [
+          "arialnarrow*"
+        ],
+        "reason": "Liberation Sans Narrow uses Arial Narrow-compatible advances"
+      }
+    ],
+    "like": [],
+    "license": {
+      "spdx": "GPL-2.0-with-font-exception",
+      "file": "LICENSE-LIBERATION-SANS-NARROW.txt",
+      "url": "https://github.com/liberationfonts/liberation-sans-narrow"
+    },
+    "faces": [
+      {
+        "file": "LiberationSansNarrow-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "563055a9a3d8301626aefbb7f0755198b737bef197b150d6753bba83169a13eb",
+        "bytes": 113304,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LiberationSansNarrow-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "1c48a46bf0f95ab080eab42381cc78dc1d5145f006dd633aa05cfdb76306017d",
+        "bytes": 110560,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LiberationSansNarrow-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "7c2fa0c4e2d3ce14f21340dd45c6e1577bbbcc50a059c2c9c188b8e46231a48a",
+        "bytes": 133540,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LiberationSansNarrow-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "a9fb3f8d6b3bf2a31e5776680666117f4f5b8e371cf396534855af3b3073fb36",
+        "bytes": 129448,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "liberation-serif",
+    "label": "Liberation Serif",
+    "family": "Liberation Serif",
+    "category": "serif",
+    "aliases": [
+      "liberationserif"
+    ],
+    "fits": [
+      {
+        "label": "Times New Roman",
+        "aliases": [
+          "timesnewroman*",
+          "tinos*",
+          "nimbusrom*",
+          "texgyretermes*"
+        ],
+        "reason": "Liberation Serif uses Times New Roman-compatible advances"
+      }
+    ],
+    "like": [
+      {
+        "label": "Times",
+        "aliases": [
+          "times",
+          "timesroman"
+        ],
+        "reason": "similar transitional serif design"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-LIBERATION.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "LiberationSerif-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "705903ae1382f0150f115d6f10a30f5b2f3d6ade649c474afe6366c39174fb65",
+        "bytes": 393692,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LiberationSerif-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "9e66c25e20868756bf12eb24a520a4552727c9cd108f577f7ae33e3c0110e39c",
+        "bytes": 370196,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LiberationSerif-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "eaeaf7f2b12544ecde64290c1fa7ec403ff70fd58b313637b265400b20249242",
+        "bytes": 375760,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LiberationSerif-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "379010e87421a883f7bbfa7936d23dfe0257a54ce850819b74556e9f2c615a8a",
+        "bytes": 376892,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "libertinus-serif",
+    "label": "Libertinus Serif",
+    "family": "Libertinus Serif",
+    "category": "serif",
+    "aliases": [
+      "libertinusserif",
+      "linuxlibertine"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-LIBERTINUS-SERIF.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "LibertinusSerif-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "81ea17858245163742c9f5ddf19e9c54667ee5e026708556fb1bf5dce7f92fae",
+        "bytes": 603444,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LibertinusSerif-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "dc5c00822f0d248256dbbe9fea8e68153e90c0dd7f95c906ed667b2ce053b415",
+        "bytes": 510796,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LibertinusSerif-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "c8d62202ff921968c491bbbd05f9794213e98e1317c8cbf5edc1d8043f4a21d6",
+        "bytes": 605956,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LibertinusSerif-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "8d7406b1e84e4ee1a658289139d16de75ee4380a2309dce2e4d68704b1d8cfe8",
+        "bytes": 506340,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "libre-baskerville",
+    "label": "Libre Baskerville",
+    "family": "Libre Baskerville",
+    "category": "serif",
+    "aliases": [
+      "librebaskerville"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Baskerville",
+        "aliases": [
+          "baskerville*"
+        ],
+        "reason": "open Baskerville revival"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-LIBRE-BASKERVILLE.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "LibreBaskerville-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "121bd463e28d54371e73af87757b503d7ff333856624bd75c4629b8c98a29f63",
+        "bytes": 111740,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LibreBaskerville-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "c15a460bd105e2546e4cb6096e638dd9d612f76ab3596eef4ed6b7660ada73ab",
+        "bytes": 121460,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LibreBaskerville-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "a21f886547fc9b156ac472d2f5ca06ffbcd38d87d218d19fad6825407bbeeff4",
+        "bytes": 111808,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LibreBaskerville-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "749d71b58bf50f8f6540343a1e6e29f0286bf2cd43422aad5c52648f62eba3dc",
+        "bytes": 121760,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "libre-franklin",
+    "label": "Libre Franklin",
+    "family": "Libre Franklin",
+    "category": "sans",
+    "aliases": [
+      "librefranklin"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Franklin Gothic",
+        "aliases": [
+          "franklingothic*"
+        ],
+        "reason": "open Franklin Gothic revival"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-LIBRE-FRANKLIN.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "LibreFranklin-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "22a3c93e87bb027bf8bdd894b1869e4962f17eef1631bebbae5bcdc2cc0e2605",
+        "bytes": 113488,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LibreFranklin-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "8a0309b9ee0e35acc4d377c4963ab8788b75353a9aa140b1967a558849b6a017",
+        "bytes": 125004,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LibreFranklin-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "8f3fcbd8bfe236a717b8a3b99e94c9afc26f250386ce19f5b755254476e6a5a8",
+        "bytes": 113280,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "LibreFranklin-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "d5da4f8d3b37913e38343c546f30f6cc1879134f273db0cb2eeb84be3f8492a0",
+        "bytes": 125172,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "lora",
+    "label": "Lora",
+    "family": "Lora",
+    "category": "serif",
+    "aliases": [
+      "lora"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-LORA.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Lora-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "06fd977165f36f5f67ed155facdddbca6eb28ae48d583f6748222e16d4e3e087",
+        "bytes": 135424,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Lora-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "1279e806b6348ab62c00e77a812e781d6f7fd926dd9da7c9d724ef1643c93620",
+        "bytes": 141068,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Lora-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "511e81ff27810388097af5096ed2f769b085e891b4298634d514664221c83396",
+        "bytes": 135104,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Lora-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "7556758dbe495b61c33eed3b7f671f600751bab5f5c6d5e01dbe234cf266b5af",
+        "bytes": 141776,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "merriweather",
+    "label": "Merriweather",
+    "family": "Merriweather",
+    "category": "serif",
+    "aliases": [
+      "merriweather"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-MERRIWEATHER.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Merriweather-Regular.otf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "e7c662ab3b36523976778b49c7900cff34e9347d4b8a1d90ee871f663db45548",
+        "bytes": 265232,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Merriweather-Bold.otf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "141774ad09bfa0a686886d1c27a9e1871cd90f866d76ae0f4bb70bcbbec027ad",
+        "bytes": 269484,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Merriweather-Italic.otf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "9cdb23db7bead9ff01c30144961d52f1b7b2f9ae17d6be7b421b3f4d434dd7dd",
+        "bytes": 247644,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Merriweather-BoldItalic.otf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "e502a6951843aca104fb72f54609f4a92b92060a46b9d8c97b7d16e13838d8bb",
+        "bytes": 249400,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "montserrat",
+    "label": "Montserrat",
+    "family": "Montserrat",
+    "category": "sans",
+    "aliases": [
+      "montserrat"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Gotham",
+        "aliases": [
+          "gotham*"
+        ],
+        "reason": "similar geometric sans design"
+      },
+      {
+        "label": "Proxima Nova",
+        "aliases": [
+          "proximanova*"
+        ],
+        "reason": "similar geometric sans design"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-MONTSERRAT.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Montserrat-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "0d3aa366447e9dc0628834e1da3339c3c7f87c7fa441c2d81d26773239b7f8ce",
+        "bytes": 374648,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Montserrat-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "55210bc0648e26d524751764cf8a4329ab95bc4c3723649f2a652d0359b3f620",
+        "bytes": 384736,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Montserrat-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "13f4d5fa69412159eea449e2a6ef9ab3b7eba4702cae4e6646b1f01bdcf41954",
+        "bytes": 374800,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Montserrat-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "0d7c04fc4c0f72a7def5e13e9ceffe5eab9b947821472455402346b252c6785f",
+        "bytes": 384980,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "noto-sans",
+    "label": "Noto Sans",
+    "family": "Noto Sans",
+    "category": "sans",
+    "aliases": [
+      "notosans"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-NOTO-SANS.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "NotoSans-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "17b6c2b9c6f8d41760c00d9ac07a0eb20dfb4ab593dcb77f35a2f67b28bb2a96",
+        "bytes": 646324,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "NotoSans-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "e5a9f5ef55e7aeb428a30bac9b5badc50437294ce40eb392bc41ed226d31bebe",
+        "bytes": 663716,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "NotoSans-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "a1977bdfb042931e241482bbe11be678d5d13edb8308daeac334e3b64ed902d7",
+        "bytes": 648488,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "NotoSans-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "1f72254c9af58a2639042016c0f7810882ed17cdd608bd9589a7f50bffc2665d",
+        "bytes": 665724,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "noto-serif",
+    "label": "Noto Serif",
+    "family": "Noto Serif",
+    "category": "serif",
+    "aliases": [
+      "notoserif"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-NOTO-SERIF.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "NotoSerif-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "700423729dd86b1dd3996cc400cc41d197e11b8e2b532f2458eb835de29e9cf6",
+        "bytes": 513288,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "NotoSerif-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "762e0c4f1bd1b848a8f7ff243556054257a6bfb9a8d52eb78ce606769a872593",
+        "bytes": 542196,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "NotoSerif-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "317dd53867fe5b23f26271b31e6268bd5c2526ab0132954afe09d449b977ce15",
+        "bytes": 515208,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "NotoSerif-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "7905289cd099ea682b6cabefdfd2cfa223ae73b5ce41f64afc4df9ef822e49f8",
+        "bytes": 542720,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "nunito-sans",
+    "label": "Nunito Sans",
+    "family": "Nunito Sans",
+    "category": "sans",
+    "aliases": [
+      "nunitosans"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Avenir",
+        "aliases": [
+          "avenir*"
+        ],
+        "reason": "similar rounded humanist sans design"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-NUNITO-SANS.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "NunitoSans-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "9e1af0a4a2273bc922d7f7a387710202b0678d41849c7c6eaf1a173f3963fe36",
+        "bytes": 113560,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "NunitoSans-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "949bdb1e332968b3c33682bac6c0c8a95117000da89db9004139da8e62546c75",
+        "bytes": 116572,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "NunitoSans-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "044b2f866a2358b51234071fab150b19546116a7f4f80d924d903842b9883cda",
+        "bytes": 113712,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "NunitoSans-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "2434521d0af238f35219c78c6d9aee04b378a5439c210d52f7dbd844668bc137",
+        "bytes": 116600,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "open-sans",
+    "label": "Open Sans",
+    "family": "Open Sans",
+    "category": "sans",
+    "aliases": [
+      "opensans"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "Apache-2.0",
+      "file": "LICENSE-OPEN-SANS.txt",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    },
+    "faces": [
+      {
+        "file": "OpenSans-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "e64e508b2aa2880f907e470c4550980ec4c0694d103a43f36150ac3f93189bee",
+        "bytes": 217360,
+        "fsType": 8,
+        "missingGerman": ""
+      },
+      {
+        "file": "OpenSans-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "5894a3649b213cf5b2d673b6e7a871815fd1d120fa68a463592f27db14eae323",
+        "bytes": 224592,
+        "fsType": 8,
+        "missingGerman": ""
+      },
+      {
+        "file": "OpenSans-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "a54dc8488f8193bf30c3820cf6f261f911f9d328d699e1a1b8042641554cec70",
+        "bytes": 212896,
+        "fsType": 8,
+        "missingGerman": ""
+      },
+      {
+        "file": "OpenSans-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "3ca680f2444cc9e50447d057c006464566e92f2e77b0b6e26491e5bd757ed4e7",
+        "bytes": 213292,
+        "fsType": 8,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "oswald",
+    "label": "Oswald",
+    "family": "Oswald",
+    "category": "display",
+    "aliases": [
+      "oswald"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-OSWALD.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Oswald-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "3dbe2ac9c3ef41bd029c4967c9aeca47a600894b1456954e61ef2b86a815fad7",
+        "bytes": 88716,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Oswald-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "4fd3b1a83fe1f328adf89534e9e0b4889d633284af78938d64ebda80c240bd57",
+        "bytes": 89104,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "playfair-display",
+    "label": "Playfair Display",
+    "family": "Playfair Display",
+    "category": "display",
+    "aliases": [
+      "playfairdisplay"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Didot",
+        "aliases": [
+          "didot*"
+        ],
+        "reason": "similar high-contrast display serif"
+      },
+      {
+        "label": "Bodoni",
+        "aliases": [
+          "bodoni*"
+        ],
+        "reason": "similar high-contrast display serif"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-PLAYFAIR-DISPLAY.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "PlayfairDisplay-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "55ea777a84f52b193e9ab27cb4ac2c4eb32d5dc6009fd6cb0677398def0548f1",
+        "bytes": 194724,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "PlayfairDisplay-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "1152682ad1992978eb1cf090db894bd49404afce8632d8a1c726af644aedf4c5",
+        "bytes": 178092,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "PlayfairDisplay-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "fca2b2c91459b2a41dcca1f38e88b222779c676478382388e0cb3a86eb7f8c20",
+        "bytes": 195132,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "PlayfairDisplay-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "0f2cbfcfd8c49f99343dd247455aaddefecc77e1039c237a17b62166bd94e4a3",
+        "bytes": 178540,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "poppins",
+    "label": "Poppins",
+    "family": "Poppins",
+    "category": "sans",
+    "aliases": [
+      "poppins"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-POPPINS.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Poppins-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "7e65201e9b79159e2300267cc885e16c8dcef2424cdfa09a29bfb0980a94a7ba",
+        "bytes": 160316,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Poppins-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "983676516167748b74de6f4771fb384c664fd913acb8b471122ecacf5da5ea6c",
+        "bytes": 155996,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Poppins-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "4fa76ae75b40f926420514044722cb97f32186cafd3b38263cc34dad7174d46d",
+        "bytes": 184544,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Poppins-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "3572ac8116a0ac7317d342262b29937bcbaf94d8f03f90df6fe666fa7e2fb43a",
+        "bytes": 179108,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "pt-sans",
+    "label": "PT Sans",
+    "family": "PT Sans",
+    "category": "sans",
+    "aliases": [
+      "ptsans"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-PT-SANS.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "PTSans-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "9cc831490532009bae2b3ce0d39c62adfc889060beb421593bfd9d2396d0f10a",
+        "bytes": 442960,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "PTSans-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "3128bd5ecf01816e59a23d54c57a7a6b14615b07db53ff277c77376010265b05",
+        "bytes": 470240,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "PTSans-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "5a90fe2d0cd798700935240580bdcc12c0ffc9102c0c7163b3418e13bc21debd",
+        "bytes": 436452,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "PTSans-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "81ac221cdd02bccfa679c74adb122478e9d092e65a722e31ca11469961483785",
+        "bytes": 375204,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "pt-serif",
+    "label": "PT Serif",
+    "family": "PT Serif",
+    "category": "serif",
+    "aliases": [
+      "ptserif"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-PT-SERIF.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "PTSerif-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "a4951fade06ff8f09b7673aa81ffb65a8cd409e24d3289a6dc670bc4dda2557a",
+        "bytes": 359048,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "PTSerif-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "038ba7336bd7ea14f12ad155bed51a4345cac5153275d521dec3ba04021c526e",
+        "bytes": 339996,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "PTSerif-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "f57e95ff9dc85691a3b2e193f2028db36f6663939a46c0fc4f286d618b80b7ce",
+        "bytes": 375356,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "PTSerif-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "f003788ba08981eb0988b3557a6f224a53dab49c20e283e8b74d5af3c466f8be",
+        "bytes": 337580,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "raleway",
+    "label": "Raleway",
+    "family": "Raleway",
+    "category": "sans",
+    "aliases": [
+      "raleway"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-RALEWAY.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "Raleway-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "da0652af24e018870b2616b773b46f7b51f113e666c2a18930ff5ae31922582b",
+        "bytes": 164732,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Raleway-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "5d742a0d82d4192d1428270cf417f80248cb96958772224f794608bc31c53309",
+        "bytes": 165644,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Raleway-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "6d7eea7b1f2f0dfdd8d6b7edde129a9283a10ca6e30214bafaa2af666f2ea8f7",
+        "bytes": 164632,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Raleway-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "a021a7e693e3ce75857d0fe42137a05bda69e897231a8e059be8c34653009eda",
+        "bytes": 165848,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "roboto",
+    "label": "Roboto",
+    "family": "Roboto",
+    "category": "sans",
+    "aliases": [
+      "roboto"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "Apache-2.0",
+      "file": "LICENSE-ROBOTO.txt",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    },
+    "faces": [
+      {
+        "file": "Roboto-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "797e35f7f5d6020a5c6ea13b42ecd668bcfb3bbc4baa0e74773527e5b6cb3174",
+        "bytes": 305608,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Roboto-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "36f3709dea3e3ce3c6aedc058079e55980825f898f1e901d091c73c40de8bab1",
+        "bytes": 306940,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Roboto-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "5cd9337020d0b1593bae42dcca5cfc0fb86f5806ef469d66d09eae1e56ce346b",
+        "bytes": 328640,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Roboto-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "63d368b094a9bde61447b410b4261b30569eef1bf2094a52de9828121ba7baf7",
+        "bytes": 332160,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ],
+    "inferWeightFromWidth": true
+  },
+  {
+    "id": "roboto-slab",
+    "label": "Roboto Slab",
+    "family": "Roboto Slab",
+    "category": "serif",
+    "aliases": [
+      "robotoslab"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Rockwell",
+        "aliases": [
+          "rockwell*"
+        ],
+        "reason": "similar geometric slab serif"
+      }
+    ],
+    "license": {
+      "spdx": "Apache-2.0",
+      "file": "LICENSE-ROBOTO-SLAB.txt",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    },
+    "faces": [
+      {
+        "file": "RobotoSlab-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "85a8f696c7d140d7cdb5a62f24ffd82d0514076f29057f4c501698a2297c1375",
+        "bytes": 128948,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "RobotoSlab-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "e864711866874555b48b0738526e79d5481a83e52820f69405c27d2b1004b8ab",
+        "bytes": 129740,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "selawik",
+    "label": "Selawik",
+    "family": "Selawik",
+    "category": "sans",
+    "aliases": [
+      "selawik"
+    ],
+    "fits": [
+      {
+        "label": "Segoe UI",
+        "aliases": [
+          "segoeui*"
+        ],
+        "reason": "Selawik uses Segoe UI-compatible advances"
+      }
+    ],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-SELAWIK.txt",
+      "url": "https://github.com/microsoft/Selawik"
+    },
+    "faces": [
+      {
+        "file": "Selawik-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "e9d98518d8ac2817782a9a382430463a2e0793ea68350b695bb727d9a830ee1c",
+        "bytes": 44224,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "Selawik-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "f0db5e174a90e0956ad7d2844bdca1d5e6da92ec65b2c04e57ba9b180668c904",
+        "bytes": 44068,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "source-code-pro",
+    "label": "Source Code Pro",
+    "family": "Source Code Pro",
+    "category": "mono",
+    "aliases": [
+      "sourcecodepro"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Consolas",
+        "aliases": [
+          "consolas*"
+        ],
+        "reason": "similar coding monospace"
+      },
+      {
+        "label": "Lucida Console",
+        "aliases": [
+          "lucidaconsole*"
+        ],
+        "reason": "similar coding monospace"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-SOURCE-CODE-PRO.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "SourceCodePro-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "e6b76bf7cc70975ad6d1c5a29221cf53903dbe90b02819c79ce13a75b73eb5a9",
+        "bytes": 135840,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "SourceCodePro-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "3e93463ce13c7ce4fb89dcde39fd440627725ba81f16294c32b7e9e59a9ce79b",
+        "bytes": 113064,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "SourceCodePro-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "8aae06a2b1281cee14c593964f786d804cdb71e0ecabf1b91e633b9baa2ed37d",
+        "bytes": 135768,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "SourceCodePro-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "d357dc67f719dd3370958dea1f3fd1566cfc0c1972423629934832e2ba6969d9",
+        "bytes": 113020,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "source-sans-3",
+    "label": "Source Sans 3",
+    "family": "Source Sans 3",
+    "category": "sans",
+    "aliases": [
+      "sourcesans3",
+      "sourcesanspro"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Myriad",
+        "aliases": [
+          "myriad*"
+        ],
+        "reason": "similar Adobe humanist sans design"
+      }
+    ],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-SOURCE-SANS-3.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "SourceSans3-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "8687f92554f6a7bfe2a7777f8874d1d40c9d14b4a9a45fb415e97bcff315e327",
+        "bytes": 379712,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "SourceSans3-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "3be9fd8eb27d05682a3b72b2cf83c9bc9352f1fce509c663a3b3995fbb9952c6",
+        "bytes": 240544,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "SourceSans3-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "9dd766dec3420c8326aff788299249a60f57d2c7f6e7063da6ae484357d872e8",
+        "bytes": 379636,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "SourceSans3-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "46146c00ab53c8d6104c3186002ed105667316144eda793e7e0bc2e7de1ba0ce",
+        "bytes": 240544,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "source-serif-4",
+    "label": "Source Serif 4",
+    "family": "Source Serif 4",
+    "category": "serif",
+    "aliases": [
+      "sourceserif4",
+      "sourceserifpro"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-SOURCE-SERIF-4.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "SourceSerif4-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "01d05518b42a6682d4eb752b234c1391b563c4bc7e218d36846cd3d3830c13fe",
+        "bytes": 330484,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "SourceSerif4-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "7981af8ff7fef5181110d6d36ca290e73720ffab9a96141144ca7509bb8fe078",
+        "bytes": 207800,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "SourceSerif4-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "3c6f95dae8266de4d9742c3c7fc14fd995cc35523eaa916411c03d18450b2260",
+        "bytes": 330644,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "SourceSerif4-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "141bc48f1a44061a5a1fe49805763374203f54bc1a8adee5509ef7681c47ee78",
+        "bytes": 207896,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "tex-gyre-adventor",
+    "label": "TeX Gyre Adventor",
+    "family": "TeX Gyre Adventor",
+    "category": "sans",
+    "aliases": [
+      "texgyreadventor"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Century Gothic / Avant Garde",
+        "aliases": [
+          "centurygothic*",
+          "avantgarde*"
+        ],
+        "reason": "similar geometric sans design"
+      }
+    ],
+    "license": {
+      "spdx": "GUST-Font-License-1.0",
+      "file": "LICENSE-TEX-GYRE-ADVENTOR.txt",
+      "url": "https://www.gust.org.pl/projects/e-foundry/licenses/GUST-FONT-LICENSE.txt"
+    },
+    "faces": [
+      {
+        "file": "texgyreadventor-regular.otf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "ee265c1c9728be9491c7f0d7fcdcb2f97bc35040a6dc1f9815265cee333e155b",
+        "bytes": 170364,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "texgyreadventor-bold.otf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "e373ae29c808c6d9149e3add46564f9acdb6ebfcd0ee311f6a55560226994720",
+        "bytes": 176096,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "texgyreadventor-italic.otf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "1f21a5a07c207f70785dd6cbe4fcb2e0a3f60823b219efb01790a72d8a61b3cb",
+        "bytes": 170968,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "texgyreadventor-bolditalic.otf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "d524c5596812aeee8fed5c81739056ada7a305b84591ea30e30c025b860b311d",
+        "bytes": 175456,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "tex-gyre-bonum",
+    "label": "TeX Gyre Bonum",
+    "family": "TeX Gyre Bonum",
+    "category": "serif",
+    "aliases": [
+      "texgyrebonum"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Bookman",
+        "aliases": [
+          "bookman*"
+        ],
+        "reason": "similar soft old-style serif design"
+      }
+    ],
+    "license": {
+      "spdx": "GUST-Font-License-1.0",
+      "file": "LICENSE-TEX-GYRE-BONUM.txt",
+      "url": "https://www.gust.org.pl/projects/e-foundry/licenses/GUST-FONT-LICENSE.txt"
+    },
+    "faces": [
+      {
+        "file": "texgyrebonum-regular.otf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "8ad5a53ae61d710fe1773f4ecc7fdf6dde7df1df59faa4492a24def95077d6b3",
+        "bytes": 142660,
+        "fsType": 12,
+        "missingGerman": ""
+      },
+      {
+        "file": "texgyrebonum-bold.otf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "173710158270252ec1ddd5e69a07fc71853680c7188d67a84d794a465a4dff81",
+        "bytes": 141140,
+        "fsType": 12,
+        "missingGerman": ""
+      },
+      {
+        "file": "texgyrebonum-italic.otf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "518836a0e5bd71f644ae131185be53b04fadb30ef7dbdc483deb5f69bd1fe47d",
+        "bytes": 147120,
+        "fsType": 12,
+        "missingGerman": ""
+      },
+      {
+        "file": "texgyrebonum-bolditalic.otf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "bd037941d21149ea0d650286537a3266fadfb03f91b4a5a78848ea5781befac9",
+        "bytes": 145488,
+        "fsType": 12,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "tex-gyre-pagella",
+    "label": "TeX Gyre Pagella",
+    "family": "TeX Gyre Pagella",
+    "category": "serif",
+    "aliases": [
+      "texgyrepagella"
+    ],
+    "fits": [],
+    "like": [
+      {
+        "label": "Palatino / Book Antiqua",
+        "aliases": [
+          "palatino*",
+          "bookantiqua*",
+          "palladio*"
+        ],
+        "reason": "similar old-style serif design"
+      }
+    ],
+    "license": {
+      "spdx": "GUST-Font-License-1.0",
+      "file": "LICENSE-TEX-GYRE-PAGELLA.txt",
+      "url": "https://www.gust.org.pl/projects/e-foundry/licenses/GUST-FONT-LICENSE.txt"
+    },
+    "faces": [
+      {
+        "file": "texgyrepagella-regular.otf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "44e64260716d8f2bbe412baa1ee99b7c995190ac4573177c24def0b9200438c7",
+        "bytes": 218100,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "texgyrepagella-bold.otf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "dd4f9b69f0b24f1fb9be8634abf1fce2009e5c68a30842a3e9f5d6e535900abd",
+        "bytes": 219564,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "texgyrepagella-italic.otf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "069bb27f48eb98a741715227fc6e4b7baf3639c29fc13925f70d1ed8884ac29a",
+        "bytes": 221936,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "texgyrepagella-bolditalic.otf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "556fd64655a92bd9f5485ae2c03f7b9cdaf745a27a91d7edb3c3abde997206d2",
+        "bytes": 216296,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  },
+  {
+    "id": "work-sans",
+    "label": "Work Sans",
+    "family": "Work Sans",
+    "category": "sans",
+    "aliases": [
+      "worksans"
+    ],
+    "fits": [],
+    "like": [],
+    "license": {
+      "spdx": "OFL-1.1",
+      "file": "LICENSE-WORK-SANS.txt",
+      "url": "https://openfontlicense.org/open-font-license-official-text/"
+    },
+    "faces": [
+      {
+        "file": "WorkSans-Regular.ttf",
+        "weight": "400",
+        "style": "normal",
+        "sha256": "ed092aa499f25df01e842301fb15b10f2059350d99fc81631746e0d063bce51e",
+        "bytes": 192976,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "WorkSans-Italic.ttf",
+        "weight": "400",
+        "style": "italic",
+        "sha256": "b7e99128c82612e80cab127acbcda6055dc774464f4a05337e606c5ec8c64681",
+        "bytes": 176592,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "WorkSans-Bold.ttf",
+        "weight": "700",
+        "style": "normal",
+        "sha256": "7b494a6563d677e29de095631a5a5b6ffd823340fc6eceaf14fcc3cefb292617",
+        "bytes": 193424,
+        "fsType": 0,
+        "missingGerman": ""
+      },
+      {
+        "file": "WorkSans-BoldItalic.ttf",
+        "weight": "700",
+        "style": "italic",
+        "sha256": "b237d736f1d6ea028805cd92dd4b10f00eeb34169a5ca067b8e5d24280adfe63",
+        "bytes": 177248,
+        "fsType": 0,
+        "missingGerman": ""
+      }
+    ]
+  }
+]

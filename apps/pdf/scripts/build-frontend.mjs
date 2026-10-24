@@ -3,9 +3,11 @@
 //
 //   dist/                      ← apps/pdf/web/* (host page, owned here)
 //   dist/tools/vendor/<name>/  ← apps/pdf/upstream/tools/vendor/<name>/ (pinned editor build, never edited)
+//   dist/tools/vendor/pdf-tools/{oo-pdf-tools.js,oo-pdf-tools.css,chunks/}
+//                              ← the editor built from berg:work's source fork (editor/, scripts/build-editor.mjs)
 //
 // The editor bundle fetches its workers, WASM and fonts from absolute /tools/vendor/... URLs, so the vendor
-// directories have to sit at exactly that path below the dist root. No dependencies; Node 22.
+// directories have to sit at exactly that path below the dist root. Node 22; the editor bundle needs the workspace's devDependencies (npm install).
 import { cp, mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -59,6 +61,13 @@ await cp(webDir, distDir, { recursive: true });
 for (const name of VENDOR_DIRS) {
   await cp(path.join(vendorSource, name), path.join(vendorTarget, name), { recursive: true });
 }
+
+// The editor's UI comes from the fork, not from the pin: rebuild it and replace the pinned bundle, its chunks and CSS.
+const scripts = path.dirname(fileURLToPath(import.meta.url));
+execFileSync(process.execPath, [path.join(scripts, 'build-editor.mjs')], { stdio: 'inherit' });
+const pdfTools = path.join(vendorTarget, 'pdf-tools');
+for (const name of ['oo-pdf-tools.js', 'oo-pdf-tools.css', 'chunks']) await rm(path.join(pdfTools, name), { recursive: true, force: true });
+await cp(path.join(appDir, 'editor-dist'), pdfTools, { recursive: true });
 
 // Licences view data (Settings → Licences); needs cargo, which every app build has.
 try {

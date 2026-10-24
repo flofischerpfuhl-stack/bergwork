@@ -9,7 +9,7 @@ Fernwork (see below).
 
 | Path | Owns |
 | --- | --- |
-| `apps/pdf/` | berg:work PDF: Tauri shell (`src-tauri/`), host page (`web/`), packaging. `upstream/` holds the pinned editor build; `dist/` is assembled from `web/` and `upstream/` (see `apps/pdf/README.md`). |
+| `apps/pdf/` | berg:work PDF: Tauri shell (`src-tauri/`), host page (`web/`), packaging. `editor/` is the source fork of the editor's UI; `upstream/` holds the pinned build of everything else (workers, WebAssembly, fonts, OCR); `dist/` is assembled from `web/`, the fork's bundle and `upstream/` (see `apps/pdf/README.md`). |
 | `apps/image/` | berg:work Image: the image editor itself (source, tests, Tauri shell in `src-tauri/`), moved here with its history from the former fwimg repository on 2026-10-24. Its own `package.json`/`package-lock.json`; not an npm workspace yet. |
 | `packages/ui/` | The design base shared by both apps: tokens, fonts and React components after the Himmel:CAD Builder UI lab, with a demo page (`npm run dev --workspace @bergwork/ui`). |
 | `packages/host-tauri/` | Host implementation shared by both apps: files, models, OCR, fonts, codecs, printing. |
@@ -23,13 +23,15 @@ Fernwork (see below).
 | Editor | Home | Status |
 | --- | --- | --- |
 | Image | this repository, `apps/image/` | Developed here. Its rendering and editing code grew from the MIT-licensed macOS editor Compositor (`apps/image/LICENSE.upstream`, parity tracking in `apps/image/parity.json`). |
-| PDF | Fernwork (`../17_fernwork`, branch `main`), pinned in `upstream.lock.json` | Taken over as the committed bundle `tools/vendor/pdf-tools`, `pdf-runtime` and the OCR engine `tesseract-5.0.4`. Planned: a fork into this repository, after which Fernwork PDF changes are ported here by an agent. |
+| PDF | Fernwork (`../17_fernwork`, branch `main`); UI sources forked into `apps/pdf/editor/`, the rest pinned in `upstream.lock.json` | Forked on 2026-10-24 at Fernwork `f945b193`: the PDF Tools shell and every file it imports, with Fernwork's paths (`apps/pdf/editor/fork.json`). Workers, WebAssembly, fonts, `pdf-runtime` and the OCR engine `tesseract-5.0.4` stay pinned at the same commit. Fernwork PDF changes are ported by an agent with `npm run fork:port -w @bergwork/pdf` (skill `bergwork-pdf-sync`). |
 
 Rules:
 
 1. **Pinned upstreams are not edited here.** `npm run sync:check` fails when a file under `apps/*/upstream/`
-   differs from the pinned build; a defect in pinned editor code is fixed upstream and pinned again. This applies to
-   the PDF editor until it is forked; the image editor in `apps/image/` is ordinary source.
+   differs from the pinned build; a defect in pinned editor code is fixed upstream and pinned again. The image
+   editor in `apps/image/` and the PDF editor's forked UI in `apps/pdf/editor/` are ordinary source; keep the fork's
+   changes small and local to the UI so Fernwork's changes keep applying, and keep fork and pin on one commit
+   (`npm run fork:check -w @bergwork/pdf`).
 2. **Hosts, not forks of behaviour.** An editor receives a host object at mount time. The browser host keeps the
    web behaviour; the Tauri host maps the same capabilities to native code. Features that the native apps have and
    the browser does not are optional capabilities or registered modules, never `if (tauri)` branches inside the
