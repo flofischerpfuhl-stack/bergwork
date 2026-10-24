@@ -38,6 +38,7 @@ import type { FilterKind, FilterSettings } from '../core/filters/settings';
 import { adjustmentName, P2AdjustmentControls, settlePendingLuts } from './adjust/controls';
 import { finishLiveFilterEdit, LIVE_FILTER_NAMES, liveFilterEditState, updateLiveFilterEdit } from './adjust/liveFilters';
 import { installAdjustP2 } from './adjust/install';
+import { recordLastFilter } from './adjust/lastFilter';
 
 // MARK: Edit state outside the engines (sampling modes, the adjustment-layer histogram)
 
@@ -89,7 +90,8 @@ function currentEdit(session: EditorSession): Edit | null {
   const hue = hueSaturationEditState(session);
   if (hue) return { kind: 'hue', settings: hue.settings, preview: hue.preview, committing: hue.committing, layer: false };
   const filter = filterEditState(session);
-  if (filter) return { kind: 'filter', filter: filter.kind, settings: filter.settings, preview: filter.preview, committing: filter.committing, preparing: filter.preparing, error: filter.previewError };
+  // Last Filter applies without a panel.
+  if (filter && !filter.repeating) return { kind: 'filter', filter: filter.kind, settings: filter.settings, preview: filter.preview, committing: filter.committing, preparing: filter.preparing, error: filter.previewError };
   return null;
 }
 
@@ -170,15 +172,20 @@ function setPreview(session: EditorSession, edit: Edit, preview: boolean): void 
 }
 
 async function commit(controller: EditorController, session: EditorSession): Promise<void> {
-  const layerEdit = adjustmentLayerEditState(session);
+  const layerEdit = adjustmentLayerEditState(session), live = liveFilterEditState(session), filter = filterEditState(session);
   if (layerEdit) { settlePendingLuts(session, layerEdit.value.kind === 'Colour Lookup' ? layerEdit.value.parameters.resourceId : null); finishAdjustmentLayerEdit(session, true); }
-  else if (liveFilterEditState(session)) finishLiveFilterEdit(session, true);
+  else if (live) {
+    // A new smart filter is a filter applied for Last Filter; re-editing one is not.
+    if (live.isNew) recordLastFilter(controller, LIVE_FILTER_NAMES[live.kind], live.settings);
+    finishLiveFilterEdit(session, true);
+  }
   else if (levelsEditState(session)) await applyLevelsEdit(session);
   else if (hueSaturationEditState(session)) await applyHueSaturationEdit(session);
-  else if (filterEditState(session)) {
-    const applied = await applyFilterEdit(session);
+  else if (filter) {
+    const { kind, settings } = filter, applied = await applyFilterEdit(session);
     // A failed apply keeps the panel open with its error; nothing else to do.
     if (!applied && filterEditState(session)) return;
+    if (applied) recordLastFilter(controller, kind, settings);
   }
   resetPanelState(session);
   session.notify('document');
@@ -712,7 +719,74 @@ function FilterControls({ controller, filter, settings: s, onChange }: {
         <SliderRow label={t('Preserve Details')} value={s.detail} min={0} max={100} suffix="%" testId="denoiseDetail" onChange={(detail) => set({ detail })} />
       </>
     );
+    case 'Vignette': return <VignetteControls controller={controller} settings={s} onChange={onChange} />;
+    case 'Bloom / Glow': return (
+      <>
+        <SliderRow label={t('Threshold')} value={s.bloomThreshold} min={0} max={100} suffix="%" testId="bloomThreshold" onChange={(bloomThreshold) => set({ bloomThreshold })} />
+        <SliderRow label={t('Radius')} value={s.bloomRadius} min={1} max={150} logarithmic suffix="px" testId="bloomRadius" onChange={(bloomRadius) => set({ bloomRadius })} />
+        <SliderRow label={t('Intensity')} value={s.bloomAmount} min={0} max={100} suffix="%" testId="bloomAmount" onChange={(bloomAmount) => set({ bloomAmount })} />
+      </>
+    );
+    case 'Tonal Contrast': return (
+      <>
+        <SliderRow label={t('Amount')} value={s.tonalAmount} min={0} max={100} suffix="%" testId="tonalAmount" onChange={(tonalAmount) => set({ tonalAmount })} />
+        <SliderRow label={t('Highlights')} value={s.tonalHighlights} min={-100} max={100} suffix="%" testId="tonalHighlights" onChange={(tonalHighlights) => set({ tonalHighlights })} />
+        <SliderRow label={t('Midtones')} value={s.tonalMidtones} min={-100} max={100} suffix="%" testId="tonalMidtones" onChange={(tonalMidtones) => set({ tonalMidtones })} />
+        <SliderRow label={t('Shadows')} value={s.tonalShadows} min={-100} max={100} suffix="%" testId="tonalShadows" onChange={(tonalShadows) => set({ tonalShadows })} />
+        <SliderRow label={t('Radius')} value={s.tonalRadius} min={1} max={100} logarithmic suffix="px" testId="tonalRadius" onChange={(tonalRadius) => set({ tonalRadius })} />
+      </>
+    );
+    case 'Progressive Blur': return (
+      <>
+        <SliderRow label={t('Angle')} value={s.progressiveAngle} min={-180} max={180} suffix="°" testId="progressiveAngle" onChange={(progressiveAngle) => set({ progressiveAngle })} />
+        <SliderRow label={t('Start')} value={s.progressiveStart} min={0} max={100} suffix="%" testId="progressiveStart" onChange={(progressiveStart) => set({ progressiveStart })} />
+        <SliderRow label={t('End')} value={s.progressiveEnd} min={0} max={100} suffix="%" testId="progressiveEnd" onChange={(progressiveEnd) => set({ progressiveEnd })} />
+        <SliderRow label={t('Radius')} value={s.progressiveRadius} min={0} max={250} decimals={1} suffix="px" testId="progressiveRadius" onChange={(progressiveRadius) => set({ progressiveRadius })} />
+        <p className={styles.panelNote}>{t('Sharp up to Start, blurring evenly to the full radius at End, in the direction of the angle (−90° runs top to bottom).')}</p>
+      </>
+    );
+    case 'RGB Split': return (
+      <>
+        <Segmented label={t('Shape')} options={['linear', 'radial'] as const} value={s.rgbSplitRadial ? 'radial' : 'linear'}
+          labelOf={(v) => t(v === 'radial' ? 'Radial' : 'Linear')} onChange={(v) => set({ rgbSplitRadial: v === 'radial' })} />
+        <SliderRow label={t('Distance')} value={s.rgbSplitDistance} min={0} max={200} suffix="px" testId="rgbSplitDistance" onChange={(rgbSplitDistance) => set({ rgbSplitDistance })} />
+        <SliderRow label={t('Blur')} value={s.rgbSplitBlur} min={0} max={400} suffix="px" testId="rgbSplitBlur" onChange={(rgbSplitBlur) => set({ rgbSplitBlur })} />
+        {s.rgbSplitRadial
+          ? <p className={styles.panelNote}>{t('Splits outwards from the middle of the layer, reaching the full distance at its corners.')}</p>
+          : <SliderRow label={t('Angle')} value={s.rgbSplitAngle} min={-180} max={180} suffix="°" testId="rgbSplitAngle" onChange={(rgbSplitAngle) => set({ rgbSplitAngle })} />}
+      </>
+    );
   }
+}
+
+/** Vignette (FilterSheet.swift): edge colour from the app's colour picker, then the falloff's strength and shape. */
+function VignetteControls({ controller, settings: s, onChange }: { controller: EditorController; settings: FilterSettings; onChange: (s: FilterSettings) => void }) {
+  const t = controller.t;
+  const set = (change: Partial<FilterSettings>) => onChange({ ...s, ...change });
+  const pick = () => {
+    const before = s;
+    controller.pickColor?.({
+      title: `${t('Vignette')} · ${t('Color')}`, initial: s.vignetteColor,
+      preview: (vignetteColor) => onChange({ ...before, vignetteColor }),
+      commit: (vignetteColor) => onChange({ ...before, vignetteColor }),
+      cancel: () => onChange(before),
+    });
+  };
+  return (
+    <>
+      <div className={styles.panelRow}>
+        <span className={styles.panelLabel}>{t('Color')}</span>
+        <button type="button" className={styles.colorWell} style={{ background: hex(s.vignetteColor) }} onClick={pick}
+          aria-label={t('Vignette color')} data-testid="vignette-color" />
+      </div>
+      <SliderRow label={t('Amount')} value={s.vignetteAmount} min={0} max={100} suffix="%" testId="vignetteAmount" onChange={(vignetteAmount) => set({ vignetteAmount })} />
+      <SliderRow label={t('Midpoint')} value={s.vignetteMidpoint} min={0} max={100} suffix="%" testId="vignetteMidpoint" onChange={(vignetteMidpoint) => set({ vignetteMidpoint })} />
+      <SliderRow label={t('Roundness')} value={s.vignetteRoundness} min={-100} max={100} testId="vignetteRoundness" onChange={(vignetteRoundness) => set({ vignetteRoundness })} />
+      <SliderRow label={t('Feather')} value={s.vignetteFeather} min={0} max={100} suffix="%" testId="vignetteFeather" onChange={(vignetteFeather) => set({ vignetteFeather })} />
+      <SliderRow label={t('Highlights')} value={s.vignetteHighlights} min={0} max={100} suffix="%" testId="vignetteHighlights"
+        title={t('Eases the vignette off bright pixels')} onChange={(vignetteHighlights) => set({ vignetteHighlights })} />
+    </>
+  );
 }
 
 // MARK: The panel

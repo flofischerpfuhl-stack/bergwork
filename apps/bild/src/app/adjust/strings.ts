@@ -44,6 +44,14 @@ export const ADJUST_P2_DE: Readonly<Record<string, string>> = {
   'Double-click to edit · Drag to reorder': 'Doppelklick zum Bearbeiten · Ziehen zum Neuordnen',
   'Add Live Filter': 'Smartfilter hinzufügen', 'Edit Live Filter': 'Smartfilter bearbeiten', 'Remove Live Filter': 'Smartfilter löschen',
   'Reorder Live Filters': 'Smartfilter neu anordnen', 'Apply Live Filters': 'Smartfilter anwenden',
+  // Creative filters (Compositor 1.2–1.5) and Last Filter; vignette labels follow Lightroom Classic
+  'Last Filter': 'Letzter Filter', 'Vignette': 'Vignette', 'Bloom / Glow': 'Bloom / Leuchten', 'Tonal Contrast': 'Tonaler Kontrast',
+  'Progressive Blur': 'Verlaufsunschärfe', 'RGB Split': 'RGB-Versatz', 'Intensity': 'Intensität', 'Midpoint': 'Mittelpunkt',
+  'Vignette color': 'Farbe der Vignette', 'Eases the vignette off bright pixels': 'Schwächt die Vignette auf hellen Pixeln ab',
+  'Sharp up to Start, blurring evenly to the full radius at End, in the direction of the angle (−90° runs top to bottom).':
+    'Scharf bis zum Anfang, dann gleichmäßig unschärfer bis zum vollen Radius am Ende, in Richtung des Winkels (−90° verläuft von oben nach unten).',
+  'Splits outwards from the middle of the layer, reaching the full distance at its corners.':
+    'Spaltet von der Mitte der Ebene nach außen auf; an ihren Ecken mit der vollen Distanz.',
   // Brush modes
   'Dodge': 'Abwedler', 'Burn': 'Nachbelichter', 'Sponge': 'Schwamm', 'Flow': 'Fluss',
   'Saturate': 'Sättigung erhöhen', 'Desaturate': 'Sättigung verringern',

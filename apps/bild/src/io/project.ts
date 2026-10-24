@@ -1263,6 +1263,13 @@ function validLiveFilter(value: import('../../contracts-v2').FilterRecordV2): bo
   if (value.kind === 'unsharpMask') return num(value.amount) && num(value.radius) && num(value.threshold);
   if (value.kind === 'smartSharpen') return num(value.amount) && num(value.radius) && num(value.threshold) && num(value.reduceNoise);
   if (value.kind === 'highPass') return num(value.radius);
+  if (value.kind === 'vignette') return validRgb(value.color) && num(value.amount) && num(value.midpoint) && num(value.roundness)
+    && num(value.feather) && num(value.highlights);
+  if (value.kind === 'bloom') return num(value.threshold) && num(value.radius) && num(value.amount);
+  if (value.kind === 'tonalContrast') return num(value.radius) && num(value.amount) && num(value.shadows) && num(value.midtones)
+    && num(value.highlights);
+  if (value.kind === 'progressiveBlur') return num(value.angle) && num(value.start) && num(value.end) && num(value.radius);
+  if (value.kind === 'rgbSplit') return num(value.distance) && num(value.blur) && num(value.angle) && typeof value.radial === 'boolean';
   if (value.kind !== 'denoise' || !num(value.luminance) || !num(value.colour)) return false;
   const detail = (value as typeof value & { readonly detail?: unknown }).detail;
   return detail === undefined || num(detail);

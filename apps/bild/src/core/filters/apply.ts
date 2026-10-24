@@ -8,6 +8,7 @@ import { adjustRaster } from '../adjust/raster';
 import { blurMargin, normalizeFilterSettings, type FilterKind, type FilterSettings } from './settings';
 import { gaussianBlur, motionBlur } from './blur';
 import { denoise, highPass, smartSharpen, unsharpMask } from './sharpen';
+import { bloom, progressiveBlur, rgbSplit, tonalContrast, vignette, type FilterFrame } from './creative';
 
 export { gaussianBlur, motionBlur } from './blur';
 
@@ -31,7 +32,7 @@ export function carryMask(mask: Raster, from: LayerTransform, to: LayerTransform
 }
 
 function expanded(raster: Raster, transform: LayerTransform, margin: number): FilterResult {
-  const m = Math.ceil(margin); if (m <= 0) return { raster, transform };
+  const m = Math.max(0, Math.ceil(margin)); if (m <= 0) return { raster, transform };
   const width = raster.width + m * 2, height = raster.height + m * 2;
   if (width > 30_000 || height > 30_000 || width * height > 100_000_000) throw new RangeError('Filtered layer is too large');
   const pixels = makePixelArray(raster.format, width * height * 4), source = raster.toPixelsNative();
@@ -89,12 +90,18 @@ function blendSelection(original: Raster, filtered: Raster, transform: LayerTran
   return Raster.fromPixels(original.width, original.height, 4, b, { format: original.format });
 }
 
+/** Filters that spread into their padding and are cut back to what they leave covered. */
+const TRIMMED: ReadonlySet<FilterKind> = new Set(['Gaussian Blur', 'Motion Blur', 'Progressive Blur', 'Bloom / Glow', 'RGB Split']);
+
 /** Runs one filter, expanding and tightly trimming blur bounds like `FilterEdit`/`PixelFilter.trimmed`. */
 export function applyFilter(kind: FilterKind, source: Raster, transform: LayerTransform, input: FilterSettings,
   options: FilterOptions = {}): FilterResult {
   if (source.channels !== 4) throw new RangeError('Filters require an RGBA raster');
   const settings = normalizeFilterSettings(input), seed = options.seed ?? settings.grain.seed;
-  const room = options.expand === false ? { raster: source, transform } : expanded(source, transform, blurMargin(kind, settings));
+  const margin = options.expand === false ? 0 : Math.max(0, Math.ceil(blurMargin(kind, settings)));
+  const room = margin ? expanded(source, transform, margin) : { raster: source, transform };
+  // Vignette, Progressive Blur and RGB Split place themselves on the layer's own pixels, not on the padding.
+  const frame: FilterFrame = { x: margin, y: margin, width: source.width, height: source.height };
   let result: Raster; const colorAdjustment = adjustment(kind, settings, seed);
   if (colorAdjustment) result = adjustRaster(room.raster, room.transform, colorAdjustment, options.selection ?? null);
   else if (kind === 'Gaussian Blur') result = gaussianBlur(room.raster, settings.radius);
@@ -104,9 +111,19 @@ export function applyFilter(kind: FilterKind, source: Raster, transform: LayerTr
   else if (kind === 'Unsharp Mask') result = unsharpMask(room.raster, settings.amount, settings.radius, settings.threshold);
   else if (kind === 'Smart Sharpen') result = smartSharpen(room.raster, settings.amount, settings.radius, settings.threshold, settings.reduceNoise);
   else if (kind === 'High Pass') result = highPass(room.raster, settings.radius);
+  else if (kind === 'Vignette') result = vignette(room.raster, { color: settings.vignetteColor, amount: settings.vignetteAmount,
+    midpoint: settings.vignetteMidpoint, roundness: settings.vignetteRoundness, feather: settings.vignetteFeather,
+    highlights: settings.vignetteHighlights }, frame);
+  else if (kind === 'Bloom / Glow') result = bloom(room.raster, settings.bloomThreshold, settings.bloomRadius, settings.bloomAmount);
+  else if (kind === 'Tonal Contrast') result = tonalContrast(room.raster, settings.tonalRadius, settings.tonalAmount,
+    settings.tonalShadows, settings.tonalMidtones, settings.tonalHighlights);
+  else if (kind === 'Progressive Blur') result = progressiveBlur(room.raster, settings.progressiveAngle, settings.progressiveStart,
+    settings.progressiveEnd, settings.progressiveRadius, frame);
+  else if (kind === 'RGB Split') result = rgbSplit(room.raster, settings.rgbSplitDistance, settings.rgbSplitBlur,
+    settings.rgbSplitAngle, settings.rgbSplitRadial, frame);
   else result = denoise(room.raster, settings.luminance, settings.colour, settings.detail);
   if (!colorAdjustment) result = blendSelection(room.raster, result, room.transform, options.selection ?? null);
-  if ((kind === 'Gaussian Blur' || kind === 'Motion Blur') && options.expand !== false) {
+  if (margin > 0 && TRIMMED.has(kind)) {
     const bounds = alphaBounds(result);
     if (bounds && (bounds.x !== 0 || bounds.y !== 0 || bounds.width !== result.width || bounds.height !== result.height)) {
       const map = pixelToDocument(room.transform, result.width, result.height), middle = apply(map, { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 });

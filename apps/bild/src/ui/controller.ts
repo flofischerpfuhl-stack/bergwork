@@ -317,7 +317,8 @@ export class EditorController {
     if (command === 'copyMerged') return 'clipboardMerged';
     if (command === 'copy' || command === 'cut' || command === 'paste' || command === 'layerViaCopy') return 'clipboard';
     if (command.startsWith('fill') || command === 'clearSelection') return 'fill';
-    if (['gaussianBlur', 'motionBlur', 'noise', 'lensCorrection', 'removeBackground', 'contentAwareFill'].includes(command)) return 'filter';
+    if (['gaussianBlur', 'motionBlur', 'noise', 'lensCorrection', 'removeBackground', 'contentAwareFill', 'vignette', 'bloom',
+      'tonalContrast', 'progressiveBlur', 'rgbSplit', 'lastFilter'].includes(command)) return 'filter';
     if (['levels', 'curves', 'hueSaturation', 'exposure', 'gradientMap', 'grain', 'invert', 'editAdjustment'].includes(command)) return 'adjustment';
     if (command === 'transformCommand') return 'transform';
     return 'fill';

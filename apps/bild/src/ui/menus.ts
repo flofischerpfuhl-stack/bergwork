@@ -27,7 +27,8 @@ export interface Menu { title: string; items: MenuEntry[] }
 
 /** Features whose module is registered at runtime (selection, brushes, adjustments…). */
 export interface FeatureRegistry {
-  [command: string]: { enabled: () => boolean; run: () => void; checked?: () => boolean } | undefined;
+  /** `label` replaces the menu's own label, for commands that name what they will do (Filter › Last Filter: Vignette). */
+  [command: string]: { enabled: () => boolean; run: () => void; checked?: () => boolean; label?: () => string } | undefined;
 }
 
 const menuCache = new WeakMap<EditorController, { key: string; menus: Menu[] }>();
@@ -53,7 +54,7 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
   const layer = session.activeLayer;
   const feature = (key: string, label: string, shortcut?: string): MenuItem => {
     const f = features[key];
-    return f ? { label, shortcut, enabled: f.enabled(), run: f.run, checked: f.checked?.() } : { label, shortcut, enabled: false };
+    return f ? { label: f.label?.() ?? label, shortcut, enabled: f.enabled(), run: f.run, checked: f.checked?.() } : { label, shortcut, enabled: false };
   };
   const mergePlan = session.mergePlan();
   const ui = controller.ui.getState();
@@ -157,8 +158,12 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
     {
       title: t('Filter'),
       items: [
+        // ⌘⌥F (Photoshop's Ctrl+Alt+F; Compositor uses ⌃⌘F, which browsers keep for fullscreen on macOS).
+        { ...feature('lastFilter', t('Last Filter'), 'mod+alt+f'), testId: 'menu-last-filter' },
+        'separator',
         feature('gaussianBlur', `${t('Gaussian Blur')}…`),
         feature('motionBlur', `${t('Motion Blur')}…`),
+        feature('progressiveBlur', `${t('Progressive Blur')}…`),
         feature('lensCorrection', `${t('Lens Correction')}…`),
         'separator',
         feature('noise', `${t('Add Noise')}…`),
@@ -168,6 +173,11 @@ export function buildMenus(controller: EditorController, features: FeatureRegist
         feature('unsharpMask', `${t('Unsharp Mask')}…`),
         feature('smartSharpen', `${t('Smart Sharpen')}…`),
         feature('highPass', `${t('High Pass')}…`),
+        feature('tonalContrast', `${t('Tonal Contrast')}…`),
+        'separator',
+        feature('vignette', `${t('Vignette')}…`),
+        feature('bloom', `${t('Bloom / Glow')}…`),
+        feature('rgbSplit', `${t('RGB Split')}…`),
         'separator',
         feature('liquify', `${t('Liquify')}…`),
         'separator',

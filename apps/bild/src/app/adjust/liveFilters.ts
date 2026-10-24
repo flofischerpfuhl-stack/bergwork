@@ -9,35 +9,29 @@
 
 import type { EditorSession } from '../../core/session';
 import type { LiveFilter } from '../../core/document';
-import { defaultFilterSettings, normalizeFilterSettings, type FilterKind, type FilterSettings } from '../../core/filters/settings';
-import { defaultLiveFilter, type LiveFilterKind } from '../../core/filters/live';
+import { normalizeFilterSettings, type FilterKind, type FilterSettings } from '../../core/filters/settings';
+import { defaultLiveFilter, liveFilterSettings, type LiveFilterKind } from '../../core/filters/live';
 
 /** Filter menu order and the destructive FilterKind each live filter shares its kernel and panel with. */
-export const LIVE_FILTER_KINDS: readonly LiveFilterKind[] = ['gaussianBlur', 'motionBlur', 'lensCorrection', 'noise', 'denoise',
-  'unsharpMask', 'smartSharpen', 'highPass'];
+export const LIVE_FILTER_KINDS: readonly LiveFilterKind[] = ['gaussianBlur', 'motionBlur', 'progressiveBlur', 'lensCorrection',
+  'noise', 'denoise', 'unsharpMask', 'smartSharpen', 'highPass', 'vignette', 'bloom', 'tonalContrast', 'rgbSplit'];
 export const LIVE_FILTER_NAMES: Readonly<Record<LiveFilterKind, FilterKind>> = {
   gaussianBlur: 'Gaussian Blur', motionBlur: 'Motion Blur', noise: 'Add Noise', lensCorrection: 'Lens Correction',
   unsharpMask: 'Unsharp Mask', smartSharpen: 'Smart Sharpen', highPass: 'High Pass', denoise: 'Denoise',
+  vignette: 'Vignette', bloom: 'Bloom / Glow', tonalContrast: 'Tonal Contrast', progressiveBlur: 'Progressive Blur', rgbSplit: 'RGB Split',
 };
 /** Menu command keys (menus.ts `feature(...)`), matching the destructive command registry's names. */
 export const LIVE_FILTER_COMMANDS: Readonly<Record<LiveFilterKind, string>> = {
   gaussianBlur: 'gaussianBlur', motionBlur: 'motionBlur', noise: 'noise', lensCorrection: 'lensCorrection',
   unsharpMask: 'unsharpMask', smartSharpen: 'smartSharpen', highPass: 'highPass', denoise: 'denoise',
+  vignette: 'vignette', bloom: 'bloom', tonalContrast: 'tonalContrast', progressiveBlur: 'progressiveBlur', rgbSplit: 'rgbSplit',
 };
-
-export function filterSettingsOf(filter: LiveFilter): FilterSettings {
-  const base = defaultFilterSettings();
-  switch (filter.kind) {
-    case 'gaussianBlur': return { ...base, radius: filter.radius };
-    case 'motionBlur': return { ...base, angle: filter.angle, distance: filter.distance };
-    case 'noise': return { ...base, amount: filter.amount, gaussian: filter.gaussian, monochromatic: filter.monochromatic };
-    case 'lensCorrection': return { ...base, distortion: filter.distortion };
-    case 'unsharpMask': return { ...base, amount: filter.amount, radius: filter.radius, threshold: filter.threshold };
-    case 'smartSharpen': return { ...base, amount: filter.amount, radius: filter.radius, threshold: filter.threshold, reduceNoise: filter.reduceNoise };
-    case 'highPass': return { ...base, radius: filter.radius };
-    case 'denoise': return { ...base, luminance: filter.luminance, colour: filter.colour, detail: filter.detail ?? 50 };
-  }
+/** The live filter kind of a destructive FilterKind, for Last Filter. */
+export function liveFilterKindOf(kind: FilterKind): LiveFilterKind | null {
+  return LIVE_FILTER_KINDS.find((live) => LIVE_FILTER_NAMES[live] === kind) ?? null;
 }
+
+export function filterSettingsOf(filter: LiveFilter): FilterSettings { return liveFilterSettings(filter).settings; }
 
 export function liveFilterFrom(kind: LiveFilterKind, value: FilterSettings, enabled: boolean,
   blending?: Pick<LiveFilter, 'opacity' | 'blendMode'>): LiveFilter {
@@ -53,6 +47,15 @@ export function liveFilterFrom(kind: LiveFilterKind, value: FilterSettings, enab
     case 'smartSharpen': return { kind, schemaVersion: 1, enabled, amount: s.amount, radius: s.radius, threshold: s.threshold, reduceNoise: s.reduceNoise, ...common };
     case 'highPass': return { kind, schemaVersion: 1, enabled, radius: s.radius, ...common };
     case 'denoise': return { kind, schemaVersion: 1, enabled, luminance: s.luminance, colour: s.colour, detail: s.detail, ...common };
+    case 'vignette': return { kind, schemaVersion: 1, enabled, color: s.vignetteColor, amount: s.vignetteAmount, midpoint: s.vignetteMidpoint,
+      roundness: s.vignetteRoundness, feather: s.vignetteFeather, highlights: s.vignetteHighlights, ...common };
+    case 'bloom': return { kind, schemaVersion: 1, enabled, threshold: s.bloomThreshold, radius: s.bloomRadius, amount: s.bloomAmount, ...common };
+    case 'tonalContrast': return { kind, schemaVersion: 1, enabled, radius: s.tonalRadius, amount: s.tonalAmount,
+      shadows: s.tonalShadows, midtones: s.tonalMidtones, highlights: s.tonalHighlights, ...common };
+    case 'progressiveBlur': return { kind, schemaVersion: 1, enabled, angle: s.progressiveAngle, start: s.progressiveStart,
+      end: s.progressiveEnd, radius: s.progressiveRadius, ...common };
+    case 'rgbSplit': return { kind, schemaVersion: 1, enabled, distance: s.rgbSplitDistance, blur: s.rgbSplitBlur,
+      angle: s.rgbSplitAngle, radial: s.rgbSplitRadial, ...common };
   }
 }
 

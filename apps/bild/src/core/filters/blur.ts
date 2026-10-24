@@ -219,3 +219,9 @@ export function motionBlur(raster: Raster, distance: number, angle: number): Ras
   }
   return fromPremultiplied(out, width, height, raster.format);
 }
+
+/** Blurs float planes in place with the layer blurs' Gaussian (exact FIR, or the bounded-cost IIR on large grids). */
+export function blurPlanes(width: number, height: number, sigma: number, planes: readonly Float32Array[]): void {
+  const blur = gaussianPlane(width, height, Math.max(0.01, sigma), true, true), scratch = new Float32Array(width * height);
+  for (const plane of planes) blur(plane, scratch);
+}

@@ -41,7 +41,15 @@ export function liveViewFilter(filter: LiveFilter, defaults: FilterSettings): Vi
     case 'highPass': return { kind: 'High Pass', settings: { ...defaults, radius: filter.radius }, seed, opacity, blendMode };
     case 'denoise': return { kind: 'Denoise', settings: { ...defaults, luminance: filter.luminance,
       colour: filter.colour, detail: filter.detail ?? 50 }, seed, opacity, blendMode };
+    // No view-space program: the compositor renders these through the cached CPU stack (`needsCpuLiveFilters`).
+    case 'vignette': case 'bloom': case 'tonalContrast': case 'progressiveBlur': case 'rgbSplit': return null;
   }
+}
+
+/** Whether a live stack holds an enabled filter that only the CPU path (`applyLiveFilters`) can render. */
+export function needsCpuLiveFilters(filters: readonly LiveFilter[]): boolean {
+  return filters.some((filter) => filter.enabled && (filter.kind === 'vignette' || filter.kind === 'bloom'
+    || filter.kind === 'tonalContrast' || filter.kind === 'progressiveBlur' || filter.kind === 'rgbSplit'));
 }
 
 export function previewViewFilter(preview: GpuFilterPreview): ViewFilter | null {
