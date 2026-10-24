@@ -21,7 +21,7 @@
   background: var(--cmp-control); color: var(--cmp-text); font: 12px/1.2 var(--cmp-font);
 }
 .button:hover { background: var(--cmp-control-hover); }
-.primary { background: var(--cmp-accent); color: var(--cmp-text); border-color: var(--cmp-accent); }
+.primary { background: var(--bw-accent); color: var(--bw-accent-on); border-color: transparent; }
 .toolbar { display: flex; gap: 10px; align-items: center; }
 .search {
   flex: 1; min-width: 0; height: 30px; border: 1px solid var(--cmp-border); border-radius: 7px;

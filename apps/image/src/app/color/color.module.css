@@ -21,7 +21,7 @@
 }
 .miniButton:hover:not(:disabled) { background: var(--cmp-control-hover); color: var(--cmp-text); }
 .miniButton:disabled { color: var(--cmp-text-tertiary); }
-.miniButtonOn { background: var(--cmp-accent); color: var(--cmp-accent-contrast); }
+.miniButtonOn { background: var(--bw-control-active); color: var(--bw-fg-strong); box-shadow: inset 0 0 0 1px var(--bw-frame); }
 
 .sliderRow { display: grid; grid-template-columns: 14px minmax(0, 1fr) 44px; align-items: center; gap: 6px; }
 .sliderLabel { font: 600 11px/1 var(--cmp-font); color: var(--cmp-text-secondary); text-align: center; }
@@ -39,17 +39,17 @@
 .range::-moz-range-thumb { width: 6px; height: 12px; border-radius: 3px; background: #fff; border: 1px solid rgba(0, 0, 0, 0.75); }
 .range:disabled { opacity: 0.4; cursor: default; }
 .number {
-  width: 44px; height: 22px; padding: 0 5px; border-radius: 6px; border: 1px solid var(--cmp-border); background: var(--cmp-surface);
-  color: var(--cmp-text); font: 12px/1 var(--cmp-font); text-align: right; font-variant-numeric: tabular-nums;
+  width: 44px; height: 22px; padding: 0 5px; border-radius: 6px; border: 1px solid transparent; background: var(--bw-field);
+  color: var(--cmp-text); font: 500 var(--bw-text-mono)/1 var(--bw-font-mono); text-align: right; font-variant-numeric: tabular-nums;
 }
-.number:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent); }
+.number:focus { outline: none; border-color: var(--bw-frame); }
 .number:disabled { color: var(--cmp-text-tertiary); }
 .hexRow { display: flex; align-items: center; gap: 6px; }
 .hexInput {
-  width: 78px; height: 22px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--cmp-border); background: var(--cmp-surface);
+  width: 78px; height: 22px; padding: 0 6px; border-radius: 6px; border: 1px solid transparent; background: var(--bw-field);
   color: var(--cmp-text); font: 12px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-transform: uppercase;
 }
-.hexInput:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent); }
+.hexInput:focus { outline: none; border-color: var(--bw-frame); }
 .readout { display: grid; grid-template-columns: 38px repeat(4, minmax(0, 1fr)); align-items: baseline; gap: 4px; font-size: 11px; }
 .readoutLabel { color: var(--cmp-text-secondary); font-weight: 600; }
 .readoutValue { font-variant-numeric: tabular-nums; color: var(--cmp-text); }
@@ -81,7 +81,7 @@
 /* Pinned to the bottom of the panel like the Layers footer, also while the swatches scroll. */
 .footer {
   display: flex; align-items: center; gap: 2px; padding: 4px 8px; border-top: 1px solid var(--cmp-border); color: var(--cmp-text-secondary);
-  margin: auto -12px -12px; position: sticky; bottom: 0; background: var(--cmp-bg); z-index: 1;
+  margin: auto -12px -12px; position: sticky; bottom: 0; background: var(--cmp-panel); z-index: 1;
 }
 .status { font-size: 11px; color: var(--cmp-text-secondary); margin: 0; }
 

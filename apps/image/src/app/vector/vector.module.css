@@ -15,10 +15,10 @@
 }
 
 .number {
-  width: 48px; height: 26px; padding: 0 6px; border-radius: 7px; border: 1px solid var(--cmp-border); background: var(--cmp-panel-3);
-  color: var(--cmp-text); font: 12px/1 var(--cmp-font); text-align: right; font-variant-numeric: tabular-nums;
+  width: 48px; height: 26px; padding: 0 6px; border-radius: 7px; border: 1px solid transparent; background: var(--bw-field);
+  color: var(--cmp-text); font: 500 var(--bw-text-mono)/1 var(--bw-font-mono); text-align: right; font-variant-numeric: tabular-nums;
 }
-.number:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent); }
+.number:focus { outline: none; border-color: var(--bw-frame); }
 .number:disabled { color: var(--cmp-text-tertiary); }
 .field { display: inline-flex; align-items: center; gap: 4px; flex: none; color: var(--cmp-text-secondary); font-size: 11px; }
 .scrub { cursor: ew-resize; user-select: none; -webkit-user-select: none; touch-action: none; }

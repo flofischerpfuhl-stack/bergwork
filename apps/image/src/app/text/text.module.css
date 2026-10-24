@@ -48,10 +48,10 @@
 .start { align-self: flex-start; }
 .cellWide { grid-column: 1 / -1; }
 .number {
-  width: 58px; height: 22px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--cmp-border); background: var(--cmp-surface);
-  color: var(--cmp-text); font: 12px/1 var(--cmp-font); text-align: right; font-variant-numeric: tabular-nums;
+  width: 58px; height: 22px; padding: 0 6px; border-radius: 6px; border: 1px solid transparent; background: var(--bw-field);
+  color: var(--cmp-text); font: 500 var(--bw-text-mono)/1 var(--bw-font-mono); text-align: right; font-variant-numeric: tabular-nums;
 }
-.number:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent); }
+.number:focus { outline: none; border-color: var(--bw-frame); }
 .number:disabled { color: var(--cmp-text-tertiary); }
 .unit { width: 16px; flex: none; color: var(--cmp-text-tertiary); font-size: 10.5px; }
 .sectionTitle { margin: 2px 0 -2px; font: 600 11px/1 var(--cmp-font); color: var(--cmp-text-secondary); }

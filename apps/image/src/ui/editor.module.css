@@ -279,21 +279,20 @@
 .field input:disabled { color: var(--bw-fg-subtle); }
 /* A labelled on/off: the framed glyph (§3) — an empty frame when off, a solid frame with a check when on. */
 .check { display: inline-flex; align-items: center; gap: 7px; flex: none; font-size: 12.5px; font-weight: 400; color: var(--bw-fg); }
-.check input {
+.root input[type='checkbox'] {
   appearance: none; -webkit-appearance: none; display: inline-grid; place-items: center; width: 16px; height: 16px; margin: 0; flex: none;
   border: 1.5px solid var(--bw-fg-subtle); border-radius: 4px; background: transparent; cursor: pointer;
 }
-.check input:checked {
+.root input[type='checkbox']:checked {
   border-color: var(--bw-fg-strong);
   background: var(--bw-fg-strong) center / 11px 11px no-repeat
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2 5 8.6l4.6-5.2' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
-.light .check input:checked, :global([data-theme='light']) .check input:checked { background-color: var(--bw-fg-strong); }
-:global([data-theme='dark']) .check input:checked {
+:global([data-theme='dark']) .root input[type='checkbox']:checked, .root[data-theme='dark'] input[type='checkbox']:checked {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 6.2 5 8.6l4.6-5.2' fill='none' stroke='%23161514' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
-.check input:disabled { opacity: 0.4; cursor: default; }
-.compact .check input, .compactLandscape .check input { width: 22px; height: 22px; }
+.root input[type='checkbox']:disabled { opacity: 0.4; cursor: default; }
+.compact input[type='checkbox'], .compactLandscape input[type='checkbox'] { width: 22px; height: 22px; }
 /* Text buttons: the design base's button; the main action in the stone accent, a toggle that is on with the frame. */
 .pill {
   flex: none; height: 28px; padding: 0 12px; border-radius: var(--bw-radius-control); border: 1px solid var(--bw-border); background: var(--bw-control);
@@ -426,7 +425,17 @@
 /* A label and its control on one line (dialog rows): the Properties row look of the design base. */
 .appearanceRow { display: flex; align-items: center; gap: 8px; min-height: var(--bw-row); font-size: 12px; font-weight: 400; color: var(--bw-fg-muted); }
 .appearanceRow .select { flex: 1; min-width: 0; }
-.slider { flex: 1; min-width: 0; accent-color: var(--cmp-accent); height: 20px; }
+/* Range sliders as the design base's slider: a thin track and a stone thumb. */
+.slider { flex: 1; min-width: 0; height: 20px; margin: 0; background: transparent; appearance: none; -webkit-appearance: none; cursor: pointer; }
+.slider::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--bw-border-strong); }
+.slider::-moz-range-track { height: 4px; border-radius: 2px; background: var(--bw-border-strong); }
+.slider::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--bw-accent-track); }
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%;
+  border: 2px solid var(--bw-surface-raised); background: var(--bw-accent); box-shadow: 0 0 0 1px var(--bw-border-strong);
+}
+.slider::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--bw-surface-raised); background: var(--bw-accent); }
+.slider:disabled { opacity: 0.45; cursor: default; }
 .compact .slider { height: 36px; }
 .layerList { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 4px 6px; outline: none; }
 .emptyLayers {
@@ -487,7 +496,13 @@
 .compact .eye, .compactLandscape .eye { width: 44px; height: 44px; }
 .compact .disclosure, .compactLandscape .disclosure { width: 30px; height: 44px; }
 .layersFooter { display: flex; align-items: center; gap: 2px; padding: 6px 4px; border-top: 1px solid var(--cmp-hairline); color: var(--bw-fg-muted); }
-.footerButton { color: inherit; }
+/* Footer buttons (Layers, Color): quiet icon buttons, as the design base's small icon button. */
+.footerButton {
+  min-width: 28px; height: 28px; padding: 0 4px; border: 1px solid transparent; border-radius: var(--bw-radius-control); background: transparent; color: inherit;
+  display: grid; place-items: center;
+}
+.footerButton:hover:not(:disabled) { color: var(--bw-fg-strong); background: var(--bw-hover); }
+.footerButton:disabled { color: var(--bw-fg-subtle); }
 .compact .footerButton, .compactLandscape .footerButton { min-width: 44px; min-height: 44px; }
 
 /* Floating sheets for compact layouts (Layers above the tool strip; beside it in landscape) */
@@ -655,7 +670,7 @@
 .styleItem:hover { background: var(--cmp-control); }
 .styleItemOn, .styleItemOn:hover { background: var(--cmp-accent-soft); }
 .styleItem { border-radius: var(--cmp-radius-control); }
-.styleItem input { accent-color: var(--cmp-accent); width: 14px; height: 14px; margin: 0; flex: none; }
+.styleItem input { flex: none; }
 .styleItemName {
   flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: transparent; color: var(--cmp-text); font: 12px/1 var(--cmp-font);
   text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -728,7 +743,7 @@
 .exportSectionHeader { display: flex; align-items: center; justify-content: space-between; align-self: stretch; }
 .exportSectionTitle { margin: 0; font: 600 11px/1.2 var(--cmp-font); color: var(--cmp-text-secondary); letter-spacing: 0.02em; }
 .exportCheckRow { display: flex; align-items: center; gap: 7px; align-self: stretch; min-width: 0; font-size: 12px; color: var(--cmp-text-secondary); }
-.exportCheckRow input { accent-color: var(--cmp-accent); width: 14px; height: 14px; margin: 0; flex: none; }
+.exportCheckRow input { flex: none; }
 .exportCheckRow svg { flex: none; }
 .exportCheckName { flex: 1 1 auto; min-width: 0; color: var(--cmp-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .exportCheckMeta { flex: none; font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -741,10 +756,10 @@
 .exportLabelFixed { width: 64px; }
 .exportValue { flex: none; width: 42px; text-align: right; font-variant-numeric: tabular-nums; }
 .exportText {
-  flex: 1 1 auto; min-width: 0; height: 26px; padding: 0 8px; border-radius: 7px; border: 1px solid var(--cmp-border); background: var(--cmp-panel-3);
+  flex: 1 1 auto; min-width: 0; height: 26px; padding: 0 8px; border-radius: 7px; border: 1px solid transparent; background: var(--bw-field);
   color: var(--cmp-text); font: 12px/1 var(--cmp-font);
 }
-.exportText:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent-hover); }
+.exportText:focus { outline: none; border-color: var(--bw-frame); }
 .exportMini {
   flex: none; width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 1px solid var(--cmp-border); border-radius: var(--cmp-radius-control);
   background: var(--cmp-panel-2); color: var(--cmp-text);
