@@ -1,0 +1,82 @@
+/* Demo-only layout: the work area and the function bar position. Components come from @bergwork/ui. */
+
+.demo-canvas {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 84px 340px 76px;
+  background: var(--bw-void);
+}
+.demo-canvas[data-grid='true'] {
+  background-image: linear-gradient(var(--bw-border-subtle) 1px, transparent 1px), linear-gradient(90deg, var(--bw-border-subtle) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+.demo-page {
+  width: 100%;
+  max-width: 1100px;
+  aspect-ratio: 1600 / 1083;
+  max-height: 100%;
+  box-shadow: 0 0 0 1px var(--bw-border), 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+.demo-art { display: block; width: 100%; height: 100%; }
+
+.bw-stage { --bw-panel-top: calc(var(--bw-gap) * 2 + 50px); }
+.demo-functionbar {
+  scrollbar-width: none;
+  position: absolute;
+  top: var(--bw-gap);
+  left: 50%;
+  z-index: var(--bw-z-floating);
+  max-width: calc(100% - 2 * var(--bw-gap));
+  overflow-x: auto;
+  transform: translateX(-50%);
+}
+.demo-menu-button {
+  height: 36px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--bw-radius-control);
+  background: transparent;
+  color: var(--bw-fg);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.demo-menu-button:hover, .demo-menu-button[aria-expanded='true'] { background: var(--bw-hover); color: var(--bw-fg-strong); }
+
+.demo-thumb {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(#2b3a67, #c97b63 60%, #3f3546 61%, #3b4a6b);
+  color: var(--bw-fg-strong);
+  font-weight: 700;
+}
+.demo-thumb.is-paper { background: #f4efe6; }
+.demo-thumb.is-text { background: var(--bw-surface-raised); font-family: var(--bw-font-ui); }
+
+.demo-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 10px 4px 6px;
+  color: var(--bw-fg-strong);
+  font-weight: 600;
+}
+.demo-grow { flex: 1; }
+
+/* Narrow windows: the menus fold into one menu button, the tools scroll. */
+.demo-compact-menu { display: none; }
+@media (max-width: 1100px) {
+  .demo-canvas { padding: 84px 24px 76px; }
+  .demo-menu-button { display: none; }
+  .demo-compact-menu { display: inline-grid; }
+}
+@media (max-width: 640px) {
+  .bw-panel { display: none; }
+  .demo-canvas { padding: 72px 8px 64px; }
+  .demo-phone-hide { display: none !important; }
+  .demo-functionbar { left: var(--bw-gap); right: var(--bw-gap); transform: none; }
+}

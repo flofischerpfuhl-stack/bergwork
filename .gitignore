@@ -10,3 +10,4 @@ apps/*/dist/
 target/
 __pycache__/
 *.pyc
+packages/*/dist-demo/

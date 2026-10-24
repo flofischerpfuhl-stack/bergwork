@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>berg:work UI · Musterseite</title>
+  <link rel="icon" href="./mark-image.svg">
+  <script>
+    // Before first paint, so a light desktop does not flash dark (same rule as applyAppearance).
+    try {
+      const a = JSON.parse(localStorage.getItem('bergwork.appearance') || 'null') || {};
+      const theme = a.theme === 'light' || a.theme === 'dark' ? a.theme : (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.dataset.theme = theme;
+      document.documentElement.dataset.corners = a.corners === 'sharp' ? 'sharp' : 'round';
+    } catch {}
+  </script>
+</head>
+<body>
+  <div id="root" style="height:100%"></div>
+  <script type="module" src="./main.tsx"></script>
+</body>
+</html>

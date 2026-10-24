@@ -11,6 +11,7 @@ Fernwork (see below).
 | --- | --- |
 | `apps/pdf/` | berg:work PDF: Tauri shell (`src-tauri/`), host page (`web/`), packaging. `upstream/` holds the pinned editor build; `dist/` is assembled from `web/` and `upstream/` (see `apps/pdf/README.md`). |
 | `apps/bild/` | berg:work Image: the image editor itself (source, tests, Tauri shell in `src-tauri/`), moved here with its history from the former fwimg repository on 2026-10-24. Its own `package.json`/`package-lock.json`; not an npm workspace yet. |
+| `packages/ui/` | The design base shared by both apps: tokens, fonts and React components after the Himmel:CAD Builder UI lab, with a demo page (`npm run dev --workspace @bergwork/ui`). |
 | `packages/host-tauri/` | Host implementation shared by both apps: files, models, OCR, fonts, codecs, printing. |
 | `packages/hardware-profile/` | Hardware identity, capabilities, budgets and device quirks (TypeScript side). |
 | `crates/` | Native Rust code: the hardware profile and native compute (ONNX Runtime, OCR, codecs). |

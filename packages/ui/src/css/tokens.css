@@ -1,0 +1,229 @@
+/**
+ * berg:work design tokens. Components read tokens only; no hex values outside this file.
+ *
+ * Structure and sizes follow the Himmel:CAD Builder UI lab (sister brand, same visual language):
+ * floating islands on a void, 28 px rows, 12 px between everything that floats, neutral states.
+ * The colours are berg:work's: warm stone neutrals, the stone accent of berg:work PDF, the site red
+ * only in the wordmark.
+ *
+ * Selection and state rules (Builder UI-REVIEW-REFERENCE §3):
+ *   - hover / press are neutral washes, never an accent fill;
+ *   - "on" is a solid frame, "automatic" a dashed frame, "off" no frame — the icon never changes;
+ *   - accent colour only where it means something (primary action, slider fill, text selection);
+ *   - status colours only for success / warning / error.
+ *
+ * Theme: html[data-theme="dark" | "light"] (set by useAppearance; without it the OS decides).
+ * Corners: html[data-corners="sharp"] sets every radius to 0; status dots stay round.
+ */
+
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* Surfaces: the void behind everything, islands, and their sunken / raised steps. */
+  --bw-void: #121110;
+  --bw-surface: #1c1b19;
+  --bw-surface-sunken: #161514;
+  --bw-surface-raised: #262422;
+  --bw-overlay: rgba(10, 9, 8, 0.66);
+  /* A calm field: a quiet fill without a frame (Builder §8b). */
+  --bw-field: rgba(255, 255, 255, 0.045);
+  --bw-field-hover: rgba(255, 255, 255, 0.07);
+  /* Active panel buttons and selected rows are a darker grey (Builder status bar). */
+  --bw-control: #2a2826;
+  --bw-control-active: #141312;
+
+  /* Text. Muted and subtle keep WCAG AA (≥ 4.5:1) on --bw-surface-raised. */
+  --bw-fg: #d3cfc9;
+  --bw-fg-strong: #f4f2ef;
+  --bw-fg-muted: #a39e96;
+  --bw-fg-subtle: #959088;
+  --bw-fg-inverse: #161514;
+
+  /* Lines. */
+  --bw-border-subtle: rgba(255, 255, 255, 0.05);
+  --bw-border: rgba(255, 255, 255, 0.1);
+  --bw-border-strong: rgba(255, 255, 255, 0.2);
+  /* The frame of an "on" toggle and of a focused field. */
+  --bw-frame: #d6d0c8;
+
+  /* Interaction (neutral). */
+  --bw-hover: rgba(255, 255, 255, 0.055);
+  --bw-press: rgba(255, 255, 255, 0.09);
+  --bw-selection: rgba(214, 208, 200, 0.14);
+  --bw-text-selection: rgba(214, 208, 200, 0.3);
+  --bw-focus: #a8a29e;
+
+  /* Accent: warm stone (berg:work PDF), used sparingly. */
+  --bw-accent: #d6d0c8;
+  --bw-accent-hover: #e7e3dd;
+  --bw-accent-on: #1c1917;
+  --bw-accent-track: #78716c;
+
+  /* Brand: the site red, for the wordmark only. */
+  --bw-wordmark: #ff5a4f;
+
+  /* Status — solid, no gradients. */
+  --bw-success: #84b72a;
+  --bw-warning: #e8a33e;
+  --bw-error: #f26b6b;
+  --bw-error-fg: #ffc0c0;
+
+  /* Checkerboard behind transparent pixels. */
+  --bw-checker-a: #2a2826;
+  --bw-checker-b: #222120;
+
+  --bw-shadow-island: 0 10px 30px rgba(0, 0, 0, 0.42), 0 1px 2px rgba(0, 0, 0, 0.5);
+  --bw-shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+
+  --bw-void: #dedbd6;
+  --bw-surface: #f5f4f2;
+  --bw-surface-sunken: #eae8e4;
+  --bw-surface-raised: #ffffff;
+  --bw-overlay: rgba(28, 25, 23, 0.36);
+  --bw-field: rgba(28, 25, 23, 0.05);
+  --bw-field-hover: rgba(28, 25, 23, 0.08);
+  --bw-control: #e6e3df;
+  --bw-control-active: #d3cfca;
+
+  --bw-fg: #2e2a27;
+  --bw-fg-strong: #141210;
+  --bw-fg-muted: #5f5952;
+  --bw-fg-subtle: #6b655e;
+  --bw-fg-inverse: #ffffff;
+
+  --bw-border-subtle: rgba(28, 25, 23, 0.06);
+  --bw-border: rgba(28, 25, 23, 0.12);
+  --bw-border-strong: rgba(28, 25, 23, 0.24);
+  --bw-frame: #44403c;
+
+  --bw-hover: rgba(28, 25, 23, 0.05);
+  --bw-press: rgba(28, 25, 23, 0.09);
+  --bw-selection: rgba(87, 83, 78, 0.12);
+  --bw-text-selection: rgba(87, 83, 78, 0.22);
+  --bw-focus: #78716c;
+
+  --bw-accent: #292524;
+  --bw-accent-hover: #44403c;
+  --bw-accent-on: #ffffff;
+  --bw-accent-track: #a8a29e;
+
+  --bw-wordmark: #c81e1e;
+
+  --bw-success: #4d7c0f;
+  --bw-warning: #b45309;
+  --bw-error: #c81e1e;
+  --bw-error-fg: #8f1414;
+
+  --bw-checker-a: #e7e5e2;
+  --bw-checker-b: #f5f4f2;
+
+  --bw-shadow-island: 0 10px 28px rgba(28, 25, 23, 0.13), 0 1px 2px rgba(28, 25, 23, 0.1);
+  --bw-shadow-popover: 0 12px 32px rgba(28, 25, 23, 0.18), 0 1px 2px rgba(28, 25, 23, 0.12);
+}
+
+/* Without an explicit choice the OS decides (light desktops must not flash dark). */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    --bw-void: #dedbd6;
+    --bw-surface: #f5f4f2;
+    --bw-surface-sunken: #eae8e4;
+    --bw-surface-raised: #ffffff;
+    --bw-overlay: rgba(28, 25, 23, 0.36);
+    --bw-field: rgba(28, 25, 23, 0.05);
+    --bw-field-hover: rgba(28, 25, 23, 0.08);
+    --bw-control: #e6e3df;
+    --bw-control-active: #d3cfca;
+    --bw-fg: #2e2a27;
+    --bw-fg-strong: #141210;
+    --bw-fg-muted: #5f5952;
+    --bw-fg-subtle: #6b655e;
+    --bw-fg-inverse: #ffffff;
+    --bw-border-subtle: rgba(28, 25, 23, 0.06);
+    --bw-border: rgba(28, 25, 23, 0.12);
+    --bw-border-strong: rgba(28, 25, 23, 0.24);
+    --bw-frame: #44403c;
+    --bw-hover: rgba(28, 25, 23, 0.05);
+    --bw-press: rgba(28, 25, 23, 0.09);
+    --bw-selection: rgba(87, 83, 78, 0.12);
+    --bw-text-selection: rgba(87, 83, 78, 0.22);
+    --bw-focus: #78716c;
+    --bw-accent: #292524;
+    --bw-accent-hover: #44403c;
+    --bw-accent-on: #ffffff;
+    --bw-accent-track: #a8a29e;
+    --bw-wordmark: #c81e1e;
+    --bw-success: #4d7c0f;
+    --bw-warning: #b45309;
+    --bw-error: #c81e1e;
+    --bw-error-fg: #8f1414;
+    --bw-checker-a: #e7e5e2;
+    --bw-checker-b: #f5f4f2;
+    --bw-shadow-island: 0 10px 28px rgba(28, 25, 23, 0.13), 0 1px 2px rgba(28, 25, 23, 0.1);
+    --bw-shadow-popover: 0 12px 32px rgba(28, 25, 23, 0.18), 0 1px 2px rgba(28, 25, 23, 0.12);
+  }
+}
+
+:root {
+  /* Type: Inter for the interface, JetBrains Mono for values, Bergschrift only in the wordmark. */
+  --bw-font-ui: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --bw-font-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Menlo, Consolas, monospace;
+  --bw-font-wordmark: 'Bergschrift', var(--bw-font-ui);
+  --bw-text: 13px;
+  --bw-text-small: 12px;
+  --bw-text-caption: 11px;
+  --bw-text-mono: 12.5px;
+
+  /* Sizes on a 4 px grid. Rows and controls are 28 px; touch makes them 44 px. */
+  --bw-row: 28px;
+  --bw-control-h: 32px;
+  --bw-touch: 44px;
+  --bw-titlebar: 40px;
+  --bw-panel-width: 320px;
+  --bw-label-column: 80px;
+
+  /* One spacing between everything that floats (window edge, bars, panels); half for attached things. */
+  --bw-gap: 12px;
+  --bw-gap-attached: 8px;
+  --bw-space-1: 4px;
+  --bw-space-2: 8px;
+  --bw-space-3: 12px;
+  --bw-space-4: 16px;
+
+  --bw-radius-window: 16px;
+  --bw-radius-island: 14px;
+  --bw-radius-menu: 10px;
+  --bw-radius-control: 8px;
+  --bw-radius-row: 6px;
+  --bw-radius-dot: 999px;
+
+  --bw-z-floating: 1000;
+  --bw-z-popover: 1100;
+  --bw-z-modal: 2000;
+  --bw-z-menu: 3100;
+  --bw-z-tooltip: 4000;
+
+  --bw-motion-fast: 90ms cubic-bezier(0.2, 0.6, 0.2, 1);
+  --bw-motion-base: 160ms cubic-bezier(0.2, 0.6, 0.2, 1);
+}
+
+@media (pointer: coarse) {
+  :root {
+    --bw-row: 44px;
+    --bw-control-h: 44px;
+  }
+}
+
+/* Sharp corners: an appearance option (Builder §9). Status dots stay round. */
+[data-corners='sharp'] {
+  --bw-radius-window: 0px;
+  --bw-radius-island: 0px;
+  --bw-radius-menu: 0px;
+  --bw-radius-control: 0px;
+  --bw-radius-row: 0px;
+}

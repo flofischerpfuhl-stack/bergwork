@@ -15,6 +15,7 @@ Monorepo; the architecture and the rules for the upstream editors are in `docs/A
 - `apps/bild/`: berg:work Image, the image editor's source with its own `package.json` (see `apps/bild/README.md`).
 - `apps/pdf/`: berg:work PDF. It pins the Fernwork PDF editor build (`upstream.lock.json`,
   `npm run sync:install|check|status|update`).
+- `packages/ui/`: the design base (tokens, fonts, components) both apps are moving to; demo page included.
 - `packages/`, `crates/`: host implementation and hardware profile shared by both apps.
 - `website/`: static marketing site (see `website/README.md`).
 - `scripts/build-wordmark-font.py`: rebuilds the Bergschrift wordmark font.

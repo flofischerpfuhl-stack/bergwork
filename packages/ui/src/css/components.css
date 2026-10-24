@@ -1,0 +1,710 @@
+/**
+ * berg:work components. Measures and behaviour follow the Himmel:CAD Builder UI lab
+ * (apps/builder-ui-lab, docs/ui-redesign/UI-REVIEW-REFERENCE.md); section numbers (§) refer to that file.
+ */
+
+/* ── Window ─────────────────────────────────────────────────────────────── */
+
+/* The app fills its window; the title bar sits on top, the stage below holds the work area and
+ * everything that floats over it. */
+.bw-window {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bw-void);
+  color: var(--bw-fg);
+  font-family: var(--bw-font-ui);
+  font-size: var(--bw-text);
+}
+
+.bw-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Title bar ──────────────────────────────────────────────────────────── */
+
+/* Left: mark, wordmark and product; centre: the document; right: app settings and window buttons.
+ * Lower corners round like the Builder's; the bar moves the window in the desktop app. */
+.bw-titlebar {
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  height: var(--bw-titlebar);
+  padding: 0 0 0 14px;
+  border-radius: 0 0 var(--bw-radius-island) var(--bw-radius-island);
+  background: var(--bw-surface);
+  box-shadow: 0 1px 0 var(--bw-border);
+  user-select: none;
+}
+
+.bw-titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.bw-titlebar-mark {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+
+/* Bergschrift appears here and nowhere else in the interface. */
+.bw-wordmark {
+  color: var(--bw-wordmark);
+  font-family: var(--bw-font-wordmark);
+  font-size: 15px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.bw-titlebar-product {
+  padding-left: 10px;
+  border-left: 1px solid var(--bw-border);
+  color: var(--bw-fg-muted);
+  font-size: var(--bw-text-caption);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.bw-titlebar-document {
+  max-width: 44vw;
+  overflow: hidden;
+  color: var(--bw-fg-muted);
+  font-size: var(--bw-text-caption);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.bw-titlebar-actions {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  height: 100%;
+}
+
+/* Title bar buttons (appearance, window controls): full height, no frame. */
+.bw-titlebar-button {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--bw-fg-muted);
+  cursor: pointer;
+  transition: background var(--bw-motion-fast), color var(--bw-motion-fast);
+}
+.bw-titlebar-button:hover,
+.bw-titlebar-button[aria-expanded='true'] {
+  background: var(--bw-hover);
+  color: var(--bw-fg-strong);
+}
+.bw-titlebar-button:last-child { border-bottom-right-radius: var(--bw-radius-island); }
+.bw-titlebar-button.is-close:hover { background: var(--bw-error); color: #fff; }
+.bw-titlebar-button:focus-visible { outline-offset: -2px; }
+
+/* ── Islands and bars ───────────────────────────────────────────────────── */
+
+.bw-island {
+  background: var(--bw-surface);
+  border: 1px solid var(--bw-border);
+  border-radius: var(--bw-radius-island);
+  box-shadow: var(--bw-shadow-island);
+}
+
+/* A row of commands: the function bar of the Builder. */
+.bw-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px;
+}
+.bw-toolbar.is-vertical { flex-direction: column; }
+
+.bw-divider {
+  flex: none;
+  align-self: center;
+  width: 1px;
+  height: 22px;
+  margin: 0 6px;
+  background: var(--bw-border);
+}
+.bw-toolbar.is-vertical > .bw-divider { width: 22px; height: 1px; margin: 6px 0; }
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+
+/* Icon buttons keep one icon in every state; the frame says the state (§3): none = off,
+ * dashed = automatic, solid = on. Pressed tools use the darker control grey. */
+.bw-icon-button {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--bw-radius-control);
+  background: transparent;
+  color: var(--bw-fg);
+  cursor: pointer;
+  transition: background var(--bw-motion-fast), color var(--bw-motion-fast);
+}
+.bw-icon-button.is-small { width: 28px; height: 28px; }
+.bw-icon-button:hover:not(:disabled) { background: var(--bw-hover); color: var(--bw-fg-strong); }
+.bw-icon-button:active:not(:disabled) { background: var(--bw-press); }
+.bw-icon-button[data-state='on'] { border-color: var(--bw-frame); color: var(--bw-fg-strong); }
+.bw-icon-button[data-state='auto'] { border-color: var(--bw-frame); border-style: dashed; }
+.bw-icon-button[aria-pressed='true'] { background: var(--bw-control-active); color: var(--bw-fg-strong); }
+.bw-icon-button:disabled { color: var(--bw-fg-subtle); cursor: default; }
+.bw-icon-button:disabled > svg { opacity: 0.45; }
+.bw-icon-button > svg { stroke-width: 1.7; }
+
+/* A mark under a tool that has more modes (the Builder's dot). */
+.bw-icon-button[data-more]::after {
+  content: '';
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  margin-left: -1.5px;
+  border-radius: var(--bw-radius-dot);
+  background: currentColor;
+  opacity: 0.6;
+}
+
+.bw-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: var(--bw-control-h);
+  padding: 0 14px;
+  border: 1px solid var(--bw-border);
+  border-radius: var(--bw-radius-control);
+  background: var(--bw-control);
+  color: var(--bw-fg-strong);
+  font-size: var(--bw-text);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--bw-motion-fast), border-color var(--bw-motion-fast);
+}
+.bw-button:hover:not(:disabled) { border-color: var(--bw-border-strong); }
+.bw-button.is-primary { border-color: transparent; background: var(--bw-accent); color: var(--bw-accent-on); }
+.bw-button.is-primary:hover:not(:disabled) { background: var(--bw-accent-hover); }
+.bw-button.is-quiet { border-color: transparent; background: transparent; color: var(--bw-fg); }
+.bw-button.is-quiet:hover:not(:disabled) { background: var(--bw-hover); }
+/* Disabled keeps its surface; only the content dims (§8a). */
+.bw-button:disabled { color: var(--bw-fg-subtle); cursor: default; }
+.bw-button:disabled > svg { opacity: 0.5; }
+.bw-button > svg { flex: none; stroke-width: 1.7; }
+
+/* ── Status bar ─────────────────────────────────────────────────────────── */
+
+/* Three rails at the bottom of the stage: left and right groups of islands, the centre between. */
+.bw-statusbar {
+  position: absolute;
+  right: var(--bw-gap);
+  bottom: var(--bw-gap);
+  left: var(--bw-gap);
+  z-index: var(--bw-z-floating);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: var(--bw-gap-attached);
+  pointer-events: none;
+}
+.bw-statusbar-group { display: flex; align-items: center; gap: var(--bw-gap-attached); min-width: 0; }
+.bw-statusbar-group.is-end { justify-content: flex-end; }
+.bw-statusbar .bw-island {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 3px;
+  border-radius: calc(var(--bw-radius-control) + 3px);
+  pointer-events: auto;
+}
+
+/* A status chip: icon, label or value, and for multi-choice menus a count — 0 included, two digits
+ * wide, so the chip never changes size (§8a). */
+.bw-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--bw-control-h);
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--bw-radius-control);
+  background: transparent;
+  color: var(--bw-fg);
+  font-size: var(--bw-text);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--bw-motion-fast);
+}
+.bw-chip:hover:not(:disabled) { background: var(--bw-hover); color: var(--bw-fg-strong); }
+.bw-chip[aria-pressed='true'] { background: var(--bw-control-active); color: var(--bw-fg-strong); border-color: var(--bw-frame); }
+.bw-chip[aria-expanded='true'] { background: var(--bw-hover); }
+.bw-chip.is-panel { background: var(--bw-control); padding: 0 12px; }
+.bw-chip.is-readout { cursor: default; color: var(--bw-fg); }
+.bw-chip.is-readout:hover { background: transparent; }
+.bw-chip > svg { flex: none; stroke-width: 1.65; }
+.bw-chip-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bw-chip-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 2.2em;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 5px;
+  background: var(--bw-field);
+  color: var(--bw-fg-muted);
+  font-family: var(--bw-font-mono);
+  font-size: var(--bw-text-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Menus ──────────────────────────────────────────────────────────────── */
+
+/* One menu row everywhere (§8a): 28 px (44 px on touch), 13 px text, a reserved 16 px check column at
+ * the row's end, hover inset inside 4 px padding. Width from the content, at most 280 px. */
+.bw-menu {
+  position: fixed;
+  z-index: var(--bw-z-menu);
+  width: max-content;
+  max-width: 280px;
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--bw-border);
+  border-radius: var(--bw-radius-menu);
+  background: var(--bw-surface-raised);
+  box-shadow: var(--bw-shadow-popover);
+  color: var(--bw-fg);
+  font-family: var(--bw-font-ui);
+  font-size: var(--bw-text);
+  animation: bw-pop 120ms var(--bw-motion-fast);
+}
+@keyframes bw-pop { from { opacity: 0; transform: translateY(-2px); } }
+
+.bw-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: var(--bw-row);
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--bw-radius-row);
+  background: transparent;
+  color: var(--bw-fg);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.bw-menu-item:is(:hover, .is-active):not(:disabled) { background: var(--bw-hover); color: var(--bw-fg-strong); }
+.bw-menu-item:focus-visible { outline: 1px solid var(--bw-fg-muted); outline-offset: -1px; }
+.bw-menu-item:disabled { color: var(--bw-fg-subtle); cursor: default; }
+.bw-menu-item:disabled > :is(svg, .bw-menu-check) { opacity: 0.5; }
+.bw-menu-item > svg { flex: none; width: 16px; height: 16px; stroke-width: 1.7; }
+.bw-menu-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Shortcuts right, quiet; at least 16 px from the label. */
+.bw-menu-shortcut {
+  flex: none;
+  margin-left: 16px;
+  color: var(--bw-fg-subtle);
+  font-size: var(--bw-text-small);
+}
+.bw-menu-check {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-left: 8px;
+  color: var(--bw-fg-strong);
+}
+.bw-menu-check.is-pale { opacity: 0.4; }
+.bw-menu-more { flex: none; width: 14px; height: 14px; color: var(--bw-fg-subtle); }
+.bw-menu-section {
+  padding: 8px 8px 3px;
+  color: var(--bw-fg-muted);
+  font-size: var(--bw-text-caption);
+  font-weight: 600;
+}
+.bw-menu-divider { height: 1px; margin: 4px 6px; background: var(--bw-border); }
+
+/* ── Tooltip ────────────────────────────────────────────────────────────── */
+
+/* One product tooltip for the whole app; no browser title tooltips (§8). */
+.bw-tooltip {
+  position: fixed;
+  z-index: var(--bw-z-tooltip);
+  max-width: min(360px, calc(100vw - 16px));
+  padding: 6px 9px;
+  border: 1px solid var(--bw-border);
+  border-radius: var(--bw-radius-control);
+  background: var(--bw-surface-raised);
+  box-shadow: var(--bw-shadow-popover);
+  color: var(--bw-fg-strong);
+  font-size: var(--bw-text-small);
+  line-height: 1.35;
+  white-space: pre-line;
+  pointer-events: none;
+}
+.bw-tooltip kbd {
+  margin-left: 6px;
+  color: var(--bw-fg-subtle);
+  font-family: var(--bw-font-ui);
+}
+
+/* ── Fields ─────────────────────────────────────────────────────────────── */
+
+/* Editable values are always fields, but calm: a quiet fill without a frame; the frame shows on
+ * hover, a neutral frame on focus — never the blue ring (§8b, §9). */
+.bw-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: var(--bw-row);
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--bw-radius-row);
+  background: var(--bw-field);
+  color: var(--bw-fg-strong);
+  transition: border-color var(--bw-motion-fast), background var(--bw-motion-fast);
+}
+.bw-field:hover { border-color: var(--bw-border-strong); }
+.bw-field:focus-within { border-color: var(--bw-frame); background: var(--bw-field-hover); }
+.bw-field > input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  outline: none;
+}
+.bw-field.is-number > input {
+  font-family: var(--bw-font-mono);
+  font-size: var(--bw-text-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.bw-field-unit { flex: none; color: var(--bw-fg-subtle); font-size: var(--bw-text-small); }
+.bw-field.is-disabled { color: var(--bw-fg-subtle); }
+.bw-field.is-disabled:hover { border-color: transparent; }
+
+/* A label that changes its number when dragged sideways (scrubbing, Photoshop). */
+.bw-scrub { cursor: ew-resize; user-select: none; touch-action: none; }
+
+/* A dropdown field: fixed choices (§8b). The menu stays at its field. */
+.bw-select {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: var(--bw-row);
+  padding: 0 6px 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--bw-radius-row);
+  background: var(--bw-field);
+  color: var(--bw-fg-strong);
+  text-align: left;
+  cursor: pointer;
+}
+.bw-select:hover:not(:disabled), .bw-select[aria-expanded='true'] { border-color: var(--bw-border-strong); }
+.bw-select > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bw-select > svg { flex: none; color: var(--bw-fg-muted); }
+.bw-select:disabled { color: var(--bw-fg-subtle); cursor: default; }
+
+/* ── Checks ─────────────────────────────────────────────────────────────── */
+
+/* The only two kinds of checkbox (§3): a plain on/off is a check mark without a box (the space stays
+ * reserved); anything with more states is the framed glyph — empty, dashed + check, solid + check. */
+.bw-check {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--bw-radius-row);
+  background: transparent;
+  color: var(--bw-fg-strong);
+  cursor: pointer;
+}
+.bw-check:hover:not(:disabled) { background: var(--bw-hover); }
+.bw-check.is-pale { opacity: 0.4; }
+.bw-check-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
+
+.bw-glyph {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--bw-fg-muted);
+  border-radius: 4px;
+  color: var(--bw-fg-strong);
+}
+.bw-glyph[data-state='auto'] { border-style: dashed; }
+.bw-glyph[data-state='on'] { border-color: var(--bw-fg-strong); }
+.bw-glyph.is-pale { opacity: 0.4; }
+
+/* ── Segmented toggle ───────────────────────────────────────────────────── */
+
+/* Two or three choices with short labels (§8c); more choices become a dropdown. */
+.bw-segmented {
+  display: inline-flex;
+  gap: 2px;
+  height: var(--bw-row);
+  padding: 2px;
+  border-radius: var(--bw-radius-row);
+  background: var(--bw-field);
+}
+.bw-segmented > button {
+  flex: 1;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--bw-radius-row) - 2px);
+  background: transparent;
+  color: var(--bw-fg-muted);
+  font-size: var(--bw-text-small);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.bw-segmented > button:hover { color: var(--bw-fg-strong); }
+.bw-segmented > button[aria-checked='true'] {
+  border-color: var(--bw-border);
+  background: var(--bw-surface-raised);
+  color: var(--bw-fg-strong);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+/* ── Slider ─────────────────────────────────────────────────────────────── */
+
+.bw-slider {
+  --bw-slider-fill: 50%;
+  width: 100%;
+  height: var(--bw-row);
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  cursor: pointer;
+}
+.bw-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--bw-accent-track) var(--bw-slider-fill), var(--bw-border-strong) var(--bw-slider-fill));
+}
+.bw-slider::-moz-range-track { height: 4px; border-radius: 2px; background: var(--bw-border-strong); }
+.bw-slider::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--bw-accent-track); }
+.bw-slider::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border: 2px solid var(--bw-surface-raised);
+  border-radius: var(--bw-radius-dot);
+  background: var(--bw-accent);
+  box-shadow: 0 0 0 1px var(--bw-border-strong);
+  appearance: none;
+}
+.bw-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--bw-surface-raised);
+  border-radius: var(--bw-radius-dot);
+  background: var(--bw-accent);
+}
+
+/* ── Side panels ────────────────────────────────────────────────────────── */
+
+/* A floating panel with a vertical tab rail and no title row (§9): the rail says what is shown. */
+/* A function bar on top has priority: the app sets --bw-panel-top below it and the panels duck under it. */
+.bw-panel {
+  position: absolute;
+  top: var(--bw-panel-top, var(--bw-gap));
+  bottom: calc(var(--bw-gap) * 2 + var(--bw-control-h) + 8px);
+  z-index: var(--bw-z-floating);
+  display: flex;
+  width: var(--bw-panel-width);
+  overflow: hidden;
+}
+.bw-panel.is-start { left: var(--bw-gap); }
+.bw-panel.is-end { right: var(--bw-gap); flex-direction: row-reverse; }
+.bw-panel-rail {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  width: 48px;
+  padding: 6px;
+  border-right: 1px solid var(--bw-border-subtle);
+}
+.bw-panel.is-end .bw-panel-rail { border-right: 0; border-left: 1px solid var(--bw-border-subtle); }
+.bw-panel-rail-end { margin-top: auto; display: flex; flex-direction: column; gap: 4px; }
+.bw-panel-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.bw-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  min-height: 44px;
+  padding: 6px 8px 2px;
+}
+.bw-panel-content { flex: 1; min-height: 0; padding: 0 8px 8px; }
+.bw-empty {
+  padding: 24px 12px;
+  color: var(--bw-fg-muted);
+  text-align: center;
+}
+
+/* ── Property sections and rows ─────────────────────────────────────────── */
+
+/* Collapsible groups (Revit); open by default, the choice remembered per group. */
+.bw-section + .bw-section { margin-top: 6px; }
+.bw-section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: var(--bw-row);
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--bw-radius-row);
+  background: transparent;
+  color: var(--bw-fg-strong);
+  font-size: var(--bw-text-small);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.bw-section-head:hover { background: var(--bw-hover); }
+.bw-section-head > svg { flex: none; color: var(--bw-fg-muted); transition: transform var(--bw-motion-fast); }
+.bw-section[data-open='false'] .bw-section-head > svg { transform: rotate(-90deg); }
+.bw-section-body { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 4px; }
+
+/* Label | control on one line: an aligned label column so every value starts at one x (§8b). */
+.bw-row {
+  display: grid;
+  grid-template-columns: var(--bw-label-column) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: var(--bw-row);
+  padding: 0 4px 0 22px;
+}
+.bw-row-label {
+  overflow: hidden;
+  color: var(--bw-fg-muted);
+  font-size: var(--bw-text-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bw-row-control { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.bw-row-control > .bw-field.is-number { flex: none; width: 84px; }
+.bw-row-text { color: var(--bw-fg); font-family: var(--bw-font-mono); font-size: var(--bw-text-mono); }
+
+/* ── Lists ──────────────────────────────────────────────────────────────── */
+
+/* A list row (layers): file-manager selection, a contiguous selection renders as one block (§5). */
+.bw-list { display: flex; flex-direction: column; }
+.bw-list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 4px 6px;
+  border-radius: var(--bw-radius-row);
+  color: var(--bw-fg);
+  cursor: default;
+}
+.bw-list-row:hover { background: var(--bw-hover); }
+.bw-list-row[aria-selected='true'] { background: var(--bw-selection); color: var(--bw-fg-strong); }
+.bw-list-row[aria-selected='true'] + .bw-list-row[aria-selected='true'] { border-top-left-radius: 0; border-top-right-radius: 0; }
+.bw-list-row[aria-selected='true']:has(+ .bw-list-row[aria-selected='true']) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.bw-list-row.is-child { padding-left: 30px; min-height: var(--bw-row); }
+.bw-list-thumb {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--bw-border);
+  border-radius: 5px;
+  background: repeating-conic-gradient(var(--bw-checker-a) 0 25%, var(--bw-checker-b) 0 50%) 0 0 / 8px 8px;
+  overflow: hidden;
+}
+.bw-list-thumb > img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bw-list-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bw-list-meta { color: var(--bw-fg-subtle); font-family: var(--bw-font-mono); font-size: var(--bw-text-caption); }
+
+/* ── Dialog ─────────────────────────────────────────────────────────────── */
+
+.bw-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--bw-z-modal);
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--bw-overlay);
+}
+.bw-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(440px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--bw-border);
+  border-radius: var(--bw-radius-island);
+  background: var(--bw-surface);
+  box-shadow: var(--bw-shadow-popover);
+}
+.bw-dialog-title { margin: 0; color: var(--bw-fg-strong); font-size: 14px; font-weight: 600; }
+.bw-dialog-body { display: flex; flex-direction: column; gap: 2px; margin: 0 -4px; }
+.bw-dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* ── Phones ─────────────────────────────────────────────────────────────── */
+
+@media (max-width: 640px) {
+  :root { --bw-gap: 8px; --bw-panel-width: calc(100vw - 16px); }
+  .bw-titlebar { grid-template-columns: minmax(0, 1fr) auto; padding-left: 10px; }
+  .bw-titlebar-document { display: none; }
+  .bw-wordmark { font-size: 13px; }
+  /* The status bar keeps its two ends; the middle rail gives way first (Fluent CommandBar stages). */
+  .bw-statusbar { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .bw-statusbar > .bw-island { justify-self: center; overflow: hidden; }
+  .bw-statusbar .bw-chip.is-panel > span { display: none; }
+  .bw-statusbar .bw-chip.is-panel { padding: 0 8px; }
+}

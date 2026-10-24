@@ -1,0 +1,15 @@
+/**
+ * Fonts ship with the app (it works offline). Inter and JetBrains Mono are the variable builds from
+ * Fontsource (SIL OFL 1.1); Bergschrift is berg:work's wordmark face (Stalinist One with faux-Cyrillic
+ * letters, SIL OFL 1.1, ../fonts/Bergschrift-OFL.txt) and is used for the wordmark only.
+ */
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+
+@font-face {
+  font-family: 'Bergschrift';
+  src: url('../fonts/Bergschrift-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}

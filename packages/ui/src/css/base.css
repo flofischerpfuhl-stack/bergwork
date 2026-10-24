@@ -1,0 +1,39 @@
+/**
+ * Base rules for a berg:work app page: box model, type, text selection, focus and scrollbars.
+ * Kept in a cascade layer so every component rule (and an embedded editor's own CSS) wins over it.
+ */
+@layer bergwork-base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html, body { height: 100%; margin: 0; }
+
+  body {
+    background: var(--bw-void);
+    color: var(--bw-fg);
+    font-family: var(--bw-font-ui);
+    font-size: var(--bw-text);
+    line-height: 1.4;
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  button, input, select, textarea { font: inherit; color: inherit; }
+
+  /* Text selection is a calm neutral highlight, never the browser's blue (Builder §9). */
+  ::selection { background: var(--bw-text-selection); color: inherit; }
+
+  /* The focus ring is for keyboard focus on controls, neutral; text fields show their own frame. */
+  :focus { outline: none; }
+  :is(button, [role='menuitem'], [role='option'], [role='tab'], input[type='checkbox'], input[type='range']):focus-visible {
+    outline: 2px solid var(--bw-focus);
+    outline-offset: 1px;
+  }
+
+  /* Quiet scrollbars that reserve their lane, so nothing shifts when a list starts to scroll. */
+  * { scrollbar-width: thin; scrollbar-color: var(--bw-border-strong) transparent; }
+  .bw-scroll { overflow: auto; scrollbar-gutter: stable; }
+
+  /* Numbers line up: values, sizes, coordinates, shortcuts. */
+  .bw-mono { font-family: var(--bw-font-mono); font-size: var(--bw-text-mono); font-variant-numeric: tabular-nums; }
+}
