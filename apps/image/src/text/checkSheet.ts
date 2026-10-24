@@ -7,7 +7,7 @@ export const BUNDLED_FONTS = [
   { id: 'noto-sans-devanagari-variable', family: 'Noto Sans Devanagari', url: '/fonts/NotoSansDevanagari-Variable.ttf' },
 ] as const;
 
-const PERFORMANCE_SOURCE = 'berg:work Image lays out a long paragraph with kerning, ligatures, umlauts, '
+const PERFORMANCE_SOURCE = 'Fernwork Bildeditor lays out a long paragraph with kerning, ligatures, umlauts, '
   + 'Arabic العربية and Devanagari देवनागरी. The same HarfBuzz shaping and Skia rasterization must remain '
   + 'predictable in every supported host while wrapping words over several measured lines. ';
 
