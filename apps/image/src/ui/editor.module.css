@@ -167,12 +167,20 @@
   padding: 0 5px;
   min-width: 0;
 }
+/* The top bar itself has no surface: its groups are islands with one small gap, as the Builder's bars. */
+.topBar { background: none; border: 0; box-shadow: none; padding: 0; gap: var(--bw-gap-attached); }
+.topIsland {
+  display: flex; align-items: center; gap: 2px; height: 100%; min-width: 0; flex: none; padding: 0 5px;
+  border: 1px solid var(--cmp-border); border-radius: var(--cmp-radius); background: var(--cmp-panel); box-shadow: var(--cmp-bar-shadow);
+}
+.topIslandTabs { flex: 0 1 auto; }
+.topIslandEnd { margin-left: auto; }
 .menuBar { display: flex; align-items: center; gap: 1px; flex: none; }
 .menuTitle {
-  height: var(--cmp-control-size); padding: 0 9px; border-radius: var(--cmp-radius-control); border: 0; background: transparent; color: var(--cmp-text);
-  font: 500 12.5px/1 var(--cmp-font); cursor: default;
+  height: var(--cmp-control-size); padding: 0 9px; border-radius: var(--bw-radius-control); border: 0; background: transparent; color: var(--bw-fg);
+  font: 500 13px/1 var(--cmp-font); cursor: default;
 }
-.menuTitle:hover, .menuTitleOpen { background: var(--cmp-control-hover); }
+.menuTitle:hover, .menuTitleOpen { background: var(--bw-hover); color: var(--bw-fg-strong); }
 .chromeDivider { flex: none; width: 1px; height: 22px; margin: 0 4px; background: var(--cmp-border); }
 .menuPopup {
   /* The berg:work menu (Builder §8a): width from the content, 4 px padding, rows of 28 px with checks at the end. */
@@ -197,15 +205,15 @@
 }
 .tabs::-webkit-scrollbar { display: none; }
 .tab {
-  flex: none; display: flex; align-items: center; height: var(--cmp-control-size); max-width: 220px; border-radius: var(--cmp-radius-control);
-  background: var(--cmp-panel-2); border: 1px solid var(--cmp-border);
+  flex: none; display: flex; align-items: center; height: var(--cmp-control-size); max-width: 220px; border-radius: var(--bw-radius-control);
+  background: transparent; border: 1px solid transparent;
 }
-.tab:hover { background: var(--cmp-control-hover); }
-/* Tabs switch content; they are not tools, so no filled accent (as in Fernwork PDF). */
-.tabActive, .tabActive:hover { background: var(--cmp-panel-3); border-color: var(--cmp-border-strong); }
+.tab:hover { background: var(--bw-hover); }
+/* Tabs switch content; they are not tools: the selected one is the calm selection, never an accent. */
+.tabActive, .tabActive:hover { background: var(--bw-selection); border-color: var(--bw-border); }
 .tabLabel {
   display: flex; align-items: center; gap: 7px; height: 100%; min-width: 35px; max-width: 185px; padding: 0 6px 0 11px;
-  border: 0; background: transparent; color: var(--cmp-text-secondary); font: 600 12.5px/1 var(--cmp-font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  border: 0; background: transparent; color: var(--bw-fg-muted); font: 500 12.5px/1 var(--cmp-font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .tabActive .tabLabel { color: var(--cmp-text); }
 .tabDot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }

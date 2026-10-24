@@ -167,6 +167,8 @@ export function TopBar({ controller, compact, width = 'full' }: { controller: Ed
   const allItems: MenuEntry[] = menuButton ? menus.flatMap((m, i) => [...(i ? ['separator' as const] : []), { label: m.title, enabled: true, submenu: m.items.filter((x): x is MenuItem => x !== 'separator') }]) : [];
   return (
     <div className={styles.topBar} role="toolbar" aria-label="Editor">
+      {/* Islands like the Builder's bars: the menus, the project tabs, the document actions. */}
+      <div className={styles.topIsland}>
       {menuButton ? (
         <button type="button" className={styles.iconButton} aria-label={t('Menu')} aria-haspopup="menu" data-testid="compact-menu"
           onClick={(event) => open('__all', event.currentTarget)}><Icon name="menu" /></button>
@@ -182,7 +184,8 @@ export function TopBar({ controller, compact, width = 'full' }: { controller: Ed
           ))}
         </nav>
       )}
-      {!menuButton ? <span className={styles.chromeDivider} aria-hidden /> : null}
+      </div>
+      <div className={`${styles.topIsland} ${styles.topIslandTabs}`}>
       <button type="button" className={compact ? styles.iconButton : styles.chromeButton} aria-label={t('New canvas')} title={`${t('New canvas')} (${shortcutLabel('mod+alt+n')}) · ${t('Drop images here for new tabs')}`}
         disabled={!workspace.canSwitch} onClick={() => { workspace.newCanvas(); }} data-testid="new-canvas" data-new-tab
         onDragOver={(event) => { if ([...event.dataTransfer.types].includes('Files')) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
@@ -223,16 +226,17 @@ export function TopBar({ controller, compact, width = 'full' }: { controller: Ed
           );
         })}
       </div>
+      </div>
       {compact ? (
         // Phones: zoom and the Layers sheet here; the desktop status bar holds zoom.
-        <div className={styles.zoomGroup}>
+        <div className={`${styles.topIsland} ${styles.topIslandEnd} ${styles.zoomGroup}`}>
           <button type="button" className={styles.iconButton} disabled={!document} aria-label={t('Zoom out')} onClick={() => session.zoomTo(session.viewport.zoom / 1.25)}><Icon name="zoomOut" /></button>
           <button type="button" className={styles.iconButton} disabled={!document} aria-label={t('Zoom in')} onClick={() => session.zoomTo(session.viewport.zoom * 1.25)}><Icon name="zoomIn" /></button>
           <button type="button" className={styles.iconButton} aria-label={t('Layers')} data-testid="open-layers"
             onClick={() => controller.ui.setState((s) => ({ sheet: s.sheet === 'layers' ? null : 'layers' }))}><Icon name="layers" /></button>
         </div>
       ) : (
-        <>
+        <div className={`${styles.topIsland} ${styles.topIslandEnd}`}>
           {width === 'full' ? <span className={styles.chromeGroup}>
             <button type="button" className={styles.chromeButton} disabled={!workspace.canSwitch} data-testid="toolbar-open"
               aria-label={t('Open')} title={`${t('Open Project…')} (${shortcutLabel('mod+o')})`} onClick={() => void controller.chooseAndOpen()}>
@@ -248,7 +252,7 @@ export function TopBar({ controller, compact, width = 'full' }: { controller: Ed
           <HistoryButtons controller={controller} />
           <span className={styles.chromeDivider} aria-hidden />
           <PanelsButton controller={controller} label={width === 'full'} />
-        </>
+        </div>
       )}
       {openMenu && anchor ? (
         <MenuPopup controller={controller} anchor={anchor} items={openMenu === '__all' ? allItems : current?.items ?? []}
