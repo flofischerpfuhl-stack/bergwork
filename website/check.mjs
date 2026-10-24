@@ -41,6 +41,21 @@ function localTarget(urlPath) {
   return candidates.find((candidate) => existsSync(candidate)) || candidates[0];
 }
 
+function jpegSize(buffer) {
+  if (buffer[0] !== 0xff || buffer[1] !== 0xd8) return null;
+  for (let at = 2; at < buffer.length - 9;) {
+    if (buffer[at] !== 0xff) return null;
+    const marker = buffer[at + 1];
+    const length = buffer.readUInt16BE(at + 2);
+    // SOF0–SOF15 except DHT (C4), JPG (C8) and DAC (CC) carry the frame size.
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      return { height: buffer.readUInt16BE(at + 5), width: buffer.readUInt16BE(at + 7) };
+    }
+    at += 2 + length;
+  }
+  return null;
+}
+
 function pngSize(buffer) {
   if (buffer.toString('hex', 0, 8) !== '89504e470d0a1a0a') return null;
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
@@ -105,9 +120,13 @@ async function staticChecks() {
   }
   record('Manifest and icon sizes', iconErrors.length === 0, iconErrors.length ? iconErrors.join(', ') : `${manifest.icons.length} icons verified`);
 
-  const ogFile = (await filesBelow(path.join(dist, 'assets', 'img'), '.png')).find((file) => path.basename(file).startsWith('og-bergwork.'));
-  const ogSize = ogFile ? pngSize(await readFile(ogFile)) : null;
-  record('Open Graph image', ogSize?.width === 1200 && ogSize?.height === 630, ogSize ? `${ogSize.width}×${ogSize.height}` : 'missing');
+  const ogErrors = [];
+  for (const name of ['og-bergwork', 'og-pdf', 'og-image']) {
+    const ogFile = (await filesBelow(path.join(dist, 'assets', 'img'), '.jpg')).find((file) => path.basename(file).startsWith(`${name}.`));
+    const ogSize = ogFile ? jpegSize(await readFile(ogFile)) : null;
+    if (ogSize?.width !== 1200 || ogSize?.height !== 630) ogErrors.push(`${name}: ${ogSize ? `${ogSize.width}×${ogSize.height}` : 'missing'}`);
+  }
+  record('Open Graph images', ogErrors.length === 0, ogErrors.length ? ogErrors.join(', ') : 'three at 1200×630');
 
   const weightErrors = [];
   const sharedWeight = (await stat(cssFile)).size + (await Promise.all((await filesBelow(path.join(dist, 'assets', 'js'), '.js')).map((file) => stat(file)))).reduce((sum, info) => sum + info.size, 0);

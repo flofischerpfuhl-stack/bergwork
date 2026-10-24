@@ -6,11 +6,11 @@ Production-oriented static product site for the two berg:work desktop apps. It i
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Factual brand introduction, product status and the recorded product commitments. |
-| `/pdf/` | Tested PDF-editor capabilities, current limitations and the planned desktop app. |
-| `/image/` | Capabilities in the current internal image build, roadmap context and explicit non-goals. |
+| `/` | What berg:work is in one screen (two buttons into the web apps), one short take per product, how files stay local, who makes it. |
+| `/pdf/` | berg:work PDF: its take, one small screenshot per tool with a short explanation, measurements, honest notes, desktop status. |
+| `/image/` | berg:work Image: the same structure, plus what it will not do. |
 | `/roadmap/` | Status of both products without unsourced dates. |
-| `/download/` | Release-manifest-driven downloads; currently reports that no public builds exist. |
+| `/download/` | “Desktop” in the navigation: nothing to install, desktop status; release-manifest-driven downloads once they exist. |
 | `/legal/` | English legal notice preserving the provider and contact facts. |
 | `/privacy/` | English privacy information including hosting, logs and service-worker storage. |
 | `/offline/` | Offline fallback reached by the service worker. |
@@ -100,6 +100,8 @@ When releases exist, the page shows an OS-matched primary download through progr
 
 The build fingerprints CSS, JavaScript, fonts, hero images, icons and present media. `_headers` gives `/assets/*` a one-year immutable cache and keeps HTML, the manifest and service worker on `no-cache`.
 
+Open Graph pictures are JPEGs drawn by `media/og-images.py` (site, PDF, Image). Besides their fingerprinted copies under `/assets/img/`, the build writes stable copies to `/og/`, which the web apps' own pages link.
+
 The generated service worker precaches the application shell, uses network-first navigation with `/offline/` as fallback, and keeps a capped stale-while-revalidate cache for same-origin images and media. The privacy page documents this local Cache Storage use.
 
 ## Cloudflare settings
@@ -149,7 +151,9 @@ Results on 2026-09-25:
 
 ## Visual assets and font licence
 
-The four mine heroes remain the identity images. Each has 2880×1620 and 1440×810 JPEG and WebP variants. The home page chooses one per load in `hero.js`; without JavaScript it shows `mine-dusk`. Mobile CSS keeps the existing per-image focal crop.
+The four mine heroes remain the identity images. Each has 2880×1620 and 1440×810 JPEG and WebP variants. The home page chooses one per load in `hero.js` and preloads exactly that picture at the size the stylesheet will use (the build fills in the URLs); without JavaScript it shows `mine-dusk`. Mobile CSS keeps the existing per-image focal crop. Below 980 px the hero is a column (wordmark, stickers, buttons), so the buttons are on the first screen of a phone.
+
+Text is set in JetBrains Mono (SIL OFL 1.1, `src/assets/fonts/OFL-JetBrainsMono.txt`), a variable-weight Latin WOFF2 of about 40 KB, so the site looks the same on every system.
 
 `Bergschrift-Regular.ttf` is a modified Stalinist One by Alexey Maslov and Jovanny Lemonad under the SIL Open Font License 1.1 (`src/assets/fonts/OFL.txt`). The Reserved Font Name required the Bergschrift rename. The site uses a WOFF2 containing the complete Latin-1, Latin Extended-A, Cyrillic and General Punctuation ranges from the source font. The source TTF remains available for regeneration with `../scripts/build-wordmark-font.py`.
 

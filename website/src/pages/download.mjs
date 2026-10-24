@@ -20,18 +20,18 @@ function markdownLite(value = '') {
 }
 
 function noRelease(product, text, mark) {
-  const subject = encodeURIComponent(`${product} public build notification`);
+  const subject = encodeURIComponent(`${product} desktop app: please tell me when it is out`);
   return `<article class="download-card">
-    ${status('No public build yet', 'progress')}
+    ${status('In development', 'progress')}
     ${productMark(mark)}
     <h2>${escapeHtml(product)}</h2>
     <p>${escapeHtml(text)}</p>
     <dl class="platform-list">
-      <div><dt>Linux</dt><dd>Planned for the first release</dd></div>
-      <div><dt>Windows</dt><dd>Planned for the first release</dd></div>
-      <div><dt>macOS</dt><dd>Not planned for the first release; no test device</dd></div>
+      <div><dt>Linux</dt><dd>First release</dd></div>
+      <div><dt>Windows</dt><dd>First release</dd></div>
+      <div><dt>macOS</dt><dd>Not at first – no Mac to test on</dd></div>
     </dl>
-    <a class="text-link" href="mailto:${escapeHtml(config.contactEmail)}?subject=${subject}">Ask to be notified <span aria-hidden="true">→</span></a>
+    <a class="text-link" href="mailto:${escapeHtml(config.contactEmail)}?subject=${subject}">Tell me when it is out <span aria-hidden="true">→</span></a>
   </article>`;
 }
 
@@ -48,12 +48,12 @@ export function render({ assets, releases }) {
   return {
     current: 'download',
     path: '/download/',
-    title: 'Download status',
-    description: 'Both berg:work editors run in the browser. There are no desktop downloads yet; Linux and Windows are planned first.',
-    body: `<header class="page-band page-band--red"><div><p class="kicker">Release status</p><h1>Downloads.</h1><p>Nothing to install: both editors run in the browser. There is no desktop download yet, and there are no prices or announced release dates.</p><p><a class="button button--cream" href="/app/pdf/">Open berg:work PDF</a> <a class="button button--cream" href="/app/image/">Open berg:work Image</a></p></div></header>
-    <section class="download-section ruled-section" aria-label="Product release status">
-      ${pdfReleases.length ? releaseCard(config.products.pdf, pdfReleases, assets.markPdf) : noRelease(config.products.pdf, 'An internal Linux desktop build wraps the web app with native file opening and saving. Its first-release scope is not fixed.', assets.markPdf)}
-      ${imageReleases.length ? releaseCard(config.products.image, imageReleases, assets.markImage) : noRelease(config.products.image, 'An internal desktop build exists for Linux and Windows. Its first-release scope is not fixed.', assets.markImage)}
+    title: 'Desktop apps',
+    description: 'Both berg:work editors run in your browser, nothing to install. Desktop apps for Linux and Windows are in development; there is no download and no release date yet.',
+    body: `<header class="page-band page-band--red"><div><p class="kicker">Desktop apps</p><h1>Nothing to install.</h1><p>Both editors run in your browser today. Desktop apps for Linux and Windows are in development; there is no download and no release date yet.</p><p class="band-actions"><a class="button button--cream" href="/app/pdf/">Open the PDF editor</a> <a class="button button--ink" href="/app/image/">Open the image editor</a></p></div></header>
+    <section class="download-section ruled-section" aria-label="Desktop apps">
+      ${pdfReleases.length ? releaseCard(config.products.pdf, pdfReleases, assets.markPdf) : noRelease(config.products.pdf, 'The same editor in its own window, with real open and save dialogs and PDFs opened from the file manager. In testing on Linux.', assets.markPdf)}
+      ${imageReleases.length ? releaseCard(config.products.image, imageReleases, assets.markImage) : noRelease(config.products.image, 'The image editor as a desktop app, already running as a test build on Linux and Windows.', assets.markImage)}
     </section>`,
   };
 }
