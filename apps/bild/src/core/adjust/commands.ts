@@ -6,18 +6,21 @@ import {
   adjustmentLayerEditState, beginAdjustmentLayerEdit, beginHueSaturationEdit, beginLevelsEdit,
   hueSaturationEditState, levelsEditState,
 } from './editing';
-import { beginFilterEdit, filterEditState } from '../filters/editing';
+import { beginFilterEdit, filterEditState, startsOnEmptyLayer } from '../filters/editing';
+import type { FilterKind } from '../filters/settings';
 
 export type AdjustmentCommandName = 'levels' | 'curves' | 'hueSaturation' | 'exposure' | 'gradientMap' | 'grain'
   | 'invert' | 'gaussianBlur' | 'motionBlur' | 'noise' | 'lensCorrection' | 'unsharpMask' | 'smartSharpen'
-  | 'highPass' | 'denoise' | 'editAdjustment' | 'adjustmentLayers';
+  | 'highPass' | 'denoise' | 'vignette' | 'bloom' | 'tonalContrast' | 'progressiveBlur' | 'rgbSplit'
+  | 'editAdjustment' | 'adjustmentLayers';
 export interface AdjustmentCommand { enabled(): boolean; run(): void }
 export type AdjustmentCommandRegistry = Record<AdjustmentCommandName, AdjustmentCommand>;
 
 /** Pixel locks do not disable these commands: running one on a locked layer refuses with the lock notice (Photoshop). */
-function canAdjust(session: EditorSession): boolean {
+function canAdjust(session: EditorSession, kind?: FilterKind): boolean {
   const layer = session.activeLayer;
-  return session.canEditLayers && session.selectedLayerIds.size === 1 && !!layer?.raster && !layer.adjustment
+  return session.canEditLayers && session.selectedLayerIds.size === 1 && (!!layer?.raster || (!!kind && startsOnEmptyLayer(kind, layer)))
+    && !layer?.adjustment
     && !session.isMaskSelected
     && !levelsEditState(session) && !hueSaturationEditState(session) && !filterEditState(session);
 }
@@ -25,8 +28,8 @@ function refused(session: EditorSession): boolean {
   const id = session.activeLayerId;
   return !!id && session.refuseLayerEdit(id, 'pixels');
 }
-function filter(session: EditorSession, kind: Parameters<typeof beginFilterEdit>[1]): AdjustmentCommand {
-  return { enabled: () => canAdjust(session), run: () => { if (!refused(session)) beginFilterEdit(session, kind); } };
+function filter(session: EditorSession, kind: FilterKind): AdjustmentCommand {
+  return { enabled: () => canAdjust(session, kind), run: () => { if (!refused(session)) beginFilterEdit(session, kind); } };
 }
 
 export function adjustmentCommands(session: EditorSession): AdjustmentCommandRegistry {
@@ -49,6 +52,8 @@ export function adjustmentCommands(session: EditorSession): AdjustmentCommandReg
     noise: filter(session, 'Add Noise'), lensCorrection: filter(session, 'Lens Correction'),
     unsharpMask: filter(session, 'Unsharp Mask'), smartSharpen: filter(session, 'Smart Sharpen'),
     highPass: filter(session, 'High Pass'), denoise: filter(session, 'Denoise'),
+    vignette: filter(session, 'Vignette'), bloom: filter(session, 'Bloom / Glow'), tonalContrast: filter(session, 'Tonal Contrast'),
+    progressiveBlur: filter(session, 'Progressive Blur'), rgbSplit: filter(session, 'RGB Split'),
     editAdjustment: { enabled: () => !!session.activeLayer?.adjustment
       && !session.editBlocker(session.activeLayer.id, 'appearance') && !adjustmentLayerEditState(session),
       run: () => { beginAdjustmentLayerEdit(session); } },

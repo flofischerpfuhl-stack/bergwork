@@ -1,6 +1,6 @@
 /** Framework-free filter preview/apply/cancel state machine with latest-request-wins previews. */
 import type { LayerTransform } from '../geometry';
-import type { Raster } from '../raster';
+import { Raster } from '../raster';
 import type { EditorSession } from '../session';
 import type { CanvasDocument, Layer } from '../document';
 import { defaultFilterSettings, normalizeFilterSettings, type FilterKind, type FilterSettings } from './settings';
@@ -20,6 +20,10 @@ export interface FilterEditState {
   preparing: boolean;
   previewError: string | null;
   request: number;
+  /** Vignette on an empty pixel layer: the edit started from clear pixels over the layer's bounds. */
+  readonly startedEmpty: boolean;
+  /** Filter › Last Filter: applied straight away with its settings, without a panel or preview. */
+  readonly repeating: boolean;
 }
 
 const edits = new WeakMap<EditorSession, FilterEditState>();
@@ -49,15 +53,26 @@ export function documentWithPixelFilterPreview(session: EditorSession,
   return changed ? { ...document, layers } : document;
 }
 
+/** Vignette can start on a pixel layer with no pixels yet, which it paints so it can sit on its own layer. */
+export function startsOnEmptyLayer(kind: FilterKind, layer: Layer | null | undefined): boolean {
+  return kind === 'Vignette' && layer?.kind === 'pixel' && !layer.raster && !layer.adjustment;
+}
+
 export function beginFilterEdit(session: EditorSession, kind: FilterKind,
-  settings: FilterSettings = defaultFilterSettings()): FilterEditState | null {
-  const layer = session.activeLayer;
-  if (edits.has(session) || !session.canEditLayers || session.selectedLayerIds.size !== 1 || !layer?.raster
+  settings: FilterSettings = defaultFilterSettings(), options: { readonly repeating?: boolean } = {}): FilterEditState | null {
+  const layer = session.activeLayer, empty = startsOnEmptyLayer(kind, layer);
+  if (edits.has(session) || !session.canEditLayers || session.selectedLayerIds.size !== 1 || !layer || (!layer.raster && !empty)
     || !!layer.adjustment || session.isMaskSelected || session.editBlocker(layer.id, 'pixels')) return null;
-  const state: FilterEditState = { kind, layerId: layer.id, originalRaster: layer.raster, originalTransform: layer.transform,
-    settings: normalizeFilterSettings(settings), seed: Math.floor(Math.random() * 0x1_0000_0000), preview: true,
-    committing: false, preparing: false, previewError: null, request: 0 };
-  edits.set(session, state); void updateFilterEdit(session, state.settings, true); session.notify('ui'); return state;
+  // Clear pixels over the empty layer's bounds (a new layer's are the canvas); blank tiles cost no memory.
+  const originalRaster = layer.raster ?? Raster.blank(Math.max(1, Math.round(layer.transform.size.width)),
+    Math.max(1, Math.round(layer.transform.size.height)), 4);
+  const repeating = options.repeating === true;
+  const state: FilterEditState = { kind, layerId: layer.id, originalRaster, originalTransform: layer.transform,
+    settings: normalizeFilterSettings(settings), seed: Math.floor(Math.random() * 0x1_0000_0000), preview: !repeating,
+    committing: false, preparing: false, previewError: null, request: 0, startedEmpty: !layer.raster, repeating };
+  edits.set(session, state);
+  if (!repeating) void updateFilterEdit(session, state.settings, true);
+  session.notify('ui'); return state;
 }
 
 export async function updateFilterEdit(session: EditorSession, settings: FilterSettings, preview = true): Promise<void> {
@@ -90,7 +105,7 @@ export async function applyFilterEdit(session: EditorSession): Promise<boolean> 
   const state = edits.get(session); if (!state || state.committing) return false;
   state.committing = true; state.request++; jobs.get(session)?.cancel(); jobs.delete(session);
   const current = session.layer(state.layerId);
-  if (!current || current.raster !== state.originalRaster || current.transform !== state.originalTransform) {
+  if (!current || current.raster !== (state.startedEmpty ? null : state.originalRaster) || current.transform !== state.originalTransform) {
     session.rasterOverrides.delete(state.layerId); edits.delete(session); session.notify('document'); return false;
   }
   try {

@@ -13,6 +13,10 @@ import { needsCpuLiveFilters } from '../../src/render/gpuFilterPasses';
 import { isValidLiveFilter } from '../../src/core/recipes';
 import { readArchive, writeArchive } from '../../src/io/project';
 import { decodePng } from '../../src/io/png';
+import { applyFilterEdit, beginFilterEdit, filterEditState } from '../../src/core/filters/editing';
+import { canRepeatLastFilter, lastFilter, recordLastFilter, repeatLastFilter } from '../../src/app/adjust/lastFilter';
+import { applySelection } from '../../src/core/selectionCommands';
+import { rectangleSelection } from '../../src/core/selectionOps';
 
 const CREATIVE: readonly LiveFilterKind[] = ['vignette', 'bloom', 'tonalContrast', 'progressiveBlur', 'rgbSplit'];
 const black = { red: 0, green: 0, blue: 0 };
@@ -271,5 +275,58 @@ describe('creative live filters', () => {
     manifest.layers[0].filters[4].radial = 1;
     files['manifest.json'] = new TextEncoder().encode(JSON.stringify(manifest));
     await expect(readArchive(new Blob([zipSync(files) as BlobPart]), decoder)).rejects.toThrow();
+  });
+});
+
+describe('Last Filter', () => {
+  function grayProject(): { session: EditorSession; id: string } {
+    const session = new EditorSession();
+    session.createNewProject(20, 20, 'Last');
+    return { session, id: session.insertRaster(solid(20, 20, [120, 120, 120, 255]), 'Gray') };
+  }
+
+  it('stays disabled until a Filter menu filter was applied, then adds it again as a smart filter in one undo step', async () => {
+    const scope = {}, { session, id } = grayProject();
+    expect(lastFilter(scope)).toBeNull();
+    expect(canRepeatLastFilter(scope, session)).toBe(false);
+    expect(await repeatLastFilter(scope, session)).toBe(false);
+    recordLastFilter(scope, 'Curves', defaultFilterSettings());
+    expect(lastFilter(scope)).toBeNull();
+    recordLastFilter(scope, 'Vignette', { ...defaultFilterSettings(), vignetteAmount: 80 });
+    expect(canRepeatLastFilter(scope, session)).toBe(true);
+    const undo = session.history.undoCount;
+    expect(await repeatLastFilter(scope, session)).toBe(true);
+    expect(session.history.undoCount).toBe(undo + 1);
+    expect(session.layer(id)!.filters).toEqual([{ ...defaultLiveFilter('vignette'), amount: 80 }]);
+  });
+
+  it('changes the pixels inside a selection with the same settings, without leaving an edit open', async () => {
+    const scope = {}, { session, id } = grayProject();
+    applySelection(session, rectangleSelection({ x: 0, y: 0, width: 10, height: 20 }, session.document!), 'New', 'Select');
+    recordLastFilter(scope, 'Vignette', { ...defaultFilterSettings(), vignetteAmount: 100 });
+    const before = session.layer(id)!.raster!, undo = session.history.undoCount;
+    expect(await repeatLastFilter(scope, session)).toBe(true);
+    expect(filterEditState(session)).toBeNull();
+    expect(session.history.undoCount).toBe(undo + 1);
+    const after = session.layer(id)!.raster!;
+    expect(after.pixel(0, 0)[0]).toBeLessThan(60);
+    expect(after.pixel(19, 0)).toEqual(before.pixel(19, 0));
+    expect(session.layer(id)!.filters).toEqual([]);
+    session.undo();
+    expect(session.layer(id)!.raster!.pixel(0, 0)).toEqual(before.pixel(0, 0));
+  });
+
+  it('Vignette paints an empty layer across the canvas so it can sit on its own layer', async () => {
+    const { session } = grayProject();
+    session.addBlankLayer();
+    const id = session.activeLayerId!;
+    expect(session.layer(id)!.raster).toBeNull();
+    expect(beginFilterEdit(session, 'Gaussian Blur')).toBeNull();
+    expect(beginFilterEdit(session, 'Vignette', { ...defaultFilterSettings(), vignetteAmount: 100 })).not.toBeNull();
+    expect(await applyFilterEdit(session)).toBe(true);
+    const raster = session.layer(id)!.raster!;
+    expect([raster.width, raster.height]).toEqual([20, 20]);
+    expect(raster.pixel(0, 0)[3]).toBeGreaterThan(200);
+    expect(raster.pixel(10, 10)[3]).toBe(0);
   });
 });
