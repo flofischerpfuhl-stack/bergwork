@@ -78,7 +78,7 @@ export function Chip(props: {
   return (
     <>
       <button ref={button} type="button" className={className} style={props.width ? { width: props.width } : undefined}
-        aria-label={props.tip ?? props.label} data-tip={props.label ? undefined : props.tip}
+        aria-label={props.tip ?? props.label} data-tip={props.label && !props.panel ? undefined : props.tip ?? props.label}
         aria-pressed={props.pressed} aria-haspopup={props.menu ? 'menu' : undefined} aria-expanded={props.menu ? !!open : undefined}
         onClick={() => {
           if (!props.menu) { props.onClick?.(); return; }
