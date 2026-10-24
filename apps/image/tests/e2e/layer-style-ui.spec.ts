@@ -129,7 +129,7 @@ test('Layer Style dialog: drop shadow from the menu, distance typed and dragged,
   // Cancel restores the state from before opening, including an effect added meanwhile and the global light.
   const kept = (await layerNamed(page, 'square1')).effects;
   const row = page.getByTestId('layer-row').first();
-  await row.locator('[class*="layerMeta"]').dblclick();
+  await row.locator('[data-layer-meta]').dblclick();
   await expect(dialog).toBeVisible();
   await page.getByTestId('style-opacity').fill('90');
   await page.getByTestId('style-angle').fill('45');
@@ -144,12 +144,12 @@ test('Layer Style dialog: drop shadow from the menu, distance typed and dragged,
   expect(await history(page)).toEqual(after);
 
   // Escape cancels, Enter confirms from a field.
-  await row.locator('[class*="layerMeta"]').dblclick();
+  await row.locator('[data-layer-meta]').dblclick();
   await page.getByTestId('style-size').fill('9');
   await page.getByTestId('style-size').press('Escape');
   await expect(dialog).toBeHidden();
   expect((await layerNamed(page, 'square1')).effects[0].size).toBe(4);
-  await row.locator('[class*="layerMeta"]').dblclick();
+  await row.locator('[data-layer-meta]').dblclick();
   await page.getByTestId('style-size').fill('9');
   await page.getByTestId('style-size').press('Enter');
   await expect(dialog).toBeHidden();

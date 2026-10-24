@@ -42,7 +42,7 @@
   display: flex; align-items: center; height: 24px; margin-bottom: 2px; padding-right: 8px; border-bottom: 1px solid var(--cmp-hairline);
   font-size: 11px; color: var(--cmp-text-secondary); cursor: default; user-select: none; touch-action: none;
 }
-.filterRow .filterEye { height: 22px; }
+.filterRow .filterEye { height: 22px; order: 10; margin-left: auto; }
 .filterHeader { color: var(--cmp-text); }
 .filterRowOff .filterName { opacity: 0.5; text-decoration: line-through; }
 .filterRowDragging { opacity: 0.5; }

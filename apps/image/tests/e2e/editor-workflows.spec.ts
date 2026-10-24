@@ -60,7 +60,7 @@ test.describe('desktop workflows', () => {
     await expect(rows.nth(0)).toContainText('top');
 
     // Rename by double-click.
-    await rows.nth(0).locator('span', { hasText: 'top' }).dblclick();
+    await rows.nth(0).locator('[data-layer-name]').dblclick();
     const input = page.getByLabel('Layer name');
     await input.fill('Overlay');
     await input.press('Enter');

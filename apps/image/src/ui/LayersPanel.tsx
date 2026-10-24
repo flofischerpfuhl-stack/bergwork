@@ -1,10 +1,12 @@
 /**
  * The Layers panel (UI/LayersPanel.swift, NativeLayerList.swift, LayerAppearanceControls.swift,
  * BlendModePicker.swift): count, blend and opacity for the active layer, the layer tree top-first
- * with folders, masks, clipping indentation, and the footer buttons.
+ * with folders, masks, clipping indentation, and the footer buttons. Built from the berg:work design base:
+ * a SidePanel with a tab rail (Layers, History, feature panels), PropertyRows for the appearance and ListRows
+ * for the tree; the state column (locks, eye) sits at each row's end (Builder §3, §9).
  */
 
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import styles from './editor.module.css';
 import { HistoryPanel } from './HistoryPanel';
 import type { EditorController } from './controller';
@@ -24,6 +26,7 @@ import { duplicateArtboard, renameArtboard } from '../core/artboardCommands';
 import { confirmDeleteArtboard, groupRowsByArtboard, isArtboardCollapsed, requestArtboardRename, selectArtboard, takeArtboardRename, selectedArtboard, toggleArtboardCollapsed, type PanelRow } from './artboardState';
 import { markUiRender } from './performance';
 import { LAYERS_WIDTH_MAX, LAYERS_WIDTH_MIN } from './store';
+import { ListRow, PropertyRow, SidePanel, type PanelTab } from '@bergwork/ui';
 
 const ADJUSTMENT_ICONS: Record<AdjustmentKind, IconName> = {
   'Hue/Saturation': 'adjustment', 'Levels': 'levels', 'Curves': 'curves', 'Exposure': 'exposure', 'Gradient Map': 'gradientMap', 'Grain': 'grain',
@@ -64,16 +67,17 @@ function PercentControl({ controller, label, testId, value, enabled, begin, fini
   const [percent, setPercent] = useState('100');
   const [focused, setFocused] = useState(false);
   useEffect(() => { if (!focused) setPercent(String(Math.round(value * 100))); }, [value, focused]);
+  const fill = Math.round(value * 100);
   return (
-    <div className={styles.appearanceRow}>
-      <span>{t(label)}</span>
-      <input className={styles.slider} type="range" min={0} max={100} step={1} value={Math.round(value * 100)} disabled={!enabled}
+    <PropertyRow label={t(label)}>
+      <input className="bw-slider" type="range" min={0} max={100} step={1} value={fill} disabled={!enabled}
+        style={{ ['--bw-slider-fill' as string]: `${fill}%` }}
         aria-label={t(label)} data-testid={`${testId}-slider`}
         onPointerDown={begin} onPointerUp={finish}
         onKeyDown={(event) => event.stopPropagation()}
         onChange={(event) => set(Number(event.target.value) / 100)} />
-      <label className={styles.field}>
-        <input value={percent} disabled={!enabled} style={{ width: 44 }} aria-label={`${t(label)} %`} data-testid={`${testId}-field`}
+      <label className={`bw-field is-number${enabled ? '' : ' is-disabled'}`} style={{ width: 64, flex: 'none' }}>
+        <input value={percent} disabled={!enabled} aria-label={`${t(label)} %`} data-testid={`${testId}-field`}
           onFocus={() => setFocused(true)}
           onBlur={() => { setFocused(false); const v = Number(percent.replace(',', '.')); if (Number.isFinite(v)) set(Math.min(100, Math.max(0, v)) / 100); }}
           onChange={(event) => setPercent(event.target.value)}
@@ -85,9 +89,9 @@ function PercentControl({ controller, label, testId, value, enabled, begin, fini
               event.preventDefault();
             }
           }} />
-        <span>%</span>
+        <span className="bw-field-unit">%</span>
       </label>
-    </div>
+    </PropertyRow>
   );
 }
 
@@ -116,24 +120,25 @@ function Appearance({ controller, session }: { controller: EditorController; ses
   const items: MenuEntry[] = BLEND_MODES.map((b) => ({ label: t(b.label), enabled: true, checked: b.mode === layer?.blendMode, run: () => session.setLayerBlendMode(b.mode) }));
   return (
     <div className={styles.appearance}>
-      <div className={styles.appearanceRow}>
-        <span>{t('Blend')}</span>
-        <button type="button" className={styles.select} style={{ flex: 1, textAlign: 'left' }} disabled={!enabled} aria-haspopup="menu" aria-label={t('Blend mode')}
+      <PropertyRow label={t('Blend')}>
+        <button type="button" className="bw-select" disabled={!enabled} aria-haspopup="menu" aria-label={t('Blend mode')} aria-expanded={!!popup}
           data-testid="blend-mode" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setPopup({ x: r.left, y: r.bottom + 4 }); }}>
-          {t(blendLabel(mode))}
+          <span>{t(blendLabel(mode))}</span>
+          <Icon name="chevronDown" size={12} />
         </button>
-      </div>
+      </PropertyRow>
       <PercentControl controller={controller} label="Opacity" testId="opacity" value={opacity} enabled={enabled}
         begin={() => session.beginOpacityEdit()} finish={() => session.finishOpacityEdit()} set={(v) => session.setLayerOpacity(v)} />
-      <div className={styles.appearanceRow}>
-        <span>{t('Lock')}</span>
+      <PropertyRow label={t('Lock')}>
         <span className={styles.lockButtons} role="group" aria-label={t('Lock')}>
           {LOCKS.map((lock) => {
-            // Pressed shows the layer's own flag; a flag implied by Lock All or by a locked folder shows as unavailable.
+            // The frame convention (Builder §3): solid = the layer's own lock, dashed = implied by Lock All or by a
+            // locked folder (unavailable here), none = off.
             const on = !!layer?.locks[lock.key];
             const implied = !on && !!locks?.[lock.key];
             return (
-              <button key={lock.key} type="button" className={`${styles.lockButton} ${on ? styles.lockButtonOn : ''}`} aria-pressed={on}
+              <button key={lock.key} type="button" className="bw-icon-button is-small" aria-pressed={on}
+                data-state={on ? 'on' : implied ? 'auto' : undefined}
                 disabled={!lockable || implied} title={t(lock.label)} aria-label={t(lock.label)} data-testid={`lock-${lock.key}`}
                 onClick={() => session.setLayerLocks([...session.selectedLayerIds], { [lock.key]: !on })}>
                 <Icon name={lock.icon} size={14} />
@@ -141,7 +146,7 @@ function Appearance({ controller, session }: { controller: EditorController; ses
             );
           })}
         </span>
-      </div>
+      </PropertyRow>
       <PercentControl controller={controller} label="Fill opacity" testId="fill" value={fill} enabled={enabled}
         begin={() => { if (layer) session.beginFillOpacityEdit([layer.id]); }} finish={() => session.finishFillOpacityEdit()}
         set={(v) => { if (layer) session.setFillOpacity([layer.id], v); }} />
@@ -237,50 +242,28 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
   const locks = session.lockState(layer.id);
   const lockedAll = locks.all, lockedSome = locks.transparency || locks.pixels || locks.position;
 
-  return (
-    <div className={`${styles.layerRow} ${selected ? styles.layerRowSelected : ''} ${entry.visible ? '' : styles.layerRowDim} ${dropAbove ? styles.layerRowDropAbove : ''} ${dropInto ? styles.layerRowDropInto : ''} ${context ? styles.layerRowContext : ''}`}
-      role="treeitem" aria-selected={selected} aria-level={entry.depth + 1} aria-expanded={layer.kind === 'group' ? !session.collapsedGroupIds.has(layer.id) : undefined}
-      aria-posinset={position} aria-setsize={setSize}
-      data-layer-id={layer.id} data-testid="layer-row"
-      onPointerDown={onRowPointerDown}
-      onDoubleClick={(event) => {
-        if ((event.target as HTMLElement).closest('button:not([data-thumb])')) return;
-        if (!session.canEditLayers) return;
-        if (layer.adjustment && controller.features.editAdjustment) { session.selectLayer(layer.id); controller.features.editAdjustment.run(); return; }
-        // Photoshop: double-clicking a text layer's thumbnail edits its text with everything selected.
-        if (layer.kind === 'text' && (event.target as HTMLElement).closest('[data-text-thumb]') && controller.features.editActiveText) {
-          session.selectLayer(layer.id); controller.features.editActiveText.run(); return;
-        }
-        // Photoshop: a double-click on the name renames, elsewhere on the row it opens Layer Style.
-        const commands = controller.layerStyles;
-        if (commands?.styleable(layer.id) && !(event.target as HTMLElement).closest('[data-layer-name], input')) { commands.open(layer.id); return; }
-        session.selectLayer(layer.id);
-        setRenaming(true);
-      }}
-      onContextMenu={(event) => { event.preventDefault(); onContext(layer.id, event.clientX, event.clientY); }}>
-      <button type="button" className={styles.eye} disabled={!enabled} data-label={layer.colorLabel}
-        style={layer.colorLabel !== 'none' ? { background: labelColor(layer.colorLabel) } : undefined} aria-label={`${t(layer.visible ? 'Hide' : 'Show')} ${layer.name}`}
-        data-testid="layer-eye" data-eye={layer.id}
-        onPointerDown={(event) => {
-          event.stopPropagation();
-          const visible = session.beginVisibilitySwipe(layer.id);
-          if (visible === null) return;
-          // Eye swipe: dragging over other eyes gives them the same state, one undo step.
-          const move = (e: PointerEvent) => {
-            const eye = (document_elementFromPoint(e.clientX, e.clientY)?.closest('[data-eye]') as HTMLElement | null)?.dataset.eye;
-            if (eye) session.setVisibilityInSwipe(eye, visible);
-          };
-          const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); session.endVisibilitySwipe(); };
-          window.addEventListener('pointermove', move);
-          window.addEventListener('pointerup', up);
-        }}>
-        <Icon name={layer.visible ? 'eye' : 'eyeSlash'} size={16} />
-      </button>
-      <span style={{ width: indent, flex: 'none' }} />
-      <button type="button" className={styles.disclosure} style={{ visibility: layer.kind === 'group' ? 'visible' : 'hidden' }} disabled={!enabled}
-        aria-label={t('Expand or collapse folder')} onClick={() => session.toggleGroupExpansion(layer.id)}>
-        <Icon name={session.collapsedGroupIds.has(layer.id) ? 'chevronRight' : 'chevronDown'} size={12} />
-      </button>
+  const eye = (
+    <button type="button" className={styles.eye} disabled={!enabled} data-label={layer.colorLabel}
+      style={layer.colorLabel !== 'none' ? { background: labelColor(layer.colorLabel) } : undefined} aria-label={`${t(layer.visible ? 'Hide' : 'Show')} ${layer.name}`}
+      data-testid="layer-eye" data-eye={layer.id}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+        const visible = session.beginVisibilitySwipe(layer.id);
+        if (visible === null) return;
+        // Eye swipe: dragging over other eyes gives them the same state, one undo step.
+        const move = (e: PointerEvent) => {
+          const eye = (document_elementFromPoint(e.clientX, e.clientY)?.closest('[data-eye]') as HTMLElement | null)?.dataset.eye;
+          if (eye) session.setVisibilityInSwipe(eye, visible);
+        };
+        const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); session.endVisibilitySwipe(); };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      }}>
+      <Icon name={layer.visible ? 'eye' : 'eyeSlash'} size={16} />
+    </button>
+  );
+  const thumbs = (
+    <>
       <div className={styles.thumbSlot}>
         {layer.kind === 'text' ? (
           <button type="button" data-thumb data-text-thumb className={`${styles.thumb} ${active && !session.isMaskSelected ? styles.thumbTarget : ''}`}
@@ -328,38 +311,74 @@ function LayerRow({ controller, session, entry, rows, drag, onDragStart, onConte
         </>
       ) : null}
       {controller.layerThumbs.map((thumb, i) => <Fragment key={i}>{thumb(session, layer)}</Fragment>)}
-      <div className={styles.layerText}>
-        {renaming ? (
-          <input className={styles.renameInput} defaultValue={layer.name} autoFocus aria-label={t('Layer name')}
-            onFocus={(event) => event.currentTarget.select()}
-            onKeyDown={(event) => {
-              event.stopPropagation();
-              if (event.key === 'Enter') { session.renameLayer(layer.id, event.currentTarget.value); setRenaming(false); }
-              if (event.key === 'Escape') setRenaming(false);
-            }}
-            onBlur={(event) => { session.renameLayer(layer.id, event.currentTarget.value); setRenaming(false); }} />
-        ) : (
-          <span className={styles.layerName} data-layer-name>{(layer.maskSourceId ? '↳ ' : '') + layer.name}</span>
-        )}
-        <span className={styles.layerMeta} title={source ? `Clipping mask based on ${source.name}. Option-click the bottom of its row to release.` : undefined}>{meta}</span>
-      </div>
-      {layer.effects.length ? (
-        <button type="button" className={styles.fxBadge} aria-expanded={effectsOpen} data-testid="fx-badge"
-          aria-label={`${t(effectsOpen ? 'Hide layer effects' : 'Show layer effects')}: ${layer.name}`} title={t('Layer effects')}
-          onClick={() => onToggleEffects?.(layer.id)}>
-          <span className={styles.fxGlyph}>fx</span>
-          <Icon name={effectsOpen ? 'chevronDown' : 'chevronRight'} size={10} />
+    </>
+  );
+  const name = renaming ? (
+    <input className={styles.renameInput} defaultValue={layer.name} autoFocus aria-label={t('Layer name')}
+      onFocus={(event) => event.currentTarget.select()}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === 'Enter') { session.renameLayer(layer.id, event.currentTarget.value); setRenaming(false); }
+        if (event.key === 'Escape') setRenaming(false);
+      }}
+      onBlur={(event) => { session.renameLayer(layer.id, event.currentTarget.value); setRenaming(false); }} />
+  ) : <span className={styles.layerName} data-layer-name>{(layer.maskSourceId ? '↳ ' : '') + layer.name}</span>;
+  const className = [styles.layerRow, dropAbove ? styles.layerRowDropAbove : '', dropInto ? styles.layerRowDropInto : ''].filter(Boolean).join(' ');
+
+  return (
+    <ListRow className={className} selected={selected} dim={!entry.visible || context} indent={indent} bareThumb
+      lead={(
+        <button type="button" className={styles.disclosure} style={{ visibility: layer.kind === 'group' ? 'visible' : 'hidden' }} disabled={!enabled}
+          aria-label={t('Expand or collapse folder')} onClick={() => session.toggleGroupExpansion(layer.id)}>
+          <Icon name={session.collapsedGroupIds.has(layer.id) ? 'chevronRight' : 'chevronDown'} size={12} />
         </button>
-      ) : null}
-      {lockedAll || lockedSome ? (
-        <span className={`${styles.layerLock} ${lockedAll ? '' : styles.layerLockPartial}`} data-testid="layer-lock"
-          title={t(lockedAll ? 'Locked' : 'Partially locked')}><Icon name="lock" size={12} /></span>
-      ) : null}
-      <button type="button" className={styles.layerMore} aria-label={`${t('More')}: ${layer.name}`}
-        onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); onContext(layer.id, r.left, r.bottom); }}>
-        <Icon name="more" size={16} />
-      </button>
-    </div>
+      )}
+      thumb={thumbs}
+      name={name}
+      meta={<span data-layer-meta title={source ? `Clipping mask based on ${source.name}. Option-click the bottom of its row to release.` : undefined}>{meta}</span>}
+      end={(
+        <>
+          {layer.effects.length ? (
+            <button type="button" className={styles.fxBadge} aria-expanded={effectsOpen} data-testid="fx-badge"
+              aria-label={`${t(effectsOpen ? 'Hide layer effects' : 'Show layer effects')}: ${layer.name}`} title={t('Layer effects')}
+              onClick={() => onToggleEffects?.(layer.id)}>
+              <span className={styles.fxGlyph}>fx</span>
+              <Icon name={effectsOpen ? 'chevronDown' : 'chevronRight'} size={10} />
+            </button>
+          ) : null}
+          {lockedAll || lockedSome ? (
+            <span className={`${styles.layerLock} ${lockedAll ? '' : styles.layerLockPartial}`} data-testid="layer-lock"
+              title={t(lockedAll ? 'Locked' : 'Partially locked')}><Icon name="lock" size={12} /></span>
+          ) : null}
+          <button type="button" className={styles.layerMore} aria-label={`${t('More')}: ${layer.name}`}
+            onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); onContext(layer.id, r.left, r.bottom); }}>
+            <Icon name="more" size={16} />
+          </button>
+          {eye}
+        </>
+      )}
+      rowProps={{
+        role: 'treeitem', 'aria-level': entry.depth + 1,
+        'aria-expanded': layer.kind === 'group' ? !session.collapsedGroupIds.has(layer.id) : undefined,
+        'aria-posinset': position, 'aria-setsize': setSize,
+        'data-layer-id': layer.id, 'data-testid': 'layer-row',
+        onPointerDown: onRowPointerDown,
+        onDoubleClick: (event) => {
+          if ((event.target as HTMLElement).closest('button:not([data-thumb])')) return;
+          if (!session.canEditLayers) return;
+          if (layer.adjustment && controller.features.editAdjustment) { session.selectLayer(layer.id); controller.features.editAdjustment.run(); return; }
+          // Photoshop: double-clicking a text layer's thumbnail edits its text with everything selected.
+          if (layer.kind === 'text' && (event.target as HTMLElement).closest('[data-text-thumb]') && controller.features.editActiveText) {
+            session.selectLayer(layer.id); controller.features.editActiveText.run(); return;
+          }
+          // Photoshop: a double-click on the name renames, elsewhere on the row it opens Layer Style.
+          const commands = controller.layerStyles;
+          if (commands?.styleable(layer.id) && !(event.target as HTMLElement).closest('[data-layer-name], input')) { commands.open(layer.id); return; }
+          session.selectLayer(layer.id);
+          setRenaming(true);
+        },
+        onContextMenu: (event) => { event.preventDefault(); onContext(layer.id, event.clientX, event.clientY); },
+      }} />
   );
 }
 
@@ -412,7 +431,7 @@ function ArtboardRow({ controller, session, artboard, count, onContext }: {
   const size = `${artboard.rect.width.toLocaleString(controller.locale)} × ${artboard.rect.height.toLocaleString(controller.locale)} px`;
   const rename = (value: string) => { setRenaming(false); if (value.trim() && value.trim() !== artboard.name) renameArtboard(session, artboard.id, value); };
   return (
-    <div className={`${styles.layerRow} ${styles.artboardRow} ${selected ? styles.layerRowSelected : ''}`} role="treeitem" aria-level={1} aria-expanded={!collapsed}
+    <div className={`bw-list-row ${styles.layerRow} ${styles.artboardRow}`} role="treeitem" aria-level={1} aria-expanded={!collapsed}
       aria-selected={selected} data-artboard-id={artboard.id} data-testid="artboard-row"
       onPointerDown={(event) => { if (event.button === 0 && !(event.target as HTMLElement).closest('button, input')) selectArtboard(session, artboard.id); }}
       onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest('button') && session.canEditLayers) setRenaming(true); }}
@@ -503,41 +522,39 @@ function layersSnapshot(controller: EditorController, session: EditorSession): L
   };
 }
 
-/** Panel tab state is isolated so switching tabs does not reconcile the layer tree. */
-function PanelChrome({ controller, layerCount, layers, inSheet }: {
-  controller: EditorController; layerCount: number; layers: RefObject<HTMLDivElement | null>; inSheet: boolean;
+const PANEL_ICONS: Record<string, IconName> = { color: 'palette' };
+
+/**
+ * The panel frame: a SidePanel with a tab rail (Layers with its count, History, feature panels) and the close button
+ * at the rail's foot. Tab state is isolated here so switching tabs does not reconcile the layer tree, which arrives
+ * as an unchanged `layers` element and is only hidden while another tab shows.
+ */
+function PanelChrome({ controller, layerCount, inSheet, layers }: {
+  controller: EditorController; layerCount: number; inSheet: boolean; layers: ReactNode;
 }) {
   markUiRender('PanelChrome');
   const t = controller.t;
   const side = useUi(controller, (state) => state.sidePanel);
   const sidePanel = controller.sidePanels.find((panel) => panel.id === side);
-  useLayoutEffect(() => { if (layers.current) layers.current.style.display = side === 'layers' ? 'contents' : 'none'; }, [layers, side]);
-  return (<>
-    <div className={styles.layersHeader} role="tablist" aria-label={t('Panels')}>
-      <span className={styles.panelTabs}>
-        <button type="button" role="tab" aria-selected={side === 'layers'} data-testid="tab-layers"
-          className={`${styles.panelTab} ${side === 'layers' ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: 'layers' })}>
-          {t('Layers')}<span className={styles.layerCount} data-testid="layerCount">{layerCount}</span>
-        </button>
-        <button type="button" role="tab" aria-selected={side === 'history'} data-testid="tab-history"
-          className={`${styles.panelTab} ${side === 'history' ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: 'history' })}>
-          {t('History')}
-        </button>
-        {controller.sidePanels.map((panel) => (
-          <button key={panel.id} type="button" role="tab" aria-selected={side === panel.id} data-testid={`tab-${panel.id}`}
-            className={`${styles.panelTab} ${side === panel.id ? styles.panelTabOn : ''}`} onClick={() => controller.ui.setState({ sidePanel: panel.id })}>
-            {panel.label}
-          </button>
-        ))}
-      </span>
-      {!inSheet ? (
-        <button type="button" className={`${styles.chromeButton} ${styles.panelClose}`} aria-label={t('Hide panels')} title={t('Hide panels')}
+  const tabs: PanelTab[] = [
+    { id: 'layers', icon: <Icon name="layers" size={18} />, label: t('Layers'), testId: 'tab-layers',
+      badge: <span data-testid="layerCount">{layerCount}</span> },
+    { id: 'history', icon: <Icon name="history" size={18} />, label: t('History'), testId: 'tab-history' },
+    ...controller.sidePanels.map((panel) => ({ id: panel.id, icon: <Icon name={PANEL_ICONS[panel.id] ?? 'panel'} size={18} />,
+      label: panel.label, testId: `tab-${panel.id}` })),
+  ];
+  return (
+    <SidePanel embedded side="end" scroll={false} label={t('Panels')} tabs={tabs} active={side}
+      onTab={(id) => controller.ui.setState({ sidePanel: id })}
+      railEnd={!inSheet ? (
+        <button type="button" className="bw-icon-button is-small" aria-label={t('Hide panels')} title={t('Hide panels')}
           data-testid="close-panels" onClick={() => controller.togglePanels(false)}><Icon name="close" size={15} /></button>
-      ) : null}
-    </div>
-    <div style={{ display: side === 'history' ? 'contents' : 'none' }}><HistoryPanel controller={controller} /></div>
-    {sidePanel ? sidePanel.render() : null}
-  </>);
+      ) : undefined}>
+      <div className={styles.panelPage} style={{ display: side === 'layers' ? 'flex' : 'none' }}>{layers}</div>
+      {side === 'history' ? <div className={styles.panelPage}><HistoryPanel controller={controller} /></div> : null}
+      {sidePanel ? <div className={styles.panelPage}>{sidePanel.render()}</div> : null}
+    </SidePanel>
+  );
 }
 
 export function LayersPanel({ controller, inSheet = false }: { controller: EditorController; inSheet?: boolean }) {
@@ -568,7 +585,6 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
   const [effectsOpen, setEffectsOpen] = useState<ReadonlySet<string>>(new Set());
   const toggleEffects = (id: string) => setEffectsOpen((open) => { const next = new Set(open); if (!next.delete(id)) next.add(id); return next; });
   const layerStyles = controller.layerStyles;
-  const layersContent = useRef<HTMLDivElement>(null);
   const virtual = panelRows.length >= LAYER_VIRTUALIZE_AT && effectsOpen.size === 0
     && !document?.layers.some((layer) => layer.filters.length > 0);
   const rowHeight = inSheet ? COMPACT_LAYER_ROW_HEIGHT : LAYER_ROW_HEIGHT;
@@ -746,19 +762,20 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
             window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
           }} />
       ) : null}
-      <PanelChrome controller={controller} layerCount={document?.layers.length ?? 0} layers={layersContent} inSheet={inSheet} />
-      <div ref={layersContent} style={{ display: controller.ui.getState().sidePanel === 'layers' ? 'contents' : 'none' }}>
+      <PanelChrome controller={controller} layerCount={document?.layers.length ?? 0} inSheet={inSheet} layers={<>
       <Appearance controller={controller} session={session} />
       {document ? (
         <div className={styles.layerFilter}>
-          <Icon name="search" size={13} />
-          <input type="search" value={query.text ?? ''} placeholder={t('Search layers')} aria-label={t('Search layers')} data-testid="layer-search"
-            onChange={(event) => setQuery({ ...query, text: event.target.value })}
-            onKeyDown={(event) => {
-              event.stopPropagation();
-              if (event.key === 'Escape') { setQuery({ ...query, text: '' }); (event.target as HTMLInputElement).blur(); }
-            }} />
-          <button type="button" className={`${styles.footerButton} ${filtering && hasFilter(query) ? styles.lockButtonOn : ''}`}
+          <label className="bw-field" style={{ flex: 1 }}>
+            <Icon name="search" size={13} />
+            <input type="search" value={query.text ?? ''} placeholder={t('Search layers')} aria-label={t('Search layers')} data-testid="layer-search"
+              onChange={(event) => setQuery({ ...query, text: event.target.value })}
+              onKeyDown={(event) => {
+                event.stopPropagation();
+                if (event.key === 'Escape') { setQuery({ ...query, text: '' }); (event.target as HTMLInputElement).blur(); }
+              }} />
+          </label>
+          <button type="button" className="bw-icon-button is-small" data-state={filtering && hasFilter(query) ? 'on' : undefined}
             aria-label={t('Filter layers')} title={t('Filter layers')} data-testid="layer-filter" aria-haspopup="menu"
             onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setFilterMenu({ x: r.left, y: r.bottom + 4 }); }}>
             <Icon name="filter" size={14} />
@@ -794,38 +811,38 @@ export function LayersPanel({ controller, inSheet = false }: { controller: Edito
           {drag?.moved && drag.target?.index === rows.length ? <div style={{ height: 2, background: 'var(--cmp-accent)' }} /> : null}
         </div>
       ) : (
-        <div className={styles.emptyLayers}>
+        <div className={`${styles.emptyLayers} bw-empty`}>
           <Icon name="layers" size={25} />
           <strong>{t('No layers yet')}</strong>
           <span>{document ? t('Import an image or add a blank layer.') : t('Create a canvas or import an image.')}</span>
         </div>
       )}
       <div className={styles.layersFooter}>
-        <button type="button" className={styles.footerButton} aria-label={t('New blank layer')} title={t('New blank layer')} disabled={!session.canEditLayers}
+        <button type="button" className={`bw-icon-button is-small ${styles.footerButton}`} aria-label={t('New blank layer')} title={t('New blank layer')} disabled={!session.canEditLayers}
           data-testid="addBlankLayer" onClick={() => session.addBlankLayer()}><Icon name="plusSquare" size={17} /></button>
-        <button type="button" className={styles.footerButton} aria-label={t('New folder')} title={t('Group Selected Layers')} disabled={!session.canEditLayers}
+        <button type="button" className={`bw-icon-button is-small ${styles.footerButton}`} aria-label={t('New folder')} title={t('Group Selected Layers')} disabled={!session.canEditLayers}
           onClick={() => session.groupSelectedLayers()}><Icon name="folderPlus" size={17} /></button>
-        <button type="button" className={styles.footerButton} aria-label={t('Add layer mask')} title={t('Add layer mask')}
+        <button type="button" className={`bw-icon-button is-small ${styles.footerButton}`} aria-label={t('Add layer mask')} title={t('Add layer mask')}
           disabled={!session.canEditMask || !!session.activeLayer?.mask} data-testid="addMask"
           onClick={(event) => controller.addMask(!event.altKey)}><Icon name="mask" size={17} /></button>
-        <button type="button" className={styles.footerButton} aria-label={t('New adjustment layer')}
+        <button type="button" className={`bw-icon-button is-small ${styles.footerButton}`} aria-label={t('New adjustment layer')}
           title={t('New adjustment layer')}
           disabled={!session.canEditLayers || !adjustmentsAvailable}
           onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setAdjustMenu({ x: r.left, y: r.top - 8 - (controller.adjustmentLayerItems?.(false).length ?? 6) * 26 }); }}>
           <Icon name="adjustment" size={17} />
         </button>
         {layerStyles ? (
-          <button type="button" className={styles.footerButton} aria-label={t('Add a layer style')} title={t('Add a layer style')} aria-haspopup="menu"
+          <button type="button" className={`bw-icon-button is-small ${styles.footerButton}`} aria-label={t('Add a layer style')} title={t('Add a layer style')} aria-haspopup="menu"
             disabled={!session.canEditLayers || !session.activeLayer || !layerStyles.styleable(session.activeLayer.id)} data-testid="fx-button"
             onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setFxMenu({ x: r.left, y: r.top - 8 - 9 * 26 }); }}>
             <span className={styles.fxButtonGlyph} aria-hidden>fx</span>
           </button>
         ) : null}
         <span className={styles.spacer} />
-        <button type="button" className={styles.footerButton} aria-label={deleteLabel} title={deleteLabel} data-testid="deleteLayer"
+        <button type="button" className={`bw-icon-button is-small ${styles.footerButton}`} aria-label={deleteLabel} title={deleteLabel} data-testid="deleteLayer"
           disabled={!session.canEditLayers || !session.activeLayer} onClick={() => void session.deleteLayerOrMask()}><Icon name="trash" size={17} /></button>
       </div>
-      </div>
+      </>} />
       {filterMenu ? <MenuPopup controller={controller} anchor={filterMenu} items={filterItems(t, query, setQuery)} onClose={() => setFilterMenu(null)} /> : null}
       {menu ? <MenuPopup controller={controller} anchor={menu} items={menuItems(menu.id)} onClose={() => setMenu(null)} /> : null}
       {fxMenu && layerStyles && session.activeLayer ? (

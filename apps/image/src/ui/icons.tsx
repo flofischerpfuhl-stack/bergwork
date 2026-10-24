@@ -12,7 +12,7 @@ type IconName =
   | 'adjustment' | 'trash' | 'link' | 'plus' | 'close' | 'zoomIn' | 'zoomOut' | 'swap' | 'reset' | 'menu'
   | 'layers' | 'sliders' | 'levels' | 'curves' | 'exposure' | 'grain' | 'gradientMap' | 'more'
   | 'lock' | 'lockTransparency' | 'search' | 'filter' | 'artboard' | 'minus'
-  | 'text' | 'pen' | 'directSelect' | 'pathSelect' | 'undo' | 'redo' | 'open' | 'save' | 'export';
+  | 'text' | 'pen' | 'directSelect' | 'pathSelect' | 'undo' | 'redo' | 'open' | 'save' | 'export' | 'history' | 'palette' | 'panel';
 
 const paths: Record<IconName, ReactElement> = {
   move: <path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3" />,
@@ -54,6 +54,9 @@ const paths: Record<IconName, ReactElement> = {
   menu: <path d="M4 7h16M4 12h16M4 17h16" />,
   layers: <><path d="m12 4 9 5-9 5-9-5z" /><path d="m3 14 9 5 9-5" /></>,
   sliders: <path d="M4 7h10M18 7h2M4 17h4M12 17h8M14 5v4M8 15v4" />,
+  history: <><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></>,
+  palette: <><path d="M12 3a9 9 0 0 0 0 18c1.1 0 1.8-.8 1.8-1.8 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z" /><path d="M7.5 11.5h.01M10 7.5h.01M14.5 7.5h.01M17 11h.01" strokeWidth="2.4" /></>,
+  panel: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></>,
   levels: <path d="M4 7h16M4 12h16M4 17h16M8 5v4M15 10v4M11 15v4" />,
   curves: <><path d="M4 20C10 20 9 4 20 4" /><circle cx="4" cy="20" r="1.5" /><circle cx="20" cy="4" r="1.5" /></>,
   exposure: <><circle cx="12" cy="12" r="8" /><path d="M9 9h4M11 7v4M9 15h6" /></>,

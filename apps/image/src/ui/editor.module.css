@@ -66,7 +66,7 @@
   --cmp-radius-control: var(--bw-radius-control);
   --cmp-rail-w: 44px;
   --cmp-target: 28px;
-  --cmp-panel-w: 264px;
+  --cmp-panel-w: 320px;
   /* The work area between the chrome (canvas-pane); the canvas itself reaches under the chrome. */
   --cmp-pane-top: calc(var(--cmp-inset) + var(--cmp-bar) * 2 + var(--cmp-gap) * 2);
   --cmp-pane-left: calc(var(--cmp-inset) + var(--cmp-rail-w) + var(--cmp-gap));
@@ -391,7 +391,11 @@
   font-variant-numeric: tabular-nums; font-size: 10.5px; font-weight: 600; text-align: center; flex: none;
 }
 .panelClose { width: var(--cmp-control-size); height: var(--cmp-control-size); }
-.appearance { display: flex; flex-direction: column; gap: 8px; padding: 4px 12px 10px; border-bottom: 1px solid var(--cmp-hairline); }
+.appearance { display: flex; flex-direction: column; gap: 2px; padding: 6px 4px 8px; border-bottom: 1px solid var(--cmp-hairline); }
+/* The Appearance rows are Properties rows (berg:work design base) without the section indent. */
+.appearance :global(.bw-row) { padding: 0 4px; }
+/* A tab page of the panel (layers, history, colour) fills the body below the rail's tabs. */
+.panelPage { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 0 6px; }
 .appearanceRow { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--cmp-text-secondary); }
 .appearanceRow .select { flex: 1; min-width: 0; }
 .slider { flex: 1; min-width: 0; accent-color: var(--cmp-accent); height: 20px; }
@@ -402,17 +406,19 @@
   color: var(--cmp-text-secondary); text-align: center;
 }
 .emptyLayers strong { color: var(--cmp-text); font-size: 13px; }
-.layerRow {
-  position: relative; display: flex; align-items: center; height: 52px; margin-bottom: 2px; padding-right: 8px;
-  border: 1px solid transparent; border-radius: var(--cmp-radius-control); cursor: default;
-}
-.layerRow:hover { background: var(--cmp-control); }
-.layerRowSelected, .layerRowSelected:hover { background: var(--cmp-accent-soft); border-color: color-mix(in srgb, var(--cmp-accent-hover) 45%, transparent); }
-.layerRowDim { opacity: 0.35; }
+/* Layer rows are design-base ListRows (selection block, dim, indent); these add the editor's fixed height and the
+   gaps between thumbnails. The state column (fx, lock, eye) sits at the row's end. */
+.layerRow { position: relative; height: 52px; gap: 6px; padding: 0 2px 0 4px; }
+/* Rows that are not ListRows yet (artboards, effect and smart-filter sub-rows) share the dim state and text column. */
+.layerRowDim { opacity: 0.45; }
+.layerText { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.layerMeta { font: 400 var(--bw-text-caption) var(--bw-font-mono); color: var(--bw-fg-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Sub-row eyes join the state column at the row's end, as on the layer rows. */
+.effectRow > .eye { order: 10; margin-left: auto; }
 .layerRowDropAbove { box-shadow: inset 0 2px 0 var(--cmp-accent-strong); }
 .layerRowDropInto { box-shadow: inset 0 0 0 2px var(--cmp-accent-strong); }
-.eye { width: 28px; height: 32px; margin-left: 2px; border: 0; background: transparent; color: var(--cmp-text-secondary); display: grid; place-items: center; flex: none; }
-.eye:hover { color: var(--cmp-text); }
+.eye { width: 28px; height: 32px; border: 0; border-radius: var(--bw-radius-row); background: transparent; color: var(--bw-fg-muted); display: grid; place-items: center; flex: none; }
+.eye:hover { color: var(--bw-fg-strong); background: var(--bw-hover); }
 .disclosure { width: 16px; height: 24px; border: 0; background: transparent; color: var(--cmp-text-secondary); padding: 0; display: grid; place-items: center; flex: none; }
 .thumbSlot { width: 36px; display: grid; place-items: center; flex: none; margin-left: -2px; }
 .thumb {
@@ -425,11 +431,10 @@
 .linkButton { width: 13px; display: grid; place-items: center; border: 0; background: transparent; color: var(--cmp-text-secondary); padding: 0; flex: none; }
 .maskSlot { width: 30px; display: grid; place-items: center; flex: none; position: relative; }
 .maskDisabled { position: absolute; inset: 0; display: grid; place-items: center; color: var(--cmp-danger); font: 500 28px/1 var(--cmp-font); pointer-events: none; }
-.layerText { flex: 1; min-width: 0; margin-left: 7px; display: flex; flex-direction: column; gap: 3px; }
 .layerName { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.layerMeta { font-size: 10.5px; color: var(--cmp-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .renameInput {
-  font: 13px/1.2 var(--cmp-font); padding: 2px 5px; border-radius: 5px; border: 1px solid var(--cmp-accent-hover); background: var(--cmp-panel-3);
+  /* Rename in place: same font and position, a thin neutral frame (Builder §7). */
+  font: 13px/1.2 var(--cmp-font); padding: 1px 4px; margin: -2px -5px; border-radius: 4px; border: 1px solid var(--bw-frame); background: var(--bw-field-hover);
   color: var(--cmp-text); width: 100%;
 }
 .lockNotice {
@@ -437,36 +442,24 @@
   border-radius: 10px; border: 1px solid var(--cmp-border); background: var(--cmp-panel); color: var(--cmp-text); box-shadow: var(--cmp-shadow);
   font-size: 12px; font-weight: 500; pointer-events: none; z-index: 5;
 }
-.layerRowContext { opacity: 0.55; }
 .eye[data-label]:not([data-label="none"]) { color: #fff; border-radius: 5px; }
 .layerLock { flex: none; display: grid; place-items: center; width: 18px; color: var(--cmp-text-secondary); }
 .layerLockPartial { opacity: 0.5; }
 .lockButtons { display: flex; gap: 2px; }
-.lockButton { width: 26px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--cmp-text-secondary); display: grid; place-items: center; }
-.lockButton:hover:not(:disabled) { background: var(--cmp-control-hover); color: var(--cmp-text); }
-.lockButton:disabled { color: var(--cmp-text-tertiary); }
-.lockButtonOn, .lockButtonOn:hover:not(:disabled) { background: var(--cmp-accent-soft); color: var(--cmp-accent-strong); }
-.layerFilter { display: flex; align-items: center; gap: 6px; padding: 8px 8px 4px; color: var(--cmp-text-secondary); position: relative; }
-.layerFilter > svg { position: absolute; left: 18px; pointer-events: none; }
-.layerFilter input {
-  flex: 1; min-width: 0; height: 30px; border: 1px solid var(--cmp-border); border-radius: var(--cmp-radius-control); padding: 0 8px 0 28px;
-  background: var(--cmp-panel-2); color: var(--cmp-text); font: inherit; font-size: 12.5px;
-}
-.layerFilter input:focus { outline: 2px solid var(--cmp-accent-soft); border-color: var(--cmp-accent-hover); }
-.layerFilter .footerButton { width: 30px; height: 30px; padding: 0; border-radius: var(--cmp-radius-control); border: 1px solid var(--cmp-border); background: var(--cmp-panel-2); }
+.lockButtons :global(.bw-icon-button):disabled { color: var(--bw-fg-subtle); }
+/* Search and filter: a quiet field and the filter button with the frame convention (on = solid frame). */
+.layerFilter { display: flex; align-items: center; gap: 4px; padding: 8px 4px 4px; color: var(--bw-fg-muted); }
+.layerFilter :global(.bw-field) > input::-webkit-search-cancel-button { display: none; }
 .layerList .panelNote { padding: 12px 16px; }
-.layerMore { width: 28px; height: 28px; border: 0; background: transparent; color: var(--cmp-text-secondary); display: none; place-items: center; flex: none; }
+.layerMore { width: 28px; height: 28px; border: 0; border-radius: var(--bw-radius-row); background: transparent; color: var(--bw-fg-muted); display: none; place-items: center; flex: none; }
+/* No permanent per-row actions (Builder §2): the more button appears on hover; touch keeps it (below). */
+.layerRow:hover .layerMore { display: grid; }
 .compact .layerMore, .compactLandscape .layerMore { display: grid; width: 44px; height: 44px; }
 .compact .layerRow, .compactLandscape .layerRow { height: 60px; }
 .compact .eye, .compactLandscape .eye { width: 44px; height: 44px; }
 .compact .disclosure, .compactLandscape .disclosure { width: 30px; height: 44px; }
-.layersFooter { display: flex; align-items: center; gap: 4px; padding: 8px; border-top: 1px solid var(--cmp-hairline); color: var(--cmp-text-secondary); }
-.footerButton {
-  min-width: 30px; height: 30px; padding: 0 4px; border: 0; border-radius: var(--cmp-radius-control); background: transparent; color: inherit;
-  display: grid; place-items: center;
-}
-.footerButton:hover:not(:disabled) { color: var(--cmp-text); background: var(--cmp-control-hover); }
-.footerButton:disabled { color: var(--cmp-text-tertiary); }
+.layersFooter { display: flex; align-items: center; gap: 2px; padding: 6px 4px; border-top: 1px solid var(--cmp-hairline); color: var(--bw-fg-muted); }
+.footerButton { color: inherit; }
 .compact .footerButton, .compactLandscape .footerButton { min-width: 44px; min-height: 44px; }
 
 /* Floating sheets for compact layouts (Layers above the tool strip; beside it in landscape) */
@@ -480,6 +473,8 @@
 .sheet .layers { position: static; width: auto; border: 0; border-radius: 0; box-shadow: none; flex: 1; min-height: 0; background: transparent; }
 .sheetGrabber { width: 40px; height: 4px; border-radius: 2px; background: var(--cmp-border-strong); margin: 8px auto 0; flex: none; }
 .sheetClose { position: absolute; right: 8px; top: 6px; z-index: 3; }
+/* The sheet's close button sits above the panel's tab rail. */
+.sheet :global(.bw-panel-rail) { padding-top: 56px; }
 
 /* Status bar (bottom, centred between tools and panels): zoom, document facts, tool hint */
 .statusDock {

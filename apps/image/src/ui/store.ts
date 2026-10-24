@@ -40,9 +40,9 @@ export interface UiState {
   theme: 'dark' | 'light';
 }
 
-/** Width limits of the floating panel stack (the Layers panel was 202–352 in the Swift source). */
-export const LAYERS_WIDTH_MIN = 220;
-export const LAYERS_WIDTH_MAX = 380;
+/** Width limits of the floating panel stack; the tab rail takes 48 px (Builder side panels are 320 px). */
+export const LAYERS_WIDTH_MIN = 268;
+export const LAYERS_WIDTH_MAX = 440;
 
 export type UiStore = ReturnType<typeof createUiStore>;
 
@@ -54,7 +54,7 @@ export function createUiStore() {
     featureRevision: 0,
     dialog: null,
     openMenu: null,
-    layersWidth: Number.isFinite(saved) && saved >= LAYERS_WIDTH_MIN && saved <= LAYERS_WIDTH_MAX ? saved : 264,
+    layersWidth: Number.isFinite(saved) && saved >= LAYERS_WIDTH_MIN && saved <= LAYERS_WIDTH_MAX ? saved : 320,
     sheet: null,
     compact: false,
     spaceHeld: false,
