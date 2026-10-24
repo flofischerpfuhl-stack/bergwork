@@ -278,6 +278,30 @@ html[data-corners='sharp'] :is(.oo-pdf-shell, body.oo-pdf-workbench-route > :not
   border-radius: 0 !important;
 }
 
+/* Empty state: the file picker and, in the web app, the sample PDF side by side (wrapping on narrow screens). */
+.oo-pdf-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* Home link (web app, homeLink.tsx): a transparent link over the title bar's mark and wordmark, the bar's full height. */
+.bw-titlebar-brand:has(> .bw-home-link) {
+  position: relative;
+  align-self: stretch;
+}
+
+.bw-home-link {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 100%;
+  border-radius: var(--bw-radius-control);
+}
+
+.bw-home-link:focus-visible { outline: 2px solid var(--bw-focus); outline-offset: -4px; }
+.bw-titlebar-brand:has(> .bw-home-link:hover) :is(.bw-titlebar-mark, .bw-wordmark) { opacity: 0.78; }
+
 /* ── 4. Window ───────────────────────────────────────────────────────── */
 
 /* Linux: the window is transparent and the page draws the corners; maximised windows stay square. */

@@ -27144,7 +27144,7 @@ function App({ shell = null }) {
             <progress className="oo-pdf-restore-progress" aria-label="Restoring PDF session" />
           </section>
         ) : !activeDoc ? (
-          <EmptyDropzone onFiles={openFiles} error={openError} onDismissError={() => setOpenError('')} />
+          <EmptyDropzone onFiles={openFiles} error={openError} onDismissError={() => setOpenError('')} sample={shell?.sample} />
         ) : (
           <PdfViewport
             doc={activeDoc}
@@ -27523,7 +27523,7 @@ function HostSlot({ node, className }) {
   return <span ref={ref} className={className} />;
 }
 
-function EmptyDropzone({ onFiles, error = '', onDismissError }) {
+function EmptyDropzone({ onFiles, error = '', onDismissError, sample = null }) {
   const [drag, setDrag] = useState(false);
   return (
     <section
@@ -27538,9 +27538,15 @@ function EmptyDropzone({ onFiles, error = '', onDismissError }) {
     >
       <Icon name="file-text" />
       <h1>Open a PDF</h1>
-      <button type="button" className="oo-pdf-primary" onClick={() => document.querySelector('.oo-pdf-shell input[type="file"]')?.click()}>
-        Choose PDF or project
-      </button>
+      {/* berg:work: the host may offer a sample document next to the file picker (shell.sample). */}
+      <div className="oo-pdf-empty-actions">
+        <button type="button" className="oo-pdf-primary" onClick={() => document.querySelector('.oo-pdf-shell input[type="file"]')?.click()}>
+          Choose PDF or project
+        </button>
+        {sample && (
+          <button type="button" className="oo-pdf-ghost-button" onClick={sample.open}>{sample.label}</button>
+        )}
+      </div>
       <p>Drop PDFs or berg:work PDF projects (.bwpdf) here.</p>
       {error && (
         <div className="oo-pdf-warning oo-pdf-choice-card oo-pdf-open-error" role="alert" aria-label="PDF could not be opened">
@@ -43783,6 +43789,9 @@ function normalizeShellHost(shell) {
     setFullscreen: typeof shell.setFullscreen === 'function' ? shell.setFullscreen.bind(shell) : undefined,
     // berg:work: 'islands' lays the chrome out as berg:work Image does (see islandChrome).
     chrome: shell.chrome === 'islands' ? 'islands' : 'default',
+    // berg:work: a sample document the empty state offers next to "Choose PDF or project" (the web app).
+    sample: shell.sample && typeof shell.sample.open === 'function' && shell.sample.label
+      ? { label: String(shell.sample.label), open: () => shell.sample.open() } : null,
     titleBar: titleBar ? {
       leading: titleBar.leading instanceof Node ? titleBar.leading : null,
       trailing: titleBar.trailing instanceof Node ? titleBar.trailing : null,

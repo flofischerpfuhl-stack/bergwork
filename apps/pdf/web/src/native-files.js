@@ -88,7 +88,7 @@ function installDownloads() {
 }
 
 /** Resolves once the editor has restored its workspace and listens for opened files. */
-async function editorReady() {
+export async function editorReady() {
   for (let attempt = 0; attempt < 600; attempt += 1) {
     const shell = document.querySelector('.oo-pdf-shell');
     const restoring = [...document.querySelectorAll('.oo-pdf-empty h1')].some((node) => /restoring/i.test(node.textContent));

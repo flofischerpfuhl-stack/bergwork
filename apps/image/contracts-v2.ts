@@ -334,6 +334,15 @@ export interface EditorHandleV2 extends EditorHandle {
   getManifestV2(): ProjectManifestV2;
   /** Calls `listener` now and whenever the current tab, its name, size or unsaved state changes; returns unsubscribe. */
   subscribeDocument?(listener: (info: DocumentInfoV2) => void): () => void;
+  /** Opens the mount option's `sample` as a document (this tab when it is empty, else a new one); no-op without one. */
+  openSample?(): Promise<void>;
+}
+
+/** A sample image the start screen offers next to Open project and Import image (the web app). */
+export interface EditorSampleV2 {
+  /** File name, with extension; the document is named after it. */
+  readonly name: string;
+  load(): Promise<Blob>;
 }
 
 export type EditorProfileId = 'pro' | 'lite';
@@ -342,6 +351,7 @@ export interface MountEditorOptionsV2 {
   locale?: 'de' | 'en';
   theme?: 'dark' | 'light';
   profile?: EditorProfileId;
+  sample?: EditorSampleV2;
 }
 export type MountEditorV2 = (root: HTMLElement, options: MountEditorOptionsV2) => Promise<EditorHandleV2>;
 

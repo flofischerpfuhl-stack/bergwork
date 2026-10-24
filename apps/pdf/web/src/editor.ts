@@ -7,6 +7,8 @@
 export interface EditorShell {
   /** The active document for the window title; empty when none is open. */
   readonly setTitle: (title: string, options?: { readonly dirty?: boolean }) => void;
+  /** A sample document the empty state offers next to "Choose PDF or project" (the web app only). */
+  readonly sample?: { readonly label: string; readonly open: () => void };
 }
 
 interface EditorBundle {
@@ -42,5 +44,5 @@ export async function mountEditor(element: HTMLElement, shell: EditorShell): Pro
   pdfjs.GlobalWorkerOptions.workerSrc = `${vendor}pdf-runtime/pdf.worker.min.mjs`;
   const bundle = await import(/* @vite-ignore */ `${vendor}pdf-tools/oo-pdf-tools.js`) as EditorBundle;
   // 'islands': the chrome laid out as berg:work Image's (top: document and tools | file and panels; bottom: status).
-  bundle.mount(element, { host: { capabilities: { shell: { version: 1, chrome: 'islands', setTitle: shell.setTitle } } } });
+  bundle.mount(element, { host: { capabilities: { shell: { version: 1, chrome: 'islands', setTitle: shell.setTitle, sample: shell.sample } } } });
 }

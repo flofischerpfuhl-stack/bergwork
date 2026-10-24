@@ -8,7 +8,10 @@ the berg:work UI round.
 
 The web page (`index.html`, `src/app/shell.tsx`) is the berg:work window: the title bar of the design base
 (`packages/ui`, aliased in `vite.bergwork.ts`) above the editor; the editor's colours, type and radii come from the
-design base's tokens (`src/ui/editor.module.css`).
+design base's tokens (`src/ui/editor.module.css`). On the web the mark and wordmark link back to
+https://bergwork.app/ (`src/app/homeLink.tsx`), `<html lang>` follows the UI language, and the shell passes the mount
+option `sample` (`EditorSampleV2`, the product photo `src/app/sample/backpack.png`): the start screen then offers "Try a
+sample image", and `/app/image/?sample` opens it right away (`EditorHandleV2.openSample`).
 
 This directory is a standalone npm project (own `package-lock.json`, Node 22): run the commands below inside
 `apps/image/`. Parity with Compositor is tracked in `parity.json`.

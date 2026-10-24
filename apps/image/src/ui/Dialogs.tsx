@@ -135,7 +135,13 @@ export function NewCanvasSheet({ controller, welcome = false, onDone }: { contro
         {!welcome ? <button type="button" className={styles.pill} onClick={onDone}>{t('Cancel')}</button> : null}
         <button type="submit" className={`${styles.pill} ${styles.pillPrimary}`} disabled={!valid} data-testid="createCanvas">{t('Create canvas')}</button>
       </div>
-      <p className={styles.secondary} style={{ margin: 0, fontSize: 12 }}>{t('Paste an image here to open it as a canvas.')}</p>
+      {controller.sample ? (
+        // The host's sample image (the web app): beside the paste hint, so the row above keeps its actions on one line.
+        <div className={styles.buttonRow}>
+          <p className={styles.secondary} style={{ margin: 0, fontSize: 12, flex: '1 1 180px' }}>{t('Paste an image here to open it as a canvas.')}</p>
+          <button type="button" className={styles.pill} onClick={() => { onDone?.(); void controller.openSample(); }} data-testid="welcome-sample">{t('Try a sample image')}</button>
+        </div>
+      ) : <p className={styles.secondary} style={{ margin: 0, fontSize: 12 }}>{t('Paste an image here to open it as a canvas.')}</p>}
     </form>
   );
   return welcome ? <div className={styles.welcome}>{card}</div> : card;

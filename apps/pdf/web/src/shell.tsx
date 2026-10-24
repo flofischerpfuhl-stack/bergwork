@@ -9,13 +9,17 @@ import { Info, ScrollText } from 'lucide-react';
 import { MenuButton, TITLE_BAR_DE, TITLE_BAR_EN, TitleBar, TooltipLayer, resolvedTheme, useAppearance } from '@bergwork/ui';
 import { appVersion, desktopWindow, setWindowTitle, windowCall, wireDesktopWindow } from './desktopWindow';
 import { mountEditor } from './editor';
+import { HomeLink } from './homeLink';
+import { SAMPLE_LABEL, openSample, takeSampleRequest } from './sample';
 // @ts-expect-error plain ES module without types
 import { showLicences } from './licenses-view.js';
 // @ts-expect-error plain ES module without types
-import { installNativeFiles, openDocumentsFromSystem } from './native-files.js';
+import { editorReady, installNativeFiles, openDocumentsFromSystem } from './native-files.js';
 
 const APP_NAME = 'berg:work PDF';
 const locale: 'de' | 'en' = navigator.language.startsWith('de') ? 'de' : 'en';
+/** The desktop app (Tauri) keeps a plain logo and offers no sample; the web app at /app/pdf/ links back to the site. */
+const inDesktopApp = '__TAURI__' in globalThis;
 const ABOUT = locale === 'de' ? { about: 'Über berg:work PDF', licences: 'Lizenzen…' } : { about: 'About berg:work PDF', licences: 'Licences…' };
 
 function Shell() {
@@ -33,8 +37,13 @@ function Shell() {
     mounted.current = true;
     installNativeFiles();
     void appVersion().then(setVersion);
-    void mountEditor(stage.current!, { setTitle: (title, { dirty = false } = {}) => setDocument({ title, dirty }) })
-      .then(() => openDocumentsFromSystem());
+    const sample = inDesktopApp ? undefined : { label: SAMPLE_LABEL, open: () => void openSample() };
+    void mountEditor(stage.current!, { setTitle: (title, { dirty = false } = {}) => setDocument({ title, dirty }), sample })
+      .then(() => {
+        openDocumentsFromSystem();
+        // bergwork.app links to /app/pdf/?sample: the sample opens once the editor has restored its workspace.
+        if (sample && takeSampleRequest()) void editorReady().then(openSample);
+      });
   }, []);
 
   useEffect(() => {
@@ -64,6 +73,7 @@ function Shell() {
         windowControls={desktopWindow ? {
           onMinimize: () => windowCall('minimize'), onMaximize: () => windowCall('toggleMaximize'), onClose: () => windowCall('close'),
         } : undefined} />
+      {inDesktopApp ? null : <HomeLink root={window} />}
       <div ref={stage} id="pdf-workbench-root" className="bw-stage" />
       <TooltipLayer />
     </div>
