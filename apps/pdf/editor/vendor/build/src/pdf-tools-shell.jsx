@@ -969,6 +969,28 @@ function fontFamilyForText(textLike = {}) {
     fallbackFamily;
 }
 
+// berg:work: a rich-text frame keeps its character styles in `richTextDocument`; the flat fontWeight/fontStyle/
+// fontFamily fields keep the source run's values. The on-page editor reads the document's style when every run
+// shares one, so a frame made regular is not edited in the old bold face (or in the source subset preview font).
+const BASE14_CSS_FAMILIES = {
+  Helvetica: 'Helvetica, Arial, "Liberation Sans", "Nimbus Sans", sans-serif',
+  Times: '"Times New Roman", Times, "Liberation Serif", "Nimbus Roman", serif',
+  Courier: '"Courier New", Courier, "Liberation Mono", "Nimbus Mono PS", monospace',
+};
+function uniformRichTextStyle(textLike = {}) {
+  const document = textLike.richTextDocument;
+  if (!document || !Array.isArray(document.runs)) return null;
+  const styles = document.runs.length ? document.runs.map(run => run.style) : [document.defaultCharacterStyle];
+  const first = styles[0];
+  if (!first || styles.some(style => style?.resourceId !== first.resourceId)) return null;
+  const resource = (document.fontResources || []).find(item => item.resourceId === first.resourceId);
+  return {
+    family: resource?.kind === 'base14' ? BASE14_CSS_FAMILIES[first.family] || first.family : first.family,
+    weight: String(first.weight || '400'),
+    style: ['italic', 'oblique'].includes(first.style) ? 'italic' : 'normal',
+  };
+}
+
 // For a PDF font with no metric-compatible preview face (e.g. Aptos, Gill
 // Sans) the browser fallback runs wider or narrower than the native run, so
 // the editor text spilled out of its frame. Measure the run in the preview
@@ -16499,9 +16521,12 @@ function App({ shell = null }) {
   const miniToolbarEnabled = shell?.inspector === 'manual';
   const [miniToolbar, setMiniToolbar] = useState(null);
   const [miniToolbarHost, setMiniToolbarHost] = useState(null);
-  // Text a canvas editor showed when the mini toolbar formatted it (per sourceId): ending that edit unchanged must
-  // not write the editor's pre-format state back over the new formatting.
-  const miniFormattedRef = useRef(new Map());
+  // Closes the on-page text editor (its text unchanged: nothing is written) and waits for the frame to settle.
+  const endCanvasTextEditing = useCallback(() => new Promise(resolve => {
+    const area = document.activeElement;
+    if (area instanceof HTMLTextAreaElement && area.closest('.oo-pdf-textbox, .oo-pdf-object')) area.blur();
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }), []);
   const [fontActionWarning, setFontActionWarning] = useState(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -22085,15 +22110,8 @@ function App({ shell = null }) {
   }, [activeDoc, updateTextEdit]);
 
   const commitTextEdit = useCallback((sourceId, edit, options = {}) => {
-    const formattedText = miniFormattedRef.current.get(sourceId);
-    miniFormattedRef.current.delete(sourceId);
-    const nextText = typeof edit === 'string' ? edit : edit?.text;
-    if (formattedText !== undefined && nextText === formattedText) {
-      // berg:work: formatted from the mini toolbar while editing, text unchanged: the format commit is the edit.
-      setEditingText(null);
-      return;
-    }
-    updateTextEdit(sourceId, typeof edit === 'string' ? { text: edit } : edit, options);
+    // berg:work: an on-page edit that changed nothing only ends editing (see TextEditObject finishEdit).
+    if (!options.unchanged) updateTextEdit(sourceId, typeof edit === 'string' ? { text: edit } : edit, options);
     setEditingText(null);
   }, [updateTextEdit]);
 
@@ -27579,11 +27597,7 @@ function App({ shell = null }) {
         headless={!inspectorOpen}
         miniToolbar={miniToolbar && miniToolbarHost
           ? { host: miniToolbarHost, externalSelection: miniToolbar.externalSelection || null,
-            onFormatted: () => {
-              if (editingText?.type === 'sourceText' && miniToolbar.externalSelection) {
-                miniFormattedRef.current.set(editingText.sourceId, miniToolbar.externalSelection.text);
-              }
-            } } : null}
+            beforeCommit: miniToolbar.externalSelection ? endCanvasTextEditing : null } : null}
         tab={inspectorOpen ? inspectorTab : 'properties'}
         onTabChange={setInspectorTab}
         stack={selectionStack}
@@ -35057,19 +35071,21 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
     ? textLineOverflowWarning(page, current, draft, sourceText, onReadNeighbourObjects)
     : null;
 
+  // berg:work: the rich-text document's style wins over the source run's flat fields (see uniformRichTextStyle).
+  const richStyle = uniformRichTextStyle(current);
   const style = {
     left: displayedDragGeometry.x * zoom,
     top: displayedDragGeometry.y * zoom,
     width: Math.max(8, displayedDragGeometry.w * zoom),
     height: Math.max(8, displayedDragGeometry.h * zoom),
     fontSize: Math.max(8, current.fontSize * zoom),
-    fontFamily: fontFamilyForText(current),
+    fontFamily: richStyle ? `${richStyle.family}, ${fontFamilyForText(current)}` : fontFamilyForText(current),
     ...(() => {
-      const spacing = previewLetterSpacing(current, fontFamilyForText(current));
+      const spacing = richStyle ? null : previewLetterSpacing(current, fontFamilyForText(current));
       return spacing != null ? { letterSpacing: `${spacing * zoom}px` } : {};
     })(),
-    fontWeight: current.fontWeight || '400',
-    fontStyle: current.fontStyle || 'normal',
+    fontWeight: richStyle?.weight || current.fontWeight || '400',
+    fontStyle: richStyle?.style || current.fontStyle || 'normal',
     color: currentColor,
     zIndex,
     // On release, before the native commit lands, keep the rotation the drag
@@ -35084,7 +35100,11 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
   const previewFamily = uploadedPreviewFamilies?.get?.(current.fontResourceHash || current.fontResourceHashes?.[0]) ||
     (current.embeddedFontFamily ? uploadedPreviewFamilies?.get?.(`source:${current.embeddedFontFamily}`) : undefined);
   const previewStatus = editing ? uploadedFontPreviewStatus(current, uploadedPreviewStatuses, uploadedPreviewFamilies) : '';
-  const editStyle = orientedTextContentStyle(previewFamily ? { ...current, fontFamily: previewFamily } : current, zoom);
+  const orientedEditStyle = orientedTextContentStyle(previewFamily ? { ...current, fontFamily: previewFamily } : current, zoom);
+  const editStyle = richStyle && orientedEditStyle
+    ? { ...orientedEditStyle, fontFamily: `${richStyle.family}, ${orientedEditStyle.fontFamily || fontFamilyForText(current)}`,
+      fontWeight: richStyle.weight, fontStyle: richStyle.style, letterSpacing: undefined }
+    : orientedEditStyle;
   const sourceStyle = {
     left: sourceCoverX * zoom,
     top: sourceCoverY * zoom,
@@ -35520,6 +35540,14 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
       Date.now() - textCommitRef.current.at < 1_000
     ) return;
     textCommitRef.current = { value: nextText, at: Date.now() };
+    // berg:work: leaving the editor without typing changes nothing. Committing the unchanged text gave the kernel a
+    // no-op ("did not produce a native PDF change") and, after a style change made meanwhile (mini toolbar,
+    // Properties), wrote this editor's pre-change state back over it.
+    const baseline = editBaselineRef.current || current;
+    if (nextText === (baseline.currentText ?? baseline.text ?? item.str)) {
+      onStartEdit(null);
+      return;
+    }
     const widthPatch = textWidthPatchForEdit(nextText, current, sourceText);
     const keepSourceAppearance = preserveSourceTextPreview(current, widthPatch, nextText, sourceText, true);
     if (!edit && nextText === item.str) {
@@ -35733,19 +35761,20 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
   const previewStatus = editing ? uploadedFontPreviewStatus(edit, uploadedPreviewStatuses, uploadedPreviewFamilies) : '';
   const editStyle = orientedTextContentStyle(previewFamily ? { ...edit, fontFamily: previewFamily } : edit, zoom);
   const hasOrientedHit = !editing && Math.abs(textDisplayAngleRadians(edit)) >= 0.01;
+  const richStyle = uniformRichTextStyle(edit);
   const style = {
     left: (edit.x || 0) * zoom,
     top: (edit.y || 0) * zoom,
     width,
     height,
     fontSize: Math.max(8, (edit.fontSize || 12) * zoom),
-    fontFamily: fontFamilyForText(edit),
+    fontFamily: richStyle ? `${richStyle.family}, ${fontFamilyForText(edit)}` : fontFamilyForText(edit),
     ...(() => {
-      const spacing = previewLetterSpacing(edit, fontFamilyForText(edit));
+      const spacing = richStyle ? null : previewLetterSpacing(edit, fontFamilyForText(edit));
       return spacing != null ? { letterSpacing: `${spacing * zoom}px` } : {};
     })(),
-    fontWeight: edit.fontWeight || '400',
-    fontStyle: edit.fontStyle || 'normal',
+    fontWeight: richStyle?.weight || edit.fontWeight || '400',
+    fontStyle: richStyle?.style || edit.fontStyle || 'normal',
     color: currentColor,
     zIndex,
     ...(Number(edit.pendingRotationDegrees) && !editing
@@ -35943,6 +35972,14 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
       Date.now() - textCommitRef.current.at < 1_000
     ) return;
     textCommitRef.current = { value: nextText, at: Date.now() };
+    // berg:work: leaving the editor without typing changes nothing. Committing the unchanged text gave the kernel a
+    // no-op ("did not produce a native PDF change") and, after a style change made meanwhile (mini toolbar,
+    // Properties), wrote this editor's pre-change state back over it.
+    const baseline = editBaselineRef.current || edit;
+    if (nextText === (baseline.currentText ?? baseline.text ?? '')) {
+      onCommit(sourceId, null, { unchanged: true });
+      return;
+    }
     const keepSourceAppearance = preserveSourceTextPreview(edit, {}, nextText, sourceText, edit.dataUrl);
     const widthPatch = textWidthPatchForEdit(nextText, edit, sourceText);
     const nextSourceRect = textTargetSourceRectForPatch(page, edit, widthPatch);
@@ -42839,7 +42876,7 @@ function Inspector({
               richTextDocument && !legacyAutofitInvalid
             ? createPortal(renderRichTextEditor(`${layerPropertyDraftScope(doc, pageId, layer)}:mini`, {
               compact: true, externalSelection: miniToolbar.externalSelection, compactExtras: miniAlignControls,
-              onCompactCommit: miniToolbar.onFormatted,
+              onBeforeCompactCommit: miniToolbar.beforeCommit,
             }), miniToolbar.host)
             : null;
           return (

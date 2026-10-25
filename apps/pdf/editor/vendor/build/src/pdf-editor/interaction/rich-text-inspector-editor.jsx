@@ -68,7 +68,7 @@ export function RichTextInspectorEditor({ document, availableFontResources = [],
   // berg:work mini toolbar: only the character-formatting row, every change committed at once, and the range a
   // canvas text editor has selected ({ text, start, end } in UTF-16 offsets) as the target instead of this editor's
   // own textarea. `compactExtras` follow the row (paragraph alignment).
-  compact = false, externalSelection = null, compactExtras = null, onCompactCommit = null }) {
+  compact = false, externalSelection = null, compactExtras = null, onBeforeCompactCommit = null }) {
   const [draft, setDraft] = useState(document);
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const [typingPatch, setTypingPatch] = useState({});
@@ -301,15 +301,21 @@ export function RichTextInspectorEditor({ document, availableFontResources = [],
   const finish = async () => {
     if (cancelledRef.current || commitPendingRef.current) return;
     focusedRef.current = false;
-    if (draftRef.current !== baselineRef.current) {
+    // Compare content, not identity: while a commit is pending the parent hands the accepted document back as a new
+    // object, so draft and baseline can be equal documents in different objects. Committing that again gave the kernel
+    // a no-op ("did not produce a native PDF change") and left the frame in a state the next edit corrupted.
+    if (draftRef.current !== baselineRef.current &&
+        documentContentIdentity(draftRef.current) !== documentContentIdentity(baselineRef.current)) {
       const committed = draftRef.current;
       const baseline = baselineRef.current;
       commitPendingRef.current = true;
       setCommitPending(true);
       try {
+        // berg:work: a range picked in the on-page editor is formatted once that editor has closed, so the frame
+        // is not committed underneath an open editing session.
+        if (compact && onBeforeCompactCommit) await onBeforeCompactCommit();
         const accepted = await onCommit?.(committed, baseline);
         if (accepted === false) throw new Error('Rich-text commit was rejected.');
-        if (compact) onCompactCommit?.(committed);
         baselineRef.current = committed;
         undoRef.current = [];
         redoRef.current = [];
