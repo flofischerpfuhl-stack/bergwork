@@ -65,7 +65,24 @@ object no longer opens it. Formatting lives in the **mini toolbar** (fork: `Mini
 colour and (for reflowing text blocks) alignment above the context menu; selecting characters in the on-page text editor
 shows it faintly above the text until the pointer comes near, and Ctrl/⌘+B/I/U use it. The toolbar is filled by the
 same rich-text editor as Properties (a hidden Properties copy computes the row), so it commits through the same path
-and undo steps. The host supplies `shell.setTitle` (the window title,
+and undo steps.
+
+**Edit as paragraph** (context menu of a text line, ¶ in the mini toolbar): a source PDF usually draws a paragraph as
+one text object per line, so typing into one line runs over the next. This joins the detected paragraph (the
+`semanticBlock` from `text/block-detection.js`) into one reflowing text box in the paragraph's own font, size, line
+spacing, width and alignment, in one transaction and one undo step: `TEXT_BLOCK_REPLACE` on the first line with the
+whole text, `OBJECT_DELETE` for the other lines, a whole-document snapshot as the inverse (`editTextAsParagraph`,
+`updateTextEdit` option `paragraphLines`, `commitLiveSourceEdit`). `pdf-editor/model/paragraph-merge.js` (berg:work's
+own file) plans it: it limits the paragraph to the lines in the selected line's font and line pitch (the detector keeps
+Word paragraphs without space between them together), joins hyphenated line ends, reads the alignment (justified text
+becomes left-aligned with natural word spacing, the pinned worker has no justified layout; an indented first line
+loses its indent) and refuses what a single-font frame would damage: bold or italic words, superscripts, rotated,
+vertical or right-to-left text, Form XObject text, and TeX output, whose fonts have no space glyph (the pinned worker
+would lay the words out without gaps). A non-embedded font gets the same bundled substitute as a typed edit. If the
+frame does not reproduce the paragraph's line count, the join is undone and the user is told why. Tests:
+`node --test apps/pdf/scripts/paragraph-merge.test.mjs`.
+
+The host supplies `shell.setTitle` (the window title,
 `• name — berg:work PDF` for unsaved changes, and the document in the title bar); the editor shows no fullscreen toggle
 because the shell offers no `setFullscreen`. The editor's `titleBar` slots are not used.
 

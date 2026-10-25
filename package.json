@@ -13,6 +13,6 @@
     "sync:status": "node scripts/sync-upstream.mjs status",
     "sync:update": "node scripts/sync-upstream.mjs update",
     "sync:publish": "node scripts/sync-upstream.mjs publish",
-    "test": "node --test scripts/*.test.mjs"
+    "test": "node --test scripts/*.test.mjs apps/pdf/scripts/*.test.mjs"
   }
 }

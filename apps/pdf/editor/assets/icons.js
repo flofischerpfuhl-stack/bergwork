@@ -137,6 +137,8 @@ const ICONS = {
   'undo-2': '<path d="M9 14 4 9l5-5"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
   'unlock': '<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>',
   'wrap-text': '<path d="M3 6h18"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><path d="m16 16-2 2 2 2"/><path d="M3 18h7"/>',
+  // berg:work: Edit as paragraph (Lucide pilcrow).
+  'pilcrow': '<path d="M13 4v16"/><path d="M17 4v16"/><path d="M19 4H9.5a4.5 4.5 0 0 0 0 9H13"/>',
   'wrench': '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94Z"/>',
   'x': '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   'zap': '<path d="M4 14a1 1 0 0 1-.78-1.63l9-11a.5.5 0 0 1 .87.44l-1.69 6.7A1 1 0 0 0 12.37 10H20a1 1 0 0 1 .78 1.63l-9 11a.5.5 0 0 1-.87-.44l1.69-6.7A1 1 0 0 0 11.63 14Z"/>',
