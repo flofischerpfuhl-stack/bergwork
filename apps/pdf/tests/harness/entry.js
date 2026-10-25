@@ -406,7 +406,10 @@ const OPS = {
     // Built from the object's own characters: the exact (often subset) source font can encode it.
     const words = String(object.text).trim().split(/\s+/u);
     const replacement = words.length > 1 ? [...words.slice(1), words[0]].join(' ') : [...String(object.text).trim()].reverse().join('');
-    const semantic = rng() < 0.5;
+    // The shell undoes an edit of a native text run with a snapshot (replacesNativeTextRun): a semantic inverse
+    // retypes the line without its TJ kerning. The draw stays so the seeded plans keep their sequence.
+    rng();
+    const semantic = false;
     const prefix = uid('edittext');
     const before = semantic ? null : await session.snapshot({ retain: true });
     // The shell's semantic locator: source rectangle from the top-left of the unrotated page box.
