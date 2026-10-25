@@ -106,7 +106,7 @@ The generated service worker precaches the application shell, uses network-first
 
 ## Cloudflare settings
 
-The site is served by the `bergwork` Worker (static assets from `./dist`) on the custom domain `bergwork.app`, with `404.html` as the not-found page. Both are set in `wrangler.jsonc`.
+The site is served by the `bergwork` Worker (static assets from `./dist`) on the custom domain `bergwork.app`, with `404.html` as the not-found page. Both are set in `wrangler.jsonc`. Its script `worker.js` runs only for the page addresses listed in `run_worker_first` and sends plain-HTTP visits there to HTTPS with a 301 (the wrangler login has no right to switch on the zone's "Always Use HTTPS"); `_headers` adds HSTS. All other requests go straight to the assets.
 
 Cloudflare Workers Builds deploys every push to `main` automatically; other branches get preview builds. The Git connection lives in the Cloudflare dashboard with:
 
