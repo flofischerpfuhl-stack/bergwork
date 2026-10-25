@@ -628,15 +628,17 @@ function FileButton({ accept, label = 'Choose file', icon: iconName = 'file', on
 function MiniToolbarHost({ toolbar, onHost }) {
   const ref = useRef(null);
   const [position, setPosition] = useState(null);
-  const [near, setNear] = useState(toolbar.reason !== 'selection');
+  const faintFirst = toolbar.reason === 'selection' || toolbar.reason === 'object';
+  const [near, setNear] = useState(!faintFirst);
   useLayoutEffect(() => {
     const node = ref.current;
     if (!node) return undefined;
     const place = () => {
       const rect = node.getBoundingClientRect();
-      const gap = 10;
+      // An object's toolbar clears its rotation handle above the frame.
+      const gap = toolbar.reason === 'object' ? 40 : 10;
       let top = toolbar.y - rect.height - gap;
-      if (top < 64) top = toolbar.reason === 'selection' ? (toolbar.bottom || toolbar.y) + gap : toolbar.y + gap + 4;
+      if (top < 64) top = faintFirst ? (toolbar.bottom || toolbar.y) + gap : toolbar.y + gap + 4;
       const left = Math.min(Math.max(8, toolbar.x - (toolbar.reason === 'context' ? 12 : 0)), Math.max(8, window.innerWidth - rect.width - 8));
       setPosition({ left, top: Math.min(Math.max(8, top), Math.max(8, window.innerHeight - rect.height - 8)) });
     };
@@ -646,7 +648,7 @@ function MiniToolbarHost({ toolbar, onHost }) {
     return () => observer.disconnect();
   }, [toolbar.x, toolbar.y, toolbar.bottom, toolbar.reason]);
   useEffect(() => {
-    if (toolbar.reason !== 'selection') { setNear(true); return undefined; }
+    if (!faintFirst) { setNear(true); return undefined; }
     setNear(false);
     const move = event => {
       const rect = ref.current?.getBoundingClientRect();
@@ -657,7 +659,7 @@ function MiniToolbarHost({ toolbar, onHost }) {
     };
     window.addEventListener('pointermove', move, true);
     return () => window.removeEventListener('pointermove', move, true);
-  }, [toolbar.reason, toolbar.externalSelection]);
+  }, [faintFirst, toolbar.externalSelection, toolbar.key]);
   return (
     <div ref={node => { ref.current = node; onHost(node); }}
       className={`oo-pdf-mini-toolbar ${near ? '' : 'is-faint'}`} role="toolbar" aria-label="Format"
@@ -20177,6 +20179,9 @@ function App({ shell = null }) {
       // A click back into the text being edited moves the selection; the selection listener decides.
       if (miniToolbar.reason === 'selection' && target?.closest?.('.oo-pdf-textbox textarea, .oo-pdf-object textarea')) return;
       setMiniToolbar(null);
+      if (miniToolbar.reason === 'object' && target?.closest?.('.oo-pdf-viewport .is-selected')) {
+        window.addEventListener('pointerup', () => setMiniToolbarReshow(value => value + 1), { once: true, capture: true });
+      }
     };
     const escape = event => {
       if (event.key !== 'Escape' || event.target?.closest?.('.oo-pdf-select-sheet-backdrop')) return;
@@ -20193,8 +20198,30 @@ function App({ shell = null }) {
     };
   }, [miniToolbar]);
   useEffect(() => {
-    if (!editingText) setMiniToolbar(current => (current?.reason === 'selection' ? null : current));
+    setMiniToolbar(current => (current?.reason === 'selection' && !editingText) || (current?.reason === 'object' && editingText)
+      ? null : current);
   }, [editingText]);
+  // Pressing on the selected object (to move it) hides its toolbar; it comes back where the object lands.
+  const [miniToolbarReshow, setMiniToolbarReshow] = useState(0);
+  // Selecting one object in Edit PDF shows its mini toolbar faintly above it (Canva, Google Slides); typing into it,
+  // another selection or none replaces or hides it. Empty for objects without quick formatting.
+  const selectionKeyForMini = selected && selected.type !== 'multi'
+    ? `${selected.type}:${selected.sourceId || selected.id || ''}` : '';
+  useEffect(() => {
+    if (!miniToolbarEnabled || tool !== 'select' || editingText) return undefined;
+    if (!selectionKeyForMini) {
+      setMiniToolbar(current => (current?.reason === 'object' ? null : current));
+      return undefined;
+    }
+    const frame = requestAnimationFrame(() => requestAnimationFrame(() => {
+      const node = rootRef.current?.querySelector('.oo-pdf-viewport .is-selected');
+      const rect = node?.getBoundingClientRect?.();
+      if (!rect || !rect.width) return;
+      setMiniToolbar(current => (current?.reason === 'context' || current?.reason === 'selection' ? current
+        : { reason: 'object', key: selectionKeyForMini, x: rect.left, y: rect.top, bottom: rect.bottom, externalSelection: null }));
+    }));
+    return () => cancelAnimationFrame(frame);
+  }, [miniToolbarEnabled, tool, editingText, selectionKeyForMini, miniToolbarReshow]);
 
   // Panels dock below the real toolbar edge. The toolbars wrap on narrow
   // windows, so a hard-coded offset let the Layers panel cover them.
@@ -27139,8 +27166,15 @@ function App({ shell = null }) {
   </button>
   );
   const layersButton = (
-  <button data-pdf-layers-trigger="true" className={`oo-pdf-chrome-button oo-pdf-desktop-layers-control ${phoneLayout ? '' : 'has-text'} ${inspectorOpen ? 'is-on' : ''}`} type="button" aria-label="Layers" aria-pressed={inspectorOpen} title="Properties and layers" onClick={toggleInspector}>
-    <Icon name="layers" />{!phoneLayout && <span className="oo-pdf-chrome-button-text">Layers</span>}
+  <button data-pdf-layers-trigger="true" className={`oo-pdf-chrome-button oo-pdf-desktop-layers-control ${phoneLayout ? '' : 'has-text'} ${inspectorOpen ? 'is-on' : ''}`} type="button"
+    aria-label={shell?.inspector === 'manual' ? 'Properties' : 'Layers'} aria-pressed={inspectorOpen} title="Properties and layers"
+    onClick={() => {
+      // berg:work: the button is Properties first; it opens on the selection's properties, Layers is the second tab.
+      if (shell?.inspector === 'manual' && !inspectorOpen) setInspectorTab(selectedRef.current ? 'properties' : 'layers');
+      toggleInspector();
+    }}>
+    <Icon name={shell?.inspector === 'manual' ? 'panel-right' : 'layers'} />
+    {!phoneLayout && <span className="oo-pdf-chrome-button-text">{shell?.inspector === 'manual' ? 'Properties' : 'Layers'}</span>}
   </button>
   );
 
@@ -39494,6 +39528,31 @@ function PanelHint({ children, role, id, className = '' }) {
 
 // Two or three exclusive choices. Real radio inputs keep keyboard and
 // screen-reader behaviour of a radio group.
+// berg:work: colour as a row of quick colours plus the system picker, as Acrobat, Canva and Word offer for markup.
+const ANNOTATION_QUICK_COLORS = [
+  ['#fff176', 'Yellow'], ['#86efac', 'Green'], ['#93c5fd', 'Light blue'], ['#f9a8d4', 'Pink'], ['#fdba74', 'Orange'],
+  ['#dc2626', 'Red'], ['#2563eb', 'Blue'], ['#111111', 'Black'],
+];
+function ColorSwatchField({ label = 'Color', value, onChange, disabled = false, title, compact = false }) {
+  const current = String(value || '').toLowerCase();
+  return (
+    <div className={`oo-pdf-swatch-field ${compact ? 'is-compact' : ''}`} role="group" aria-label={label} title={title}>
+      {!compact && <span className="oo-pdf-caption">{label}</span>}
+      <span className="oo-pdf-swatches">
+        {ANNOTATION_QUICK_COLORS.map(([color, name]) => (
+          <button key={color} type="button" className="oo-pdf-swatch" aria-label={name} title={name} disabled={disabled}
+            aria-pressed={current === color} style={{ '--oo-pdf-swatch': color }}
+            onMouseDown={event => event.preventDefault()} onClick={() => onChange(color)} />
+        ))}
+        <label className="oo-pdf-swatch-custom" title="Other colour">
+          <input type="color" aria-label={`${label}: other colour`} value={/^#[0-9a-f]{6}$/u.test(current) ? current : '#000000'}
+            disabled={disabled} onChange={event => onChange(event.target.value)} />
+        </label>
+      </span>
+    </div>
+  );
+}
+
 function SegmentedChoice({ label, name, value, options, onChange, disabled = false, className = '' }) {
   return (
     <div className={`oo-pdf-seg ${className}`} role="radiogroup" aria-label={label}>
@@ -41947,6 +42006,17 @@ function Inspector({
   // A nested component gets a new React type on every Inspector render, which
   // remounts the range during its own preview update and loses the gesture
   // that blur/pointer-up must commit.
+  const annotationColorEditable = layer => (layer.item.type === 'comment' || isTextMarkup(layer.item)) &&
+    annotationAppearanceColorEditable(layer.item);
+  const annotationColorControl = (layer, compact = false) => <ColorSwatchField compact={compact}
+    value={isTextMarkup(layer.item) ? textMarkupColor(layer.item) : layer.item.color || '#facc15'}
+    disabled={readOnly || nativeBusy}
+    // Text markup paints with fill and stroke; comments carry a colour.
+    onChange={color => onUpdateAnnotation(layer.item.id, isTextMarkup(layer.item) ? { fill: color, stroke: color } : { color }, {
+      commitGesture: true,
+      gestureReason: layer.item.type === 'comment' ? 'comment-color-commit' : 'markup-color-commit',
+      previousForCommit: clonePlain(layer.item, {}),
+    })} />;
   const annotationOpacityControl = layer => <label>Opacity <PercentRange
     aria-label="Opacity"
     type="range"
@@ -43461,6 +43531,11 @@ function Inspector({
 
                   {layer.type === 'annotation' && (
                     <>
+                      {miniToolbar && !miniToolbar.externalSelection && isSelected && !multiSelection && annotationColorEditable(layer) &&
+                        createPortal(<div className="oo-pdf-mini-annotation">
+                          {annotationColorControl(layer, true)}
+                          <span className="oo-pdf-mini-opacity">{annotationOpacityControl(layer)}</span>
+                        </div>, miniToolbar.host)}
                       {createdAnnotationRichTextDocument && <>{renderCreatedRichEditor()}{miniToolbarAnnotationEditor}</>}
                       {layer.item.type === 'comment' && <PropSection sectionKey="content" title="Content"
                         summary={String(layer.item.text || '').replace(/\s+/gu, ' ').trim()}>
@@ -43510,27 +43585,7 @@ function Inspector({
                       {!createdAnnotationRichTextDocument && <PropSection sectionKey="appearance" title="Appearance"
                         summary={`${Math.round(100 * Number(layer.item.opacity ?? 1))} %`}>
                       {annotationOpacityControl(layer)}
-                      {layer.item.type === 'comment' && (
-                        <>
-                          <label>Color <input
-                            type="color"
-                            value={layer.item.color || '#facc15'}
-                            disabled={!annotationAppearanceColorEditable(layer.item)}
-                            title={!annotationAppearanceColorEditable(layer.item)
-                              ? 'Color is unavailable because this PDF annotation subtype has no editable color appearance.'
-                              : undefined}
-                            onChange={(event) => onUpdateAnnotation(
-                              layer.item.id,
-                              { color: event.target.value },
-                              {
-                                commitGesture: true,
-                                gestureReason: 'comment-color-commit',
-                                previousForCommit: clonePlain(layer.item, {}),
-                              },
-                            )}
-                          /></label>
-                        </>
-                      )}
+                      {annotationColorEditable(layer) && annotationColorControl(layer)}
                       {(layer.item.type === 'text' || layer.item.type === 'signature') && (
                         <>
                           {!createdAnnotationRichTextDocument && layer.item.imported && layer.item.sourceSubtype === 'freetext' &&

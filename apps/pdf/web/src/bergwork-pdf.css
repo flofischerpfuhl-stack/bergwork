@@ -370,7 +370,7 @@ body.oo-pdf-workbench-route button { font-family: var(--bw-font-ui); }
   border-radius: calc(var(--bw-radius-control) - 3px);
 }
 
-.oo-pdf-mini-toolbar button:not(.oo-pdf-select-trigger) {
+.oo-pdf-mini-toolbar button:not(.oo-pdf-select-trigger):not(.oo-pdf-swatch) {
   display: inline-grid;
   place-items: center;
   width: 30px;
@@ -384,8 +384,8 @@ body.oo-pdf-workbench-route button { font-family: var(--bw-font-ui); }
   font: 600 14px / 1 var(--bw-font-ui);
 }
 
-.oo-pdf-mini-toolbar button:not(.oo-pdf-select-trigger):hover:not(:disabled) { background: var(--bw-hover); color: var(--bw-fg-strong); }
-.oo-pdf-mini-toolbar button[aria-pressed='true'] {
+.oo-pdf-mini-toolbar button:not(.oo-pdf-select-trigger):not(.oo-pdf-swatch):hover:not(:disabled) { background: var(--bw-hover); color: var(--bw-fg-strong); }
+.oo-pdf-mini-toolbar button:not(.oo-pdf-swatch)[aria-pressed='true'] {
   border-color: var(--bw-frame);
   background: var(--bw-control);
   color: var(--bw-fg-strong);
@@ -404,6 +404,51 @@ body.oo-pdf-workbench-route button { font-family: var(--bw-font-ui); }
 }
 
 .oo-pdf-mini-toolbar .oo-rich-text-error { max-width: 220px; padding: 0 6px; color: var(--bw-error); font-size: var(--bw-text-small); }
+
+/* Quick colours (markup, comments): a row of swatches plus the system picker, in Properties and the mini toolbar. */
+.oo-pdf-shell .oo-pdf-swatch-field { display: grid; gap: 6px; }
+.oo-pdf-swatch-field.is-compact { display: flex; align-items: center; }
+.oo-pdf-swatches { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.oo-pdf-swatch-field.is-compact .oo-pdf-swatches { flex-wrap: nowrap; gap: 2px; }
+.oo-pdf-swatch,
+html body .oo-pdf-shell button.oo-pdf-swatch,
+body .oo-pdf-mini-toolbar button.oo-pdf-swatch {
+  flex: none;
+  min-width: 22px;
+  max-width: 22px;
+  box-shadow: none;
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 1px solid var(--bw-border-strong);
+  border-radius: var(--bw-radius-dot) !important;
+  background: var(--oo-pdf-swatch) !important;
+}
+.oo-pdf-swatch:hover:not(:disabled) { transform: scale(1.12); }
+.oo-pdf-swatch[aria-pressed='true'],
+body .oo-pdf-mini-toolbar button.oo-pdf-swatch[aria-pressed='true'] {
+  outline: 2px solid var(--bw-frame);
+  outline-offset: 2px;
+}
+.oo-pdf-swatch-custom { display: inline-grid; place-items: center; }
+.oo-pdf-swatch-custom input[type='color'],
+html body .oo-pdf-shell .oo-pdf-swatch-custom input[type='color'] {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--bw-radius-dot);
+  background: conic-gradient(#f87171, #fbbf24, #a3e635, #34d399, #38bdf8, #818cf8, #e879f9, #f87171);
+}
+.oo-pdf-swatch-custom input[type='color']::-webkit-color-swatch-wrapper { padding: 0; }
+.oo-pdf-swatch-custom input[type='color']::-webkit-color-swatch { border: 0; opacity: 0; }
+
+.oo-pdf-mini-toolbar .oo-pdf-mini-annotation { display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+.oo-pdf-mini-toolbar .oo-pdf-mini-opacity label { display: inline-flex; align-items: center; gap: 6px; font-size: var(--bw-text-small); color: var(--bw-fg-muted); }
+.oo-pdf-mini-toolbar .oo-pdf-mini-opacity input[type='range'] { width: 90px; }
 
 /* Text alignment row in Properties (Align text) and its pressed state, like the mini toolbar's. */
 .oo-pdf-shell .oo-pdf-text-align-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

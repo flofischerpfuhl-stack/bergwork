@@ -24,7 +24,8 @@ function saveSectionState() {
 export function PropSection({ sectionKey, title, summary = '', children, className = '' }) {
   loadSectionState();
   const contentId = useId();
-  const [open, setOpen] = useState(() => sectionState.get(sectionKey) === true);
+  // berg:work: sections start open (design base, Figma); a section someone folded stays folded.
+  const [open, setOpen] = useState(() => sectionState.get(sectionKey) !== false);
   const toggle = () => {
     const next = !open;
     sectionState.set(sectionKey, next);
