@@ -214,9 +214,13 @@ class Session {
 
   /** Re-inspects the first pages a commit dirtied (at most 3, like the editor's immediate visible-page refresh after a commit, undo or redo). */
   async refresh(result) {
+    // A page-structure commit returns the new page order: a duplicated, imported or inserted page is found there,
+    // as the editor does, before the caller syncs its own list.
+    const pageIds = Array.isArray(result?.pageIds) ? result.pageIds : this.pageIds;
+    if (pageIds !== this.pageIds) this.pageIds = [...pageIds];
     const dirty = this.refreshAll
-      ? this.pageIds.map((_, index) => index).slice(0, INSPECT_ALL_LIMIT)
-      : (result?.dirtyPages || []).map((id) => this.pageIds.indexOf(id)).filter((index) => index >= 0).slice(0, 3);
+      ? pageIds.map((_, index) => index).slice(0, INSPECT_ALL_LIMIT)
+      : (result?.dirtyPages || []).map((id) => pageIds.indexOf(id)).filter((index) => index >= 0).slice(0, 3);
     for (const index of dirty) {
       try { await this.inspect(index); } catch { /* a failed inspection surfaces in the next step */ }
     }
