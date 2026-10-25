@@ -159,7 +159,9 @@ class Session {
       password: String(password || ''),
     });
     const kernel = new PdfSemanticKernel({
-      engine, store: store || new MemoryCommandJournalStore(), documentKey, checkpointEvery: 0,
+      // The editor keeps recovery resources in OPFS (2 GB budget); the memory store's default 256 MB would refuse
+      // edits of the corpus's largest files that the editor accepts.
+      engine, store: store || new MemoryCommandJournalStore({ resourceByteLimit: 2 * 1024 * 1024 * 1024 }), documentKey, checkpointEvery: 0,
     });
     const session = new Session(engine, kernel, opened.pageIds);
     session.opened = opened;
