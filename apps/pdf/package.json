@@ -14,7 +14,12 @@
     "fork:status": "node scripts/editor-fork.mjs status",
     "fork:port": "node scripts/editor-fork.mjs port",
     "fork:check": "node scripts/editor-fork.mjs check",
-    "dev": "vite"
+    "dev": "vite",
+    "test:corpus:fetch": "node tests/corpus/fetch-corpus.mjs",
+    "test:corpus:quick": "node tests/run-corpus.mjs --tier quick",
+    "test:corpus": "node tests/run-corpus.mjs --tier sample",
+    "test:corpus:full": "node tests/run-corpus.mjs --tier full",
+    "test:corpus:ui": "node tests/ui-smoke.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.5",

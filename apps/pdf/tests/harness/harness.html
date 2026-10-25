@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>berg:work PDF corpus harness</title>
+</head>
+<body>
+<p id="status">loading</p>
+<script type="module">
+  // The editor shell reads PDFLib/pdfjsLib from window when its module is evaluated (as web/src/editor.ts sets them
+  // before importing the bundle), so the runtimes load first.
+  Promise.all([import('/tools/vendor/pdf-runtime/pdf-lib.esm.min.js'), import('/tools/vendor/pdf-runtime/pdf.min.mjs')])
+    .then(([pdfLib, pdfjs]) => {
+      Object.assign(globalThis, { PDFLib: pdfLib, pdfjsLib: pdfjs });
+      pdfjs.GlobalWorkerOptions.workerSrc = '/tools/vendor/pdf-runtime/pdf.worker.min.mjs';
+      return import('/__harness/harness.js');
+    })
+    .then(async (module) => { await module.init(); window.BW = module; document.getElementById('status').textContent = 'ready'; })
+    .catch((error) => { window.__harnessError = String(error?.stack || error); document.getElementById('status').textContent = 'error'; });
+</script>
+</body>
+</html>
