@@ -345,8 +345,13 @@ export class PdfEngineSessionOrchestrator {
 
   /**
    * @param {import('../model/commands.js').PdfTransaction} transaction
+   * @param {{ rebindStaleTargets?: boolean, targetPageIds?: Record<string, string> }} [options]
+   *   History replay (Undo, Redo, recovery) asks the worker to re-inspect the
+   *   pages of targets whose Stable Binding is not live at the current page
+   *   epoch before preflight; targetPageIds (from the original commit's
+   *   result) names the page of a target whose binding is gone.
    */
-  applyTransaction(transaction) {
+  applyTransaction(transaction, { rebindStaleTargets = false, targetPageIds = null } = {}) {
     this.#requireWritable();
     if (transaction.sessionId !== this.#sessionId) {
       return Promise.reject(new Error('Transaction session does not match the open engine session.'));
@@ -378,7 +383,14 @@ export class PdfEngineSessionOrchestrator {
         sessionId: this.#sessionId,
         revision: transaction.baseRevision,
         transactionId,
-        payload: { commands: transaction.commands, resourceHashes: transaction.resourceHashes },
+        payload: {
+          commands: transaction.commands,
+          resourceHashes: transaction.resourceHashes,
+          ...(rebindStaleTargets === true ? { rebindStaleTargets: true } : {}),
+          ...(rebindStaleTargets === true && targetPageIds && typeof targetPageIds === 'object'
+            ? { targetPageIds: { ...targetPageIds } }
+            : {}),
+        },
       });
       try {
         // A deterministic test gate pauses dispatch while the preview remains

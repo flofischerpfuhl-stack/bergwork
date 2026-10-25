@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "upstream": "fernwork-pdf",
   "description": "Fernwork PDF editor sources forked into berg:work; paths as in Fernwork. See apps/pdf/scripts/editor-fork.mjs.",
-  "commit": "bb126427b74527602c97999d91da8d28f195ac0f",
+  "commit": "c51d5b38f181ecf61f57e6875dc94180438cfa23",
   "entries": [
     "vendor/build/src/pdf-tools-shell.jsx"
   ],

@@ -302,7 +302,9 @@ export class PdfSemanticKernel {
         // rejected tail command leaves the original complete record intact.
         await this.#ensureTransactionResources(transaction.resourceHashes);
         try {
-          result = await this.#engine.applyTransaction(transaction);
+          // A replayed command targets objects nobody inspected since the
+          // preceding replayed entry; let the worker rebind them first.
+          result = await this.#engine.applyTransaction(transaction, { rebindStaleTargets: true });
         } catch (error) {
           const noReplayMutation = this.#engine.revision === checkpointRevision &&
             this.#entries.every(item => item.committedRevision <= checkpointRevision);
@@ -493,6 +495,8 @@ export class PdfSemanticKernel {
     historyLabel = label,
     uiTransition = null,
     finalizeUiTransition = null,
+    // Undo/Redo: the page of each target at the original commit.
+    replayTargetPageIds = null,
     // Inverse commands can own resources too. A pre-edit document snapshot is
     // the exact inverse for destructive font-family replacement, and it must
     // remain durable even though the forward command does not reference it.
@@ -545,7 +549,19 @@ export class PdfSemanticKernel {
     let committedResult = null;
     try {
       await this.#ensureTransactionResources(transaction.resourceHashes);
-      const result = await this.#engine.applyTransaction(transaction);
+      // Undo/Redo replays commands authored for the document state the
+      // history has just restored. Their targets' pages need not have been
+      // inspected since (page-structure steps keep bindings only until the
+      // next inspection, and the editor refreshes only visible pages), so the
+      // worker rebinds stale targets exactly as an inspection would.
+      const replay = historyMode === 'undo' || historyMode === 'redo';
+      const result = await this.#engine.applyTransaction(
+        transaction,
+        ...(replay ? [{
+          rebindStaleTargets: true,
+          ...(replayTargetPageIds ? { targetPageIds: replayTargetPageIds } : {}),
+        }] : []),
+      );
       nativeResult = result;
       committedResult = result;
       if (typeof finalizeUiTransition === 'function' && entry.uiTransition) {
@@ -598,7 +614,10 @@ export class PdfSemanticKernel {
       entry.committedRevision = result.committedRevision;
       entry.effectDigest = result.effectDigest;
       if (recordHistory) {
-        this.#undo.push({ label, commands, inverseCommands, uiTransition: entry.uiTransition });
+        this.#undo.push({
+          label, commands, inverseCommands, uiTransition: entry.uiTransition,
+          ...(result.targetPageIds ? { targetPageIds: { ...result.targetPageIds } } : {}),
+        });
         this.#redo = [];
         this.#trimHistory();
         this.#pruneResourceMetadata();
@@ -684,6 +703,7 @@ export class PdfSemanticKernel {
         transactionId: `${prefix}:transaction`,
         recordHistory: false,
         historyMode: 'undo',
+        replayTargetPageIds: item.targetPageIds || null,
         historyLabel: item.label,
         uiTransition: normalizedUiTransition(uiTransition) || reversedUiTransition(item.uiTransition),
       });
@@ -715,6 +735,7 @@ export class PdfSemanticKernel {
         transactionId: `${prefix}:transaction`,
         recordHistory: false,
         historyMode: 'redo',
+        replayTargetPageIds: item.targetPageIds || null,
         historyLabel: item.label,
         uiTransition: normalizedUiTransition(uiTransition) || normalizedUiTransition(item.uiTransition),
       });
