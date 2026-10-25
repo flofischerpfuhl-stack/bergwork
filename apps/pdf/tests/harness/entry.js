@@ -587,7 +587,7 @@ const OPS = {
     await session.execute('Add comment', [command(prefix, CommandType.ANNOTATION_SET, id, {
       pageIndex: page.index, subtypeName: 'text', bounds, contents, title: 'Corpus suite', color: '#facc15', opacity: 1,
     })], [command(`${prefix}:inv`, CommandType.ANNOTATION_SET, id, { pageIndex: page.index, deleted: true })]);
-    state.model.annotationContents.push({ pageId: page.id, contents });
+    state.model.annotationContents.push({ pageId: page.id, contents, bounds });
     touch(state, page.id);
     return { status: 'ok', detail: { page: page.index } };
   },
@@ -606,7 +606,7 @@ const OPS = {
       fontColor: '#111111', fontSize: signature ? 16 : 11, fontFamily: signature ? 7 : 4,
       backgroundColor: signature ? 'transparent' : '#fffde7', borderColor: signature ? 'transparent' : '#9e9e9e', borderWidth: signature ? 0 : 1,
     })], [command(`${prefix}:inv`, CommandType.ANNOTATION_SET, id, { pageIndex: page.index, deleted: true })]);
-    state.model.annotationContents.push({ pageId: page.id, contents: text });
+    state.model.annotationContents.push({ pageId: page.id, contents: text, bounds });
     touch(state, page.id);
     return { status: 'ok', detail: { page: page.index, signature } };
   },
@@ -733,6 +733,9 @@ async function addRedaction(state, page, rects) {
   const { session } = state;
   // A redaction removes every glyph it touches, including text this run added earlier.
   state.model.markers = state.model.markers.filter((item) => !(item.pageId === page.id &&
+    (!item.bounds || rects.some((rect) => rectsIntersect(rect, item.bounds)))));
+  // Annotations under a redaction are removed on export, as in Acrobat.
+  state.model.annotationContents = state.model.annotationContents.filter((item) => !(item.pageId === page.id &&
     (!item.bounds || rects.some((rect) => rectsIntersect(rect, item.bounds)))));
   const prefix = uid('redact');
   const commands = []; const inverse = [];
@@ -868,8 +871,12 @@ async function formFieldsOf(bytes) {
   try {
     const pdf = await globalThis.PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
     const form = pdf.getForm();
+    const seen = new Set();
     for (const field of form.getFields()) {
       const name = field.getName();
+      // Separate field dicts may share one full name; they hold one value, so expect it once.
+      if (seen.has(name)) continue;
+      seen.add(name);
       const { PDFTextField, PDFCheckBox } = globalThis.PDFLib;
       if (field instanceof PDFTextField) {
         if (field.isReadOnly?.()) continue;

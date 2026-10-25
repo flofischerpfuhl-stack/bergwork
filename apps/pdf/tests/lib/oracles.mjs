@@ -43,16 +43,17 @@ export async function qpdfEncrypted(file) {
 export async function popplerWordsInRects(file, pageNumber, rects) {
   const info = await run('pdfinfo', ['-box', '-f', String(pageNumber), '-l', String(pageNumber), file], 15_000);
   const rotation = Number((info.stdout.match(/Page\s+\d+\s+rot:\s+(\d+)/) || [])[1] || 0);
-  const crop = (info.stdout.match(/Page\s+\d+\s+CropBox:\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/) || []).slice(1).map(Number);
-  if (rotation % 360 !== 0 || crop.length !== 4) return { skipped: `rotation ${rotation}` };
+  // pdftotext -bbox reports MediaBox coordinates (CropBox ones only with -cropbox).
+  const media = (info.stdout.match(/Page\s+\d+\s+MediaBox:\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/) || []).slice(1).map(Number);
+  if (rotation % 360 !== 0 || media.length !== 4) return { skipped: `rotation ${rotation}` };
   const result = await run('pdftotext', ['-f', String(pageNumber), '-l', String(pageNumber), '-bbox', file, '-'], 30_000);
   if (result.code !== 0) return { skipped: `pdftotext exit ${result.code}` };
   const words = [];
   for (const match of result.stdout.matchAll(/<word xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">([^<]*)<\/word>/g)) {
     const [xMin, yMin, xMax, yMax] = match.slice(1, 5).map(Number);
-    // poppler: top-left origin of the crop box; PDF space: bottom-left of user space.
-    const cx = crop[0] + (xMin + xMax) / 2;
-    const cy = crop[3] - (yMin + yMax) / 2;
+    // poppler: top-left origin of the media box; PDF space: bottom-left of user space.
+    const cx = media[0] + (xMin + xMax) / 2;
+    const cy = media[3] - (yMin + yMax) / 2;
     if (rects.some((rect) => cx > rect.left && cx < rect.right && cy > rect.bottom && cy < rect.top)) words.push(match[5]);
   }
   return { words };
