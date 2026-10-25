@@ -30,7 +30,8 @@ const ENTRIES = ['vendor/build/src/pdf-tools-shell.jsx'];
 const EXTRAS = ['vendor/build/src/pdf-tools-theme.css'];
 
 function git(repo, args, { input, allowFail = false } = {}) {
-  const result = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', input, maxBuffer: 1 << 30 });
+  // English messages: port() reads git apply's reject report.
+  const result = spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8', input, maxBuffer: 1 << 30, env: { ...process.env, LC_ALL: 'C' } });
   if (result.status !== 0 && !allowFail) throw new Error(`git ${args.join(' ')}: ${result.stderr.trim()}`);
   return result;
 }

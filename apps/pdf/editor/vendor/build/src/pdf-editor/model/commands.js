@@ -69,15 +69,78 @@ function normalizeMatrix(value) {
  * @param {unknown} value
  * @returns {unknown}
  */
+// `String#localeCompare` without arguments is specified as the comparison of
+// a default `Intl.Collator`; one shared collator gives the identical order
+// (journal hashes and binding fingerprints depend on it) at a fraction of the
+// cost. Paths are only needed for the error message, so they are built from
+// the parent chain on failure instead of as a string per nested value: large
+// path descriptors serialize thousands of points per fingerprint.
+const serializableKeyCollator = new Intl.Collator();
+const compareSerializableEntries = ([left], [right]) => serializableKeyCollator.compare(left, right);
+
+/**
+ * @param {unknown} value
+ * @param {string} [path]
+ * @returns {unknown}
+ */
 function cloneSerializable(value, path = 'payload') {
-  if (Array.isArray(value)) return value.map((item, index) => cloneSerializable(item, `${path}[${index}]`));
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(/** @type {Record<string, unknown>} */ (value))
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, item]) => [key, cloneSerializable(item, `${path}.${key}`)]),
-    );
+  return cloneSerializableAt(value, { parent: null, key: path });
+}
+
+/**
+ * @param {{ parent: any, key: string | number }} trail
+ * @returns {string}
+ */
+function serializablePath(trail) {
+  const parts = [];
+  for (let node = trail; node; node = node.parent) parts.push(node);
+  let path = '';
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const { key } = parts[index];
+    path = index === parts.length - 1 ? String(key) : typeof key === 'number' ? `${path}[${key}]` : `${path}.${key}`;
   }
+  return path;
+}
+
+/**
+ * @param {unknown} value
+ * @param {{ parent: any, key: string | number }} trail
+ * @returns {unknown}
+ */
+function cloneSerializableAt(value, trail) {
+  if (Array.isArray(value)) {
+    const result = new Array(value.length);
+    for (let index = 0; index < value.length; index += 1) {
+      const item = value[index];
+      result[index] = item !== null && typeof item === 'object'
+        ? cloneSerializableAt(item, { parent: trail, key: index })
+        : cloneSerializableScalar(item, trail, index);
+    }
+    return result;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(/** @type {Record<string, unknown>} */ (value));
+    if (entries.length > 1) entries.sort(compareSerializableEntries);
+    const result = {};
+    for (const [key, item] of entries) {
+      const cloned = item !== null && typeof item === 'object'
+        ? cloneSerializableAt(item, { parent: trail, key })
+        : cloneSerializableScalar(item, trail, key);
+      // Same semantics as Object.fromEntries (a "__proto__" key stays data).
+      Object.defineProperty(result, key, { value: cloned, enumerable: true, writable: true, configurable: true });
+    }
+    return result;
+  }
+  return cloneSerializableScalar(value, trail.parent, trail.key);
+}
+
+/**
+ * @param {unknown} value
+ * @param {any} parentTrail
+ * @param {string | number} key
+ * @returns {unknown}
+ */
+function cloneSerializableScalar(value, parentTrail, key) {
   if (
     value == null ||
     typeof value === 'string' ||
@@ -86,7 +149,7 @@ function cloneSerializable(value, path = 'payload') {
   ) {
     return value;
   }
-  throw new TypeError(`Value is not journal-serializable at ${path}: ${typeof value}`);
+  throw new TypeError(`Value is not journal-serializable at ${serializablePath({ parent: parentTrail, key })}: ${typeof value}`);
 }
 
 /**

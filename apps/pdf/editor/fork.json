@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "upstream": "fernwork-pdf",
   "description": "Fernwork PDF editor sources forked into berg:work; paths as in Fernwork. See apps/pdf/scripts/editor-fork.mjs.",
-  "commit": "f945b19398dbe9f73c6b6a1ee1f97c75d043a741",
+  "commit": "2b85bcbbda777f53ba5a665ada39fd24c63b1bce",
   "entries": [
     "vendor/build/src/pdf-tools-shell.jsx"
   ],
@@ -19,6 +19,7 @@
     "vendor/build/src/pdf-editor/engine/annotation-preview.js",
     "vendor/build/src/pdf-editor/engine/empty-acroform-export.js",
     "vendor/build/src/pdf-editor/engine/protocol.js",
+    "vendor/build/src/pdf-editor/engine/redaction-export.js",
     "vendor/build/src/pdf-editor/engine/session-orchestrator.js",
     "vendor/build/src/pdf-editor/engine/source-commit-entry.js",
     "vendor/build/src/pdf-editor/engine/worker-transport.js",
@@ -76,9 +77,11 @@
     "vendor/build/src/pdf-editor/model/native-object-hierarchy.js",
     "vendor/build/src/pdf-editor/model/native-object-opacity.js",
     "vendor/build/src/pdf-editor/model/native-text-opacity.js",
+    "vendor/build/src/pdf-editor/model/object-numbering.js",
     "vendor/build/src/pdf-editor/model/page-stamps.js",
     "vendor/build/src/pdf-editor/model/pdf-permissions.js",
     "vendor/build/src/pdf-editor/model/portable-project-state.js",
+    "vendor/build/src/pdf-editor/model/redacted-form-fields.js",
     "vendor/build/src/pdf-editor/model/redaction-geometry.js",
     "vendor/build/src/pdf-editor/model/rich-text-document.js",
     "vendor/build/src/pdf-editor/model/rich-text-frame-projection.js",

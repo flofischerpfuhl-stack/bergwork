@@ -608,6 +608,13 @@ html[data-theme="light"] .oo-pdf-shell {
   font-size: 0.92rem;
 }
 
+/* Information, not a problem: a repaired file, protection removed on open. */
+.oo-pdf-session-notice.is-info {
+  border-color: var(--pdf-border-strong);
+  background: var(--pdf-panel);
+  color: var(--pdf-text);
+}
+
 .oo-pdf-session-notice-actions {
   display: flex;
   flex-wrap: wrap;
@@ -3034,6 +3041,13 @@ fieldset.oo-pdf-layer-details {
   box-sizing: border-box;
   border: 1px solid #ef4444;
   background: rgb(239 68 68 / 0.18);
+}
+
+.oo-pdf-redaction-annotation {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed #ef4444;
+  background: rgb(239 68 68 / 0.12);
 }
 
 .oo-pdf-redaction-count {

@@ -62,7 +62,11 @@ import {
   ownedStringListMatches,
 } from './pdf-editor/model/ui-transition-string-list.js';
 import { resolveCommittedUiProjection } from './pdf-editor/model/ui-transition-recovery.js';
-import { pdfMetadataKeywords, pdfMetadataText } from './pdf-editor/model/metadata-values.js';
+import {
+  applyPdfLibMetadata,
+  pdfMetadataText,
+  readPdfLibMetadata,
+} from './pdf-editor/model/metadata-values.js';
 import { interactionDraftRuntime } from './pdf-editor/interaction/draft-runtime.js';
 import { CreatedNativePaintHandoff } from './pdf-editor/interaction/created-native-paint-handoff.js';
 import { dependsOnUnconfirmedPdfWork, shouldCancelDependentPdfDrag } from './pdf-editor/interaction/dependent-drag-policy.js';
@@ -130,12 +134,14 @@ import {
 } from './pdf-editor/model/form-fields.js';
 import { FormDesigner } from './pdf-editor/interaction/form-designer.jsx';
 import {
-  DEFAULT_PDF_RESTRICT_FLAGS, restrictPdfPermissionArgs,
+  DEFAULT_PDF_RESTRICT_FLAGS, pdfBytesMayBeEncrypted, pdfProtectionRemovedNotice, restrictPdfPermissionArgs,
 } from './pdf-editor/model/pdf-permissions.js';
 import { pdfBytesHaveIntactSignature } from './pdf-editor/model/signature-byte-range.js';
 import { editPdfForm, formFieldNamesCompatible, normalizeFormDesignerWidgets, remapFormSnapshotBindings } from './pdf-editor/model/form-designer.js';
 import { typedSignatureFrame } from './pdf-editor/model/typed-signature-frame.js';
 import { PAGE_STAMP_KINDS, pageStampTextEncodable, stampPdfPages } from './pdf-editor/model/page-stamps.js';
+import { pdfBytesMayHaveRedactedWidgets, removeRedactedFormFieldsFromPdf } from './pdf-editor/model/redacted-form-fields.js';
+import { compactSparsePdfObjectNumbers } from './pdf-editor/model/object-numbering.js';
 import { findGlyphTextMatches, glyphsFromTextGlyphResult, redactionRemovedGlyphs, replaceQueryInText, snapRedactionRect, textContainsQuery } from './pdf-editor/model/redaction-geometry.js';
 import { buildPageTextDiffReport } from './pdf-editor/model/compare-text-report.js';
 import {
@@ -2915,32 +2921,18 @@ function sourcePageIdFromLayerSource(sourceId, type) {
 
 async function readPdfMetadata(bytes) {
   try {
-    const doc = await PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true });
-    const dateValue = date => date instanceof Date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : '';
-    const keywords = doc.getKeywords?.();
-    return {
-      title: pdfMetadataText(doc.getTitle?.()),
-      author: pdfMetadataText(doc.getAuthor?.()),
-      subject: pdfMetadataText(doc.getSubject?.()),
-      keywords: pdfMetadataText(keywords),
-      creator: pdfMetadataText(doc.getCreator?.()),
-      producer: pdfMetadataText(doc.getProducer?.()),
-      creationDate: dateValue(doc.getCreationDate?.()),
-      modificationDate: dateValue(doc.getModificationDate?.()),
-    };
+    const doc = await PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false });
+    return readPdfLibMetadata(doc);
   } catch {
     return {};
   }
 }
 
-function applyMetadata(pdf, metadata = {}) {
-  pdf.setTitle(pdfMetadataText(metadata.title));
-  pdf.setAuthor(pdfMetadataText(metadata.author));
-  pdf.setSubject(pdfMetadataText(metadata.subject));
-  pdf.setKeywords(pdfMetadataKeywords(metadata.keywords));
-  pdf.setCreator(pdfMetadataText(metadata.creator));
-  pdf.setProducer(pdfMetadataText(metadata.producer));
-  pdf.setModificationDate(new Date());
+// `original`: the fields as the source had them; then only edited fields are
+// written (see applyPdfLibMetadata). Without it every field is written, as
+// for a newly created document.
+function applyMetadata(pdf, metadata = {}, original = null) {
+  applyPdfLibMetadata(pdf, metadata, original);
 }
 
 function stripMetadata(pdf) {
@@ -10243,6 +10235,7 @@ async function repairGeneratedFreeTextAppearances(bytes, commands = []) {
   const repairs = [...repairsByTarget.values()].filter(repair => repair.contents != null);
   if (!repairs.length) return bytes;
 
+  bytes = await decryptedPdfBytesForRewrite(bytes);
   const pdf = await PDFLib.PDFDocument.load(bytes, { updateMetadata: false });
   let repaired = 0;
   const name = key => PDFLib.PDFName.of(key);
@@ -10327,6 +10320,15 @@ function pageWidgetEntries(pdf) {
     }
   }
   return widgets;
+}
+
+// Form fields under a redaction (pdf-editor/model/redacted-form-fields.js).
+async function removeRedactedFormFields(bytes) {
+  const input = asUint8Array(bytes);
+  if (!pdfBytesMayHaveRedactedWidgets(input)) return input;
+  const pdf = await PDFLib.PDFDocument.load(input, { ignoreEncryption: true, updateMetadata: false });
+  if (!removeRedactedFormFieldsFromPdf(PDFLib, pdf)) return input;
+  return new Uint8Array(await pdf.save({ addDefaultPage: false, useObjectStreams: false, updateFieldAppearances: false }));
 }
 
 function removeAcroFormWidgets(pdf) {
@@ -10535,18 +10537,23 @@ async function repairDanglingFontResources(bytes) {
 }
 
 async function postprocessPdfiumExportBytes(bytes, doc, options = {}) {
-  let nextBytes = await repairDanglingFontResources(bytes);
+  // qpdf (below) rejects object numbers that are large for the file size.
+  const compacted = pdfBytesHaveIntactSignature(asUint8Array(bytes))
+    ? bytes : await compactSparsePdfObjectNumbers(PDFLib, asUint8Array(bytes));
+  let nextBytes = await repairDanglingFontResources(await decryptedPdfBytesForRewrite(compacted));
   if (options.stripMetadata || !metadataMatchesOriginal(doc)) {
     const pdf = await PDFLib.PDFDocument.load(nextBytes, {
       ignoreEncryption: true,
       updateMetadata: false,
     });
     if (options.stripMetadata) stripMetadata(pdf);
-    else applyMetadata(pdf, doc.metadata);
+    else applyMetadata(pdf, doc.metadata, doc.originalMetadata);
     nextBytes = new Uint8Array(await pdf.save({ addDefaultPage: false, useObjectStreams: false }));
   }
   // Entered form values are part of every export, not only of "Save form".
   nextBytes = await pdfBytesWithFormValues(nextBytes, doc?.formValues);
+  // Form fields under a redaction go with their values (after the values were written).
+  nextBytes = await removeRedactedFormFields(nextBytes);
   const toolkit = await getPdfToolkit();
   if (options.pages) {
     const indices = options.pages.map(page => doc.pages.findIndex(current => current.id === page.id));
@@ -11296,13 +11303,17 @@ function applyFormValuesToPdf(pdf, values = {}) {
   const allFields = form.getFields();
   let applied = false;
   let viewerMustRedraw = false;
-  for (const [fieldName, value] of entries) {
-    let field = form.getFieldMaybe(fieldName);
-    if (!field) {
-      const compatible = allFields.filter(candidate => formFieldNamesCompatible(candidate.getName(), fieldName));
-      if (compatible.length === 1) field = compatible[0];
-    }
-    if (!field || field.isReadOnly?.()) continue;
+  // Fields with the same fully qualified name are one field to a reader (ISO
+  // 32000 12.7.4); copied pages and some writers still store them as separate
+  // field dictionaries. All of them take the value, not only the first.
+  const targetsFor = fieldName => {
+    const exact = allFields.filter(candidate => candidate.getName() === fieldName);
+    if (exact.length) return exact;
+    const compatible = allFields.filter(candidate => formFieldNamesCompatible(candidate.getName(), fieldName));
+    return compatible.length === 1 ? compatible : [];
+  };
+  for (const [fieldName, value] of entries) for (const field of targetsFor(fieldName)) {
+    if (field.isReadOnly?.()) continue;
     try {
       if (field instanceof PDFLib.PDFTextField) {
         const limit = field.getMaxLength?.();
@@ -11834,8 +11845,12 @@ function pdfSceneImageRegions(page, items) {
   }));
 }
 
-async function loadPdfPageDescriptors(pdf, sourceId, firstPage, onProgress) {
+// `structure.sharedPageObject` turns true when the page tree lists one page
+// object more than once: every edit, rotation or deletion of one of those
+// pages would then hit the others too.
+async function loadPdfPageDescriptors(pdf, sourceId, firstPage, onProgress, structure = null) {
   const pages = new Array(pdf.numPages);
+  const pageObjects = new Set();
   let nextIndex = 0;
   let completed = 0;
   const worker = async () => {
@@ -11843,6 +11858,11 @@ async function loadPdfPageDescriptors(pdf, sourceId, firstPage, onProgress) {
       const index = nextIndex;
       nextIndex += 1;
       const pdfPage = index === 0 ? firstPage : await pdf.getPage(index + 1);
+      if (structure && pdfPage.ref) {
+        const key = `${pdfPage.ref.num} ${pdfPage.ref.gen}`;
+        if (pageObjects.has(key)) structure.sharedPageObject = true;
+        pageObjects.add(key);
+      }
       const rotation = pdfPageRotation(pdfPage);
       const viewport = pdfPage.getViewport({ scale: 1, rotation: 0 });
       pages[index] = {
@@ -11890,7 +11910,8 @@ async function loadPdfFromBytes(name, bytes, size = bytes.byteLength, onProgress
   const firstViewport = firstPage.getViewport({ scale: 1, rotation: 0 });
   const pdfMetadataPromise = readPdfJsMetadata(pdf);
   const sourceId = uid();
-  const pages = await loadPdfPageDescriptors(pdf, sourceId, firstPage, onProgress);
+  const structure = {};
+  const pages = await loadPdfPageDescriptors(pdf, sourceId, firstPage, onProgress, structure);
   const pdfMetadata = await pdfMetadataPromise;
   const importedAnnotations = [];
   const scene = progressivePdfScene(pages);
@@ -11927,6 +11948,7 @@ async function loadPdfFromBytes(name, bytes, size = bytes.byteLength, onProgress
     originalMetadata: exportMetadataFingerprint(pdfMetadata),
     scene,
     editModelVersion: FERNWORK_PDF_PROJECT_VERSION,
+    ...(structure.sharedPageObject ? { sharedPageObjects: true } : {}),
   };
   reportPdfLoadProgress(onProgress, 'ready', 1, `Ready - ${pdf.numPages} page${pdf.numPages === 1 ? '' : 's'}`);
   return doc;
@@ -12053,6 +12075,7 @@ async function loadPdfFile(file, onProgress = null, password = '') {
   if (!acceptsPdf(file)) throw new Error('Only PDF files can be opened here.');
   const bytes = await readPdfFileBytes(file, onProgress);
   let readableBytes = bytes;
+  let protectionRemoved = null;
   if (password) {
     reportPdfLoadProgress(onProgress, 'parsing', 0.24, 'Unlocking protected PDF');
     const toolkit = await getPdfToolkit();
@@ -12061,6 +12084,14 @@ async function loadPdfFile(file, onProgress = null, password = '') {
       const error = new Error('The password did not unlock this encrypted PDF.');
       error.name = 'PasswordException';
       throw error;
+    }
+    protectionRemoved = { kind: 'password' };
+  } else if (pdfBytesMayBeEncrypted(bytes)) {
+    reportPdfLoadProgress(onProgress, 'parsing', 0.22, 'Reading PDF permissions');
+    const unlocked = await unlockPermissionOnlyPdf(bytes).catch(() => null);
+    if (unlocked) {
+      readableBytes = unlocked.bytes;
+      protectionRemoved = unlocked.protection;
     }
   }
   reportPdfLoadProgress(onProgress, 'parsing', 0.22, 'Preparing PDF parser');
@@ -12074,8 +12105,10 @@ async function loadPdfFile(file, onProgress = null, password = '') {
       progress,
     );
   });
+  const withProtection = doc => (protectionRemoved ? { ...doc, protectionRemoved } : doc);
+  let loaded;
   try {
-    return await loadBytes(readableBytes);
+    loaded = await loadBytes(readableBytes);
   } catch (error) {
     if (isPdfPasswordError(error) || !readableBytes.byteLength) throw error;
     if (!pdfBytesHavePdfHeader(readableBytes)) {
@@ -12083,52 +12116,148 @@ async function loadPdfFile(file, onProgress = null, password = '') {
     }
     if (!isDamagedPdfStructureError(error)) throw error;
     reportPdfLoadProgress(onProgress, 'parsing', 0.22, 'Trying to recover the damaged PDF');
-    const recovered = await recoverDamagedPdfBytes(readableBytes).catch(() => null);
-    if (!recovered) throw error;
-    const doc = await loadBytes(recovered.bytes).catch(() => null);
-    if (!doc?.pages?.length) throw error;
-    return {
-      ...doc,
-      damageRecovery: {
-        method: recovered.method,
-        recoveredPages: doc.pages.length,
-        expectedPages: recovered.expectedPages || 0,
-      },
-    };
+    for await (const recovered of damagedPdfRecoveries(readableBytes)) {
+      const doc = await loadBytes(recovered.bytes).catch(() => null);
+      if (!doc?.pages?.length) continue;
+      return withProtection({
+        ...doc,
+        damageRecovery: {
+          method: recovered.method,
+          recoveredPages: doc.pages.length,
+          expectedPages: recovered.expectedPages || 0,
+        },
+      });
+    }
+    throw error;
   }
+  if (loaded.sharedPageObjects) {
+    // qpdf rebuilds the page tree and gives every repeated entry its own copy
+    // of the page object.
+    const { sharedPageObjects, ...doc } = loaded;
+    const repaired = await getPdfToolkit()
+      .then(async toolkit => asUint8Array(await toolkit.raw([readableBytes], ['$in0', '--pages', '.', '--', '$out'])))
+      .then(loadBytes)
+      .catch(() => null);
+    if (repaired?.pages?.length === doc.pages.length && !repaired.sharedPageObjects) {
+      await doc.pdf?.destroy?.().catch?.(() => {});
+      return withProtection({
+        ...repaired,
+        damageRecovery: { method: 'qpdf-xref', recoveredPages: repaired.pages.length, expectedPages: 0 },
+      });
+    }
+    await repaired?.pdf?.destroy?.().catch?.(() => {});
+    return withProtection(doc);
+  }
+  return withProtection(loaded);
+}
+
+// Owner-password ("permissions only") PDFs open without a password, but their
+// strings and streams stay encrypted. Every pdf-lib step of the editor
+// (page inspection in the worker, stamps, metadata, bookmarks, Save, the
+// project file) needs readable bytes, so such a file is decrypted once on open,
+// like a file unlocked with its password. The editor and Save then work on
+// that unprotected copy, and the document says so (pdfProtectionRemovedNotice).
+// Returns null for unencrypted files, files that need a password (PDF.js then
+// asks for it) and files qpdf cannot decrypt (they open as before).
+async function unlockPermissionOnlyPdf(bytes) {
+  const state = await decryptPdfWithoutPassword(bytes);
+  return state.decrypted || null;
+}
+
+// One qpdf --json pass tells whether the file is encrypted and whether the
+// empty user password opens it (otherwise it throws); a second pass decrypts.
+// Large scans make each qpdf pass cost seconds, so there are no more.
+async function decryptPdfWithoutPassword(bytes) {
+  const source = asUint8Array(bytes);
+  if (!pdfBytesMayBeEncrypted(source)) return { encrypted: false };
+  const toolkit = await getPdfToolkit();
+  let info;
+  try {
+    info = await toolkit.getInfo(source);
+  } catch {
+    // A user password is required, or qpdf cannot read the file at all (then
+    // the callers keep their previous behaviour).
+    return { encrypted: await toolkit.isEncrypted(source).catch(() => false) };
+  }
+  if (!info?.encrypted) return { encrypted: false };
+  const unlocked = await toolkit.unlock(source, { password: '' }).then(asUint8Array).catch(() => null);
+  if (!unlocked?.byteLength || (pdfBytesMayBeEncrypted(unlocked) && await toolkit.isEncrypted(unlocked))) {
+    return { encrypted: true };
+  }
+  return {
+    encrypted: true,
+    decrypted: {
+      bytes: unlocked,
+      protection: {
+        kind: 'permissions',
+        method: String(info.encryption?.method || ''),
+        permissions: info.encryption?.permissions || null,
+      },
+    },
+  };
+}
+
+// The editor's later pdf-lib rewrites (metadata, bookmarks, form values) need
+// decrypted bytes. Documents are decrypted on open, so this only matters for
+// encrypted bytes from elsewhere (a document restored from an older version,
+// an export of an encrypted source); an owner-only file is decrypted here the
+// same way, one that needs a password is refused with a clear reason instead
+// of being written into with plain strings.
+async function decryptedPdfBytesForRewrite(bytes) {
+  const source = asUint8Array(bytes);
+  const state = await decryptPdfWithoutPassword(source);
+  if (!state.encrypted) return source;
+  if (state.decrypted) return state.decrypted.bytes;
+  throw new Error('This PDF is still encrypted, so it cannot be rewritten. Open it again with its password.');
+}
+
+// A qpdf rewrite that PDF.js opens kept every object qpdf could read; a page
+// tree rebuilt from salvaged page objects may have lost pages or content.
+function pdfDamageRecoveryWasRepair(recovery) {
+  return recovery?.method === 'qpdf-xref' && !recovery.expectedPages;
 }
 
 function pdfBytesHavePdfHeader(bytes) {
   return new TextDecoder('latin1').decode(asUint8Array(bytes).subarray(0, 1024)).includes('%PDF-');
 }
 
+// PDF.js names the structural faults it refuses to open on: a damaged or
+// missing xref, an invalid /Root, a page tree with a loop or a page that is
+// not a dictionary, an illegal token. PDFium and qpdf often still read such a
+// file, so these are worth a repair attempt.
 function isDamagedPdfStructureError(error) {
-  return /invalid pdf|invalid.*structure|missing pdf|bad xref|format error|xref/i.test(String(error?.message || ''));
+  return /invalid pdf|invalid.*structure|missing pdf|bad xref|format error|xref|invalid root|root reference|pages tree|kid reference|wrong type of object|circular reference|illegal character/i
+    .test(String(error?.message || ''));
 }
 
-// Opening failed on a file that starts like a PDF. First let qpdf rebuild the
-// cross-reference table (damaged or missing xref, bad offsets). If the page
-// tree itself is lost, typically in a truncated download where the writer put
-// the page tree, catalog and xref at the end, rebuild a page tree from the
-// page objects that survived. Returns null when nothing is recoverable.
-async function recoverDamagedPdfBytes(bytes) {
+// Opening failed on a file that starts like a PDF. Candidates in order, each
+// tried by the caller until PDF.js opens one: first qpdf rewrites the file
+// (rebuilds a damaged or missing xref, bad offsets, an object stream PDF.js
+// misreads). If the page tree itself is lost or unusable, typically in a
+// truncated download where the writer put the page tree, catalog and xref at
+// the end, or a tree with a loop or a page stored as a stream, a fresh page
+// tree is built from the page objects that survived.
+async function* damagedPdfRecoveries(bytes) {
   const toolkit = await getPdfToolkit();
-  try {
-    const repaired = asUint8Array(await toolkit.repair(asUint8Array(bytes)));
-    if (await toolkit.pageCount(repaired) > 0) return { bytes: repaired, method: 'qpdf-xref' };
-  } catch {
-    /* the page tree is not reachable; salvage page objects below */
-  }
-  const salvaged = await salvagePdfPageObjects(bytes);
-  if (!salvaged) return null;
-  const repaired = asUint8Array(await toolkit.repair(salvaged.bytes));
-  return { bytes: repaired, method: 'page-objects', expectedPages: salvaged.expectedPages };
+  // No separate page count pass: the caller's PDF.js open is the check, and a
+  // second qpdf parse doubled the time on files with many objects.
+  const repaired = await toolkit.repair(asUint8Array(bytes)).then(asUint8Array).catch(() => null);
+  if (repaired?.byteLength) yield { bytes: repaired, method: 'qpdf-xref' };
+  const salvaged = await salvagePdfPageObjects(bytes).catch(() => null);
+  if (!salvaged) return;
+  yield {
+    bytes: asUint8Array(await toolkit.repair(salvaged.bytes)),
+    method: 'page-objects',
+    expectedPages: salvaged.expectedPages,
+  };
 }
 
 // Reads the surviving objects sequentially (including those inside object
 // streams), keeps every /Type /Page dictionary in object order and gives them
-// a fresh page tree. Attributes a page inherited from a lost parent fall back
-// to the other pages' media box and to empty resources.
+// a fresh page tree. A page written as a stream object (its dictionary is
+// valid, the stream is junk) keeps its dictionary. Attributes a page
+// inherited from a lost parent fall back to the other pages' media box and to
+// empty resources.
 async function salvagePdfPageObjects(bytes) {
   const source = asUint8Array(bytes);
   const end = new TextDecoder('latin1').decode(source).lastIndexOf('endobj');
@@ -12142,7 +12271,14 @@ async function salvagePdfPageObjects(bytes) {
   const name = key => PDFLib.PDFName.of(key);
   const pages = [];
   let expectedPages = 0;
-  for (const [ref, object] of context.enumerateIndirectObjects()) {
+  for (const [ref, found] of context.enumerateIndirectObjects()) {
+    const pageStream = found instanceof PDFLib.PDFStream && String(found.dict.get(name('Type')) || '') === '/Page';
+    const object = pageStream ? context.obj({}) : found;
+    if (pageStream) {
+      const streamKeys = new Set(['Length', 'Filter', 'DecodeParms', 'DL'].map(name));
+      for (const [key, value] of found.dict.entries()) if (!streamKeys.has(key)) object.set(key, value);
+      context.assign(ref, object);
+    }
     if (!(object instanceof PDFLib.PDFDict)) continue;
     // Encrypted objects cannot be salvaged without the lost trailer /ID.
     if (String(object.get(name('Filter')) || '') === '/Standard' && object.has(name('O'))) return null;
@@ -12670,6 +12806,7 @@ function applyBookmarkOutlinesToPdf(pdf, bookmarks, pages) {
 }
 
 async function pdfBytesWithBookmarks(bytes, doc, pages = doc?.pages) {
+  bytes = await decryptedPdfBytesForRewrite(bytes);
   const pdf = await PDFLib.PDFDocument.load(asUint8Array(bytes), {
     ignoreEncryption: true,
     updateMetadata: false,
@@ -18269,6 +18406,12 @@ function App({ shell = null }) {
       : doc));
   }, []);
 
+  const dismissProtectionRemoved = useCallback((docId) => {
+    setDocs(current => current.map(doc => doc.id === docId && doc.protectionRemoved
+      ? { ...doc, protectionRemoved: { ...doc.protectionRemoved, dismissed: true } }
+      : doc));
+  }, []);
+
   // `showOpenCopy`: files handed over by the system (file manager, installed
   // app, native host) switch to an identical document that is already open
   // instead of opening it twice; the Open button still opens a second copy.
@@ -18335,7 +18478,7 @@ function App({ shell = null }) {
         : 1);
       // No success toast here: the editing session is still opening, and its
       // progress notice is the single status until the PDF is ready.
-      if (loaded.some(doc => doc.damageRecovery)) {
+      if (loaded.some(doc => doc.damageRecovery && !pdfDamageRecoveryWasRepair(doc.damageRecovery))) {
         showToast('The PDF was damaged. Check the recovered pages before relying on them.', 'warning');
       }
     } catch (error) {
@@ -24738,6 +24881,11 @@ function App({ shell = null }) {
         ? await finalizeFlattenedPdfBytes(postprocessedBytes)
         : postprocessedBytes;
       const exportVersion = Number(exportDoc.editVersion || 0);
+      const rasterizedRedactionPages = Number(exported?.redactionReport?.rasterizedPages || 0);
+      if (report && rasterizedRedactionPages) {
+        report.summary.redactionRasterizedPages = rasterizedRedactionPages;
+        report.warnings.push(redactionRasterNotice(rasterizedRedactionPages));
+      }
       if (report && hasFormValueChanges(exportDoc) && await documentHasXfaForm(exportDoc)) {
         report.summary.xfaRemoved = true;
         report.warnings.push(PDF_XFA_REMOVED_NOTICE);
@@ -24759,6 +24907,8 @@ function App({ shell = null }) {
           : 'Download started with fidelity warnings. Check the export report for details.', 'info');
       } else if (report?.summary?.xfaRemoved) {
         showToast(`${saved ? 'PDF saved' : 'Download started'}. ${PDF_XFA_REMOVED_NOTICE}`, 'info');
+      } else if (report?.summary?.redactionRasterizedPages) {
+        showToast(`${saved ? 'PDF saved' : 'Download started'}. ${redactionRasterNotice(report.summary.redactionRasterizedPages)}`, 'info');
       } else {
         showToast(saved ? 'PDF saved.' : 'Download started.', 'success');
       }
@@ -25594,7 +25744,7 @@ function App({ shell = null }) {
       const delta = originalSize ? Math.round((1 - blob.size / originalSize) * 100) : 0;
       downloadBlob(blob, `${stripExt(activeDoc.name)}-${suffix}.pdf`);
       const detail = info.imageOnly
-        ? ` ${info.optimized || 0} image${info.optimized === 1 ? '' : 's'} recompressed; ${(info.skippedTransparency || 0) + (info.skippedUnsupported || 0)} unsupported or transparent skipped; ${info.skippedAlreadySmall || 0} already at target resolution. Images inside nested form content were left unchanged.${info.sizeRejected ? ' The result was not smaller, so the original bytes were kept.' : ''} Text, vectors, links, forms and bookmarks were preserved.`
+        ? ` ${info.optimized || 0} image${info.optimized === 1 ? '' : 's'} recompressed; ${(info.skippedTransparency || 0) + (info.skippedUnsupported || 0)} unsupported or transparent skipped; ${info.skippedOversized ? `${info.skippedOversized} too large to recompress left as they are; ` : ''}${info.skippedAlreadySmall || 0} already at target resolution. Images inside nested form content were left unchanged.${info.sizeRejected ? ' The result was not smaller, so the original bytes were kept.' : ''} Text, vectors, links, forms and bookmarks were preserved.`
         : ' Text, links, forms and vector objects were preserved.';
       setUtilityStatus(`Optimized: ${formatFileSize(blob.size)} (${delta >= 0 ? '-' : '+'}${Math.abs(delta)}%).${detail}`);
       showToast(info.imageOnly ? 'Image-optimized PDF exported.' : 'Lossless PDF exported.', 'success');
@@ -27488,6 +27638,7 @@ function App({ shell = null }) {
             onDiscardFailedDocument={discardAndCloseDoc}
             onDismissFontActionWarning={() => setFontActionWarning(null)}
             onDismissDamageRecovery={dismissDamageRecovery}
+            onDismissProtectionRemoved={dismissProtectionRemoved}
             imageToPlace={imageToPlace}
             signature={signature}
             shapeStyle={shapeStyle}
@@ -28023,6 +28174,7 @@ function PdfViewport(props) {
     onDiscardFailedDocument,
     onDismissFontActionWarning,
     onDismissDamageRecovery,
+    onDismissProtectionRemoved,
     imageToPlace,
     signature,
     shapeStyle,
@@ -28111,6 +28263,7 @@ function PdfViewport(props) {
     };
   }, [doc.id, pdfiumSession.runtime, pdfiumSession.status, previewCatalogKey]);
   const viewportSafety = liveRuntimeSafetyState(pdfiumSession.runtime, doc.id);
+  const protectionNotice = pdfProtectionRemovedNotice(doc.protectionRemoved);
   const effectiveTool = pdfiumSession.status === 'open' && !props.pageStructureBusy && !viewportSafety.mutationBlocked ? tool : 'pan';
   useEffect(() => {
     onPdfiumRuntimeChange?.(pdfiumSession.runtime, pdfiumSession.status);
@@ -28413,7 +28566,15 @@ function PdfViewport(props) {
           </div>
         </div>
       )}
-      {doc.damageRecovery && !doc.damageRecovery.dismissed && (
+      {doc.damageRecovery && !doc.damageRecovery.dismissed && (pdfDamageRecoveryWasRepair(doc.damageRecovery) ? (
+        <div className="oo-pdf-session-notice is-actionable is-info" role="status" aria-label="PDF repaired">
+          <strong>This PDF was repaired</strong>
+          <span>Its file structure had errors, so it was rebuilt when it was opened. Check the pages before relying on this copy.</span>
+          <div className="oo-pdf-session-notice-actions">
+            <button className="oo-pdf-ghost-button" type="button" onClick={() => onDismissDamageRecovery?.(doc.id)}>Dismiss</button>
+          </div>
+        </div>
+      ) : (
         <div className="oo-pdf-session-notice is-actionable" role="alert" aria-label="Damaged PDF recovered">
           <strong>This PDF was damaged</strong>
           <span>
@@ -28424,6 +28585,15 @@ function PdfViewport(props) {
           </span>
           <div className="oo-pdf-session-notice-actions">
             <button className="oo-pdf-ghost-button" type="button" onClick={() => onDismissDamageRecovery?.(doc.id)}>Dismiss</button>
+          </div>
+        </div>
+      ))}
+      {protectionNotice && !doc.protectionRemoved?.dismissed && (
+        <div className="oo-pdf-session-notice is-actionable is-info" role="status" aria-label="PDF protection removed">
+          <strong>{protectionNotice.title}</strong>
+          <span>{protectionNotice.text}</span>
+          <div className="oo-pdf-session-notice-actions">
+            <button className="oo-pdf-ghost-button" type="button" onClick={() => onDismissProtectionRemoved?.(doc.id)}>Dismiss</button>
           </div>
         </div>
       )}
@@ -30088,9 +30258,11 @@ const REDACTION_LABEL_HEIGHT = 17;
 const REDACTION_LABEL_CHAR_WIDTH = 5.8;
 
 // berg:work: a hint, not a warning: what the mark does, then how much.
-function redactionLabelText(count, marks) {
-  const characters = count === 1 ? '1 character' : `${count} characters`;
-  return marks > 1 ? `${marks} marks redacted on export · ${characters}` : `Redacted on export · ${characters}`;
+function redactionLabelText(count, marks, annotations = 0, fields = 0) {
+  const parts = [count === 1 ? '1 character' : `${count} characters`];
+  if (annotations) parts.push(annotations === 1 ? '1 annotation' : `${annotations} annotations`);
+  if (fields) parts.push(fields === 1 ? '1 form field' : `${fields} form fields`);
+  return `${marks > 1 ? `${marks} marks redacted on export` : 'Redacted on export'} · ${parts.join(', ')}`;
 }
 
 // berg:work: one label per mark sits above it, so marks on neighbouring lines
@@ -30099,7 +30271,7 @@ function redactionLabelText(count, marks) {
 function groupRedactionLabels(labels, zoom) {
   const groups = [];
   const box = (group) => {
-    const width = redactionLabelText(group.count, group.ids.length).length * REDACTION_LABEL_CHAR_WIDTH + 12;
+    const width = redactionLabelText(group.count, group.ids.length, group.annotations, group.fields).length * REDACTION_LABEL_CHAR_WIDTH + 12;
     return { left: group.x * zoom, right: group.x * zoom + width, top: group.y * zoom - REDACTION_LABEL_HEIGHT };
   };
   for (const label of [...labels].sort((a, b) => (a.y - b.y) || (a.x - b.x))) {
@@ -30110,11 +30282,14 @@ function groupRedactionLabels(labels, zoom) {
     });
     if (hit) {
       hit.count += label.count;
+      hit.annotations += label.annotations || 0;
+      hit.fields += label.fields || 0;
       hit.ids.push(label.id);
       hit.text = `${hit.text} ${label.text}`.trim();
       hit.bottom = Math.max(hit.bottom, label.y + REDACTION_LABEL_HEIGHT / zoom);
     } else {
-      groups.push({ x: label.x, y: label.y, count: label.count, ids: [label.id], text: label.text,
+      groups.push({ x: label.x, y: label.y, count: label.count, annotations: label.annotations || 0,
+        fields: label.fields || 0, ids: [label.id], text: label.text,
         bottom: label.y + REDACTION_LABEL_HEIGHT / zoom });
     }
   }
@@ -30123,10 +30298,57 @@ function groupRedactionLabels(labels, zoom) {
 
 // Outlines every glyph that PDFium's redaction will remove on export, so a
 // mark that also touches a neighbouring line is visible before it is applied.
-function PdfPageRedactionPreview({ page, marks, zoom, pdfiumRuntime, pdfiumRevision }) {
+// Saving removes every PDF annotation that intersects a redaction mark
+// (pdf-editor/engine/redaction-export.js): its text and appearance would
+// otherwise survive. Created text that became page content is previewed by
+// its glyphs instead; form fields stay.
+function redactionRemovesAnnotation(ann) {
+  if (!ann || ann.deleted || ann.type === 'redact') return false;
+  const subtype = semanticPdfAnnotationSubtype(ann);
+  if (!subtype || ['redact', 'widget', 'popup'].includes(subtype)) return false;
+  return !(ann.type === 'text' && ann.liveCommitted === true && ann.imported !== true && ann.annotationIndex == null);
+}
+
+function redactionMarkCoversAnnotation(mark, ann) {
+  const [ax, ay, aw, ah] = [ann.x, ann.y, ann.w, ann.h].map(value => Number(value) || 0);
+  const [mx, my, mw, mh] = [mark.x, mark.y, mark.w, mark.h].map(value => Number(value) || 0);
+  return ax + aw > mx && ax < mx + mw && ay + ah > my && ay < my + mh;
+}
+
+// Pages with spot, calibrated or pattern colours, or marks over nested Forms,
+// are redacted as images (pdf-editor/engine/redaction-export.js rasterizePageRedactions).
+function redactionRasterNotice(pages) {
+  return `${pages === 1 ? 'One redacted page was' : `${pages} redacted pages were`} saved as an image so ` +
+    `${pages === 1 ? 'its' : 'their'} colours and the redaction come out right; ${pages === 1 ? 'its' : 'their'} text can no longer be selected.`;
+}
+
+function redactionPreviewLabel(characters, annotations, fields = 0) {
+  const parts = [`${characters} ${characters === 1 ? 'character' : 'characters'}`];
+  if (annotations) parts.push(`${annotations} ${annotations === 1 ? 'annotation' : 'annotations'}`);
+  if (fields) parts.push(`${fields} ${fields === 1 ? 'form field' : 'form fields'}`);
+  const list = parts.length > 2 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts.join(' and ');
+  return `${list} removed on export`;
+}
+
+function PdfPageRedactionPreview({ doc, page, marks, zoom, pdfiumRuntime, pdfiumRevision }) {
   const redactions = useMemo(() => (marks || []).filter(ann => ann?.type === 'redact'), [marks]);
   const hasRedactions = redactions.length > 0;
   const [glyphs, setGlyphs] = useState(null);
+  // Form fields under a mark are removed on export with their values
+  // (pdf-editor/model/redacted-form-fields.js).
+  const [widgets, setWidgets] = useState([]);
+  useEffect(() => {
+    if (!hasRedactions || !doc) {
+      setWidgets([]);
+      return undefined;
+    }
+    let cancelled = false;
+    formWidgetsForPage(doc, page).then(
+      value => { if (!cancelled) setWidgets(value || []); },
+      () => { if (!cancelled) setWidgets([]); },
+    );
+    return () => { cancelled = true; };
+  }, [doc, hasRedactions, page]);
   useEffect(() => {
     if (!hasRedactions || !pdfiumRuntime?.engine) {
       setGlyphs(null);
@@ -30142,30 +30364,42 @@ function PdfPageRedactionPreview({ page, marks, zoom, pdfiumRuntime, pdfiumRevis
   const preview = useMemo(() => {
     if (!glyphs || !hasRedactions) return null;
     const removed = new Map();
+    const removedAnnotations = new Map();
+    const annotations = (marks || []).filter(redactionRemovesAnnotation);
     const labels = [];
     for (const mark of redactions) {
       const hits = redactionRemovedGlyphs(glyphs, topLeftEditToPdfBounds(page, mark));
       for (const glyph of hits) removed.set(glyph.index, glyph);
-      labels.push({ id: mark.id, x: mark.x, y: mark.y, count: hits.length,
-        text: hits.map(glyph => glyph.char).join('') });
+      const covered = annotations.filter(ann => redactionMarkCoversAnnotation(mark, ann));
+      for (const ann of covered) removedAnnotations.set(ann.id, ann);
+      const coveredFields = widgets.filter(widget => redactionMarkCoversAnnotation(mark, widget));
+      for (const widget of coveredFields) removedAnnotations.set(`field:${widget.key}`, { ...widget, id: `field:${widget.key}` });
+      labels.push({ id: mark.id, x: mark.x, y: mark.y, count: hits.length, annotations: covered.length,
+        fields: coveredFields.length, text: hits.map(glyph => glyph.char).join('') });
     }
     return {
       boxes: [...removed.values()].map(glyph => ({ index: glyph.index, ...pdfBoundsToDisplayRect(page, glyph) })),
+      annotations: [...removedAnnotations.values()],
       labels,
     };
-  }, [glyphs, hasRedactions, page, redactions]);
+  }, [glyphs, hasRedactions, marks, page, redactions, widgets]);
   if (!preview) return null;
   const labelGroups = groupRedactionLabels(preview.labels, zoom);
   return (
-    <div className="oo-pdf-redaction-preview" aria-hidden="true" data-removed-glyphs={preview.boxes.length}>
+    <div className="oo-pdf-redaction-preview" aria-hidden="true" data-removed-glyphs={preview.boxes.length}
+      data-removed-annotations={preview.annotations.length}>
       {preview.boxes.map(box => (
         <span key={box.index} className="oo-pdf-redaction-glyph"
           style={{ left: box.x * zoom, top: box.y * zoom, width: box.w * zoom, height: box.h * zoom }} />
       ))}
+      {preview.annotations.map(ann => (
+        <span key={ann.id} className="oo-pdf-redaction-annotation" data-annotation-id={ann.id}
+          style={{ left: ann.x * zoom, top: ann.y * zoom, width: Math.max(1, ann.w * zoom), height: Math.max(1, ann.h * zoom) }} />
+      ))}
       {labelGroups.map(group => (
         <span key={group.ids.join(' ')} className="oo-pdf-redaction-count" data-redaction-id={group.ids.join(' ')} title={group.text}
           style={{ left: group.x * zoom, top: group.y * zoom }}>
-          {redactionLabelText(group.count, group.ids.length)}
+          {redactionLabelText(group.count, group.ids.length, group.annotations, group.fields)}
         </span>
       ))}
     </div>
@@ -33488,6 +33722,7 @@ function PdfPageContent({
             />
           )}
           <PdfPageRedactionPreview
+            doc={doc}
             page={page}
             marks={pageAnnotations}
             zoom={zoom}
@@ -40715,6 +40950,13 @@ function ToolDrawer(props) {
       body = (
         <>
           {statusLine}
+          {doc?.protectionRemoved?.kind && (
+            <PanelHint>
+              {doc.protectionRemoved.kind === 'password'
+                ? 'This PDF was opened with its password. Saved copies have no password until you protect them here.'
+                : 'This PDF came with usage restrictions, removed when it was opened. Saved copies have none until you protect them here.'}
+            </PanelHint>
+          )}
           <PanelSection title="Passwords">
             <PanelField label="Owner password" aside="required"><input type="password" autoComplete="new-password" required value={restrictOwnerPassword} onChange={(e) => setRestrictOwnerPassword(e.target.value)} /></PanelField>
             <PanelHint className="is-tight">Needed later to lift the restrictions below.</PanelHint>

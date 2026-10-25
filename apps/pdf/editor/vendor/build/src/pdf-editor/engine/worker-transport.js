@@ -50,15 +50,20 @@ export class PdfEngineWorkerTransport {
       return Promise.reject(new Error(`Duplicate PDF engine request ID: ${request.requestId}`));
     }
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const onTimeout = () => {
+        const timedOut = this.#pending.get(request.requestId);
         this.#pending.delete(request.requestId);
-        log.error('engine.timeout', { type: request.type, requestId: request.requestId, timeoutMs: this.#timeoutMs });
+        log.error('engine.timeout', { type: request.type, requestId: request.requestId, timeoutMs: this.#timeoutMs,
+          heartbeats: timedOut?.heartbeats || 0, ms: timedOut ? Date.now() - timedOut.startedAt : undefined });
         reject(new Error(`PDFium Worker timed out during ${request.type}.`));
-      }, this.#timeoutMs);
+      };
+      const timer = setTimeout(onTimeout, this.#timeoutMs);
       this.#pending.set(request.requestId, {
         resolve,
         reject,
         timer,
+        onTimeout,
+        heartbeats: 0,
         type: request.type,
         revision: request.revision,
         commands: Array.isArray(request.payload?.commands)
@@ -94,7 +99,26 @@ export class PdfEngineWorkerTransport {
     this.#rejectAll(new Error('PDFium Worker transport closed.'));
   }
 
+  // The worker announces in-flight request ids while it is busy (see
+  // engineHeartbeat in pdfium-worker.js). A heartbeat restarts the timeout of
+  // each named request, so the timeout bounds silence, not total duration: a
+  // 60 s inspection of a dense map or a request queued behind it completes,
+  // while a worker stuck in one native call still times out.
+  #onHeartbeat(requestIds) {
+    for (const requestId of requestIds) {
+      const pending = this.#pending.get(String(requestId));
+      if (!pending) continue;
+      clearTimeout(pending.timer);
+      pending.timer = setTimeout(pending.onTimeout, this.#timeoutMs);
+      pending.heartbeats = (pending.heartbeats || 0) + 1;
+    }
+  }
+
   #onMessage = (event) => {
+    if (event.data?.type === 'engine-heartbeat' && Array.isArray(event.data.requestIds)) {
+      this.#onHeartbeat(event.data.requestIds);
+      return;
+    }
     const requestId = event.data?.requestId;
     if (typeof requestId !== 'string') return;
     const pending = this.#pending.get(requestId);
