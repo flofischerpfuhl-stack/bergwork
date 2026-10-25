@@ -69,6 +69,13 @@ and undo steps. The host supplies `shell.setTitle` (the window title,
 `• name — berg:work PDF` for unsaved changes, and the document in the title bar); the editor shows no fullscreen toggle
 because the shell offers no `setFullscreen`. The editor's `titleBar` slots are not used.
 
+In the web app (outside Tauri) the mark and wordmark link back to https://bergwork.app/ (`web/src/homeLink.tsx`, a
+link laid over the design base's title bar), and the host passes `shell.sample` (`{ label, open }`, a berg:work
+addition to the fork's `normalizeShellHost`): the empty state then offers "Try a sample PDF" next to "Choose PDF or
+project". The sample is `scripts/fixtures/smoke.pdf`, emitted by Vite into `assets/` (`web/src/sample.ts`);
+`/app/pdf/?sample` opens it once the editor has restored its workspace and drops the parameter. The desktop app keeps
+a plain logo and offers no sample.
+
 Files (`web/src/native-files.js`, commands in `src-tauri/src/lib.rs`):
 
 - Opening a PDF or `.bwpdf`/`.fwdoc` project from the file manager, or passing it on the command line, opens it

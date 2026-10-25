@@ -5,11 +5,15 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "bergwork",
   "compatibility_date": "2026-09-25",
+  // worker.js only sends plain-HTTP page visits to HTTPS; app files and assets never invoke it.
+  "main": "worker.js",
   "routes": [
     { "pattern": "bergwork.app", "custom_domain": true }
   ],
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "404-page"
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "run_worker_first": ["/", "/pdf/", "/pdf", "/image/", "/image", "/roadmap/", "/roadmap", "/download/", "/download", "/legal/", "/legal", "/privacy/", "/privacy", "/app/pdf/", "/app/pdf", "/app/image/", "/app/image"]
   }
 }

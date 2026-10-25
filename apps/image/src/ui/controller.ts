@@ -4,7 +4,7 @@
  */
 
 import type { HostAdapter, LayerId, ProjectManifestV1 } from '../../contracts';
-import type { EditorHandleV2, ProjectManifestV2 } from '../../contracts-v2';
+import type { EditorHandleV2, EditorSampleV2, ProjectManifestV2 } from '../../contracts-v2';
 import { documentLimits, type CanvasDocument, type DocumentLimits, type Layer } from '../core/document';
 import type { LayerEffect } from '../core/model/types';
 import { Raster, alphaBounds, cropRaster } from '../core/raster';
@@ -118,6 +118,8 @@ export class EditorController {
    * attribute), so an embedding app switches the editor with its own theme switch.
    */
   get theme(): 'dark' | 'light' { return this.ui.getState().theme; }
+  /** The host's sample image (mount option `sample`); the start screen offers it when set. */
+  sample: EditorSampleV2 | null = null;
   /** Installed by the RAW UI module; null means the user cancelled RAW files in this import batch. */
   requestRawImportOptions: ((files: readonly File[]) => Promise<RawDecodeOptions | null>) | null = null;
   private readonly imports: ImportQueue;
@@ -747,6 +749,22 @@ export class EditorController {
     if (!images.length) { if (files.length) this.alert(this.t('Import Folder as Layers'), this.t('This folder holds no images to import.')); return; }
     try { await this.importFiles(images, this.workspace.current); }
     catch (error) { this.reportError('import-failed', error, this.t('Import couldn’t finish')); }
+  }
+
+  /** Opens the host's sample image as a document: in this tab when it is still empty, else in a new one. */
+  async openSample(): Promise<void> {
+    const sample = this.sample;
+    if (!sample || !this.workspace.canSwitch) return;
+    try {
+      const blob = await sample.load();
+      const tab = this.session.document ? this.workspace.newCanvas() ?? this.workspace.current : this.workspace.current;
+      await this.importFiles([new File([blob], sample.name, { type: blob.type })], tab);
+      // The document is named after the sample rather than "Untitled".
+      if (tab.session.document && tab.session.projectName === null) {
+        tab.session.projectName = fileBaseName(sample.name);
+        tab.session.notify('document');
+      }
+    } catch (error) { this.reportError('import-failed', error, this.t('Import couldn’t finish')); }
   }
 
   async chooseAndImport(): Promise<void> {
@@ -1380,6 +1398,7 @@ export class EditorController {
         tell();
         return this.workspace.subscribe(tell);
       },
+      openSample: async () => this.openSample(),
       undo: async () => this.session.undo(),
       redo: async () => this.session.redo(),
       destroy,

@@ -7,6 +7,8 @@
 export interface EditorShell {
   /** The active document for the window title; empty when none is open. */
   readonly setTitle: (title: string, options?: { readonly dirty?: boolean }) => void;
+  /** A sample document the empty state offers next to "Choose PDF or project" (the web app only). */
+  readonly sample?: { readonly label: string; readonly open: () => void };
 }
 
 interface EditorBundle {
@@ -44,6 +46,6 @@ export async function mountEditor(element: HTMLElement, shell: EditorShell): Pro
   // 'islands': the chrome laid out as berg:work Image's (top: document and tools | file and panels; bottom: status).
   // 'manual': Properties opens on request only; formatting is in the mini toolbar at the object.
   bundle.mount(element, { host: { capabilities: { shell: {
-    version: 1, chrome: 'islands', inspector: 'manual', setTitle: shell.setTitle,
+    version: 1, chrome: 'islands', inspector: 'manual', setTitle: shell.setTitle, sample: shell.sample,
   } } } });
 }

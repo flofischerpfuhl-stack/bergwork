@@ -5,10 +5,19 @@ const nav = [
   ['pdf', '/pdf/', 'PDF'],
   ['image', '/image/', 'Image'],
   ['roadmap', '/roadmap/', 'Roadmap'],
-  ['download', '/download/', 'Download'],
+  ['download', '/download/', 'Desktop'],
 ];
 
-function organizationData() {
+function structuredData() {
+  const app = (name, path, category, description) => ({
+    '@type': 'WebApplication',
+    name,
+    applicationCategory: category,
+    operatingSystem: 'Any (runs in a web browser)',
+    browserRequirements: 'Requires a current browser with WebAssembly',
+    description,
+    ...(config.siteUrl ? { url: new URL(path, config.siteUrl).href } : {}),
+  });
   return {
     '@context': 'https://schema.org',
     '@graph': [
@@ -16,22 +25,11 @@ function organizationData() {
         '@type': 'Organization',
         name: config.siteName,
         email: config.contactEmail,
+        founder: { '@type': 'Person', name: 'Florian Fischer' },
         ...(config.siteUrl ? { url: config.siteUrl } : {}),
       },
-      {
-        '@type': 'SoftwareApplication',
-        name: config.products.pdf,
-        applicationCategory: 'ProductivityApplication',
-        operatingSystem: 'Linux, Windows',
-        description: 'A planned desktop application based on the working Fernwork browser PDF editor. No public build is available.',
-      },
-      {
-        '@type': 'SoftwareApplication',
-        name: config.products.image,
-        applicationCategory: 'GraphicsApplication',
-        operatingSystem: 'Linux, Windows',
-        description: 'An image editor with an internal desktop build. No public build is available.',
-      },
+      app(config.products.pdf, '/app/pdf/', 'ProductivityApplication', 'Edit existing PDFs in the browser: move and retype text, images and drawings, sort pages, redact, sign and run OCR. Files are not uploaded.'),
+      app(config.products.image, '/app/image/', 'GraphicsApplication', 'A layered image editor in the browser with masks, adjustment layers, text, vector shapes and background removal on the device. Files are not uploaded.'),
     ],
   };
 }
@@ -55,44 +53,37 @@ function header(current, home = false) {
   </header>`;
 }
 
-// Pinned on every page until a desktop release exists: the web apps are public, the desktop apps are not.
-function previewNote() {
-  return `<aside class="preview-note" aria-label="Preview notice">
-    <strong>Preview</strong>
-    <span>Web apps are public; no desktop release yet.</span>
-    <a href="/download/">Release status <span aria-hidden="true">→</span></a>
-  </aside>`;
-}
-
 function footer() {
   return `<footer class="site-footer">
     <div class="footer-grid">
       <div>
         <a class="footer-wordmark" href="/">berg:work</a>
-        <p>PDF and image editing in the browser; desktop apps for Linux and Windows in development.</p>
+        <p>A PDF editor and an image editor that run in your browser. Made by Florian Fischer in the Allgäu, Germany.</p>
       </div>
       <nav aria-label="Products">
-        <h2>Products</h2>
-        <a href="/pdf/">${escapeHtml(config.products.pdf)}</a>
-        <a href="/image/">${escapeHtml(config.products.image)}</a>
-        <a href="/roadmap/">Roadmap</a>
-        <a href="/download/">Download status</a>
+        <h2>Editors</h2>
+        <a href="/app/pdf/">Open the PDF editor</a>
+        <a href="/app/image/">Open the image editor</a>
+        <a href="/pdf/">About ${escapeHtml(config.products.pdf)}</a>
+        <a href="/image/">About ${escapeHtml(config.products.image)}</a>
       </nav>
       <nav aria-label="Site information">
-        <h2>Information</h2>
-        <a href="/legal/">Legal notice</a>
+        <h2>More</h2>
+        <a href="/roadmap/">Roadmap</a>
+        <a href="/download/">Desktop apps</a>
         <a href="/privacy/">Privacy</a>
+        <a href="/legal/">Legal notice</a>
         <a href="mailto:${escapeHtml(config.contactEmail)}">Contact</a>
       </nav>
     </div>
-    <p class="footer-note">From the same workshop as Himmel:CAD, surveying CAD.</p>
   </footer>`;
 }
 
 export function renderLayout(page, assets) {
-  const title = `${page.title} — ${config.siteName}`;
+  const title = page.fullTitle || `${page.title} — ${config.siteName}`;
   const canonical = config.siteUrl ? new URL(page.path, config.siteUrl).href : '';
-  const ogImage = config.siteUrl ? new URL(assets.og, config.siteUrl).href : assets.og;
+  const og = page.og ? assets[page.og] : assets.og;
+  const ogImage = config.siteUrl ? new URL(og, config.siteUrl).href : og;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -121,18 +112,17 @@ export function renderLayout(page, assets) {
   <link rel="icon" href="/favicon.ico" sizes="any" />
   <link rel="apple-touch-icon" href="${assets.appleTouch}" />
   <link rel="preload" href="${assets.font}" as="font" type="font/woff2" crossorigin />
-  ${page.current === 'home' ? `<link rel="preload" href="${assets.heroDusk}" as="image" type="image/webp" fetchpriority="high" />` : ''}
+  <link rel="preload" href="${assets.monoFont}" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="${assets.css}" />
   ${page.current === 'home' ? `<script src="${assets.heroJs}"></script>` : ''}
   <script src="${assets.siteJs}" defer></script>
-  <script type="application/ld+json">${JSON.stringify(organizationData()).replaceAll('<', '\\u003c')}</script>
+  <script type="application/ld+json">${JSON.stringify(structuredData()).replaceAll('<', '\\u003c')}</script>
 </head>
 <body class="page-${escapeHtml(page.current)}">
   <a class="skip-link" href="#main">Skip to content</a>
   ${header(page.current, page.current === 'home')}
   <main id="main">${page.body}</main>
   ${footer()}
-  ${previewNote()}
 </body>
 </html>`;
 }

@@ -7,6 +7,15 @@
   size-adjust: 100%;
 }
 
+/* JetBrains Mono (OFL), Latin, variable weight: the same text face on every system. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('__MONO_WOFF2__') format('woff2');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: light;
   --cream: #f3f0e6;
@@ -20,7 +29,7 @@
   --pad: clamp(1rem, 4vw, 4.5rem);
   --content: 1296px;
   --prose: 70ch;
-  --mono: ui-monospace, 'Cascadia Mono', 'Liberation Mono', Menlo, Consolas, monospace;
+  --mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', 'Liberation Mono', Menlo, Consolas, monospace;
   --display: 'Bergschrift', Impact, sans-serif;
 }
 
@@ -290,52 +299,27 @@ html[data-hero='mine-winter'] .hero {
   transform: rotate(1deg);
 }
 
-.hero-link {
+.hero-actions {
   position: absolute;
   right: 5.5%;
-  bottom: calc(8% + 5.5rem);
+  bottom: 8%;
+  display: flex;
+  max-width: 24rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.9rem;
 }
 
-/* Preview notice: fixed on every page until a public build exists. */
-.preview-note {
-  position: fixed;
-  right: 1.25rem;
-  bottom: 1.25rem;
-  z-index: 90;
-  display: grid;
-  max-width: 21rem;
-  gap: 0.2rem 0.75rem;
-  grid-template-columns: auto 1fr;
-  padding: 0.7rem 0.9rem;
+.hero-sample {
+  margin: 0.2rem 0 0;
+  padding: 0.45rem 0.7rem;
   color: var(--cream);
-  background: var(--ink);
-  border: 2px solid var(--cream);
-  box-shadow: 5px 5px 0 var(--red);
-  font-size: 0.74rem;
-  line-height: 1.35;
-  transform: rotate(-1.5deg);
-  transition: transform 170ms ease-out;
+  background: rgba(10, 10, 10, 0.72);
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
-.preview-note:hover,
-.preview-note:focus-within {
-  transform: rotate(0);
-}
-
-.preview-note strong {
-  grid-row: span 2;
-  align-self: center;
-  padding: 0.3rem 0.45rem;
-  color: var(--cream);
-  background: var(--red);
-  font-size: 0.72rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.preview-note a {
-  width: fit-content;
-  color: var(--cream);
+.hero-sample a {
   font-weight: 800;
 }
 
@@ -552,6 +536,11 @@ html[data-hero='mine-winter'] .hero {
   color: var(--cream);
   background: var(--ink);
   border-color: var(--ink);
+}
+
+.roadmap-product--ink .status--works,
+.page-band .status--works {
+  border-color: var(--cream);
 }
 
 .status--progress {
@@ -1091,46 +1080,283 @@ html[data-os='macos'] .os-primary[data-os='macos'] {
   font-size: 0.78rem;
 }
 
+
+/* Product names keep their own spelling inside uppercase kickers. */
+.kicker--name {
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+.band-actions,
+.row-actions,
+.cta-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem 1.5rem;
+}
+
+.page-band .band-actions {
+  margin-top: 2rem;
+}
+
+/* A dark button on a dark band still needs an edge. */
+.page-band .button--ink,
+.showcase--ink .button--ink,
+.cta-band--ink .button--ink {
+  border-color: var(--cream);
+  box-shadow: 5px 5px 0 var(--red);
+}
+
+.page-band--red .button--ink {
+  border-color: var(--ink);
+  box-shadow: 5px 5px 0 var(--ink);
+}
+
+/* Showcase: one take per product, the video next to its explanation. */
+.showcase,
+.feature-section {
+  padding: clamp(4rem, 8vw, 7rem) var(--pad);
+}
+
+.showcase--ink {
+  color: var(--cream);
+  background: var(--ink);
+}
+
+.showcase--ink .kicker {
+  color: var(--red-bright);
+}
+
+.showcase .section-heading,
+.feature-section .section-heading {
+  margin-bottom: clamp(2rem, 5vw, 3.5rem);
+}
+
+.feature-rows {
+  display: grid;
+  width: min(100%, 1120px);
+  gap: clamp(3rem, 6vw, 4.5rem);
+  margin: 0 auto;
+}
+
+.feature-row {
+  display: grid;
+  width: min(100%, 1120px);
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  align-items: center;
+  gap: clamp(1.5rem, 4vw, 3.5rem);
+  margin: 0 auto;
+}
+
+.feature-rows .feature-row:nth-child(even) {
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+}
+
+.feature-rows .feature-row:nth-child(even) .feature-row-media {
+  order: 2;
+}
+
+.feature-row-media {
+  display: grid;
+  gap: 1rem;
+}
+
+.feature-row .media-frame {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0;
+  justify-self: center;
+  background: var(--paper);
+}
+
+.feature-row .media-frame figcaption {
+  width: 0;
+  min-width: 100%;
+}
+
+.feature-row .media-frame img,
+.feature-row .media-frame video {
+  width: auto;
+  max-width: 100%;
+  max-height: 44rem;
+}
+
+.feature-row .media-frame:hover img,
+.feature-row .media-frame:hover video {
+  transform: none;
+}
+
+.feature-row-text h3 {
+  margin: 0 0 0.8rem;
+  font-size: clamp(1.15rem, 2vw, 1.5rem);
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.feature-row-text p {
+  max-width: 46ch;
+  margin: 0 0 0.9rem;
+}
+
+.feature-row-text .row-actions {
+  margin-top: 1.6rem;
+}
+
+.showcase--ink .media-frame {
+  border-color: var(--cream);
+  box-shadow: 6px 6px 0 var(--red);
+}
+
+.media-frame--video {
+  position: relative;
+}
+
+.video-toggle {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  color: var(--cream);
+  background: rgba(10, 10, 10, 0.78);
+  border: 2px solid var(--cream);
+  cursor: pointer;
+}
+
+.video-toggle span {
+  width: 12px;
+  height: 14px;
+  border-right: 4px solid currentColor;
+  border-left: 4px solid currentColor;
+}
+
+.video-toggle[data-state='paused'] span {
+  width: 0;
+  height: 0;
+  margin-left: 4px;
+  border-top: 8px solid transparent;
+  border-right: 0;
+  border-bottom: 8px solid transparent;
+  border-left: 13px solid currentColor;
+}
+
+.also-line {
+  width: min(100%, 1120px);
+  margin: clamp(3rem, 6vw, 4.5rem) auto 0;
+  font-size: 0.95rem;
+}
+
+.also-line--center {
+  text-align: center;
+}
+
+/* Closing call to action. */
+.cta-band {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: clamp(4rem, 8vw, 6.5rem) var(--pad);
+  color: var(--cream);
+  text-align: center;
+  background: var(--red);
+  border-bottom: 1px solid var(--ink);
+}
+
+.cta-band--ink {
+  background: var(--ink);
+}
+
+.cta-band h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: clamp(1.9rem, 4vw, 3.6rem);
+  font-weight: 400;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.cta-band p {
+  margin: 0;
+}
+
+.cta-actions {
+  justify-content: center;
+  margin-top: 1rem;
+}
+
+.product-mark--inline {
+  width: 1.6rem;
+  height: 1.6rem;
+  margin: 0;
+  border-width: 0;
+  box-shadow: none;
+}
+
+.maker-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(2rem, 6vw, 7rem);
+  padding: clamp(4rem, 8vw, 7rem) var(--pad);
+  background: var(--paper);
+  border-bottom: var(--line);
+}
+
+.maker-panel > * {
+  width: min(100%, 37rem);
+  margin: 0 auto;
+}
+
+.maker-panel h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: clamp(1.7rem, 3.4vw, 3.2rem);
+  font-weight: 400;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.maker-panel p:not(.kicker) {
+  margin: 0 0 1rem;
+}
+
+.download-card h2 {
+  text-transform: none;
+}
+
 @media (max-width: 980px) {
+  /* Narrower screens: the hero becomes a column, so the wordmark, the two stickers and the buttons never overlap. */
+  .hero {
+    display: flex;
+    min-height: 100svh;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 2rem;
+    padding: 6.5rem 5.5% 2.5rem;
+  }
+
+  .hero-wordmark-wrap,
+  .hero-copy,
+  .hero-actions {
+    position: static;
+  }
+
+  .hero-wordmark {
+    font-size: 8.4vw;
+  }
+
   .hero-copy {
-    bottom: calc(17% + 3.5rem);
-    max-width: 82vw;
+    max-width: 100%;
+    margin-top: auto;
   }
 
-  .hero-link {
-    right: auto;
-    bottom: calc(5% + 3.5rem);
-    left: 5.5%;
-  }
-
-  body {
-    padding-bottom: 4rem;
-  }
-
-  .preview-note {
-    right: 0;
-    bottom: 0;
-    left: 0;
+  .hero-actions {
+    width: min(100%, 26rem);
     max-width: none;
-    grid-template-columns: auto 1fr auto;
-    align-items: center;
-    padding: 0.55rem 0.8rem;
-    border-width: 2px 0 0;
-    box-shadow: none;
-    transform: none;
-  }
-
-  .preview-note:hover,
-  .preview-note:focus-within {
-    transform: none;
-  }
-
-  .preview-note strong {
-    grid-row: auto;
-  }
-
-  .preview-note span {
-    font-size: 0.7rem;
   }
 
   .feature-grid {
@@ -1218,10 +1444,6 @@ html[data-os='macos'] .os-primary[data-os='macos'] {
     background-position: 90% center;
   }
 
-  .hero-wordmark-wrap {
-    top: 13%;
-    left: 5%;
-  }
 
   .hero-wordmark {
     max-width: 90vw;
@@ -1233,11 +1455,19 @@ html[data-os='macos'] .os-primary[data-os='macos'] {
     display: block;
   }
 
+  .hero {
+    min-height: max(640px, 100svh);
+    padding: 5.25rem 5% 1.75rem;
+    gap: 1.5rem;
+  }
+
   .hero-copy {
-    bottom: calc(24% + 3.5rem);
-    left: 5%;
-    max-width: 90vw;
     gap: 0.8rem;
+  }
+
+  .hero-actions {
+    width: 100%;
+    gap: 0.75rem;
   }
 
   .sticker {
@@ -1247,11 +1477,6 @@ html[data-os='macos'] .os-primary[data-os='macos'] {
 
   .sticker--red {
     margin-left: 0.5rem;
-  }
-
-  .hero-link {
-    left: 5%;
-    width: 90%;
   }
 
   .product-grid,
@@ -1299,6 +1524,21 @@ html[data-os='macos'] .os-primary[data-os='macos'] {
 
   .plain-list--compact {
     columns: 1;
+  }
+
+  .feature-row,
+  .feature-rows .feature-row:nth-child(even),
+  .maker-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .feature-rows .feature-row:nth-child(even) .feature-row-media {
+    order: 0;
+  }
+
+  .cta-actions .button,
+  .band-actions .button {
+    width: 100%;
   }
 }
 
@@ -1356,7 +1596,6 @@ html[data-os='macos'] .os-primary[data-os='macos'] {
 
 @media print {
   .site-header,
-  .preview-note,
   .hero,
   .site-footer,
   .button,

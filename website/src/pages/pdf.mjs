@@ -1,83 +1,91 @@
 import config from '../../site.config.mjs';
-import { productMark, status } from '../lib/html.mjs';
-import { renderMedia } from '../lib/media.mjs';
+import { escapeHtml, productMark } from '../lib/html.mjs';
+import { featureRow } from '../lib/media.mjs';
 
 export function render({ assets, media }) {
   return {
     current: 'pdf',
     path: '/pdf/',
-    title: 'PDF editor — web app, tested features and limits',
-    description: 'berg:work PDF in the browser: edit text, organise pages, redact, OCR and sign, with screenshots and a recording from the published web app, known limits and the internal desktop build.',
+    og: 'ogPdf',
+    title: 'PDF editor in your browser: move, retype, redact, sign',
+    description: 'berg:work PDF changes what is already in a PDF: move and retype text, pictures and drawings, sort pages, redact for real, sign and make scans searchable. In your browser; nothing is uploaded.',
     body: `<header class="page-band">
       <div>
         ${productMark(assets.markPdf, 'large')}
-        <p class="kicker">${config.products.pdf}</p>
-        <h1>${config.products.pdf}</h1>
-        <p>Edit PDF content and pages in the browser: files are opened and saved on your device, nothing is uploaded. A desktop build for Linux exists internally and is not distributed yet.</p>
-        <a class="button button--ink" href="/app/pdf/">Open berg:work PDF in the browser</a>
+        <p class="kicker kicker--name">${escapeHtml(config.products.pdf)}</p>
+        <h1>Edit the PDF itself.</h1>
+        <p>Not just notes on top: change the text, pictures and drawings that are already in the file, then save a normal PDF. It all happens in your browser, and the file never leaves your computer.</p>
+        <p class="band-actions"><a class="button button--cream" href="/app/pdf/">Open the PDF editor</a> <a class="text-link" href="/app/pdf/?sample">Try it with a sample PDF <span aria-hidden="true">→</span></a></p>
       </div>
-      ${status('Web app: works', 'works')}
     </header>
 
-    <section class="feature-section ruled-section" aria-labelledby="pdf-works-title">
+    <section class="showcase ruled-section" aria-labelledby="pdf-move-title">
       <div class="section-heading">
-        <p class="kicker">Works in the current browser build</p>
-        <h2 id="pdf-works-title">Workflows.</h2>
-        <p>These editing workflows are covered by automated tests of the editor. The pictures below are screenshots of the published web app with this site's sample files.</p>
+        <p class="kicker">In the web app</p>
+        <h2 id="pdf-move-title">Move anything.</h2>
       </div>
-      <div class="feature-grid">
-        <article><h3>Edit text in place</h3><p>Edit existing rich text. Mixed formatting survives undo, redo, export and reopen.</p></article>
-        <article><h3>Organise pages</h3><p>Append, reorder, delete and rotate pages. Merge and split tools are also present.</p></article>
-        <article><h3>Redact content</h3><p>Preview the affected content, redact a marked area, or find and redact every text match.</p></article>
-        <article><h3>Sign documents</h3><p>Add visible signatures or use a certificate. Invalid credentials are rejected before export.</p></article>
-        <article><h3>Recognise scanned text</h3><p>Run OCR and select the recognised text layer over a scanned page.</p></article>
-        <article><h3>Forms and markup</h3><p>Fill form fields. Copy, highlight, underline and strike through text.</p></article>
-        <article><h3>Page stamps</h3><p>Add watermarks and page numbers across rotated and cropped pages.</p></article>
-        <article><h3>File operations</h3><p>Compress files, edit metadata, and encrypt or decrypt PDF documents.</p></article>
+      ${featureRow(media.get('pdf-move'), 'Grab it, turn it, retype it', `<p>Switch to <strong>Edit PDF</strong> and every object on the page becomes yours: the heading moves, a drawing and its label move together and turn, and a double-click lets you type in the line itself.</p>
+        <p>Undo is always one key away, and nothing changes in your file until you save.</p>`)}
+    </section>
+
+    <section class="feature-section ruled-section" aria-labelledby="pdf-features-title">
+      <div class="section-heading">
+        <p class="kicker">Tools</p>
+        <h2 id="pdf-features-title">What you can do.</h2>
       </div>
-      ${renderMedia(media.get('pdf-text-edit'))}
-      ${renderMedia(media.get('pdf-page-organiser'))}
-      ${renderMedia(media.get('pdf-redaction'))}
-      ${renderMedia(media.get('pdf-ocr'))}
+      <div class="feature-rows">
+        ${featureRow(media.get('pdf-text-edit'), 'Retype text in its own font', `<p>Click a line and change it. Font, size, style and colour come from the PDF, and mixed formatting survives undo, saving and reopening.</p>`)}
+        ${featureRow(media.get('pdf-select-many'), 'Grab many things at once', `<p>Draw a box around a table and all twenty cells are selected. Move them together, group them or line them up.</p>`)}
+        ${featureRow(media.get('pdf-precise'), 'Exact when it matters', `<p>Every object shows its position, size and angle. Type the numbers you need, align it to the page, turn it by 90° or edit the points of a path.</p>`)}
+        ${featureRow(media.get('pdf-insert'), 'Add what is missing', `<p>Put new text, images, rectangles, ellipses, arrows, freehand lines, comments or a visible signature on any page.</p>`)}
+        ${featureRow(media.get('pdf-pages'), 'Sort the pages', `<p>Drag pages into order, duplicate, delete or rotate them, add pages, or save a range of pages as its own PDF.</p>`)}
+        ${featureRow([media.get('pdf-redaction-find'), media.get('pdf-redaction')], 'Black out names – for real', `<p>Search for a name, check every match in context and mark them all at once. When you save, the characters are deleted from the file, not just hidden under a black box.</p>`)}
+        ${featureRow(media.get('pdf-sign'), 'Sign it', `<p>Draw, type or insert your signature and place it on the page, or sign with a certificate. Signing happens on your computer.</p>`)}
+        ${featureRow(media.get('pdf-ocr'), 'Make scans searchable', `<p>Text recognition runs in your browser – about two to four seconds for a page like this – and adds a text layer you can search and copy.</p>`)}
+        ${featureRow(media.get('pdf-tools'), 'And the rest of the toolbox', `<p>Bookmarks, page numbers, watermarks, form fields, document details, smaller files, password protection, comparing two versions and batch jobs.</p>`)}
+      </div>
     </section>
 
     <section class="evidence-strip" aria-labelledby="pdf-measured-title">
       <div class="section-heading">
-        <p class="kicker">Measured on 24 October 2026</p>
-        <h2 id="pdf-measured-title">Measured.</h2>
-        <p>Headless Chromium on a laptop, empty cache, the published web app. The numbers are single runs, not averages.</p>
+        <p class="kicker">Measured on 24 October 2026, laptop, empty cache</p>
+        <h2 id="pdf-measured-title">Light, and local.</h2>
       </div>
       <div class="evidence-grid">
-        <article><p class="big-number">1.0 MB</p><h3>Until the editor is ready</h3><p>Transferred on a first visit before a PDF can be opened, ready after about 2 seconds. PDFium and the OCR engine load when a document needs them.</p></article>
-        <article><p class="big-number">2–4 s</p><h3>OCR of a scanned page</h3><p>Tesseract recognised the sample scan above in 2.4 and 3.6 seconds on the device. Nothing is sent anywhere.</p></article>
-        <article><p class="big-number">0</p><h3>Upload endpoints</h3><p>The page may only make requests to bergwork.app, which serves static files and accepts none. In a session that opened, edited and saved the sample PDF, all 25 requests were GETs for the app's own files.</p></article>
+        <article><p class="big-number">1 MB</p><h3>To get started</h3><p>That is all your browser downloads before you can open a PDF – ready in about two seconds. The PDF engine and text recognition load only when a document needs them.</p></article>
+        <article><p class="big-number">2–4 s</p><h3>Per scanned page</h3><p>Text recognition of the sample scan above took 2.4 and 3.6 seconds, on the laptop itself.</p></article>
+        <article><p class="big-number">0</p><h3>Places your file goes</h3><p>The editor may only talk to bergwork.app, which serves the app and accepts nothing. Opening, editing and saving the sample made 25 requests, all of them for the app's own files.</p></article>
       </div>
     </section>
 
     <section class="limitations ruled-section" aria-labelledby="pdf-limits-title">
       <div class="section-heading">
-        <p class="kicker">Known limitations</p>
-        <h2 id="pdf-limits-title">Limitations.</h2>
-        <p>These points remain open in the browser editor.</p>
+        <p class="kicker">Honest notes</p>
+        <h2 id="pdf-limits-title">Good to know.</h2>
       </div>
       <ul class="plain-list plain-list--compact">
-        <li><strong>Text frames:</strong> narrowing a frame does not automatically fit its height. A word wider than the frame can break inside the word.</li>
-        <li><strong>Paragraphs:</strong> some multiline source paragraphs still edit as separate line objects rather than one reflowing paragraph.</li>
-        <li><strong>Phones:</strong> text can be small at fit-to-width because editing does not yet trigger an automatic zoom.</li>
-        <li><strong>Placement:</strong> snapping is off by default while that product decision remains open.</li>
-        <li><strong>Nested paths:</strong> a path inside a form object cannot be rotated alone; its group can be rotated.</li>
-        <li><strong>Large files:</strong> opening and committing changes to very large scanned documents still has performance work remaining.</li>
-        <li><strong>Toolbar:</strong> at some desktop widths, a few labels collapse to icons.</li>
+        <li><strong>Long paragraphs:</strong> some paragraphs edit line by line instead of flowing as one block.</li>
+        <li><strong>Narrow text boxes:</strong> a box does not grow taller by itself when you make it narrower.</li>
+        <li><strong>Phones:</strong> it works, but editing text on a small screen is fiddly; it does not zoom in for you yet.</li>
+        <li><strong>Huge scans:</strong> opening and saving very large scanned documents is still slow.</li>
       </ul>
     </section>
 
     <section class="planned-panel" aria-labelledby="pdf-desktop-title">
-      <div>${status('Internal build', 'progress')}<h2 id="pdf-desktop-title">Desktop app</h2></div>
+      <div><p class="kicker">Coming later</p><h2 id="pdf-desktop-title">Desktop app.</h2></div>
       <div>
-        <p>The same editor runs in a desktop app for Linux (Tauri 2): its own window, native open and save dialogs, PDFs opened from the file manager. It is an internal build; Windows packaging is configured but not built yet, and the first-release scope is not fixed.</p>
-        <a class="button button--cream" href="/roadmap/">See the roadmap</a>
+        <p>A desktop version for Linux is in testing: its own window, real open and save dialogs, PDFs opened straight from the file manager. Windows follows. It is not public yet.</p>
+        <a class="button button--cream" href="/download/">Desktop status</a>
       </div>
     </section>
-    ${renderMedia(media.get('pdf-workflow'))}`,
+
+    <section class="cta-band" aria-labelledby="pdf-cta-title">
+      <h2 id="pdf-cta-title">Open a PDF.</h2>
+      <p>Nothing to install, nothing uploaded.</p>
+      <div class="cta-actions">
+        <a class="button button--cream" href="/app/pdf/">Open the PDF editor</a>
+        <a class="button button--ink" href="/app/pdf/?sample">Try the sample</a>
+      </div>
+    </section>`,
   };
 }

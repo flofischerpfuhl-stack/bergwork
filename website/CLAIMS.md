@@ -82,3 +82,23 @@ Paths beginning `../17_fernwork` and `~/.local/share/fernwork-compositor-lab/wor
 | C43 | Remove Background's fast model is 4.6 MB and runs in the browser; on the sample photo thin straps come out partly transparent. | WORKS | `apps/image/src/core/subject/models.ts` (`byteLength: 4_574_861`); screenshot `website/src/media/image-background-removal.png`. |
 | C44 | The Image web app renders with WebGL 2 on the GPU. | WORKS | `apps/image` compositor (PixiJS, WebGL 2), `docs/ARCHITECTURE.md`. |
 | C45 | The screenshots and recordings on the site come from the published web apps with the site's own sample files; recordings cut waiting times and keep real speed otherwise. | WORKS | `website/media/capture-pdf.mjs`, `website/media/capture-image.mjs`, `website/media/video.mjs`; samples `apps/pdf/scripts/fixtures/`, `website/media/backpack.png` (generated for the site), `website/src/assets/img/mine-dusk.jpg`. |
+
+## Changes of 2026-10-25 (site review)
+
+The copy was rewritten for visitors instead of reviewers; the evidence stays here. Claims no longer published: C04
+(replaced by C37), C16 (Windows network probe), C47–C49 and C52 (minor PDF items), C43's model remark (the new
+cut-out picture is described in `content/media.json`) and the per-status labels on the home page. C45 changes: takes
+are played a little faster than real time (C67).
+
+| ID | Published claim | Status | Source |
+| --- | --- | --- | --- |
+| C62 | In Edit PDF, existing text, images and drawings are objects that can be moved, turned, retyped and selected many at once (a marquee over the sample table selects its 20 cells), with exact position, size and angle and editable path points. | WORKS | `website/media/capture-pdf.mjs` (`pdf-move-video`, `pdf-select-many`, `pdf-precise`) against the live app 2026-10-25; Fernwork tests behind C39. |
+| C63 | Insert offers text, image, rectangle, ellipse, arrow, freehand drawing, comment and visible signature; Document tools offer bookmarks, page numbers, watermark, forms, sign, OCR, metadata, optimize, security, compare, batch, guides. | WORKS | Menus as captured in `pdf-insert.png` and `pdf-tools.png` (capture-pdf.mjs, 2026-10-25). |
+| C64 | Signing: a handwritten mark (drawn, typed or image) or a certificate signature, on the device. | WORKS | Sign panel text in `pdf-sign.png`; certificate handling behind the PDF signing claim (C41, line “PDF signing supports visible marks …”). |
+| C65 | Both web apps open a sample file from their empty state or with `?sample`, and their logo links back to bergwork.app. | WORKS | `apps/pdf/web/src/sample.ts`, `apps/pdf/web/src/homeLink.tsx`, `apps/image/src/app/shell.tsx`; headless check `~/AgentWork/bergwork-site-review/app-checks/check.mjs` (2026-10-25). |
+| C66 | Optional larger models (better background removal, object selection, AI fill, upscaling) are downloaded from Hugging Face only after the user starts the feature; the small background-removal model ships with the app. | WORKS | `apps/image/src/core/subject/models.ts`, `objectSelect/models.ts`, `genai/models.ts`; CSP in `website/_headers`. Published on `/privacy/` and the home page. |
+| C67 | The takes are recorded in the published web app and played a little faster than real time (session run 4× slower, played 5.2× faster for the PDF take). | WORKS | `website/media/video.mjs` (`grabFrames`, `encodeFrames`), `capture-pdf.mjs`, `capture-image.mjs`. |
+| C68 | The PDF desktop app is in testing on Linux; the image desktop app runs as a test build on Linux and Windows. | IN PROGRESS | C13, C40. |
+| C69 | Image documents can use 16 bits per channel; tagged PNG, JPEG and TIFF are converted with their colour profiles. | WORKS | Phase 1 (complete) in the roadmap claims above (“Document/format v2, 16-bit colour”); C27 for the ICC conversion. |
+| C70 | berg:work is made by Florian Fischer in Grünenbach (Allgäu), the same workshop as Himmel:CAD. | OWNER | Legal notice facts (C59) and C55. |
+| C71 | The website and the web apps are delivered by Cloudflare Workers (static assets). | WORKS | `website/wrangler.jsonc`, `website/README.md` (Cloudflare settings); replaces the Pages wording of C58. |

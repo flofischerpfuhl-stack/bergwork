@@ -6,11 +6,11 @@ Production-oriented static product site for the two berg:work desktop apps. It i
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Factual brand introduction, product status and the recorded product commitments. |
-| `/pdf/` | Tested PDF-editor capabilities, current limitations and the planned desktop app. |
-| `/image/` | Capabilities in the current internal image build, roadmap context and explicit non-goals. |
+| `/` | What berg:work is in one screen (two buttons into the web apps), one short take per product, how files stay local, who makes it. |
+| `/pdf/` | berg:work PDF: its take, one small screenshot per tool with a short explanation, measurements, honest notes, desktop status. |
+| `/image/` | berg:work Image: the same structure, plus what it will not do. |
 | `/roadmap/` | Status of both products without unsourced dates. |
-| `/download/` | Release-manifest-driven downloads; currently reports that no public builds exist. |
+| `/download/` | “Desktop” in the navigation: nothing to install, desktop status; release-manifest-driven downloads once they exist. |
 | `/legal/` | English legal notice preserving the provider and contact facts. |
 | `/privacy/` | English privacy information including hosting, logs and service-worker storage. |
 | `/offline/` | Offline fallback reached by the service worker. |
@@ -100,11 +100,13 @@ When releases exist, the page shows an OS-matched primary download through progr
 
 The build fingerprints CSS, JavaScript, fonts, hero images, icons and present media. `_headers` gives `/assets/*` a one-year immutable cache and keeps HTML, the manifest and service worker on `no-cache`.
 
+Open Graph pictures are JPEGs drawn by `media/og-images.py` (site, PDF, Image). Besides their fingerprinted copies under `/assets/img/`, the build writes stable copies to `/og/`, which the web apps' own pages link.
+
 The generated service worker precaches the application shell, uses network-first navigation with `/offline/` as fallback, and keeps a capped stale-while-revalidate cache for same-origin images and media. The privacy page documents this local Cache Storage use.
 
 ## Cloudflare settings
 
-The site is served by the `bergwork` Worker (static assets from `./dist`) on the custom domain `bergwork.app`, with `404.html` as the not-found page. Both are set in `wrangler.jsonc`.
+The site is served by the `bergwork` Worker (static assets from `./dist`) on the custom domain `bergwork.app`, with `404.html` as the not-found page. Both are set in `wrangler.jsonc`. Its script `worker.js` runs only for the page addresses listed in `run_worker_first` and sends plain-HTTP visits there to HTTPS with a 301 (the wrangler login has no right to switch on the zone's "Always Use HTTPS"); `_headers` adds HSTS. All other requests go straight to the assets.
 
 Cloudflare Workers Builds deploys every push to `main` automatically; other branches get preview builds. The Git connection lives in the Cloudflare dashboard with:
 
@@ -126,15 +128,15 @@ node check.mjs
 
 The check uses `npx -y html-validate@9`, the existing Fernwork Playwright installation and the existing Himmel:CAD axe-core file. It writes ignored screenshots for every page at 1440 px and 360 px to `.check-out/`.
 
-Results on 2026-09-25:
+Results on 2026-10-25 (full build with both web apps):
 
 | Gate | Result |
 | --- | --- |
 | HTML validity, 9 pages | PASS |
 | Banned phrases and competitor names | PASS |
-| Internal links and fingerprinted assets | PASS |
+| Internal links and assets | PASS |
 | Manifest parsing and declared icon sizes | PASS |
-| Open Graph image at 1200×630 | PASS |
+| Open Graph images, three at 1200×630 | PASS |
 | Per-page 150 KB budget (document + shared CSS/JS; fonts, heroes and media excluded) | PASS |
 | axe-core WCAG 2.2 AA, 9 pages | PASS |
 | Horizontal overflow at 360, 768 and 1440 px | PASS |
@@ -147,9 +149,14 @@ Results on 2026-09-25:
 | Service-worker offline reload for `/` and `/pdf/` | PASS |
 | 18 responsive screenshots | PASS |
 
+The character-coverage gate needs Python's `fontTools` and `brotli` (for example `PYTHONPATH` pointing at a
+`uv pip install --target` folder); Playwright and axe-core come from `PLAYWRIGHT_PATH` and `AXE_PATH`.
+
 ## Visual assets and font licence
 
-The four mine heroes remain the identity images. Each has 2880×1620 and 1440×810 JPEG and WebP variants. The home page chooses one per load in `hero.js`; without JavaScript it shows `mine-dusk`. Mobile CSS keeps the existing per-image focal crop.
+The four mine heroes remain the identity images. Each has 2880×1620 and 1440×810 JPEG and WebP variants. The home page chooses one per load in `hero.js` and preloads exactly that picture at the size the stylesheet will use (the build fills in the URLs); without JavaScript it shows `mine-dusk`. Mobile CSS keeps the existing per-image focal crop. Below 980 px the hero is a column (wordmark, stickers, buttons), so the buttons are on the first screen of a phone.
+
+Text is set in JetBrains Mono (SIL OFL 1.1, `src/assets/fonts/OFL-JetBrainsMono.txt`), a variable-weight Latin WOFF2 of about 40 KB, so the site looks the same on every system.
 
 `Bergschrift-Regular.ttf` is a modified Stalinist One by Alexey Maslov and Jovanny Lemonad under the SIL Open Font License 1.1 (`src/assets/fonts/OFL.txt`). The Reserved Font Name required the Bergschrift rename. The site uses a WOFF2 containing the complete Latin-1, Latin Extended-A, Cyrillic and General Punctuation ranges from the source font. The source TTF remains available for regeneration with `../scripts/build-wordmark-font.py`.
 

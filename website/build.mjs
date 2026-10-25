@@ -118,13 +118,24 @@ async function build() {
   await mkdir(dist, { recursive: true });
 
   const font = await fingerprintAsset(path.join(sourceAssets, 'fonts', 'Bergschrift-Regular.woff2'), 'fonts/Bergschrift-Regular.woff2');
+  const monoFont = await fingerprintAsset(path.join(sourceAssets, 'fonts', 'JetBrainsMono-latin.woff2'), 'fonts/JetBrainsMono-latin.woff2');
   const logo = await fingerprintAsset(path.join(sourceAssets, 'icons', 'bergwork-mark.svg'), 'icons/bergwork-mark.svg');
   const favicon = await fingerprintAsset(path.join(sourceAssets, 'icons', 'favicon.ico'), 'icons/favicon.ico');
   const appleTouch = await fingerprintAsset(path.join(sourceAssets, 'icons', 'apple-touch-icon.png'), 'icons/apple-touch-icon.png');
   const icon192 = await fingerprintAsset(path.join(sourceAssets, 'icons', 'icon-192.png'), 'icons/icon-192.png');
   const icon512 = await fingerprintAsset(path.join(sourceAssets, 'icons', 'icon-512.png'), 'icons/icon-512.png');
   const iconMaskable = await fingerprintAsset(path.join(sourceAssets, 'icons', 'icon-maskable-512.png'), 'icons/icon-maskable-512.png');
-  const og = await fingerprintAsset(path.join(sourceAssets, 'img', 'og-bergwork.png'), 'img/og-bergwork.png');
+  // Open Graph pictures (website/media/og-images.py). The web apps link them from their own pages, so each also gets a
+  // stable, unfingerprinted copy under /og/.
+  const ogImages = {};
+  for (const [key, name] of [['og', 'og-bergwork'], ['ogPdf', 'og-pdf'], ['ogImage', 'og-image']]) {
+    const source = path.join(sourceAssets, 'img', `${name}.jpg`);
+    if (!existsSync(source)) { warnings.push(`Missing Open Graph picture ${name}.jpg`); continue; }
+    ogImages[key] = await fingerprintAsset(source, `img/${name}.jpg`);
+    await ensureParent(path.join(dist, 'og', `${name}.jpg`));
+    await cp(source, path.join(dist, 'og', `${name}.jpg`));
+  }
+  const og = ogImages.og;
   const markPdf = await fingerprintAsset(path.join(sourceAssets, 'logos', 'bergwork-pdf.svg'), 'logos/bergwork-pdf.svg');
   const markImage = await fingerprintAsset(path.join(sourceAssets, 'logos', 'bergwork-image.svg'), 'logos/bergwork-image.svg');
 
@@ -141,6 +152,7 @@ async function build() {
 
   const cssTokens = {
     __FONT_WOFF2__: font,
+    __MONO_WOFF2__: monoFont,
     __HERO_DUSK_WEBP__: hero['dusk@2880-webp'], __HERO_DUSK_JPG__: hero['dusk@2880-jpg'],
     __HERO_DAY_WEBP__: hero['day@2880-webp'], __HERO_DAY_JPG__: hero['day@2880-jpg'],
     __HERO_INSIDE_WEBP__: hero['inside@2880-webp'], __HERO_INSIDE_JPG__: hero['inside@2880-jpg'],
@@ -158,15 +170,20 @@ async function build() {
   await rm(cssTemp);
 
   const siteJs = await fingerprintAsset(path.join(root, 'src', 'site.js'), 'js/site.js');
-  const heroJs = await fingerprintAsset(path.join(root, 'src', 'hero.js'), 'js/hero.js');
+  const heroes = Object.fromEntries(heroNames.map((name) => [`mine-${name}`, { wide: hero[`${name}@2880-webp`], narrow: hero[`${name}@1440-webp`] }]));
+  const heroSource = (await readFile(path.join(root, 'src', 'hero.js'), 'utf8')).replace('__HEROES__', JSON.stringify(heroes));
+  const heroTemp = path.join(dist, '.hero.js');
+  await writeFile(heroTemp, heroSource, 'utf8');
+  const heroJs = await fingerprintAsset(heroTemp, 'js/hero.js');
+  await rm(heroTemp);
 
   const mediaData = JSON.parse(await readFile(path.join(root, 'content', 'media.json'), 'utf8'));
   const releases = JSON.parse(await readFile(path.join(root, 'content', 'releases.json'), 'utf8'));
   const media = await prepareMedia(mediaData, path.join(root, 'src', 'media'), fingerprintAsset, warnings);
 
   const assets = {
-    css, siteJs, heroJs, font, logo, favicon, appleTouch, icon192, icon512, iconMaskable, og, markPdf, markImage,
-    heroDusk: hero['dusk@2880-webp'],
+    css, siteJs, heroJs, font, monoFont, logo, favicon, appleTouch, icon192, icon512, iconMaskable, og, markPdf, markImage,
+    ogPdf: ogImages.ogPdf || og, ogImage: ogImages.ogImage || og,
   };
   const pageContext = { assets, media, releases, config };
   const pages = [renderHome(pageContext), renderPdf(pageContext), renderImage(pageContext), renderRoadmap(pageContext), renderDownload(pageContext), renderLegal(pageContext), renderPrivacy(pageContext), renderOffline(pageContext)];
@@ -184,7 +201,7 @@ async function build() {
   const manifest = {
     name: 'berg:work PDF and Image',
     short_name: 'berg:work',
-    description: 'Release status and product information for the berg:work PDF and image editors.',
+    description: 'A PDF editor and an image editor that run in your browser. Nothing is uploaded.',
     start_url: '/',
     scope: '/',
     display: 'standalone',
@@ -201,7 +218,7 @@ async function build() {
   await writeText('manifest.webmanifest', `${JSON.stringify(manifest, null, 2)}\n`);
 
   const routePaths = ['/', '/pdf/', '/image/', '/roadmap/', '/download/', '/legal/', '/privacy/', '/offline/', '/404.html'];
-  const precache = [...routePaths, css, siteJs, heroJs, font, logo, icon192, icon512, iconMaskable, appleTouch, '/manifest.webmanifest', '/favicon.svg', '/favicon.ico'];
+  const precache = [...routePaths, css, siteJs, heroJs, font, monoFont, logo, icon192, icon512, iconMaskable, appleTouch, '/manifest.webmanifest', '/favicon.svg', '/favicon.ico'];
   let sw = await readFile(path.join(root, 'src', 'sw-template.js'), 'utf8');
   const swVersion = digest(JSON.stringify([...copiedAssets].sort()) + sw, 12);
   sw = sw.replace('__CACHE_VERSION__', swVersion).replace('__PRECACHE__', JSON.stringify(precache));
