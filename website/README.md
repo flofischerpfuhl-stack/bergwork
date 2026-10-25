@@ -128,15 +128,15 @@ node check.mjs
 
 The check uses `npx -y html-validate@9`, the existing Fernwork Playwright installation and the existing Himmel:CAD axe-core file. It writes ignored screenshots for every page at 1440 px and 360 px to `.check-out/`.
 
-Results on 2026-09-25:
+Results on 2026-10-25 (full build with both web apps):
 
 | Gate | Result |
 | --- | --- |
 | HTML validity, 9 pages | PASS |
 | Banned phrases and competitor names | PASS |
-| Internal links and fingerprinted assets | PASS |
+| Internal links and assets | PASS |
 | Manifest parsing and declared icon sizes | PASS |
-| Open Graph image at 1200×630 | PASS |
+| Open Graph images, three at 1200×630 | PASS |
 | Per-page 150 KB budget (document + shared CSS/JS; fonts, heroes and media excluded) | PASS |
 | axe-core WCAG 2.2 AA, 9 pages | PASS |
 | Horizontal overflow at 360, 768 and 1440 px | PASS |
@@ -148,6 +148,9 @@ Results on 2026-09-25:
 | Reduced-motion transition check | PASS |
 | Service-worker offline reload for `/` and `/pdf/` | PASS |
 | 18 responsive screenshots | PASS |
+
+The character-coverage gate needs Python's `fontTools` and `brotli` (for example `PYTHONPATH` pointing at a
+`uv pip install --target` folder); Playwright and axe-core come from `PLAYWRIGHT_PATH` and `AXE_PATH`.
 
 ## Visual assets and font licence
 

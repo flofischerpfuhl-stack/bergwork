@@ -86,5 +86,5 @@ product('berg:work PDF', ['MOVE', 'ANYTHING.'], ['Edit what is inside a PDF,', '
 image_poster = MEDIA / 'image-move-poster.jpg'
 if image_poster.exists():
     product('berg:work Image', ['LAYERS,', 'IN YOUR', 'BROWSER.'], ['Cut out, compose, adjust.', 'Your photos stay on your computer.'],
-            image_poster, INK, 'og-image.jpg', (0.5, 0.5))
+            image_poster, INK, 'og-image.jpg', (0.17, 0.5))
 print('og images written to', OUT)

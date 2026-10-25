@@ -24,7 +24,7 @@ export function render({ assets, media }) {
         <p class="kicker">In the web app</p>
         <h2 id="image-move-title">Everything stays movable.</h2>
       </div>
-      ${featureRow(media.get('image-move'), 'From photo to poster in one go', `<p>Remove the background, place the cut-out on a new scene, scale and turn it, add a line of text. Every step is a layer you can still move, hide or change later.</p>`)}
+      ${featureRow(media.get('image-move'), 'From photo to poster in one go', `<p>Remove the background, put the photo on a new scene, scale it, turn it, add a title with a shadow and warm it all up with Curves. Every step is a layer you can still move, hide or change later.</p>`)}
     </section>
 
     <section class="feature-section ruled-section" aria-labelledby="image-features-title">
@@ -33,14 +33,14 @@ export function render({ assets, media }) {
         <h2 id="image-features-title">What you can do.</h2>
       </div>
       <div class="feature-rows">
-        ${featureRow(media.get('image-cutout'), 'Cut-outs on your computer', `<p>Remove a background with one command. The model runs in your browser and the result is a layer mask, so the original pixels stay and you can paint the edge back.</p>`)}
-        ${featureRow(media.get('image-transform'), 'Move, scale, turn', `<p>Grab a layer and drag its handles, or type exact position, size and angle. Flip, distort and choose the resampling quality.</p>`)}
+        ${featureRow(media.get('image-cutout'), 'Cut-outs on your computer', `<p>Remove a background with one command. The model runs in your browser, and the result is a layer mask: the original pixels stay, and you can paint the edge back in.</p>`)}
+        ${featureRow(media.get('image-transform'), 'Move, scale, turn', `<p>Drag a layer's handles to scale and turn it, or type exact position, size and angle. Flip and distort are right there too.</p>`)}
         ${featureRow(media.get('image-layers'), 'Real layers', `<p>Groups, pixel and vector masks, clipping masks, opacity and fill, locks, colour labels, 27 blend modes and a search for when the list gets long.</p>`)}
         ${featureRow(media.get('image-curves'), 'Adjustments you can change later', `<p>Curves, levels, hue and saturation, exposure, gradient maps and more sit on their own layers above the photo. Double-click to change them again at any time.</p>`)}
         ${featureRow(media.get('image-text'), 'Type that stays type', `<p>Point and area text with full typography and OpenType features, editable on the canvas until the very end.</p>`)}
-        ${featureRow(media.get('image-shapes'), 'Shapes and paths', `<p>Parametric shapes, a pen tool with editable points, Boolean operations and vector masks – sharp at every size.</p>`)}
+        ${featureRow(media.get('image-shapes'), 'Shapes and paths', `<p>Draw with the pen, then pull any point and its curve handles into place. Parametric shapes, Boolean operations and vector masks stay sharp at every size.</p>`)}
         ${featureRow(media.get('image-styles'), 'Layer styles', `<p>Drop shadow, stroke, outer glow, colour and gradient overlay, live on text, shapes and pictures.</p>`)}
-        ${featureRow(media.get('image-selection'), 'Precise selections', `<p>Rectangle, ellipse, lasso, magic wand, colour range and quick mask, with feather and refine edge.</p>`)}
+        ${featureRow(media.get('image-selection'), 'Precise selections', `<p>Pick a colour range – here the whole sky in one click – or use rectangle, ellipse, lasso, magic wand and quick mask, with feather and refine edge.</p>`)}
         ${featureRow(media.get('image-export'), 'One export dialog', `<p>PNG, JPEG, WebP, AVIF or TIFF, with a preview and the file size before anything is written. Export whole documents, artboards or single layers at 1×, 2× and 3×.</p>`)}
       </div>
       <p class="also-line"><strong>Also in the box:</strong> brush and eraser with pen pressure, healing, clone stamp, content-aware fill, dodge and burn, live filters (blur, noise, sharpen, lens correction, denoise), artboards, and import of PNG, JPEG, TIFF, HEIC, WebP, AVIF and GIF with colour profiles.</p>

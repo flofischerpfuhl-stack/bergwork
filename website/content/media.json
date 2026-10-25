@@ -110,5 +110,107 @@
     "width": 920,
     "height": 1020,
     "what": "Document tools menu open"
+  },
+  {
+    "id": "image-move",
+    "page": "image",
+    "kind": "video",
+    "file": "image-move.mp4",
+    "poster": "image-move-poster.jpg",
+    "alt": "A product photo of a red backpack has its background removed, the mountain illustration appears behind it, the cut-out is scaled down, moved onto the meadow and turned, the text “Into the hills” is typed, placed and given a drop shadow, and a Curves adjustment layer brightens the scene.",
+    "caption": "Recorded in the web app; waits cut, played faster than real time.",
+    "width": 1600,
+    "height": 886,
+    "what": "capture-image.mjs video: one session of 2× screenshots per step, concat, setpts PTS/1.5"
+  },
+  {
+    "id": "image-cutout",
+    "page": "image",
+    "kind": "image",
+    "file": "image-cutout.png",
+    "alt": "The backpack cut out on transparency, with its bounding box, and in the Layers panel the Backpack layer with its black-and-white layer mask.",
+    "width": 1264,
+    "height": 752,
+    "what": "web app, light, en-US, 1280×800 at 2×; website/media/capture-image.mjs"
+  },
+  {
+    "id": "image-transform",
+    "page": "image",
+    "kind": "image",
+    "file": "image-transform.png",
+    "alt": "The cut-out being turned with the rotation handle over the mountain scene; the transform bar shows position, size, 55 % scale and −12°.",
+    "width": 1470,
+    "height": 1152,
+    "what": "web app, light, en-US, 1280×800 at 2×; website/media/capture-image.mjs"
+  },
+  {
+    "id": "image-layers",
+    "page": "image",
+    "kind": "image",
+    "file": "image-layers.png",
+    "alt": "The Layers panel with a Curves adjustment layer, a vector shape layer, the text layer “Into the hills” with an effects badge, the masked Backpack photo and the Mountains illustration.",
+    "width": 1700,
+    "height": 1000,
+    "what": "web app, light, en-US, 1280×800 at 2×; website/media/capture-image.mjs"
+  },
+  {
+    "id": "image-curves",
+    "page": "image",
+    "kind": "image",
+    "file": "image-curves.png",
+    "alt": "The Curves adjustment layer dialog with an S-curve on the RGB channel next to the canvas it brightens.",
+    "width": 1616,
+    "height": 1040,
+    "what": "web app, light, en-US, 1280×800 at 2×; website/media/capture-image.mjs"
+  },
+  {
+    "id": "image-text",
+    "page": "image",
+    "kind": "image",
+    "file": "image-text.png",
+    "alt": "“Into the hills” being typed on the canvas, with the text bar: Noto Sans, Bold, 80 pt, alignment, colour, Character & Paragraph, Cancel and Commit.",
+    "width": 1924,
+    "height": 940,
+    "what": "web app, light, en-US, 1280×800 at 2×; website/media/capture-image.mjs"
+  },
+  {
+    "id": "image-shapes",
+    "page": "image",
+    "kind": "image",
+    "file": "image-shapes.png",
+    "alt": "A dashed white pen path curving from the meadow up to the mine, one anchor selected with the Direct Selection tool and its Bézier handles visible.",
+    "width": 1784,
+    "height": 1152,
+    "what": "web app, light, en-US, 1280×800 at 2×; website/media/capture-image.mjs"
+  },
+  {
+    "id": "image-styles",
+    "page": "image",
+    "kind": "image",
+    "file": "image-styles.png",
+    "alt": "The Layer Style dialog for “Into the hills” with Drop Shadow on (Multiply, 60 % opacity, 120°, 8 px distance, 16 px size) next to the shadowed title.",
+    "width": 2110,
+    "height": 1032,
+    "what": "web app, light, en-US, 1280×800 at 2×; website/media/capture-image.mjs"
+  },
+  {
+    "id": "image-selection",
+    "page": "image",
+    "kind": "image",
+    "file": "image-selection.png",
+    "alt": "Select › Color Range with the sky sampled, its black-and-white selection preview, and the canvas tinting everything outside the selection.",
+    "width": 1616,
+    "height": 1040,
+    "what": "web app, light, en-US, 1280×800 at 2×; website/media/capture-image.mjs"
+  },
+  {
+    "id": "image-export",
+    "page": "image",
+    "kind": "image",
+    "file": "image-export.png",
+    "alt": "The Export As dialog with WebP chosen (quality 85 %, transparency), the output size, a live preview and the estimated file size of 195 KB.",
+    "width": 1720,
+    "height": 1280,
+    "what": "web app, light, en-US, 1280×800 at 2×; website/media/capture-image.mjs"
   }
 ]
