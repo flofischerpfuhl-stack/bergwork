@@ -42621,7 +42621,28 @@ function Inspector({
             (propertyItem.fontWeight || '400') === '700' ? 'B' : '',
             (propertyItem.fontStyle || 'normal') === 'italic' ? 'I' : '',
           ].filter(Boolean).join(' · ');
+          // berg:work: text alignment for every text, as in document tools: inside the box. A plain PDF text run
+          // becomes a text box first (the same promotion as "Wrap text in a box"); widening the box shows it.
+          const textAlignButtons = (className = 'oo-pdf-text-align') => layer.type === 'text' && !legacyAutofitInvalid &&
+              (layer.item.textBlock === true || layer.item.textFrame !== true)
+            ? <span className={className} role="group" aria-label="Text alignment">
+              {[['left', 'align-left', 'Align text left'], ['center', 'align-center', 'Center text'], ['right', 'align-right', 'Align text right']].map(([value, icon, label]) => (
+                <button key={value} type="button" className="oo-pdf-icon-button" aria-label={label} title={label}
+                  aria-pressed={layer.item.textBlock === true && (layer.item.textAlign || 'left') === value}
+                  onMouseDown={event => event.preventDefault()}
+                  onClick={() => {
+                    const promote = layer.item.textBlock !== true;
+                    const patch = promote
+                      ? { textBlock: true, textAlign: value, preserveSourceAppearance: false }
+                      : legacyPropertyPatch({ textAlign: value });
+                    if (patch) updateTextLayer(layer, patch, { commitGesture: true,
+                      gestureReason: promote ? 'text-block-mode' : 'text-block-align', gestureKind: GestureKind.STYLE,
+                      previousForCommit: clonePlain(layer.item, {}) });
+                  }}><Icon name={icon} /></button>
+              ))}
+            </span> : null;
           const textReflowControls = layer.type === 'text' ? <>
+            {textAlignButtons() && <div className="oo-pdf-prop-row oo-pdf-text-align-row"><span className="oo-pdf-caption">Align text</span>{textAlignButtons()}</div>}
             <label className="oo-pdf-check"><TextBlockReflowToggle
               checked={layer.item.textBlock === true}
               disabled={layer.item.textFrame === true || legacyAutofitInvalid}
@@ -42630,18 +42651,9 @@ function Inspector({
                 { textBlock: checked, preserveSourceAppearance: false },
                 { commitGesture: true, gestureReason: 'text-block-mode', gestureKind: GestureKind.STYLE },
               )}
-            /> Text block reflow</label>
+            /> Wrap text in a box</label>
             {layer.item.textBlock === true && <>
               <div className="oo-pdf-prop-row two">
-                <label>Align <SimpleInspectorSelect label="Align" disabled={legacyAutofitInvalid}
-                  value={layer.item.textAlign || 'left'} options={[
-                    { value: 'left', label: 'Left' }, { value: 'center', label: 'Center' }, { value: 'right', label: 'Right' },
-                  ]} onChange={value => {
-                    const patch = legacyPropertyPatch({ textAlign:value });
-                    if (patch) updateTextLayer(layer, patch, { commitGesture:true,
-                      gestureReason:'text-block-align', gestureKind:GestureKind.STYLE,
-                      previousForCommit:clonePlain(layer.item, {}) });
-                  }} /></label>
                 <label>Vertical <SimpleInspectorSelect label="Vertical" disabled={legacyAutofitInvalid}
                   value={layer.item.verticalAlign || 'top'} options={[
                     { value: 'top', label: 'Top' }, { value: 'middle', label: 'Middle' }, { value: 'bottom', label: 'Bottom' },
@@ -42788,19 +42800,7 @@ function Inspector({
                         }}
                         {...extraProps} />
           );
-          const miniAlignControls = layer.type === 'text' && layer.item.textBlock === true && !legacyAutofitInvalid
-            ? <span className="oo-pdf-mini-align" role="group" aria-label="Align">
-              {[['left', 'align-left', 'Align left'], ['center', 'align-center', 'Align center'], ['right', 'align-right', 'Align right']].map(([value, icon, label]) => (
-                <button key={value} type="button" aria-label={label} title={label} aria-pressed={(layer.item.textAlign || 'left') === value}
-                  onMouseDown={event => event.preventDefault()}
-                  onClick={() => {
-                    const patch = legacyPropertyPatch({ textAlign:value });
-                    if (patch) updateTextLayer(layer, patch, { commitGesture:true,
-                      gestureReason:'text-block-align', gestureKind:GestureKind.STYLE,
-                      previousForCommit:clonePlain(layer.item, {}) });
-                  }}><Icon name={icon} /></button>
-              ))}
-            </span> : null;
+          const miniAlignControls = textAlignButtons('oo-pdf-mini-align');
           const renderCreatedRichEditor = (editorKey = `${layerPropertyDraftScope(doc, pageId, layer)}:created-rich`, extraProps = {}) => (
                       <RichTextInspectorEditor
                         key={editorKey}
@@ -43703,13 +43703,13 @@ function Inspector({
 
                   {!layer.deleted && layer.item.w > 0 && layer.item.h > 0 && (
                     <div className="oo-pdf-align-field">
-                      <span className="oo-pdf-caption">Align on page</span>
-                      <div className="oo-pdf-align-row" role="group" aria-label="Align on page">
+                      <span className="oo-pdf-caption">Position on page</span>
+                      <div className="oo-pdf-align-row" role="group" aria-label="Position on page">
                         {[
-                          ['left', 'objects-align-left', 'Align left'], ['center', 'objects-align-center', 'Align center'], ['right', 'objects-align-right', 'Align right'],
-                          ['top', 'objects-align-top', 'Align top'], ['middle', 'objects-align-middle', 'Align middle'], ['bottom', 'objects-align-bottom', 'Align bottom'],
+                          ['left', 'objects-align-left', 'Move to the left edge of the page'], ['center', 'objects-align-center', 'Center horizontally on the page'], ['right', 'objects-align-right', 'Move to the right edge of the page'],
+                          ['top', 'objects-align-top', 'Move to the top edge of the page'], ['middle', 'objects-align-middle', 'Center vertically on the page'], ['bottom', 'objects-align-bottom', 'Move to the bottom edge of the page'],
                         ].map(([value, iconName, label]) => (
-                          <button key={value} type="button" className="oo-pdf-icon-button" title={`${label} on page`} aria-label={`${label} on page`}
+                          <button key={value} type="button" className="oo-pdf-icon-button" title={label} aria-label={label}
                             onClick={() => {
                               const sheet = doc.pages.find(item => item.id === layer.pageId);
                               if (!sheet) return;

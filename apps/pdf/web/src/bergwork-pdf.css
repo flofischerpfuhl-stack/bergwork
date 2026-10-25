@@ -405,6 +405,15 @@ body.oo-pdf-workbench-route button { font-family: var(--bw-font-ui); }
 
 .oo-pdf-mini-toolbar .oo-rich-text-error { max-width: 220px; padding: 0 6px; color: var(--bw-error); font-size: var(--bw-text-small); }
 
+/* Text alignment row in Properties (Align text) and its pressed state, like the mini toolbar's. */
+.oo-pdf-shell .oo-pdf-text-align-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.oo-pdf-shell .oo-pdf-text-align { display: inline-flex; gap: 2px; }
+.oo-pdf-shell .oo-pdf-text-align button[aria-pressed='true'] {
+  border-color: var(--bw-frame);
+  background: var(--bw-control);
+  color: var(--bw-fg-strong);
+}
+
 /* Sharp corners: every radius in the editor's chrome follows, as the design base's do. Dots, handles, knobs and
    colour swatches stay round. */
 html[data-corners='sharp'] :is(.oo-pdf-shell, body.oo-pdf-workbench-route > :not(#root)) *:not(
