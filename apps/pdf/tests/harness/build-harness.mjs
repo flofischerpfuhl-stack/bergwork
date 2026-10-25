@@ -14,9 +14,15 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const testsDir = path.dirname(here);
 const appDir = path.dirname(testsDir);
-const sourceDir = path.join(appDir, 'editor', 'vendor', 'build', 'src');
+// BERGWORK_PDF_EDITOR_SRC points the harness at another checkout's editor sources (a Fernwork worktree's
+// vendor/build/src), to test engine fixes there before they are ported; the default is the fork.
+const sourceDir = process.env.BERGWORK_PDF_EDITOR_SRC
+  ? path.resolve(process.env.BERGWORK_PDF_EDITOR_SRC) : path.join(appDir, 'editor', 'vendor', 'build', 'src');
 const shellPath = path.join(sourceDir, 'pdf-tools-shell.jsx');
-const outDir = path.join(testsDir, '.build');
+// Each source tree builds into its own folder, so runs against different checkouts can go on side by side.
+export const outDir = process.env.BERGWORK_PDF_EDITOR_SRC
+  ? path.join(testsDir, '.build', `src-${createHash('sha256').update(sourceDir).digest('hex').slice(0, 10)}`)
+  : path.join(testsDir, '.build');
 
 // Top-level helpers of pdf-tools-shell.jsx the harness calls. Missing names (renamed upstream) are reported and
 // skipped; the harness marks the operations that need them as unavailable instead of failing to build.

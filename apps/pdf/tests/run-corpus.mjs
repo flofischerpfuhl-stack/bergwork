@@ -11,7 +11,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildHarness } from './harness/build-harness.mjs';
+import { buildHarness, outDir as harnessDir } from './harness/build-harness.mjs';
 import { startServer } from './lib/server.mjs';
 import { TIERS, selectFiles, planFor, donorPool } from './lib/plan.mjs';
 import { detectTools, qpdfCheck, qpdfPages, qpdfEncrypted, popplerWordsInRects } from './lib/oracles.mjs';
@@ -19,8 +19,8 @@ import { writeReports } from './lib/report.mjs';
 
 const testsDir = path.dirname(fileURLToPath(import.meta.url));
 const appDir = path.dirname(testsDir);
-const distDir = path.join(appDir, 'dist');
-const harnessDir = path.join(testsDir, '.build');
+// BERGWORK_PDF_DIST serves another build's /tools/vendor/ (a Fernwork worktree's root) with BERGWORK_PDF_EDITOR_SRC.
+const distDir = process.env.BERGWORK_PDF_DIST ? path.resolve(process.env.BERGWORK_PDF_DIST) : path.join(appDir, 'dist');
 
 function parseArgs(argv) {
   const args = { tier: 'quick', jobs: 3, seed: 1, build: true, keepPdfs: false, browser: 'chromium' };

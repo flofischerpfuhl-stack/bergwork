@@ -47,6 +47,18 @@ node apps/pdf/tests/corpus/fetch-corpus.mjs --verify-only   # ≈4 s
 - **Missing files.** If only part of the corpus is present, the runner uses the files that are there.
 - **Sources.** The corpus combines test corpora (pdf.js, PDFium, qpdf, veraPDF/Isartor, pdf20examples, PDFBox, pdfcpu, pypdf, pikepdf, pdf-lib, SafeDocs) with public documents (arXiv, IRS forms, NASA NTRS, USGS maps, Wikimedia Commons, OHCHR UDHR translations, govdocs1, ZUGFeRD invoices). `corpus/SOURCES.md` lists them.
 
+## Testing another checkout (Fernwork engine fixes)
+
+Engine fixes are made in Fernwork and ported into the fork. To check them before porting, point the runner at a
+Fernwork worktree: `BERGWORK_PDF_EDITOR_SRC` is its editor source (`vendor/build/src`), `BERGWORK_PDF_DIST` its root,
+whose `tools/vendor/` is the built worker (`cd vendor/build && node build.mjs pdf-tools` there first). Each source tree
+gets its own harness build under `.build/src-<hash>/`; pass `--out` so parallel runs keep apart.
+
+```sh
+BERGWORK_PDF_EDITOR_SRC=~/source/fw-x/vendor/build/src BERGWORK_PDF_DIST=~/source/fw-x \
+  node apps/pdf/tests/run-corpus.mjs --tier sample --file pdfjs/tracemonkey.pdf --ops page.move,text.font --out /tmp/f7
+```
+
 ## Tiers
 
 ```sh
