@@ -623,6 +623,50 @@ function FileButton({ accept, label = 'Choose file', icon: iconName = 'file', on
 
 // Right-click menu for the canvas. It mirrors existing affordances (edit,
 // clipboard, duplicate, delete) so desktop editing feels like a slide editor.
+// berg:work: the floating home of the mini toolbar. Over the pointer for a right-click (the context menu opens below
+// it), above the text for a selection; kept inside the window. A selection shows it faintly until the pointer is near.
+function MiniToolbarHost({ toolbar, onHost }) {
+  const ref = useRef(null);
+  const [position, setPosition] = useState(null);
+  const [near, setNear] = useState(toolbar.reason !== 'selection');
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return undefined;
+    const place = () => {
+      const rect = node.getBoundingClientRect();
+      const gap = 10;
+      let top = toolbar.y - rect.height - gap;
+      if (top < 64) top = toolbar.reason === 'selection' ? (toolbar.bottom || toolbar.y) + gap : toolbar.y + gap + 4;
+      const left = Math.min(Math.max(8, toolbar.x - (toolbar.reason === 'context' ? 12 : 0)), Math.max(8, window.innerWidth - rect.width - 8));
+      setPosition({ left, top: Math.min(Math.max(8, top), Math.max(8, window.innerHeight - rect.height - 8)) });
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [toolbar.x, toolbar.y, toolbar.bottom, toolbar.reason]);
+  useEffect(() => {
+    if (toolbar.reason !== 'selection') { setNear(true); return undefined; }
+    setNear(false);
+    const move = event => {
+      const rect = ref.current?.getBoundingClientRect();
+      if (!rect) return;
+      const dx = Math.max(rect.left - event.clientX, 0, event.clientX - rect.right);
+      const dy = Math.max(rect.top - event.clientY, 0, event.clientY - rect.bottom);
+      setNear(Math.hypot(dx, dy) < 48);
+    };
+    window.addEventListener('pointermove', move, true);
+    return () => window.removeEventListener('pointermove', move, true);
+  }, [toolbar.reason, toolbar.externalSelection]);
+  return (
+    <div ref={node => { ref.current = node; onHost(node); }}
+      className={`oo-pdf-mini-toolbar ${near ? '' : 'is-faint'}`} role="toolbar" aria-label="Format"
+      style={position ? { left: position.left, top: position.top } : { left: -10000, top: -10000 }}
+      onFocusCapture={() => setNear(true)}
+      onContextMenu={event => event.preventDefault()} />
+  );
+}
+
 function PdfContextMenu({ x, y, items, onClose }) {
   const menuRef = useRef(null);
   const [position, setPosition] = useState({ left: x, top: y });
@@ -16448,6 +16492,16 @@ function App({ shell = null }) {
   const [inspectorSelected, setInspectorSelected] = useState(null);
   const [editingText, setEditingText] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
+  // berg:work mini toolbar (shell.inspector === 'manual'): the selected object's formatting next to the pointer, as
+  // Word's Mini Toolbar. A right-click opens it over the context menu; selecting text in a canvas text editor shows it
+  // faintly above the text until the pointer comes near. The Inspector renders the controls into it (see Inspector
+  // `miniToolbar`), so it formats with the same rich-text commits and undo steps as Properties.
+  const miniToolbarEnabled = shell?.inspector === 'manual';
+  const [miniToolbar, setMiniToolbar] = useState(null);
+  const [miniToolbarHost, setMiniToolbarHost] = useState(null);
+  // Text a canvas editor showed when the mini toolbar formatted it (per sourceId): ending that edit unchanged must
+  // not write the editor's pre-format state back over the new formatting.
+  const miniFormattedRef = useRef(new Map());
   const [fontActionWarning, setFontActionWarning] = useState(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -19555,7 +19609,7 @@ function App({ shell = null }) {
     // typed (the layout shift would fight the caret), and not on narrow
     // screens where the panel would cover the page.
     if (!options.keepTool && !options.editImmediately && typeof window !== 'undefined' &&
-        window.matchMedia?.('(min-width: 1100px)').matches) {
+        shell?.inspector !== 'manual' && window.matchMedia?.('(min-width: 1100px)').matches) {
       setDrawerOpen(false);
       setInspectorOpen(true);
     }
@@ -20000,7 +20054,17 @@ function App({ shell = null }) {
     const onContextMenu = (event) => {
       const target = event.target;
       if (!activeDoc || !rootRef.current?.contains(target)) return;
-      if (target?.closest?.('input, textarea, select, [contenteditable="true"], .oo-pdf-inspector, .oo-pdf-drawer, .oo-pdf-context-menu')) return;
+      const canvasTextEditor = miniToolbarEnabled
+        ? target?.closest?.('.oo-pdf-textbox textarea, .oo-pdf-object textarea') : null;
+      if (canvasTextEditor) {
+        // Right-click while typing: the mini toolbar for the selected characters (or the whole text).
+        event.preventDefault();
+        const { selectionStart: start, selectionEnd: end, value } = canvasTextEditor;
+        setMiniToolbar({ reason: 'context', x: event.clientX, y: event.clientY,
+          externalSelection: { text: value, start, end } });
+        return;
+      }
+      if (target?.closest?.('input, textarea, select, [contenteditable="true"], .oo-pdf-inspector, .oo-pdf-drawer, .oo-pdf-context-menu, .oo-pdf-mini-toolbar')) return;
       if (!target?.closest?.('.oo-pdf-viewport') || target.closest('.is-path-isolation, .oo-pdf-path-editor-bounds, [role="dialog"]')) return;
       event.preventDefault();
       const object = target.closest('.oo-pdf-textbox, .oo-pdf-imagebox, .oo-pdf-native-object, .oo-pdf-object');
@@ -20014,11 +20078,98 @@ function App({ shell = null }) {
         : object.classList.contains('oo-pdf-native-object') && object.getAttribute('data-object-type') === 'path' ? 'path'
         : 'object';
       const detail = { x: event.clientX, y: event.clientY, objectKind, objectElement: object || null };
-      requestAnimationFrame(() => setContextMenu(detail));
+      requestAnimationFrame(() => {
+        setContextMenu(detail);
+        setMiniToolbar(miniToolbarEnabled && object
+          ? { reason: 'context', x: event.clientX, y: event.clientY, externalSelection: null } : null);
+      });
     };
     window.addEventListener('contextmenu', onContextMenu);
     return () => window.removeEventListener('contextmenu', onContextMenu);
-  }, [activeDoc]);
+  }, [activeDoc, miniToolbarEnabled]);
+
+  // Selecting characters in a canvas text editor shows the mini toolbar faintly above the text (Word); a collapsed
+  // selection, typing or leaving the editor hides it again.
+  useEffect(() => {
+    if (!miniToolbarEnabled) return undefined;
+    const canvasEditor = node => (node instanceof HTMLTextAreaElement &&
+      node.closest('.oo-pdf-textbox, .oo-pdf-object') ? node : null);
+    const follow = () => {
+      const area = canvasEditor(document.activeElement);
+      if (!area) return;
+      const { selectionStart: start, selectionEnd: end, value } = area;
+      setMiniToolbar(current => {
+        if (current?.reason === 'context') return current;
+        if (start === end) return current?.reason === 'selection' ? null : current;
+        const rect = area.getBoundingClientRect();
+        const same = current?.externalSelection && current.externalSelection.start === start &&
+          current.externalSelection.end === end && current.externalSelection.text === value;
+        return same ? current : { reason: 'selection', x: rect.left, y: rect.top, bottom: rect.bottom,
+          externalSelection: { text: value, start, end } };
+      });
+    };
+    const onKey = event => {
+      if (!canvasEditor(event.target)) return;
+      // Typing goes on: the toolbar steps aside; selection keys keep it in step with the range.
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key.length === 1) {
+        setMiniToolbar(current => (current?.reason === 'selection' ? null : current));
+        return;
+      }
+      follow();
+    };
+    // Ctrl/⌘+B, I, U on selected characters: the mini toolbar's buttons (Word's shortcuts).
+    const onShortcut = event => {
+      const area = canvasEditor(event.target);
+      const command = { b: 'Bold', i: 'Italic', u: 'Underline' }[event.key.toLowerCase()];
+      if (!area || !command || !(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+      if (area.selectionStart === area.selectionEnd) return;
+      event.preventDefault();
+      event.stopPropagation();
+      follow();
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        document.querySelector(`.oo-pdf-mini-toolbar button[aria-label="${command}"]:not(:disabled)`)?.click();
+      }));
+    };
+    window.addEventListener('keydown', onShortcut, true);
+    document.addEventListener('selectionchange', follow);
+    window.addEventListener('select', follow, true);
+    window.addEventListener('mouseup', follow, true);
+    window.addEventListener('keyup', onKey, true);
+    return () => {
+      window.removeEventListener('keydown', onShortcut, true);
+      document.removeEventListener('selectionchange', follow);
+      window.removeEventListener('select', follow, true);
+      window.removeEventListener('mouseup', follow, true);
+      window.removeEventListener('keyup', onKey, true);
+    };
+  }, [miniToolbarEnabled]);
+
+  useEffect(() => {
+    if (!miniToolbar) return undefined;
+    const outside = event => {
+      const target = event.target;
+      if (target?.closest?.('.oo-pdf-mini-toolbar, .oo-pdf-select-sheet-backdrop')) return;
+      // A click back into the text being edited moves the selection; the selection listener decides.
+      if (miniToolbar.reason === 'selection' && target?.closest?.('.oo-pdf-textbox textarea, .oo-pdf-object textarea')) return;
+      setMiniToolbar(null);
+    };
+    const escape = event => {
+      if (event.key !== 'Escape' || event.target?.closest?.('.oo-pdf-select-sheet-backdrop')) return;
+      setMiniToolbar(null);
+    };
+    const close = () => setMiniToolbar(null);
+    window.addEventListener('pointerdown', outside, true);
+    window.addEventListener('keydown', escape, true);
+    window.addEventListener('wheel', close, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', outside, true);
+      window.removeEventListener('keydown', escape, true);
+      window.removeEventListener('wheel', close, { capture: true });
+    };
+  }, [miniToolbar]);
+  useEffect(() => {
+    if (!editingText) setMiniToolbar(current => (current?.reason === 'selection' ? null : current));
+  }, [editingText]);
 
   // Panels dock below the real toolbar edge. The toolbars wrap on narrow
   // windows, so a hard-coded offset let the Layers panel cover them.
@@ -21934,6 +22085,14 @@ function App({ shell = null }) {
   }, [activeDoc, updateTextEdit]);
 
   const commitTextEdit = useCallback((sourceId, edit, options = {}) => {
+    const formattedText = miniFormattedRef.current.get(sourceId);
+    miniFormattedRef.current.delete(sourceId);
+    const nextText = typeof edit === 'string' ? edit : edit?.text;
+    if (formattedText !== undefined && nextText === formattedText) {
+      // berg:work: formatted from the mini toolbar while editing, text unchanged: the format commit is the edit.
+      setEditingText(null);
+      return;
+    }
     updateTextEdit(sourceId, typeof edit === 'string' ? { text: edit } : edit, options);
     setEditingText(null);
   }, [updateTextEdit]);
@@ -26465,8 +26624,8 @@ function App({ shell = null }) {
         cancelInspectorSelectionDeferRef.current = afterSelectionOutlinePaint(() => {
           cancelInspectorSelectionDeferRef.current = null;
           setInspectorSelected(nextInspectorSelection);
-          setInspectorTab('properties');
-          if (!inspectorOpen && !drawerOpen) {
+          if (!inspectorOpen) setInspectorTab('properties');
+          if (!inspectorOpen && !drawerOpen && shell?.inspector !== 'manual') {
             inspectorAutoRef.current = true;
             setInspectorSheet('peek');
             setInspectorOpen(true);
@@ -27014,6 +27173,7 @@ function App({ shell = null }) {
       {activeDoc && documentDropActive && (
         <div className="oo-pdf-document-drop-overlay" role="status">Drop to open PDF or project</div>
       )}
+      {miniToolbar && <MiniToolbarHost toolbar={miniToolbar} onHost={setMiniToolbarHost} />}
       {contextMenu && (
         <PdfContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)} items={[
           ...(selected && selected.type !== 'multi' && contextMenu.objectKind === 'text' ? [{
@@ -27415,8 +27575,16 @@ function App({ shell = null }) {
       />
 
       <Inspector
-        open={inspectorOpen}
-        tab={inspectorTab}
+        open={inspectorOpen || Boolean(miniToolbar && miniToolbarHost)}
+        headless={!inspectorOpen}
+        miniToolbar={miniToolbar && miniToolbarHost
+          ? { host: miniToolbarHost, externalSelection: miniToolbar.externalSelection || null,
+            onFormatted: () => {
+              if (editingText?.type === 'sourceText' && miniToolbar.externalSelection) {
+                miniFormattedRef.current.set(editingText.sourceId, miniToolbar.externalSelection.text);
+              }
+            } } : null}
+        tab={inspectorOpen ? inspectorTab : 'properties'}
         onTabChange={setInspectorTab}
         stack={selectionStack}
         onStackStep={stepSelectionStack}
@@ -41482,6 +41650,9 @@ function CustomFreeTextConversion({ onReplace, disabled = false }) {
 }
 function Inspector({
   open,
+  // berg:work: mounted only to fill the mini toolbar (Properties itself closed): hidden and inert.
+  headless = false,
+  miniToolbar = null,
   tab = 'layers',
   onTabChange,
   stack = null,
@@ -42100,7 +42271,8 @@ function Inspector({
     setDropTargetKey('');
   };
   return (
-    <aside className={`oo-pdf-inspector ${sheet ? `is-sheet is-sheet-${sheet}` : ''} is-tab-${tab}`} aria-label="Layers and properties" onKeyDown={event => {
+    <aside className={`oo-pdf-inspector ${sheet ? `is-sheet is-sheet-${sheet}` : ''} is-tab-${tab} ${headless ? 'is-headless' : ''}`} aria-label="Layers and properties"
+      aria-hidden={headless || undefined} inert={headless || undefined} onKeyDown={event => {
       if (event.key === 'Escape' && pressRef.current) {
         event.preventDefault();
         event.stopPropagation();
@@ -42478,6 +42650,192 @@ function Inspector({
               <button type="button" className="oo-pdf-font-action" onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item)
                 .catch(error => showToast(userFacingError(error, 'PDF font import failed.'), 'error'))}>Import embedded frame font for reuse</button>}
           </> : null;
+          // berg:work: the same editor twice — in the Properties row and, compact, in the mini toolbar next to the
+          // object — so both format through this row's commit path and undo gestures.
+          const renderRichTextEditor = (editorKey = layerPropertyDraftScope(doc, pageId, layer), extraProps = {}) => (
+                      <RichTextInspectorEditor key={editorKey}
+                        document={richTextDocument}
+                        availableFontResources={[
+                          ...base14RichResources(),
+                          ...(propertyItem.richTextAvailableFontResources || []),
+                          ...richFontResourcesFromCatalog(doc.fontCatalog || []),
+                        ]}
+                        disabled={readOnly || nativeBusy || legacyAutofitInvalid}
+                        textExtras={textReflowControls}
+                        fontExtras={richFontFacts}
+                        onRequestHistory={onRequestTextHistory}
+                        onCommit={(nextDocument, baselineDocument) => {
+                          const embeddedResources = nextDocument.fontResources
+                            .filter(resource => resource.kind === 'embedded');
+                          const replacesBase14WithEmbedded = base14RichEditor && embeddedResources.length > 0 &&
+                            embeddedResources.length === nextDocument.fontResources.length;
+                          const materializedCommit = legacyAutofitMaterialization
+                            ? legacyTextAutofitRichInspectorCommit(legacyAutofitMaterialization, nextDocument)
+                            : null;
+                          if (legacyAutofitMaterialization && !materializedCommit) return;
+                          updateTextLayer(
+                          layer,
+                          {
+                            ...(materializedCommit || {}),
+                            richTextDocument: { version: 1, ...nextDocument },
+                            richTextFontResources: nextDocument.fontResources,
+                            richTextAvailableFontResources: nextDocument.fontResources,
+                            ...(replacesBase14WithEmbedded ? {
+                              fontResourceHash: embeddedResources[0].resourceId,
+                              fontResourceHashes: embeddedResources.map(resource => resource.resourceId),
+                              embeddedFontFamily: embeddedResources[0].family,
+                              fontFamily: embeddedResources[0].family,
+                              fontWeight: embeddedResources[0].weight,
+                              fontStyle: embeddedResources[0].style,
+                              fontOverride: true,
+                              richTextCapability: undefined,
+                              base14Rich: false,
+                            } : {}),
+                            ...(base14RichEditor && propertyItem.textFrame !== true
+                              ? { richTextAutoWidth:true }
+                              : {}),
+                            text: nextDocument.text,
+                            currentText: nextDocument.text,
+                            preserveSourceAppearance: false,
+                          },
+                          {
+                            commitGesture: true,
+                            gestureReason: 'rich-text-inspector-commit',
+                            gestureKind: GestureKind.TEXT_COMMIT,
+                            mergeKey: `text:${layer.item.sourceId}:rich-text-inspector-commit`,
+                            previousForCommit: {
+                              ...clonePlain(layer.item, {}),
+                              richTextDocument: legacyAutofit
+                                ? layer.item.richTextDocument
+                                : layer.item.richTextDocument
+                                  ? { version: 1, ...baselineDocument }
+                                : undefined,
+                              ...(legacyAutofit ? {
+                                block: layer.item.block,
+                                textOverflow: layer.item.block?.overflow || layer.item.textOverflow || 'shrink',
+                                fontSize: layer.item.fontSize,
+                                sourceFontSize: layer.item.sourceFontSize,
+                                primitives: layer.item.primitives,
+                              } : {}),
+                              text: baselineDocument.text,
+                              currentText: baselineDocument.text,
+                            },
+                          },
+                        );
+                        }}
+                        onUploadFont={file => onUploadTextFont?.(layer.item.sourceId, file, {
+                          ...layer.item,
+                          richTextUploadOnly: true,
+                        })}
+                        onRequestFontFamily={async entry => {
+                          if (typeof onUploadTextFont !== 'function') {
+                            throw new Error('The bundled font cannot be embedded in this PDF.');
+                          }
+                          const resources = [];
+                          for (const face of entry.faces) {
+                            const file = await fetchLibraryFontFile(entry, face);
+                            const resource = await onUploadTextFont(layer.item.sourceId, file, {
+                              ...layer.item,
+                              richTextUploadOnly: true,
+                            }, {}, { silent: true });
+                            if (!resource?.resourceId) throw new Error('The bundled font could not be embedded.');
+                            resources.push(resource);
+                          }
+                          return resources;
+                        }}
+                        {...extraProps} />
+          );
+          const miniAlignControls = layer.type === 'text' && layer.item.textBlock === true && !legacyAutofitInvalid
+            ? <span className="oo-pdf-mini-align" role="group" aria-label="Align">
+              {[['left', 'align-left', 'Align left'], ['center', 'align-center', 'Align center'], ['right', 'align-right', 'Align right']].map(([value, icon, label]) => (
+                <button key={value} type="button" aria-label={label} title={label} aria-pressed={(layer.item.textAlign || 'left') === value}
+                  onMouseDown={event => event.preventDefault()}
+                  onClick={() => {
+                    const patch = legacyPropertyPatch({ textAlign:value });
+                    if (patch) updateTextLayer(layer, patch, { commitGesture:true,
+                      gestureReason:'text-block-align', gestureKind:GestureKind.STYLE,
+                      previousForCommit:clonePlain(layer.item, {}) });
+                  }}><Icon name={icon} /></button>
+              ))}
+            </span> : null;
+          const renderCreatedRichEditor = (editorKey = `${layerPropertyDraftScope(doc, pageId, layer)}:created-rich`, extraProps = {}) => (
+                      <RichTextInspectorEditor
+                        key={editorKey}
+                        document={createdAnnotationRichTextDocument}
+                        availableFontResources={[
+                          ...base14RichResources(),
+                          ...richFontResourcesFromCatalog(doc.fontCatalog || []),
+                        ]}
+                        textSectionTitle="Content"
+                        fontSectionTitle="Appearance"
+                        preserveStandardTraits={false}
+                        fontExtras={annotationOpacityControl(layer)}
+                        disabled={readOnly || nativeBusy}
+                        onCommit={(nextDocument) => {
+                          const defaultResource = nextDocument.fontResources.find(resource =>
+                            resource.resourceId === nextDocument.defaultCharacterStyle?.resourceId);
+                          const uniformBase14 = defaultResource?.kind === 'base14' &&
+                            nextDocument.runs.every(run => run.style.resourceId === defaultResource.resourceId);
+                          const standardPatch = uniformBase14 ? {
+                            fontKey: fontKeyWithTraits(
+                              defaultResource.family === 'Times' ? 'times'
+                                : defaultResource.family === 'Courier' ? 'courier' : 'helvetica',
+                              defaultResource.weight,
+                              defaultResource.style,
+                            ),
+                            fontFamily: defaultResource.family,
+                            fontWeight: defaultResource.weight,
+                            fontStyle: ['italic', 'oblique'].includes(defaultResource.style) ? 'italic' : 'normal',
+                            fontResourceHash: '',
+                            fontResourceHashes: [],
+                            embeddedFontFamily: '',
+                            fontOverride: true,
+                          } : {};
+                          return commitAnnotationProperty(layer, {
+                            richTextDocument:{ version:1, ...nextDocument },
+                            richTextFontResources: nextDocument.fontResources,
+                            richTextAvailableFontResources: nextDocument.fontResources,
+                            text:nextDocument.text,
+                            preserveSourceAppearance:false,
+                            ...standardPatch,
+                          }, 'annotation-rich-text-inspector-commit');
+                        }}
+                        onUploadFont={file => onUploadTextFont?.(layer.item.sourceId, file, {
+                          ...layer.item,
+                          richTextUploadOnly: true,
+                        })}
+                        onRequestFontFamily={async entry => {
+                          if (typeof onUploadTextFont !== 'function') {
+                            throw new Error('The bundled font cannot be embedded in this PDF.');
+                          }
+                          const resources = [];
+                          for (const face of entry.faces) {
+                            const file = await fetchLibraryFontFile(entry, face);
+                            const resource = await onUploadTextFont(layer.item.sourceId, file, {
+                              ...layer.item,
+                              richTextUploadOnly: true,
+                            }, {}, { silent: true });
+                            if (!resource?.resourceId) throw new Error('The bundled font could not be embedded.');
+                            resources.push(resource);
+                          }
+                          return resources;
+                        }}
+                        {...extraProps} />
+          );
+          // Created text formats as a whole from the mini toolbar; while its canvas editor is open the editor owns it.
+          const miniToolbarAnnotationEditor = miniToolbar && !miniToolbar.externalSelection && isSelected &&
+              !multiSelection && createdAnnotationRichTextDocument
+            ? createPortal(renderCreatedRichEditor(`${layerPropertyDraftScope(doc, pageId, layer)}:created-rich:mini`, {
+              compact: true,
+            }), miniToolbar.host)
+            : null;
+          const miniToolbarEditor = miniToolbar && isSelected && !multiSelection && layer.type === 'text' &&
+              richTextDocument && !legacyAutofitInvalid
+            ? createPortal(renderRichTextEditor(`${layerPropertyDraftScope(doc, pageId, layer)}:mini`, {
+              compact: true, externalSelection: miniToolbar.externalSelection, compactExtras: miniAlignControls,
+              onCompactCommit: miniToolbar.onFormatted,
+            }), miniToolbar.host)
+            : null;
           return (
             <div
               key={layer.key}
@@ -42631,97 +42989,7 @@ function Inspector({
                         <label>Text <textarea aria-label="Text" value={layer.item.text || ''} readOnly /></label>
                         {textReflowControls}
                       </PropSection>}
-                      {!legacyAutofitInvalid && (richTextDocument ? <RichTextInspectorEditor key={layerPropertyDraftScope(doc, pageId, layer)}
-                        document={richTextDocument}
-                        availableFontResources={[
-                          ...base14RichResources(),
-                          ...(propertyItem.richTextAvailableFontResources || []),
-                          ...richFontResourcesFromCatalog(doc.fontCatalog || []),
-                        ]}
-                        disabled={readOnly || nativeBusy || legacyAutofitInvalid}
-                        textExtras={textReflowControls}
-                        fontExtras={richFontFacts}
-                        onRequestHistory={onRequestTextHistory}
-                        onCommit={(nextDocument, baselineDocument) => {
-                          const embeddedResources = nextDocument.fontResources
-                            .filter(resource => resource.kind === 'embedded');
-                          const replacesBase14WithEmbedded = base14RichEditor && embeddedResources.length > 0 &&
-                            embeddedResources.length === nextDocument.fontResources.length;
-                          const materializedCommit = legacyAutofitMaterialization
-                            ? legacyTextAutofitRichInspectorCommit(legacyAutofitMaterialization, nextDocument)
-                            : null;
-                          if (legacyAutofitMaterialization && !materializedCommit) return;
-                          updateTextLayer(
-                          layer,
-                          {
-                            ...(materializedCommit || {}),
-                            richTextDocument: { version: 1, ...nextDocument },
-                            richTextFontResources: nextDocument.fontResources,
-                            richTextAvailableFontResources: nextDocument.fontResources,
-                            ...(replacesBase14WithEmbedded ? {
-                              fontResourceHash: embeddedResources[0].resourceId,
-                              fontResourceHashes: embeddedResources.map(resource => resource.resourceId),
-                              embeddedFontFamily: embeddedResources[0].family,
-                              fontFamily: embeddedResources[0].family,
-                              fontWeight: embeddedResources[0].weight,
-                              fontStyle: embeddedResources[0].style,
-                              fontOverride: true,
-                              richTextCapability: undefined,
-                              base14Rich: false,
-                            } : {}),
-                            ...(base14RichEditor && propertyItem.textFrame !== true
-                              ? { richTextAutoWidth:true }
-                              : {}),
-                            text: nextDocument.text,
-                            currentText: nextDocument.text,
-                            preserveSourceAppearance: false,
-                          },
-                          {
-                            commitGesture: true,
-                            gestureReason: 'rich-text-inspector-commit',
-                            gestureKind: GestureKind.TEXT_COMMIT,
-                            mergeKey: `text:${layer.item.sourceId}:rich-text-inspector-commit`,
-                            previousForCommit: {
-                              ...clonePlain(layer.item, {}),
-                              richTextDocument: legacyAutofit
-                                ? layer.item.richTextDocument
-                                : layer.item.richTextDocument
-                                  ? { version: 1, ...baselineDocument }
-                                : undefined,
-                              ...(legacyAutofit ? {
-                                block: layer.item.block,
-                                textOverflow: layer.item.block?.overflow || layer.item.textOverflow || 'shrink',
-                                fontSize: layer.item.fontSize,
-                                sourceFontSize: layer.item.sourceFontSize,
-                                primitives: layer.item.primitives,
-                              } : {}),
-                              text: baselineDocument.text,
-                              currentText: baselineDocument.text,
-                            },
-                          },
-                        );
-                        }}
-                        onUploadFont={file => onUploadTextFont?.(layer.item.sourceId, file, {
-                          ...layer.item,
-                          richTextUploadOnly: true,
-                        })}
-                        onRequestFontFamily={async entry => {
-                          if (typeof onUploadTextFont !== 'function') {
-                            throw new Error('The bundled font cannot be embedded in this PDF.');
-                          }
-                          const resources = [];
-                          for (const face of entry.faces) {
-                            const file = await fetchLibraryFontFile(entry, face);
-                            const resource = await onUploadTextFont(layer.item.sourceId, file, {
-                              ...layer.item,
-                              richTextUploadOnly: true,
-                            }, {}, { silent: true });
-                            if (!resource?.resourceId) throw new Error('The bundled font could not be embedded.');
-                            resources.push(resource);
-                          }
-                          return resources;
-                        }}
-                      /> : <PropSection sectionKey="text" title="Text"
+                      {!legacyAutofitInvalid && (richTextDocument ? <>{renderRichTextEditor()}{miniToolbarEditor}</> : <PropSection sectionKey="text" title="Text"
                         summary={textValueSummary}>
                         <label>Text <TextInspectorEditor
                         value={layer.item.text || ''}
@@ -43150,68 +43418,7 @@ function Inspector({
 
                   {layer.type === 'annotation' && (
                     <>
-                      {createdAnnotationRichTextDocument && <RichTextInspectorEditor
-                        key={`${layerPropertyDraftScope(doc, pageId, layer)}:created-rich`}
-                        document={createdAnnotationRichTextDocument}
-                        availableFontResources={[
-                          ...base14RichResources(),
-                          ...richFontResourcesFromCatalog(doc.fontCatalog || []),
-                        ]}
-                        textSectionTitle="Content"
-                        fontSectionTitle="Appearance"
-                        preserveStandardTraits={false}
-                        fontExtras={annotationOpacityControl(layer)}
-                        disabled={readOnly || nativeBusy}
-                        onCommit={(nextDocument) => {
-                          const defaultResource = nextDocument.fontResources.find(resource =>
-                            resource.resourceId === nextDocument.defaultCharacterStyle?.resourceId);
-                          const uniformBase14 = defaultResource?.kind === 'base14' &&
-                            nextDocument.runs.every(run => run.style.resourceId === defaultResource.resourceId);
-                          const standardPatch = uniformBase14 ? {
-                            fontKey: fontKeyWithTraits(
-                              defaultResource.family === 'Times' ? 'times'
-                                : defaultResource.family === 'Courier' ? 'courier' : 'helvetica',
-                              defaultResource.weight,
-                              defaultResource.style,
-                            ),
-                            fontFamily: defaultResource.family,
-                            fontWeight: defaultResource.weight,
-                            fontStyle: ['italic', 'oblique'].includes(defaultResource.style) ? 'italic' : 'normal',
-                            fontResourceHash: '',
-                            fontResourceHashes: [],
-                            embeddedFontFamily: '',
-                            fontOverride: true,
-                          } : {};
-                          return commitAnnotationProperty(layer, {
-                            richTextDocument:{ version:1, ...nextDocument },
-                            richTextFontResources: nextDocument.fontResources,
-                            richTextAvailableFontResources: nextDocument.fontResources,
-                            text:nextDocument.text,
-                            preserveSourceAppearance:false,
-                            ...standardPatch,
-                          }, 'annotation-rich-text-inspector-commit');
-                        }}
-                        onUploadFont={file => onUploadTextFont?.(layer.item.sourceId, file, {
-                          ...layer.item,
-                          richTextUploadOnly: true,
-                        })}
-                        onRequestFontFamily={async entry => {
-                          if (typeof onUploadTextFont !== 'function') {
-                            throw new Error('The bundled font cannot be embedded in this PDF.');
-                          }
-                          const resources = [];
-                          for (const face of entry.faces) {
-                            const file = await fetchLibraryFontFile(entry, face);
-                            const resource = await onUploadTextFont(layer.item.sourceId, file, {
-                              ...layer.item,
-                              richTextUploadOnly: true,
-                            }, {}, { silent: true });
-                            if (!resource?.resourceId) throw new Error('The bundled font could not be embedded.');
-                            resources.push(resource);
-                          }
-                          return resources;
-                        }}
-                      />}
+                      {createdAnnotationRichTextDocument && <>{renderCreatedRichEditor()}{miniToolbarAnnotationEditor}</>}
                       {layer.item.type === 'comment' && <PropSection sectionKey="content" title="Content"
                         summary={String(layer.item.text || '').replace(/\s+/gu, ' ').trim()}>
                         <label>Comment <textarea
@@ -43783,6 +43990,8 @@ function normalizeShellHost(shell) {
     setFullscreen: typeof shell.setFullscreen === 'function' ? shell.setFullscreen.bind(shell) : undefined,
     // berg:work: 'islands' lays the chrome out as berg:work Image does (see islandChrome).
     chrome: shell.chrome === 'islands' ? 'islands' : 'default',
+    // berg:work: 'manual' opens Properties only on request; formatting lives in the mini toolbar at the object.
+    inspector: shell.inspector === 'manual' ? 'manual' : 'auto',
     titleBar: titleBar ? {
       leading: titleBar.leading instanceof Node ? titleBar.leading : null,
       trailing: titleBar.trailing instanceof Node ? titleBar.trailing : null,

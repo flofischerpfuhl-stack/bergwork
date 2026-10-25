@@ -59,7 +59,13 @@ editor's controls out as berg:work Image does after the Builder UI — top left 
 PDF, Insert, Markup, Guides), top right Save, Undo/Redo, Print, Document tools and Layers, at the bottom status islands
 for zoom and page, Pages and rotation, and Find/comments/link outlines; tool options sit under the top row. Phones and
 hosts without the option keep Fernwork's layout. The controls are shared JSX variables in `pdf-tools-shell.jsx`, so a
-Fernwork change to one of them reaches both layouts. The host supplies `shell.setTitle` (the window title,
+Fernwork change to one of them reaches both layouts. With `shell.inspector: 'manual'` Properties opens only on request (Layers button, *Show properties*); selecting an
+object no longer opens it. Formatting lives in the **mini toolbar** (fork: `MiniToolbarHost`, Inspector `miniToolbar`,
+`RichTextInspectorEditor` `compact`): a right-click on a text object shows font, size, bold/italic/underline/strike,
+colour and (for reflowing text blocks) alignment above the context menu; selecting characters in the on-page text editor
+shows it faintly above the text until the pointer comes near, and Ctrl/⌘+B/I/U use it. The toolbar is filled by the
+same rich-text editor as Properties (a hidden Properties copy computes the row), so it commits through the same path
+and undo steps. The host supplies `shell.setTitle` (the window title,
 `• name — berg:work PDF` for unsaved changes, and the document in the title bar); the editor shows no fullscreen toggle
 because the shell offers no `setFullscreen`. The editor's `titleBar` slots are not used.
 

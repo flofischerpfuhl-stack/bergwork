@@ -64,7 +64,11 @@ function richStandardOptionValue(option) {
 export function RichTextInspectorEditor({ document, availableFontResources = [], onCommit, onUploadFont,
   onRequestFontFamily, onRequestHistory,
   externalWholeTextControls = false, disabled = false, textExtras = null, fontExtras = null,
-  textSectionTitle = 'Text', fontSectionTitle = 'Font', preserveStandardTraits = true }) {
+  textSectionTitle = 'Text', fontSectionTitle = 'Font', preserveStandardTraits = true,
+  // berg:work mini toolbar: only the character-formatting row, every change committed at once, and the range a
+  // canvas text editor has selected ({ text, start, end } in UTF-16 offsets) as the target instead of this editor's
+  // own textarea. `compactExtras` follow the row (paragraph alignment).
+  compact = false, externalSelection = null, compactExtras = null, onCompactCommit = null }) {
   const [draft, setDraft] = useState(document);
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const [typingPatch, setTypingPatch] = useState({});
@@ -135,6 +139,24 @@ export function RichTextInspectorEditor({ document, availableFontResources = [],
     selectionRef.current = { start: end, end };
     setSelection(selectionRef.current);
   }, [document]);
+
+  // A range selected in the canvas editor is the formatting target while its text is the committed text; typed but
+  // uncommitted text has no rich-text offsets yet, so it formats the whole frame only after the edit is applied.
+  const externalRangeKey = externalSelection
+    ? `${externalSelection.start}:${externalSelection.end}:${externalSelection.text}` : '';
+  const externalSelectionStale = Boolean(externalSelection) && externalSelection.text !== draft.text;
+  useEffect(() => {
+    if (!compact) return;
+    const usable = externalSelection && externalSelection.text === draftRef.current.text &&
+      externalSelection.end > externalSelection.start;
+    textSelectionActiveRef.current = Boolean(usable);
+    setTextSelectionActive(Boolean(usable));
+    selectionRef.current = usable
+      ? graphemeSelection(draftRef.current.text, externalSelection.start, externalSelection.end)
+      : { start: 0, end: draftRef.current.text.length };
+    setSelection(selectionRef.current);
+    // externalRangeKey stands for the selection and its text.
+  }, [compact, externalRangeKey, draft.text, document]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const typingStyle = useMemo(
     () => resolveTypingStyle(draft, selection, typingPatch),
@@ -255,7 +277,7 @@ export function RichTextInspectorEditor({ document, availableFontResources = [],
       draftRef.current = next;
       setDraft(next);
     }
-    if (!textSelectionActiveRef.current) void finish();
+    if (compact || !textSelectionActiveRef.current) void finish();
     else if (options.restoreSelection !== false) restoreSelection();
   };
   const applyRgb = rgb => {
@@ -273,7 +295,7 @@ export function RichTextInspectorEditor({ document, availableFontResources = [],
       draftRef.current = next;
       setDraft(next);
     }
-    if (!textSelectionActiveRef.current) void finish();
+    if (compact || !textSelectionActiveRef.current) void finish();
     else restoreSelection();
   };
   const finish = async () => {
@@ -287,6 +309,7 @@ export function RichTextInspectorEditor({ document, availableFontResources = [],
       try {
         const accepted = await onCommit?.(committed, baseline);
         if (accepted === false) throw new Error('Rich-text commit was rejected.');
+        if (compact) onCompactCommit?.(committed);
         baselineRef.current = committed;
         undoRef.current = [];
         redoRef.current = [];
@@ -407,7 +430,7 @@ export function RichTextInspectorEditor({ document, availableFontResources = [],
     recordLocalMutation('format');
     draftRef.current = next;
     setDraft(next);
-    if (!textSelectionActiveRef.current) void finish();
+    if (compact || !textSelectionActiveRef.current) void finish();
     else restoreSelection();
   };
   const chooseFontOption = async value => {
@@ -515,11 +538,12 @@ export function RichTextInspectorEditor({ document, availableFontResources = [],
     finish();
   };
 
-  const controlsDisabled = disabled || commitPending || fontLoading;
+  // A canvas edit with typed, unapplied text has no matching rich-text offsets: format after it is applied.
+  const controlsDisabled = disabled || commitPending || fontLoading || (compact && externalSelectionStale);
   // A native select loses focus when it becomes disabled. Keep the family
   // selector focused while its async face registration runs so equivalent
   // parent renders cannot end the editor session and invalidate the request.
-  const fontSelectDisabled = disabled || commitPending;
+  const fontSelectDisabled = disabled || commitPending || (compact && externalSelectionStale);
   const uploadFontFromPicker = file => {
     if (!onUploadFont) return;
     focusedRef.current = true;
@@ -571,7 +595,7 @@ export function RichTextInspectorEditor({ document, availableFontResources = [],
       }
       draftRef.current = next;
       setDraft(next);
-      if (!textSelectionActiveRef.current) {
+      if (compact || !textSelectionActiveRef.current) {
         // Font registration can cause an equivalent parent render. Let that
         // render reconcile against the old baseline before advancing the
         // accepted baseline, otherwise the stale equivalent prop can look like
@@ -602,6 +626,64 @@ export function RichTextInspectorEditor({ document, availableFontResources = [],
     state.decoration.strike === true ? 'S' : '',
   ].filter(Boolean).join(' ');
   const fontSummary = `${state.family || 'Mixed'}${state.fontSize == null ? '' : ` · ${displaySize(state.fontSize)} pt`}${fontTraits ? ` · ${fontTraits}` : ''}`;
+  const formattingRow = (
+  <div className={`oo-rich-text-toolbar ${externalWholeTextControls ? 'has-external-whole-text-controls' : ''}`} role="toolbar" aria-label="Character formatting">
+    {!externalWholeTextControls && <InspectorSelect label="Font" disabled={fontSelectDisabled} value={fontPickerValue}
+      dataValue={state.family ?? ''}
+      groups={state.family == null
+        ? [{ label: '', options: [{ value: '', label: 'Mixed' }] }, ...fontOptionGroups]
+        : fontOptionGroups}
+      onChange={value => { void chooseFontOption(value); }} searchable searchLabel="Search fonts"
+      emptyText="No fonts match" fontPreview onUploadFile={onUploadFont ? uploadFontFromPicker : null}
+      uploadDisabled={controlsDisabled} onOpenChange={value => { fontPickerOpenRef.current = value; }} />}
+    <div className="oo-rich-text-face-toggles">
+      {!externalWholeTextControls && <>
+        <button type="button" aria-label="Bold" title={boldFaces.some(face => !face) ? 'Upload the matching regular or bold font face to change this style.' : 'Bold for selected characters or text typed next'} onMouseDown={preserveButtonSelection} disabled={controlsDisabled || boldFaces.some(face => !face)} aria-pressed={state.weight == null ? 'mixed' : state.weight === '700'}
+          onClick={() => applyFacePlan(boldPatch)}>B</button>
+        <button type="button" aria-label="Italic" title={italicFaces.some(face => !face) ? 'Upload the matching upright or italic font face to change this style.' : 'Italic for selected characters or text typed next'} onMouseDown={preserveButtonSelection} disabled={controlsDisabled || italicFaces.some(face => !face)} aria-pressed={allSelectedSlanted ? 'true' : state.style == null ? 'mixed' : 'false'}
+          onClick={() => applyFacePlan(italicPatch)}>I</button>
+      </>}
+      <button type="button" aria-label="Underline" title="Underline for selected characters or text typed next (Ctrl/⌘+U)" onMouseDown={preserveButtonSelection} disabled={controlsDisabled}
+        aria-pressed={state.decoration.underline == null ? 'mixed' : state.decoration.underline}
+        onClick={() => applyPatch(underlinePatch)}>U</button>
+      <button type="button" aria-label="Strikethrough" title="Strikethrough for selected characters or text typed next" onMouseDown={preserveButtonSelection} disabled={controlsDisabled}
+        aria-pressed={state.decoration.strike == null ? 'mixed' : state.decoration.strike}
+        onClick={() => applyPatch(strikePatch)}>S</button>
+    </div>
+    {!externalWholeTextControls && <>
+      <label>Size <input aria-label="Rich text size" type="number" min="0.000001" disabled={controlsDisabled}
+        value={sizeDraft ?? displaySize(state.fontSize)} placeholder={state.fontSize == null ? 'Mixed' : ''}
+        onFocus={() => { sizeDraftRef.current = state.fontSize == null ? '' : displaySize(state.fontSize); setSizeDraft(sizeDraftRef.current); }}
+        onChange={event => {
+          sizeDraftRef.current = event.target.value;
+          setSizeDraft(event.target.value);
+          if (!event.nativeEvent?.inputType) {
+            window.clearTimeout(sizeStepTimerRef.current);
+            sizeStepTimerRef.current = window.setTimeout(() => finishSizeRef.current?.(), STEP_COMMIT_DELAY_MS);
+          }
+        }} onBlur={finishSize}
+        onKeyDown={event => {
+          if (event.key === 'Enter') { event.preventDefault(); finishSize(); }
+          if (event.key === 'Escape') {
+            event.preventDefault(); event.stopPropagation();
+            sizeDraftRef.current = null; setSizeDraft(null);
+          }
+        }} /></label>
+      <label>Color <input aria-label="Rich text color" type="color" disabled={controlsDisabled}
+        value={(state.color || typingStyle.color || '#000000ff').slice(0, 7)}
+        onChange={event => applyRgb(event.target.value)} /></label>
+    </>}
+  </div>
+  );
+  if (compact) {
+    return <div className="oo-rich-text-inspector is-compact" data-font-resource-count={fontResourcePool.length}
+      aria-disabled={controlsDisabled || undefined} aria-busy={commitPending || fontLoading || undefined}
+      title={externalSelectionStale ? 'Apply the typed text first (click outside the text), then format it.' : undefined}>
+      {formattingRow}
+      {compactExtras}
+      {uploadError && <span className="oo-rich-text-error" role="alert">{uploadError}</span>}
+    </div>;
+  }
   return <div className="oo-rich-text-inspector" data-font-resource-count={fontResourcePool.length}
     aria-disabled={controlsDisabled || undefined} aria-busy={commitPending || fontLoading || undefined}
     onFocusCapture={event => {
@@ -723,53 +805,7 @@ export function RichTextInspectorEditor({ document, availableFontResources = [],
     {textExtras && <div className="oo-rich-text-external-controls" data-rich-text-external-controls="true">{textExtras}</div>}
     </PropSection>
     <PropSection sectionKey={fontSectionTitle === 'Appearance' ? 'appearance' : 'font'} title={fontSectionTitle} summary={fontSummary}>
-      <div className={`oo-rich-text-toolbar ${externalWholeTextControls ? 'has-external-whole-text-controls' : ''}`} role="toolbar" aria-label="Character formatting">
-        {!externalWholeTextControls && <InspectorSelect label="Font" disabled={fontSelectDisabled} value={fontPickerValue}
-          dataValue={state.family ?? ''}
-          groups={state.family == null
-            ? [{ label: '', options: [{ value: '', label: 'Mixed' }] }, ...fontOptionGroups]
-            : fontOptionGroups}
-          onChange={value => { void chooseFontOption(value); }} searchable searchLabel="Search fonts"
-          emptyText="No fonts match" fontPreview onUploadFile={onUploadFont ? uploadFontFromPicker : null}
-          uploadDisabled={controlsDisabled} onOpenChange={value => { fontPickerOpenRef.current = value; }} />}
-        <div className="oo-rich-text-face-toggles">
-          {!externalWholeTextControls && <>
-            <button type="button" aria-label="Bold" title={boldFaces.some(face => !face) ? 'Upload the matching regular or bold font face to change this style.' : 'Bold for selected characters or text typed next'} onMouseDown={preserveButtonSelection} disabled={controlsDisabled || boldFaces.some(face => !face)} aria-pressed={state.weight == null ? 'mixed' : state.weight === '700'}
-              onClick={() => applyFacePlan(boldPatch)}>B</button>
-            <button type="button" aria-label="Italic" title={italicFaces.some(face => !face) ? 'Upload the matching upright or italic font face to change this style.' : 'Italic for selected characters or text typed next'} onMouseDown={preserveButtonSelection} disabled={controlsDisabled || italicFaces.some(face => !face)} aria-pressed={allSelectedSlanted ? 'true' : state.style == null ? 'mixed' : 'false'}
-              onClick={() => applyFacePlan(italicPatch)}>I</button>
-          </>}
-          <button type="button" aria-label="Underline" title="Underline for selected characters or text typed next (Ctrl/⌘+U)" onMouseDown={preserveButtonSelection} disabled={controlsDisabled}
-            aria-pressed={state.decoration.underline == null ? 'mixed' : state.decoration.underline}
-            onClick={() => applyPatch(underlinePatch)}>U</button>
-          <button type="button" aria-label="Strikethrough" title="Strikethrough for selected characters or text typed next" onMouseDown={preserveButtonSelection} disabled={controlsDisabled}
-            aria-pressed={state.decoration.strike == null ? 'mixed' : state.decoration.strike}
-            onClick={() => applyPatch(strikePatch)}>S</button>
-        </div>
-        {!externalWholeTextControls && <>
-          <label>Size <input aria-label="Rich text size" type="number" min="0.000001" disabled={controlsDisabled}
-            value={sizeDraft ?? displaySize(state.fontSize)} placeholder={state.fontSize == null ? 'Mixed' : ''}
-            onFocus={() => { sizeDraftRef.current = state.fontSize == null ? '' : displaySize(state.fontSize); setSizeDraft(sizeDraftRef.current); }}
-            onChange={event => {
-              sizeDraftRef.current = event.target.value;
-              setSizeDraft(event.target.value);
-              if (!event.nativeEvent?.inputType) {
-                window.clearTimeout(sizeStepTimerRef.current);
-                sizeStepTimerRef.current = window.setTimeout(() => finishSizeRef.current?.(), STEP_COMMIT_DELAY_MS);
-              }
-            }} onBlur={finishSize}
-            onKeyDown={event => {
-              if (event.key === 'Enter') { event.preventDefault(); finishSize(); }
-              if (event.key === 'Escape') {
-                event.preventDefault(); event.stopPropagation();
-                sizeDraftRef.current = null; setSizeDraft(null);
-              }
-            }} /></label>
-          <label>Color <input aria-label="Rich text color" type="color" disabled={controlsDisabled}
-            value={(state.color || typingStyle.color || '#000000ff').slice(0, 7)}
-            onChange={event => applyRgb(event.target.value)} /></label>
-        </>}
-      </div>
+      {formattingRow}
       {!externalWholeTextControls && (boldFaces.some(face => !face) || italicFaces.some(face => !face)) && <p className="oo-pdf-panel-hint oo-rich-text-hint is-face-hint">Bold or italic needs the matching font file; upload that face. Existing characters keep their exact font.</p>}
       {uploadError && <span className="oo-rich-text-error" role="alert">{uploadError}</span>}
       {fontExtras}

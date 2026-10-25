@@ -42,5 +42,8 @@ export async function mountEditor(element: HTMLElement, shell: EditorShell): Pro
   pdfjs.GlobalWorkerOptions.workerSrc = `${vendor}pdf-runtime/pdf.worker.min.mjs`;
   const bundle = await import(/* @vite-ignore */ `${vendor}pdf-tools/oo-pdf-tools.js`) as EditorBundle;
   // 'islands': the chrome laid out as berg:work Image's (top: document and tools | file and panels; bottom: status).
-  bundle.mount(element, { host: { capabilities: { shell: { version: 1, chrome: 'islands', setTitle: shell.setTitle } } } });
+  // 'manual': Properties opens on request only; formatting is in the mini toolbar at the object.
+  bundle.mount(element, { host: { capabilities: { shell: {
+    version: 1, chrome: 'islands', inspector: 'manual', setTitle: shell.setTitle,
+  } } } });
 }
