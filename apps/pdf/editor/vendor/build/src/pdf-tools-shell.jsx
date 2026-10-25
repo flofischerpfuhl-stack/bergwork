@@ -625,6 +625,59 @@ function FileButton({ accept, label = 'Choose file', icon: iconName = 'file', on
 // clipboard, duplicate, delete) so desktop editing feels like a slide editor.
 // berg:work: the floating home of the mini toolbar. Over the pointer for a right-click (the context menu opens below
 // it), above the text for a selection; kept inside the window. A selection shows it faintly until the pointer is near.
+// berg:work: the keyboard shortcut overview (? or right-click on the page › Keyboard shortcuts).
+const SHORTCUT_MOD = /Mac|iPhone|iPad/u.test(globalThis.navigator?.platform || '') ? '⌘' : 'Ctrl';
+const SHORTCUT_GROUPS = [
+  ['Document', [
+    ['Open', `${SHORTCUT_MOD}+O`], ['Save', `${SHORTCUT_MOD}+S`], ['Save as', `${SHORTCUT_MOD}+Shift+S`], ['Print', `${SHORTCUT_MOD}+P`],
+    ['Find text', `${SHORTCUT_MOD}+F`], ['Undo', `${SHORTCUT_MOD}+Z`], ['Redo', `${SHORTCUT_MOD}+Shift+Z`],
+    ['Zoom in / out', `${SHORTCUT_MOD}++ / ${SHORTCUT_MOD}+−`], ['Zoom with the wheel', `${SHORTCUT_MOD}+scroll`], ['This overview', '?'],
+  ]],
+  ['Objects', [
+    ['Format and actions', 'Right-click'], ['Add to the selection', 'Shift+click'], ['Select all on the page', `${SHORTCUT_MOD}+A`],
+    ['Nudge', 'Arrow keys'], ['Nudge further', 'Shift+arrow keys'], ['Duplicate', `${SHORTCUT_MOD}+D`],
+    ['Cut / copy / paste', `${SHORTCUT_MOD}+X / C / V`], ['Delete', 'Del'], ['Deselect', 'Esc'],
+  ]],
+  ['Text', [
+    ['Edit text', 'Double-click / F2'], ['Bold, italic, underline', `${SHORTCUT_MOD}+B / I / U`],
+    ['Format a selection', 'Select text'], ['Finish editing', 'Esc'],
+  ]],
+];
+
+function ShortcutsDialog({ onClose }) {
+  const dialogRef = useRef(null);
+  useEffect(() => {
+    dialogRef.current?.focus({ preventScroll: true });
+    const key = event => {
+      if (event.key !== 'Escape' && event.key !== '?') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', key, true);
+    return () => window.removeEventListener('keydown', key, true);
+  }, [onClose]);
+  return createPortal(
+    <div className="oo-pdf-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <section ref={dialogRef} className="oo-pdf-shortcuts-modal" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" tabIndex={-1}>
+        <div className="oo-pdf-drawer-head">
+          <strong>Keyboard shortcuts</strong>
+          <button className="oo-pdf-icon-button" type="button" aria-label="Close" onClick={onClose}><Icon name="x" /></button>
+        </div>
+        <div className="oo-pdf-shortcuts-groups">
+          {SHORTCUT_GROUPS.map(([title, rows]) => (
+            <section key={title} aria-label={title}>
+              <h3>{title}</h3>
+              <dl>{rows.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd><kbd>{keys}</kbd></dd></div>)}</dl>
+            </section>
+          ))}
+        </div>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 function MiniToolbarHost({ toolbar, onHost }) {
   const ref = useRef(null);
   const [position, setPosition] = useState(null);
@@ -639,13 +692,22 @@ function MiniToolbarHost({ toolbar, onHost }) {
       const gap = toolbar.reason === 'object' ? 40 : 10;
       let top = toolbar.y - rect.height - gap;
       if (top < 64) top = faintFirst ? (toolbar.bottom || toolbar.y) + gap : toolbar.y + gap + 4;
-      const left = Math.min(Math.max(8, toolbar.x - (toolbar.reason === 'context' ? 12 : 0)), Math.max(8, window.innerWidth - rect.width - 8));
+      let left = Math.min(Math.max(8, toolbar.x - (toolbar.reason === 'context' ? 12 : 0)), Math.max(8, window.innerWidth - rect.width - 8));
+      // With the context menu open the toolbar sits right above it (below it when there is no room), as in Word;
+      // the menu may have moved away from the pointer to stay on screen.
+      const menu = toolbar.reason === 'context' ? document.querySelector('.oo-pdf-context-menu')?.getBoundingClientRect() : null;
+      if (menu) {
+        top = menu.top - rect.height - 6 >= 64 ? menu.top - rect.height - 6 : menu.bottom + 6;
+        left = Math.min(Math.max(8, menu.left), Math.max(8, window.innerWidth - rect.width - 8));
+      }
       setPosition({ left, top: Math.min(Math.max(8, top), Math.max(8, window.innerHeight - rect.height - 8)) });
     };
     place();
+    // The context menu settles its own position in the same commit; place again once it has.
+    const frame = requestAnimationFrame(place);
     const observer = new ResizeObserver(place);
     observer.observe(node);
-    return () => observer.disconnect();
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); };
   }, [toolbar.x, toolbar.y, toolbar.bottom, toolbar.reason]);
   useEffect(() => {
     if (!faintFirst) { setNear(true); return undefined; }
@@ -13825,6 +13887,39 @@ function focusInlineEditorOnce(node) {
   try { node.focus({ preventScroll: true }); } catch { node.focus(); }
 }
 
+// berg:work: a new text box mounts its editor a frame after the click that placed it. Keys typed in that moment
+// went nowhere (the first letter was lost); they are kept here and typed into the editor once it has focus.
+let inlineTypeAhead = null;
+function captureInlineTypeAhead(event) {
+  if (!inlineTypeAhead) return;
+  const active = document.activeElement;
+  if (active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement) return;
+  if (event.key.length !== 1 || event.ctrlKey || event.metaKey || event.altKey) return;
+  inlineTypeAhead.text += event.key;
+  event.preventDefault();
+  event.stopPropagation();
+}
+function startInlineTypeAhead() {
+  inlineTypeAhead = { text: '' };
+  window.addEventListener('keydown', captureInlineTypeAhead, true);
+  window.setTimeout(() => takeInlineTypeAhead(), 2000);
+}
+function takeInlineTypeAhead() {
+  const text = inlineTypeAhead?.text || '';
+  inlineTypeAhead = null;
+  window.removeEventListener('keydown', captureInlineTypeAhead, true);
+  return text;
+}
+
+// berg:work: width of a text draft's longest line in CSS pixels (auto-width text boxes grow with what is typed).
+let autoWidthCanvas = null;
+function measureTextDraftWidth(text, style = {}) {
+  autoWidthCanvas ||= document.createElement('canvas');
+  const context = autoWidthCanvas.getContext('2d');
+  context.font = `${style.fontStyle || 'normal'} ${style.fontWeight || '400'} ${style.fontSize || 16}px ${style.fontFamily || 'sans-serif'}`;
+  return Math.max(0, ...String(text || '').split('\n').map(line => context.measureText(line || ' ').width));
+}
+
 // True when an inline editor's first line is outside the visible part of its
 // scroll viewport (clipped by the visual viewport, e.g. a phone keyboard).
 function inlineEditorNeedsScroll(node, visualViewport = window.visualViewport) {
@@ -16516,6 +16611,7 @@ function App({ shell = null }) {
   const [inspectorSelected, setInspectorSelected] = useState(null);
   const [editingText, setEditingText] = useState(null);
   const [contextMenu, setContextMenu] = useState(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // berg:work mini toolbar (shell.inspector === 'manual'): the selected object's formatting next to the pointer, as
   // Word's Mini Toolbar. A right-click opens it over the context menu; selecting text in a canvas text editor shows it
   // faintly above the text until the pointer comes near. The Inspector renders the controls into it (see Inspector
@@ -20032,6 +20128,11 @@ function App({ shell = null }) {
         redoDoc();
         return;
       }
+      if (event.key === '?' && !modifier && !event.altKey) {
+        event.preventDefault();
+        setShortcutsOpen(open => !open);
+        return;
+      }
       if ((event.key === 'Delete' || event.key === 'Backspace') && target?.closest?.('.oo-pdf-viewport')) {
         if (target?.closest?.('button, summary, .oo-pdf-inspector, .oo-pdf-drawer')) return;
         deleteSelection();
@@ -20222,6 +20323,15 @@ function App({ shell = null }) {
     }));
     return () => cancelAnimationFrame(frame);
   }, [miniToolbarEnabled, tool, editingText, selectionKeyForMini, miniToolbarReshow]);
+  // A click on the still-selected object brings back a toolbar that an outside click or Escape had closed.
+  useEffect(() => {
+    if (!miniToolbarEnabled || tool !== 'select' || editingText || miniToolbar || !selectionKeyForMini) return undefined;
+    const up = event => {
+      if (event.button === 0 && event.target?.closest?.('.oo-pdf-viewport .is-selected')) setMiniToolbarReshow(value => value + 1);
+    };
+    window.addEventListener('pointerup', up, true);
+    return () => window.removeEventListener('pointerup', up, true);
+  }, [miniToolbarEnabled, tool, editingText, miniToolbar, selectionKeyForMini]);
 
   // Panels dock below the real toolbar edge. The toolbars wrap on narrow
   // windows, so a hard-coded offset let the Layers panel cover them.
@@ -26979,9 +27089,10 @@ function App({ shell = null }) {
           primary={{
             label: 'Edit PDF',
             compact: phoneLayout,
+            // berg:work: a mode button stays on when clicked again (document tools); Pan is the way back.
             title: tool !== 'select' ? 'Edit PDF content: select and change text, images and shapes (V)'
-              : phoneLayout ? 'Choose editable objects (Pan stops editing)' : 'Stop editing (back to Pan)',
-            onClick: () => { closeChromeMenu(); setAllSelectableTypes(tool !== 'select'); },
+              : 'Editing: select and change text, images and shapes (Pan stops editing)',
+            onClick: () => { closeChromeMenu(); if (tool !== 'select') setAllSelectableTypes(true); },
           }}>
           <div className="oo-pdf-chrome-popover-title">Editable objects</div>
           <ChromeMenuItem label="All" iconName="check" pressed={allSelectable} className="oo-pdf-select-all"
@@ -27226,6 +27337,7 @@ function App({ shell = null }) {
         <div className="oo-pdf-document-drop-overlay" role="status">Drop to open PDF or project</div>
       )}
       {miniToolbar && <MiniToolbarHost toolbar={miniToolbar} onHost={setMiniToolbarHost} />}
+      {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
       {contextMenu && (
         <PdfContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)} items={[
           ...(selected && selected.type !== 'multi' && contextMenu.objectKind === 'text' ? [{
@@ -27241,6 +27353,7 @@ function App({ shell = null }) {
             { label: 'Copy', icon: 'copy', shortcut: 'Ctrl+C', run: () => document.execCommand('copy') },
           ] : []),
           { label: 'Paste', icon: 'clipboard', shortcut: 'Ctrl+V', disabled: !clipboardRef.current, run: () => void pasteClipboard() },
+          ...(!selected ? ['separator', { label: 'Keyboard shortcuts', icon: 'keyboard', shortcut: '?', run: () => setShortcutsOpen(true) }] : []),
           ...(selected ? [
             { label: 'Duplicate', icon: 'copy', shortcut: 'Ctrl+D', run: () => duplicateSelection() },
             // Opens the Layers drawer; the current selection is already the
@@ -32717,11 +32830,14 @@ function PdfPageContent({
       // Prevent the canvas pointerdown default from taking focus after React
       // mounts the inline editor for this placement gesture.
       event.preventDefault();
+      startInlineTypeAhead();
       onAppendAnnotation(page.id, {
         type: 'text',
         x: pos.x,
         y: pos.y,
-        w: 160,
+        // berg:work: a clicked text box grows with its text (auto width) until its frame is resized.
+        w: 24,
+        autoWidth: true,
         h: shapeStyle.fontSize * 1.4,
         text: '',
         fontSize: shapeStyle.fontSize,
@@ -37823,11 +37939,22 @@ function AnnotationObject({ page, ann, zoom, zIndex, selected, editing, pageCont
   const shapeRotation = ['rect', 'ellipse'].includes(ann.type) && Math.abs(Number(ann.angle || 0)) >= 0.01
     ? Number(ann.angle) : 0;
   const hasOrientedHit = Boolean(contentStyle && !editing && !ann.liveCommitted);
+  const autoWidthStyle = ann.type === 'text' && ann.autoWidth === true
+    ? fontPreviewStyleForTextLike(ann, 'helvetica', uploadedPreviewFamilies) : null;
+  const autoWidthFor = text => {
+    const lines = String(text || '').split('\n').length;
+    const fontSize = Number(ann.fontSize || 18);
+    const pagePoints = pageDimensions(page).width - Number(ann.x || 0) - 4;
+    const width = measureTextDraftWidth(text, { ...autoWidthStyle, fontSize: fontSize * zoom }) / zoom + fontSize + 8;
+    // The slack covers the textarea padding and the inset of the native FreeText appearance.
+    return { w: Math.max(24, Math.min(pagePoints, width)), h: Math.max(Number(ann.h || 0), lines * fontSize * Number(ann.lineHeight || 1.2) + 2) };
+  };
+  const autoWidthBox = autoWidthStyle && editing ? autoWidthFor(draftText) : null;
   const style = {
     left: (ann.x || 0) * zoom,
     top: (ann.y || 0) * zoom,
-    width: Math.max(8, (ann.w || 8) * zoom),
-    height: Math.max(8, (ann.h || 8) * zoom),
+    width: Math.max(8, (autoWidthBox?.w ?? ann.w ?? 8) * zoom),
+    height: Math.max(8, (autoWidthBox?.h ?? ann.h ?? 8) * zoom),
     zIndex,
     opacity: importedCustomFreeText || nativeAppearanceBacked ? 1 : (ann.opacity ?? 1),
     ...(shapeRotation ? { transform: `rotate(${shapeRotation}rad)`, transformOrigin: 'center center' } : {}),
@@ -37882,12 +38009,13 @@ function AnnotationObject({ page, ann, zoom, zIndex, selected, editing, pageCont
     }
     textEditorFocusedRef.current = false;
     textCommitStartedRef.current = true;
+    // Text edits never resize the frame implicitly — except an auto-width box (berg:work), which fits its text
+    // until the user resizes it.
+    const fitted = autoWidthStyle ? autoWidthFor(committedText) : null;
     const accepted = onCommitEdit?.(ann.id, {
       text: committedText,
-      // Text edits never resize the frame implicitly. Layout and overflow are
-      // independent properties; users resize the frame explicitly.
-      w: Number(ann.w || 0),
-      h: Number(ann.h || 0),
+      w: fitted ? fitted.w : Number(ann.w || 0),
+      h: fitted ? fitted.h : Number(ann.h || 0),
     }, ann);
     if (accepted === false) textCommitStartedRef.current = false;
   };
@@ -37998,7 +38126,8 @@ function AnnotationObject({ page, ann, zoom, zIndex, selected, editing, pageCont
         });
       }
     } else if (drag.latest) {
-      pendingCommit = onUpdate(ann.id, drag.latest, {
+      // A resized auto-width box keeps the width it was given (berg:work).
+      pendingCommit = onUpdate(ann.id, ann.autoWidth ? { ...drag.latest, autoWidth: false } : drag.latest, {
         commitGesture: true,
         gestureReason: 'annotation-resize',
       });
@@ -38067,6 +38196,8 @@ function AnnotationObject({ page, ann, zoom, zIndex, selected, editing, pageCont
               // Keep its duplicate-commit guard local to that focus session;
               // otherwise reopening this same object cannot commit again.
               textCommitStartedRef.current = false;
+              const typed = takeInlineTypeAhead();
+              if (typed) document.execCommand('insertText', false, typed);
             }}
             onPointerDown={(event) => event.stopPropagation()}
             onChange={(event) => {
@@ -39550,6 +39681,35 @@ function ColorSwatchField({ label = 'Color', value, onChange, disabled = false, 
         </label>
       </span>
     </div>
+  );
+}
+
+// berg:work: a colour well that opens the quick colours (mini toolbar). An empty value means none (no fill or stroke).
+function ColorMenuButton({ label, value, onChange, disabled = false, allowNone = false }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = event => { if (!rootRef.current?.contains(event.target)) setOpen(false); };
+    const escape = event => { if (event.key === 'Escape') { event.stopPropagation(); setOpen(false); } };
+    window.addEventListener('pointerdown', close, true);
+    window.addEventListener('keydown', escape, true);
+    return () => { window.removeEventListener('pointerdown', close, true); window.removeEventListener('keydown', escape, true); };
+  }, [open]);
+  const choose = color => { setOpen(false); onChange(color); };
+  return (
+    <span ref={rootRef} className="oo-pdf-color-menu">
+      <button type="button" className={`oo-pdf-color-well ${value ? '' : 'is-none'}`} aria-label={`${label} colour`}
+        title={`${label}: ${value || 'none'}`} aria-expanded={open} disabled={disabled}
+        style={value ? { '--oo-pdf-swatch': value } : undefined}
+        onMouseDown={event => event.preventDefault()} onClick={() => setOpen(current => !current)}>
+        <span className="oo-pdf-color-well-dot" /><span className="oo-pdf-color-well-label">{label}</span>
+      </button>
+      {open && <span className="oo-pdf-color-pop" role="dialog" aria-label={`${label} colour`}>
+        <ColorSwatchField compact label={label} value={value} onChange={choose} />
+        {allowNone && <button type="button" className="oo-pdf-color-none" aria-pressed={!value} onClick={() => choose('')}>No {label.toLowerCase()}</button>}
+      </span>}
+    </span>
   );
 }
 
@@ -42097,6 +42257,136 @@ function Inspector({
         : { pendingRotationDegrees: 90 }, `${layer.type}-rotate-right`, GestureKind.ROTATE)}><Icon name="rotate-cw" /></button>
     </div>
   );
+  // Opacity, fill and stroke controls shared by Properties and the mini toolbar (berg:work).
+  const imageOpacityControl = (layer, imageDescriptor) => (
+                      <label>Opacity <PercentRange
+                        aria-label="Opacity"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        disabled={!imageDescriptor?.opacityChannelsSupported}
+                        value={nativeImageOpacityControlValue(imageEdit?.sourceId === layer.item.sourceId ? imageEdit : null, imageDescriptor)}
+                        onPointerDown={() => beginPropertyGesture(`image-opacity:${layer.key}`, layer.item, { pointer: true, owner: propertyGestureOwner(layer) })}
+                        onChange={(event) => {
+                          if (cancelledPropertyGesturesRef.current.has(`image-opacity:${layer.key}`)) return;
+                          beginPropertyGesture(`image-opacity:${layer.key}`, layer.item, { owner: propertyGestureOwner(layer) });
+                          const opacity = parseFloat(event.target.value);
+                          ownPropertyDraftCancellation(
+                            `image-opacity:${layer.key}`,
+                            onUpdateImage(layer.item.sourceId, { opacity, opacityMode: NATIVE_IMAGE_OPACITY_MODE }),
+                          );
+                          queuePropertyGestureCommit(`image-opacity:${layer.key}`, previousForCommit => onUpdateImage(
+                            layer.item.sourceId,
+                            { opacity, opacityMode: NATIVE_IMAGE_OPACITY_MODE },
+                            { commitGesture: true, gestureReason: 'image-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
+                          ));
+                        }}
+                        onKeyDown={(event) => resumeCancelledRangeFromKey(`image-opacity:${layer.key}`, event)}
+                        onPointerCancel={() => cancelPropertyGesture(`image-opacity:${layer.key}`)}
+                        onLostPointerCapture={() => cancelPropertyGesture(`image-opacity:${layer.key}`)}
+                        onPointerUp={(event) => finishPropertyGesture(`image-opacity:${layer.key}`, previousForCommit => onUpdateImage(
+                          layer.item.sourceId,
+                          { opacity: parseFloat(event.currentTarget.value), opacityMode: NATIVE_IMAGE_OPACITY_MODE },
+                          { commitGesture: true, gestureReason: 'image-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
+                        ))}
+                        onMouseUp={(event) => finishPropertyGesture(`image-opacity:${layer.key}`, previousForCommit => onUpdateImage(
+                          layer.item.sourceId,
+                          { opacity: parseFloat(event.currentTarget.value), opacityMode: NATIVE_IMAGE_OPACITY_MODE },
+                          { commitGesture: true, gestureReason: 'image-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
+                        ))}
+                        onBlur={(event) => finishPropertyGesture(`image-opacity:${layer.key}`, previousForCommit => onUpdateImage(
+                          layer.item.sourceId,
+                          { opacity: parseFloat(event.currentTarget.value), opacityMode: NATIVE_IMAGE_OPACITY_MODE },
+                          { commitGesture: true, gestureReason: 'image-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
+                        ))}
+                      /></label>
+  );
+  const nativeObjectOpacityControl = layer => (
+                        <label>Opacity <PercentRange
+                          aria-label="Opacity"
+                          type="range"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={layer.item.opacity ?? 1}
+                          onPointerDown={() => beginPropertyGesture(`object-opacity:${layer.key}`, layer.item, { pointer: true, owner: propertyGestureOwner(layer) })}
+                          onChange={(event) => {
+                            if (cancelledPropertyGesturesRef.current.has(`object-opacity:${layer.key}`)) return;
+                            beginPropertyGesture(`object-opacity:${layer.key}`, layer.item, { owner: propertyGestureOwner(layer) });
+                            const opacity = parseFloat(event.target.value);
+                            ownPropertyDraftCancellation(
+                              `object-opacity:${layer.key}`,
+                              onUpdateObject(layer.item.sourceId, { ...layer.item, opacity }),
+                            );
+                            queuePropertyGestureCommit(`object-opacity:${layer.key}`, previousForCommit => onUpdateObject(
+                              layer.item.sourceId,
+                              { ...layer.item, opacity },
+                              { commitGesture: true, gestureReason: 'native-object-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
+                            ));
+                          }}
+                          onKeyDown={(event) => resumeCancelledRangeFromKey(`object-opacity:${layer.key}`, event)}
+                          onPointerCancel={() => cancelPropertyGesture(`object-opacity:${layer.key}`)}
+                          onLostPointerCapture={() => cancelPropertyGesture(`object-opacity:${layer.key}`)}
+                          onPointerUp={(event) => finishPropertyGesture(`object-opacity:${layer.key}`, previousForCommit => onUpdateObject(
+                            layer.item.sourceId,
+                            { ...layer.item, opacity: parseFloat(event.currentTarget.value) },
+                            { commitGesture: true, gestureReason: 'native-object-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
+                          ))}
+                          onMouseUp={(event) => finishPropertyGesture(`object-opacity:${layer.key}`, previousForCommit => onUpdateObject(
+                            layer.item.sourceId,
+                            { ...layer.item, opacity: parseFloat(event.currentTarget.value) },
+                            { commitGesture: true, gestureReason: 'native-object-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
+                          ))}
+                          onBlur={(event) => finishPropertyGesture(`object-opacity:${layer.key}`, previousForCommit => onUpdateObject(
+                            layer.item.sourceId,
+                            { ...layer.item, opacity: parseFloat(event.currentTarget.value) },
+                            { commitGesture: true, gestureReason: 'native-object-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
+                          ))}
+                        /></label>
+  );
+  const miniShapeControls = (layer, imageDescriptor) => {
+    const item = layer.item;
+    const off = readOnly || nativeBusy;
+    const widthField = (value, commit, key) => <span className="oo-pdf-mini-width" title="Stroke width">
+      <GeometryNumber label="Width" draftKey={`${layerPropertyDraftScope(doc, layer.pageId, layer)}:mini-${key}`} min={0}
+        value={value} onCommit={commit} disabled={off} /></span>;
+    if (layer.type === 'annotation' && ['rect', 'ellipse'].includes(item.type) && !item.imported) return <>
+      <ColorMenuButton label="Fill" value={item.fillEnabled === false ? '' : item.fill || '#000000'} disabled={off} allowNone
+        onChange={color => commitAnnotationProperty(layer, color ? { fill: color, fillEnabled: true } : { fillEnabled: false }, 'annotation-fill-style')} />
+      <ColorMenuButton label="Stroke" value={item.strokeEnabled === false ? '' : item.stroke || '#000000'} disabled={off} allowNone
+        onChange={color => commitAnnotationProperty(layer, color ? { stroke: color, strokeEnabled: true } : { strokeEnabled: false }, 'annotation-stroke-style')} />
+      {widthField(Number(item.strokeWidth || 0), value => commitAnnotationProperty(layer, { strokeWidth: value }, 'annotation-stroke-width'), 'stroke-width')}
+      <span className="oo-pdf-mini-opacity">{annotationOpacityControl(layer)}</span>
+    </>;
+    if (layer.type === 'annotation' && ['draw', 'arrow', 'line'].includes(item.type) && !item.imported) return <>
+      <ColorMenuButton label="Stroke" value={item.stroke || '#000000'} disabled={off || !annotationAppearanceColorEditable(item)}
+        onChange={color => commitAnnotationProperty(layer, { stroke: color }, 'annotation-stroke-style')} />
+      {widthField(Number(item.strokeWidth || 2), value => commitAnnotationProperty(layer, { strokeWidth: value }, 'annotation-stroke-width'), 'stroke-width')}
+      <span className="oo-pdf-mini-opacity">{annotationOpacityControl(layer)}</span>
+    </>;
+    if (layer.type === 'nativeObject' && item.typeName === 'path') {
+      const fillOn = item.fillEnabled ?? (Number(item.drawMode?.fillMode || 0) !== 0);
+      const strokeOn = item.strokeEnabled ?? item.drawMode?.stroke !== false;
+      return <>
+        <ColorMenuButton label="Fill" value={fillOn ? pdfiumColorToHex(item.fillColor, '#000000') : ''} disabled={off} allowNone
+          onChange={color => commitObjectProperty(layer, color ? { fillColor: color, fillEnabled: true } : { fillEnabled: false }, 'native-object-fill-style')} />
+        <ColorMenuButton label="Stroke" value={strokeOn ? pdfiumColorToHex(item.strokeColor, '#000000') : ''} disabled={off} allowNone
+          onChange={color => commitObjectProperty(layer, color ? { strokeColor: color, strokeEnabled: true } : { strokeEnabled: false }, 'native-object-stroke-style')} />
+        {widthField(Number(item.strokeWidth || 0), value => commitObjectProperty(layer, { strokeWidth: value }, 'native-object-stroke-width'), 'object-stroke-width')}
+        <span className="oo-pdf-mini-opacity">{nativeObjectOpacityControl(layer)}</span>
+      </>;
+    }
+    if (layer.type === 'imageRegion') return <>
+      <span className="oo-pdf-mini-opacity">{imageOpacityControl(layer, imageDescriptor)}</span>
+      {rotationButtons(layer, commitImageProperty)}
+    </>;
+    if (layer.type === 'annotation' && item.type === 'image' && !item.imported) return <>
+      <span className="oo-pdf-mini-opacity">{annotationOpacityControl(layer)}</span>
+      {rotationButtons(layer, commitAnnotationProperty)}
+    </>;
+    return null;
+  };
   const layerOrientationDegrees = layer => {
     if (Number.isFinite(layer.item.orientationDegrees)) return layer.item.orientationDegrees;
     const matrix = nativePathObjectMatrix(layer.item);
@@ -42949,6 +43239,9 @@ function Inspector({
               onBeforeCompactCommit: miniToolbar.beforeCommit,
             }), miniToolbar.host)
             : null;
+          const miniShape = miniToolbar && !miniToolbar.externalSelection && isSelected && !multiSelection
+            ? miniShapeControls(layer, imageDescriptor) : null;
+          const miniToolbarShape = miniShape ? createPortal(<div className="oo-pdf-mini-shape">{miniShape}</div>, miniToolbar.host) : null;
           return (
             <div
               key={layer.key}
@@ -42967,6 +43260,7 @@ function Inspector({
               onPointerCancel={endLayerPress}
               onLostPointerCapture={endLayerPress}
             >
+              {miniToolbarShape}
               {hierarchy?.expandable && <button type="button" className="oo-pdf-native-group-toggle"
                 aria-label={`${hierarchy.expanded ? 'Collapse' : 'Expand'} ${presentation.name || layer.label || 'PDF group'}`}
                 aria-expanded={hierarchy.expanded}
@@ -43370,48 +43664,7 @@ function Inspector({
                   {layer.type === 'imageRegion' && (
                     <PropSection sectionKey="appearance" title="Appearance"
                       summary={`${Math.round(100 * nativeImageOpacityControlValue(imageEdit?.sourceId === layer.item.sourceId ? imageEdit : null, imageDescriptor))} %`}>
-                      <label>Opacity <PercentRange
-                        aria-label="Opacity"
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        disabled={!imageDescriptor?.opacityChannelsSupported}
-                        value={nativeImageOpacityControlValue(imageEdit?.sourceId === layer.item.sourceId ? imageEdit : null, imageDescriptor)}
-                        onPointerDown={() => beginPropertyGesture(`image-opacity:${layer.key}`, layer.item, { pointer: true, owner: propertyGestureOwner(layer) })}
-                        onChange={(event) => {
-                          if (cancelledPropertyGesturesRef.current.has(`image-opacity:${layer.key}`)) return;
-                          beginPropertyGesture(`image-opacity:${layer.key}`, layer.item, { owner: propertyGestureOwner(layer) });
-                          const opacity = parseFloat(event.target.value);
-                          ownPropertyDraftCancellation(
-                            `image-opacity:${layer.key}`,
-                            onUpdateImage(layer.item.sourceId, { opacity, opacityMode: NATIVE_IMAGE_OPACITY_MODE }),
-                          );
-                          queuePropertyGestureCommit(`image-opacity:${layer.key}`, previousForCommit => onUpdateImage(
-                            layer.item.sourceId,
-                            { opacity, opacityMode: NATIVE_IMAGE_OPACITY_MODE },
-                            { commitGesture: true, gestureReason: 'image-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
-                          ));
-                        }}
-                        onKeyDown={(event) => resumeCancelledRangeFromKey(`image-opacity:${layer.key}`, event)}
-                        onPointerCancel={() => cancelPropertyGesture(`image-opacity:${layer.key}`)}
-                        onLostPointerCapture={() => cancelPropertyGesture(`image-opacity:${layer.key}`)}
-                        onPointerUp={(event) => finishPropertyGesture(`image-opacity:${layer.key}`, previousForCommit => onUpdateImage(
-                          layer.item.sourceId,
-                          { opacity: parseFloat(event.currentTarget.value), opacityMode: NATIVE_IMAGE_OPACITY_MODE },
-                          { commitGesture: true, gestureReason: 'image-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
-                        ))}
-                        onMouseUp={(event) => finishPropertyGesture(`image-opacity:${layer.key}`, previousForCommit => onUpdateImage(
-                          layer.item.sourceId,
-                          { opacity: parseFloat(event.currentTarget.value), opacityMode: NATIVE_IMAGE_OPACITY_MODE },
-                          { commitGesture: true, gestureReason: 'image-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
-                        ))}
-                        onBlur={(event) => finishPropertyGesture(`image-opacity:${layer.key}`, previousForCommit => onUpdateImage(
-                          layer.item.sourceId,
-                          { opacity: parseFloat(event.currentTarget.value), opacityMode: NATIVE_IMAGE_OPACITY_MODE },
-                          { commitGesture: true, gestureReason: 'image-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
-                        ))}
-                      /></label>
+                      {imageOpacityControl(layer, imageDescriptor)}
                       <label className="oo-pdf-check"><input
                         type="checkbox"
                         disabled={nativeBusy}
@@ -43433,47 +43686,7 @@ function Inspector({
                         <div className="oo-pdf-mini-stat oo-pdf-caption">PDF object: {PDF_NATIVE_OBJECT_TYPES[layer.item.typeName] || layer.item.typeName || 'Unknown'} · Object index: {Number.isInteger(Number(layer.item.objectIndex)) ? layer.item.objectIndex : 'unknown'}</div>
                       </details>
                       {['path', 'text', 'form', 'shading'].includes(layer.item.typeName) && (
-                        <label>Opacity <PercentRange
-                          aria-label="Opacity"
-                          type="range"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={layer.item.opacity ?? 1}
-                          onPointerDown={() => beginPropertyGesture(`object-opacity:${layer.key}`, layer.item, { pointer: true, owner: propertyGestureOwner(layer) })}
-                          onChange={(event) => {
-                            if (cancelledPropertyGesturesRef.current.has(`object-opacity:${layer.key}`)) return;
-                            beginPropertyGesture(`object-opacity:${layer.key}`, layer.item, { owner: propertyGestureOwner(layer) });
-                            const opacity = parseFloat(event.target.value);
-                            ownPropertyDraftCancellation(
-                              `object-opacity:${layer.key}`,
-                              onUpdateObject(layer.item.sourceId, { ...layer.item, opacity }),
-                            );
-                            queuePropertyGestureCommit(`object-opacity:${layer.key}`, previousForCommit => onUpdateObject(
-                              layer.item.sourceId,
-                              { ...layer.item, opacity },
-                              { commitGesture: true, gestureReason: 'native-object-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
-                            ));
-                          }}
-                          onKeyDown={(event) => resumeCancelledRangeFromKey(`object-opacity:${layer.key}`, event)}
-                          onPointerCancel={() => cancelPropertyGesture(`object-opacity:${layer.key}`)}
-                          onLostPointerCapture={() => cancelPropertyGesture(`object-opacity:${layer.key}`)}
-                          onPointerUp={(event) => finishPropertyGesture(`object-opacity:${layer.key}`, previousForCommit => onUpdateObject(
-                            layer.item.sourceId,
-                            { ...layer.item, opacity: parseFloat(event.currentTarget.value) },
-                            { commitGesture: true, gestureReason: 'native-object-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
-                          ))}
-                          onMouseUp={(event) => finishPropertyGesture(`object-opacity:${layer.key}`, previousForCommit => onUpdateObject(
-                            layer.item.sourceId,
-                            { ...layer.item, opacity: parseFloat(event.currentTarget.value) },
-                            { commitGesture: true, gestureReason: 'native-object-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
-                          ))}
-                          onBlur={(event) => finishPropertyGesture(`object-opacity:${layer.key}`, previousForCommit => onUpdateObject(
-                            layer.item.sourceId,
-                            { ...layer.item, opacity: parseFloat(event.currentTarget.value) },
-                            { commitGesture: true, gestureReason: 'native-object-opacity', gestureKind: GestureKind.STYLE, previousForCommit },
-                          ))}
-                        /></label>
+                        nativeObjectOpacityControl(layer)
                       )}
                       {['path', 'text'].includes(layer.item.typeName) && (
                         <div className="oo-pdf-prop-row two">

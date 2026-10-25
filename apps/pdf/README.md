@@ -65,7 +65,11 @@ object no longer opens it. Formatting lives in the **mini toolbar** (fork: `Mini
 colour and (for reflowing text blocks) alignment above the context menu; selecting characters in the on-page text editor
 shows it faintly above the text until the pointer comes near, and Ctrl/⌘+B/I/U use it. The toolbar is filled by the
 same rich-text editor as Properties (a hidden Properties copy computes the row), so it commits through the same path
-and undo steps. The host supplies `shell.setTitle` (the window title,
+and undo steps. Shapes, lines and PDF paths get fill and stroke colour wells (`ColorMenuButton`), stroke width and
+opacity there, images opacity and 90° rotation, highlights and comments their colour. Text placed with Insert › Text
+grows with what is typed (`autoWidth`) until its frame is resized, and keys typed before its editor mounts are kept.
+`?` or a right-click on the page opens the keyboard shortcut overview (`ShortcutsDialog`). Clicking the active
+Edit PDF keeps it on; Pan stops editing. The host supplies `shell.setTitle` (the window title,
 `• name — berg:work PDF` for unsaved changes, and the document in the title bar); the editor shows no fullscreen toggle
 because the shell offers no `setFullscreen`. The editor's `titleBar` slots are not used.
 

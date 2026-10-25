@@ -450,6 +450,36 @@ html body .oo-pdf-shell .oo-pdf-swatch-custom input[type='color'] {
 .oo-pdf-mini-toolbar .oo-pdf-mini-opacity label { display: inline-flex; align-items: center; gap: 6px; font-size: var(--bw-text-small); color: var(--bw-fg-muted); }
 .oo-pdf-mini-toolbar .oo-pdf-mini-opacity input[type='range'] { width: 90px; }
 
+/* Shapes, lines and images in the mini toolbar: colour wells that open the quick colours, stroke width, opacity. */
+.oo-pdf-mini-toolbar .oo-pdf-mini-shape { display: flex; align-items: center; gap: 6px; padding: 0 4px; }
+.oo-pdf-mini-toolbar .oo-pdf-mini-shape .oo-pdf-rotate-row { display: inline-flex; align-items: center; gap: 2px; }
+.oo-pdf-mini-toolbar .oo-pdf-mini-shape .oo-pdf-rotate-row .oo-pdf-caption { display: none; }
+.oo-pdf-mini-toolbar .oo-pdf-mini-shape .oo-pdf-rotate-row button:first-of-type .oo-pdf-icon { transform: scaleX(-1); }
+.oo-pdf-color-menu { position: relative; display: inline-flex; }
+html body .oo-pdf-mini-toolbar .oo-pdf-color-menu button.oo-pdf-color-well {
+  display: inline-flex; align-items: center; gap: 6px; width: auto; padding: 0 8px; white-space: nowrap;
+  font: 500 var(--bw-text-small) / 1 var(--bw-font-ui); color: var(--bw-fg-muted);
+}
+.oo-pdf-color-well-dot {
+  width: 14px; height: 14px; border-radius: var(--bw-radius-dot);
+  background: var(--oo-pdf-swatch, transparent); box-shadow: inset 0 0 0 1px var(--bw-frame);
+}
+.oo-pdf-color-well.is-none .oo-pdf-color-well-dot {
+  background: linear-gradient(135deg, transparent 45%, var(--bw-error) 45% 55%, transparent 55%);
+}
+.oo-pdf-color-pop {
+  position: absolute; top: calc(100% + 8px); left: 0; z-index: 2;
+  display: grid; gap: 6px; padding: 8px;
+  border: 1px solid var(--bw-border); border-radius: var(--bw-radius-menu);
+  background: var(--bw-surface-raised); box-shadow: var(--bw-shadow-popover);
+}
+html body .oo-pdf-mini-toolbar .oo-pdf-color-menu button.oo-pdf-color-none {
+  width: auto; justify-self: start; padding: 0 8px; white-space: nowrap; font: 500 var(--bw-text-small) / 1 var(--bw-font-ui);
+}
+html body .oo-pdf-mini-toolbar .oo-pdf-color-menu button.oo-pdf-color-none[aria-pressed='true'] { color: var(--bw-fg-strong); }
+.oo-pdf-mini-toolbar .oo-pdf-mini-width label { display: inline-flex; align-items: center; gap: 6px; font-size: var(--bw-text-small); color: var(--bw-fg-muted); }
+.oo-pdf-mini-toolbar .oo-pdf-mini-width input { width: 60px; }
+
 /* Text alignment row in Properties (Align text) and its pressed state, like the mini toolbar's. */
 .oo-pdf-shell .oo-pdf-text-align-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .oo-pdf-shell .oo-pdf-text-align { display: inline-flex; gap: 2px; }
@@ -619,3 +649,26 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
 }
 
 .bw-licence-missing { margin: 4px 4px 10px; color: var(--bw-fg-muted); font-size: var(--bw-text-small); }
+
+/* Keyboard shortcut overview (? key). */
+.oo-pdf-shortcuts-modal {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(86vh, 720px);
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  padding: 12px 16px 16px;
+  border: 1px solid var(--bw-border);
+  border-radius: var(--bw-radius-menu);
+  background: var(--bw-surface-raised);
+  box-shadow: var(--bw-shadow-popover);
+  color: var(--bw-fg);
+  outline: none;
+}
+.oo-pdf-shortcuts-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px 24px; }
+.oo-pdf-shortcuts-groups h3 { margin: 0 0 6px; font: 600 var(--bw-text-small) / 1.4 var(--bw-font-ui); color: var(--bw-fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.oo-pdf-shortcuts-groups dl { display: grid; gap: 2px; margin: 0; }
+.oo-pdf-shortcuts-groups dl > div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--bw-border-subtle); }
+.oo-pdf-shortcuts-groups dt { font-size: var(--bw-text-small); }
+.oo-pdf-shortcuts-groups dd { margin: 0; text-align: right; }
+.oo-pdf-shortcuts-groups kbd { font: 500 var(--bw-text-small) / 1.4 var(--bw-font-ui); color: var(--bw-fg-muted); white-space: nowrap; }

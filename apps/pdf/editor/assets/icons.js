@@ -81,6 +81,7 @@ const ICONS = {
   'indent-decrease': '<path d="M21 6H9"/><path d="M21 12H9"/><path d="M21 18H9"/><path d="m3 8 4 4-4 4"/>',
   'indent-increase': '<path d="M21 6H9"/><path d="M21 12H9"/><path d="M21 18H9"/><path d="m7 8-4 4 4 4"/>',
   'key-round': '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21h2.172a2 2 0 0 0 1.414-.586l8.704-8.704"/><circle cx="16" cy="8" r="6"/>',
+  'keyboard': '<path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/>',
   'library': '<path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/>',
   'layers': '<path d="m12 3 10 5-10 5L2 8Z"/><path d="m2 12 10 5 10-5"/><path d="m2 16 10 5 10-5"/>',
   'link': '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
