@@ -42626,7 +42626,7 @@ function Inspector({
           const textAlignButtons = (className = 'oo-pdf-text-align') => layer.type === 'text' && !legacyAutofitInvalid &&
               (layer.item.textBlock === true || layer.item.textFrame !== true)
             ? <span className={className} role="group" aria-label="Text alignment">
-              {[['left', 'align-left', 'Align text left'], ['center', 'align-center', 'Center text'], ['right', 'align-right', 'Align text right']].map(([value, icon, label]) => (
+              {[['left', 'align-left', 'Align text left'], ['center', 'align-center', 'Center text'], ['right', 'align-right', 'Align text right'], ['justify', 'align-justify', 'Justify text']].map(([value, icon, label]) => (
                 <button key={value} type="button" className="oo-pdf-icon-button" aria-label={label} title={label}
                   aria-pressed={layer.item.textBlock === true && (layer.item.textAlign || 'left') === value}
                   onMouseDown={event => event.preventDefault()}
