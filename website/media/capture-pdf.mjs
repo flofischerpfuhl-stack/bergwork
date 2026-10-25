@@ -17,7 +17,7 @@ import { cutList, encodeFrames, grabFrames } from './video.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../..');
 // Fernwork's Playwright first: its browsers are installed on the capture machines; apps/image may pin a newer one.
-const playwrightFrom = ['/home/flo/source/fernwork/package.json', path.join(repo, 'apps/image/package.json')]
+const playwrightFrom = [process.env.PLAYWRIGHT_PACKAGE_JSON, '/home/flo/source/fernwork/package.json', path.join(repo, 'apps/image/package.json')].filter(Boolean)
   .find((file) => existsSync(path.join(path.dirname(file), 'node_modules/playwright')));
 const { chromium } = createRequire(playwrightFrom)('playwright');
 const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
