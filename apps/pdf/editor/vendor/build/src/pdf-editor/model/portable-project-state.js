@@ -151,6 +151,28 @@ function assertPdfBytes(bytes) {
  * current checkpoint durable. Resource bodies are hydrated one at a time so
  * large snapshot histories do not become resident in the worker or kernel.
  */
+// Every hash a history entry can name: its declared resource hashes and any
+// 64-hex string in its command payloads (resourceHash, rollbackResourceHash,
+// font hashes, ...).
+function referencedResourceHashes(entries) {
+  const hashes = new Set();
+  const visit = (value, depth) => {
+    if (depth > 16 || value == null) return;
+    if (typeof value === 'string') {
+      if (HASH_PATTERN.test(value)) hashes.add(value);
+      return;
+    }
+    if (typeof value !== 'object' || ArrayBuffer.isView(value)) return;
+    for (const item of Array.isArray(value) ? value : Object.values(value)) visit(item, depth + 1);
+  };
+  for (const entry of entries) {
+    for (const hash of entry?.resourceHashes || []) hashes.add(String(hash));
+    visit(entry?.commands, 0);
+    visit(entry?.inverseCommands, 0);
+  }
+  return hashes;
+}
+
 export async function exportPortablePdfNativeState({ store, documentKey, expectedRevision }) {
   if (!store?.load || !store?.loadResource) {
     throw new TypeError('A resource-capable PDF journal store is required.');
@@ -175,7 +197,13 @@ export async function exportPortablePdfNativeState({ store, documentKey, expecte
   if (entries.some(entry => entry?.status !== 'committed')) {
     throw new Error('A native PDF transaction is still pending; project export was not started.');
   }
-  const resources = record.resources || [];
+  // Document snapshots registered for a transaction that was then refused
+  // (a stamp whose snapshots did not fit the engine budget) are referenced by
+  // no history entry; each is a whole PDF, so they are left out. Other kinds
+  // (fonts registered ahead of their first use) are always kept.
+  const referenced = referencedResourceHashes(entries);
+  const resources = (record.resources || []).filter(metadata =>
+    metadata?.kind !== 'pdf-snapshot' || referenced.has(String(metadata.hash || '')));
   if (resources.length > MAX_RESOURCES) {
     throw new Error('The native PDF resource count exceeds the portable project limit.');
   }

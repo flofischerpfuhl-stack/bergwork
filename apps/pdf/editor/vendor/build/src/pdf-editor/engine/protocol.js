@@ -9,6 +9,7 @@ export const EngineRequestType = Object.freeze({
   INSPECT_BINDING: 'inspectBinding',
   BIND_SEMANTIC_TEXT: 'bindSemanticText',
   PAGE_TEXT_GLYPHS: 'pageTextGlyphs',
+  TEXT_RUN_LAYOUT: 'textRunLayout',
   EXTRACT_PAGE_TEXT: 'extractPageText',
   PROBE_FREETEXT_CAPABILITY: 'probeFreeTextCapability',
   PUT_RESOURCE: 'putResource',

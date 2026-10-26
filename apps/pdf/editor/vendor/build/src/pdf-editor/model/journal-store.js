@@ -751,6 +751,13 @@ export class MemoryCommandJournalStore {
     return resource ? structuredClone(resource) : null;
   }
 
+  // Stored resource and checkpoint entries are immutable: their bytes are
+  // copied once, when they first arrive, and later saves reuse the entry, as
+  // the IndexedDB store keeps an already written OPFS file. Copying and
+  // structured-cloning every snapshot of the history on every save was
+  // quadratic in the history (the corpus harness spent 180 s of one undo run
+  // there). Like the IndexedDB store, `save` returns the manifest without
+  // resource bytes; `load` and `loadResource` still return private copies.
   async save(documentKey, state) {
     const previous = this.#records.get(documentKey);
     const previousResources = new Map((previous?.resources || []).map(resource => [resource.hash, resource]));
@@ -761,18 +768,29 @@ export class MemoryCommandJournalStore {
       seenResourceHashes.add(resource.hash);
       const bytes = asBytes(resource.bytes);
       const prior = previousResources.get(resource.hash);
-      const retainedBytes = bytes.byteLength ? bytes : asBytes(prior?.bytes);
+      const priorBytes = asBytes(prior?.bytes);
+      const retainedBytes = priorBytes.byteLength && (!bytes.byteLength || bytes.byteLength === priorBytes.byteLength)
+        ? priorBytes
+        : bytes.byteLength ? bytes.slice() : priorBytes;
       if (!retainedBytes.byteLength) {
         throw new Error(`PDF recovery resource bytes are unavailable: ${resource.hash}`);
       }
-      resources.push(resourceMetadata({
+      const { bytes: _bytes, bindingsSidecar: _sidecar, bindings: incomingBindings, ...metadata } = resource;
+      // A resource is content-addressed: once stored, its binding records are
+      // kept (the IndexedDB store keeps its written sidecar the same way).
+      const bindingRecords = Array.isArray(prior?.bindings) && prior.bindings.length
+        ? prior.bindings
+        : resource.bindingsSidecar instanceof Uint8Array
+          ? structuredClone(resourceBindingRecords(resource))
+          : incomingBindings !== undefined ? structuredClone(incomingBindings) : prior?.bindings;
+      resources.push(Object.freeze(resourceMetadata({
         ...prior,
-        ...resource,
-        ...(resource.bindingsSidecar instanceof Uint8Array ? { bindings: resourceBindingRecords(resource) } : {}),
+        ...structuredClone(metadata),
+        ...(bindingRecords !== undefined ? { bindings: bindingRecords } : {}),
       }, {
-        bytes: retainedBytes.slice(),
+        bytes: retainedBytes,
         byteLength: retainedBytes.byteLength,
-      }));
+      })));
     }
     if (resourceBytes(resources) > this.#resourceByteLimit) {
       throw quotaError('PDF recovery resources exceed the configured byte budget.');
@@ -786,21 +804,21 @@ export class MemoryCommandJournalStore {
       }
       ring = boundedCheckpointRing([
         ...ring,
-        {
+        Object.freeze({
           revision,
-          bindings: state.checkpointBindings || [],
+          bindings: structuredClone(state.checkpointBindings || []),
           bytes: bytes.slice(),
           fileName: null,
           byteLength: bytes.byteLength,
           createdAt: Date.now(),
-        },
+        }),
       ], {
         byteLimit: this.#checkpointByteLimit,
         countLimit: this.#checkpointCount,
       });
     }
     const active = ring.at(-1) || null;
-    const record = structuredClone({
+    const record = {
       documentKey,
       version: 2,
       updatedAt: Date.now(),
@@ -810,10 +828,21 @@ export class MemoryCommandJournalStore {
       checkpointRing: ring,
       checkpointRingBytes: ring.reduce((total, item) => total + Number(item.byteLength || 0), 0),
       resources,
-      entries: state.entries || [],
-    });
+      entries: structuredClone(state.entries || []),
+    };
     this.#records.set(documentKey, record);
-    return structuredClone(record);
+    // Binding records (thousands per snapshot of a large document) stay out of
+    // the returned manifest too, counted as the IndexedDB sidecar is.
+    return structuredClone({
+      ...record,
+      checkpointBytes: null,
+      checkpointRing: ring.map(entry => ({ ...entry, bytes: null, bindings: [] })),
+      checkpointBindings: [],
+      resources: resources.map(resource => ({
+        ...resource, bytes: null, bindings: [],
+        ...(Array.isArray(resource.bindings) && resource.bindings.length ? { bindingsCount: resource.bindings.length } : {}),
+      })),
+    });
   }
 
   async clear(documentKey) {

@@ -2,6 +2,18 @@ const OCR_ASSET_ROOT = '/tools/vendor/tesseract-5.0.4';
 
 export const OCR_LANGUAGES = Object.freeze(['eng', 'deu', 'fra', 'spa', 'ita', 'por']);
 
+// Recognition renders a page at 2x (144 dpi), the size Tesseract reads body
+// text at. A map or poster page at 2x is tens to hundreds of megapixels: more
+// than a canvas holds (a 12,608 x 16,806 pt page is 850 Mpx) and minutes of
+// recognition. Pages above OCR_MAX_PIXELS render at the scale that fits.
+export const OCR_RENDER_SCALE = 2;
+export const OCR_MAX_PIXELS = 16 * 1024 * 1024;
+export function ocrRenderScale(widthPt, heightPt) {
+  const area = Math.abs(Number(widthPt) * Number(heightPt));
+  if (!(area > 0)) return OCR_RENDER_SCALE;
+  return Math.min(OCR_RENDER_SCALE, Math.sqrt(OCR_MAX_PIXELS / area));
+}
+
 let tesseractModulePromise = null;
 
 function asError(error, fallback) {

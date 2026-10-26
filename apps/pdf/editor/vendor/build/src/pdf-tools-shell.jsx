@@ -31,6 +31,7 @@ import { registerFilePasteTarget } from '../../../assets/file-paste.js';
 import { PdfEngineSessionOrchestrator } from './pdf-editor/engine/session-orchestrator.js';
 import { AtomicGenerationController } from './pdf-editor/interaction/atomic-generation-controller.js';
 import { PdfEngineWorkerTransport } from './pdf-editor/engine/worker-transport.js';
+import { assertPdfProjectFileReadable, pdfProjectJsonText } from './pdf-editor/persistence/project-json.js';
 import {
   annotationPreviewVersion,
   committedAnnotationAppearanceGeneration,
@@ -104,7 +105,7 @@ import { replaceRichTextDocumentWholeFont } from './pdf-editor/model/rich-text-w
 import { applyCharacterFormatting, createRichTextDocument, replaceRichTextPlainProjection } from './pdf-editor/model/rich-text-document.js';
 import { exactTextFrameMarkedContentOwnership, hasExactTextFrameOwnerMark } from './pdf-editor/model/text-frame-marked-content-ownership.js';
 import { VirtualLayerList } from './pdf-editor/interaction/virtual-layer-list.jsx';
-import { withOcrWorker } from './pdf-editor/ocr/runtime.js';
+import { ocrRenderScale, withOcrWorker } from './pdf-editor/ocr/runtime.js';
 import { ocrTextLayerWords } from './pdf-editor/ocr/text-layer.js';
 import { createAdvanceMeasurer, subsetTrueTypeFont } from './pdf-editor/ocr/truetype-subset.js';
 import { arrangeSelection } from './pdf-editor/interaction/arrange-selection.js';
@@ -126,6 +127,7 @@ import { fontProgramIdentity } from './pdf-editor/text/font-program-identity.js'
 import { base14RichResources } from './pdf-editor/text/base14-rich-frame.js';
 import { standardFontFallback } from './pdf-editor/text/standard-font-fallback.js';
 import { lineOverflowIntoNeighbours, MIN_FIT_SCALE } from './pdf-editor/text/line-overflow.js';
+import { positionedEditorGlyphs, runNeedsPositionedEditor, wordRangeAt } from './pdf-editor/interaction/positioned-text-editor.js';
 import { canPrintPdfNatively, printPdfAsImages, printPdfBytesNatively } from './pdf-editor/rendering/print-document.js';
 import {
   FORM_CHECKED, FORM_UNCHECKED, formFieldLabel, formValueFor, formValuesWithChange, formWidgetFontSize,
@@ -143,6 +145,7 @@ import { PAGE_STAMP_KINDS, pageStampTextEncodable, stampPdfPages } from './pdf-e
 import { pdfBytesMayHaveRedactedWidgets, removeRedactedFormFieldsFromPdf } from './pdf-editor/model/redacted-form-fields.js';
 import { compactSparsePdfObjectNumbers } from './pdf-editor/model/object-numbering.js';
 import { findGlyphTextMatches, glyphsFromTextGlyphResult, redactionRemovedGlyphs, replaceQueryInText, snapRedactionRect, textContainsQuery } from './pdf-editor/model/redaction-geometry.js';
+import { addPiecesToMarkup, applyTextMarkupPlan, isTextLineMarkup, isTextMarkupAnnotation, markupTouchesLines, markupWithAbsoluteQuads, planTextMarkupFollowRuns, removeLinesFromMarkup, textMarkupBoundToBox, textMarkupPlanIds, textMarkupSelectionState, unmarkedLinePieces } from './pdf-editor/model/text-markup-binding.js';
 import { buildPageTextDiffReport } from './pdf-editor/model/compare-text-report.js';
 import {
   bookmarkWithTitle,
@@ -455,12 +458,37 @@ const LINEAR_ANNOTATION_SUBTYPES = ['line', 'ink', 'highlight', 'underline', 'st
 const PDFIUM_ANNOTATION_COLOR_SUBTYPES = new Set(['text', ...LINEAR_ANNOTATION_SUBTYPES]);
 const TEXT_MARKUP_DEFAULT_COLOR = { highlight: '#fff176', underline: '#2563eb', strikeout: '#dc2626' };
 const isTextMarkup = annotation => TEXT_MARKUP_TYPES.has(annotation?.type);
+const TEXT_MARKUP_ANNOTATION_TYPES = ['highlight', 'underline', 'strikeout'];
+const TEXT_MARKUP_LABEL = { highlight: 'Highlight', underline: 'Underline', strikeout: 'Strikethrough' };
 
 function textMarkupQuads(annotation = {}) {
   const quads = Array.isArray(annotation.quads)
-    ? annotation.quads.filter(quad => quad && quad.w > 0 && quad.h > 0)
+    ? annotation.quads.filter(quad => quad && (Array.isArray(quad.points) && quad.points.length === 4
+      ? quad.w > 0 || quad.h > 0
+      : quad.w > 0 && quad.h > 0))
     : [];
   return quads.length ? quads : [{ x: 0, y: 0, w: Number(annotation.w || 0), h: Number(annotation.h || 0) }];
+}
+
+// The four corners of a marked line (top-left, top-right, bottom-left,
+// bottom-right in text direction), relative to the annotation box. A line
+// rotated with its text keeps them in `points`.
+function textMarkupQuadCorners(quad) {
+  if (Array.isArray(quad.points) && quad.points.length === 4) return quad.points.map(point => [Number(point[0]), Number(point[1])]);
+  const x = Number(quad.x || 0);
+  const y = Number(quad.y || 0);
+  const w = Number(quad.w || 0);
+  const h = Number(quad.h || 0);
+  return [[x, y], [x + w, y], [x, y + h], [x + w, y + h]];
+}
+
+// The underline / strike line of a marked line, and its thickness.
+function textMarkupQuadLine(quad, type) {
+  const [topLeft, topRight, bottomLeft, bottomRight] = textMarkupQuadCorners(quad);
+  const offset = textMarkupLineOffset(type);
+  const along = (from, to) => [from[0] + (to[0] - from[0]) * offset, from[1] + (to[1] - from[1]) * offset];
+  const lineHeight = Math.hypot(bottomLeft[0] - topLeft[0], bottomLeft[1] - topLeft[1]);
+  return { start: along(topLeft, bottomLeft), end: along(topRight, bottomRight), width: textMarkupLineWidth({ h: lineHeight }) };
 }
 
 // Where the line sits in the marked line box (0 = top, 1 = bottom).
@@ -816,7 +844,7 @@ function isPdfPasswordError(error) {
 
 function friendlyPdfOpenError(error) {
   const message = String(error?.message || '');
-  if (/invalid pdf|invalid.*structure|missing pdf|bad xref|format error/i.test(message)) {
+  if (isDamagedPdfStructureError(error)) {
     return 'This PDF appears damaged or incomplete. Try opening a repaired copy or exporting it again from the source app.';
   }
   return message || 'Document could not be opened.';
@@ -1136,15 +1164,30 @@ function previewLetterSpacing(textLike = {}, fontFamily = '') {
   }
   const spacing = (target - measured) / (text.length - 1);
   if (!Number.isFinite(spacing) || Math.abs(spacing) < 0.01) return undefined;
-  // A run with a wide gap ("Reg.-Bez.:      Tübingen", tab-like positioning)
-  // keeps its letters and widens its spaces, as the PDF draws it; spreading
-  // the gap over every letter made the line unrecognisable while editing.
-  const spaces = (text.match(/ /gu) || []).length;
-  if (spaces && spacing > size * 0.08) {
-    return { wordSpacing: Math.min(size * 40, (target - measured) / spaces) };
-  }
   // Never squeeze glyphs into each other or spread them absurdly.
   return Math.max(-size * 0.12, Math.min(size * 0.6, spacing));
+}
+
+// Advance of one character in the inline editor's preview face, in page
+// points at `fontSize`. NaN while that face is still loading (then the
+// measurement would describe a fallback face).
+function previewGlyphMeasurer(textLike = {}, fontSize = 12) {
+  const family = fontFamilyForText(textLike);
+  const weight = (String(textLike.fontWeight).toLowerCase() === 'bold' || Number(textLike.fontWeight) >= 600) ? '700' : '400';
+  const style = ['italic', 'oblique'].includes(String(textLike.fontStyle).toLowerCase()) ? 'italic' : 'normal';
+  const unavailable = /^"?Fernwork(?:Library|Preview)_/u.test(family) && !previewFaceLoaded(family, weight, style);
+  return character => {
+    if (unavailable || typeof document === 'undefined') return NaN;
+    try {
+      previewMeasureCanvas = previewMeasureCanvas || document.createElement('canvas');
+      const context = previewMeasureCanvas.getContext('2d');
+      if (!context) return NaN;
+      context.font = `${style} ${weight} 100px ${family}`;
+      return context.measureText(character).width * Number(fontSize) / 100;
+    } catch {
+      return NaN;
+    }
+  };
 }
 
 const UPLOADED_FONT_OPTION_PREFIX = 'uploaded-font:';
@@ -3022,6 +3065,7 @@ function projectRecordHasKernelHistory(record) {
 }
 
 async function loadFernworkPdfProjectFile(file) {
+  assertPdfProjectFileReadable(file);
   const text = await file.text();
   const project = JSON.parse(text);
   if (project?.format !== FERNWORK_PDF_PROJECT_FORMAT) {
@@ -3464,6 +3508,11 @@ function getPdfiumWorkerState() {
     const id = event.data?.id;
     const pending = id ? state.pending.get(id) : null;
     if (!pending) return;
+    if (event.data.progress && event.data.ok === undefined) {
+      pending.restartTimer?.();
+      try { pending.onProgress?.(event.data.progress); } catch {}
+      return;
+    }
     state.pending.delete(id);
     window.clearTimeout(pending.timer);
     if (event.data.ok) {
@@ -3490,7 +3539,10 @@ function getPdfiumWorkerState() {
   return state;
 }
 
-function pdfiumWorkerRequest(type, payload = {}, timeoutMs = 45_000) {
+// `timeoutMs` bounds silence: a request whose worker posts `{ id, progress }`
+// (optimizeImages, page by page) restarts its timer with each message and
+// reports it to `onProgress`, so a long document operation is not cut off.
+function pdfiumWorkerRequest(type, payload = {}, timeoutMs = 45_000, { onProgress = null } = {}) {
   if (typeof Worker === 'undefined') {
     return Promise.reject(new Error('PDFium worker is not available in this environment.'));
   }
@@ -3503,7 +3555,7 @@ function pdfiumWorkerRequest(type, payload = {}, timeoutMs = 45_000) {
       return;
     }
     const id = `pdfium-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const timer = window.setTimeout(() => {
+    const onTimeout = () => {
       const pending = state.pending.get(id);
       if (!pending) return;
       state.pending.delete(id);
@@ -3515,8 +3567,12 @@ function pdfiumWorkerRequest(type, payload = {}, timeoutMs = 45_000) {
       });
       pending.reject(error);
       resetPdfiumWorkerState(error);
-    }, timeoutMs);
-    state.pending.set(id, { resolve, reject, timer });
+    };
+    const timer = window.setTimeout(onTimeout, timeoutMs);
+    state.pending.set(id, { resolve, reject, timer, onProgress, restartTimer() {
+      window.clearTimeout(this.timer);
+      this.timer = window.setTimeout(onTimeout, timeoutMs);
+    } });
     pdfiumWorkerStatsPatch({
       requests: (window.__fernworkPdfiumWorkerStats?.requests || 0) + 1,
       inflight: state.pending.size,
@@ -6222,6 +6278,10 @@ async function commitLiveDeletion(runtime, doc, targets, nativeAnnotations = [],
     }));
 
   }
+  // Marks that lose only their lines on deleted text keep the rest.
+  if (options.annotationUpdates?.length) {
+    commands.push(...await textMarkupChangeCommands(runtime, doc, options.annotationUpdates, prefix));
+  }
   // Retained PDFium handles can restore an object only while their document
   // instance lives. The exact document plus binding-table snapshot also survives
   // page reloads, crash recovery, and portable-project export/import. Register
@@ -7237,6 +7297,209 @@ function applyMultiMoveUiOperations(doc, operations) {
   return { ...nextDoc, textEdits, imageEdits, objectEdits, annotations };
 }
 
+// Text markup follows its text. Highlight / Underline / StrikeOut stay PDF
+// annotations, but every marked line belongs to the text run it lies on
+// (pdf-editor/model/text-markup-binding.js derives that from geometry). A
+// text gesture plans the marks' new geometry once, from the state its native
+// transaction starts from; the optimistic UI, the history transition and the
+// native commands all take the marks from that one plan, so the text and its
+// marks commit, undo and redo as one step.
+function textMarkupRunBox(value) {
+  const box = {
+    x: Number(value?.x), y: Number(value?.y), w: Number(value?.w), h: Number(value?.h),
+  };
+  return Object.values(box).every(Number.isFinite) && box.w > 0 && box.h > 0 ? box : null;
+}
+
+function textMarkupRunText(value) {
+  return String(value?.currentText ?? value?.text ?? value?.str ?? value?.sourceText ?? '');
+}
+
+// How a text gesture moves the marks on the run. Retyping, and a font or
+// size change that changes the run's width, re-place the marks over their
+// characters.
+function textMarkupFollowMode(gestureKind, oldText, newText, fromBox, toBox, next) {
+  if (next?.deleted) return 'delete';
+  if (gestureKind === GestureKind.ROTATE) return 'rotate';
+  if (gestureKind === GestureKind.RESIZE) return next?.textBlock === true ? 'reflow' : 'scale';
+  if (oldText !== newText) return 'text';
+  if ([GestureKind.TEXT_COMMIT, GestureKind.STYLE, GestureKind.POLICY].includes(gestureKind) &&
+      Math.abs(fromBox.w - toBox.w) > 0.01) return 'text';
+  return 'move';
+}
+
+// The run a text gesture changes, as text-markup-binding expects it.
+function textMarkupRunForEdit(sourceId, from, nextEdit, gestureKind, doc = null) {
+  const pageId = from?.pageId || livePageIdFromSourceId(sourceId, 'text');
+  // A run edited for the first time has no edit record yet: it is still where
+  // its source rectangle says.
+  const page = (doc?.pages || []).find(item => item.id === pageId);
+  const sourceRect = [nextEdit?.sourceX, nextEdit?.sourceY, nextEdit?.sourceW, nextEdit?.sourceH].map(Number);
+  const fromBox = textMarkupRunBox(from) || (page && sourceRect.every(Number.isFinite)
+    ? textMarkupRunBox(displayRectForSourceRect(page, { x: sourceRect[0], y: sourceRect[1], w: sourceRect[2], h: sourceRect[3] }))
+    : null);
+  if (!pageId || !fromBox) return null;
+  const next = { ...from, ...nextEdit };
+  const toBox = textMarkupRunBox(next) || fromBox;
+  const oldText = textMarkupRunText(from) || String(nextEdit?.originalText ?? nextEdit?.sourceText ?? '');
+  const newText = textMarkupRunText(next);
+  return {
+    pageId,
+    from: fromBox,
+    to: { ...toBox, pageId: next.pageId || pageId },
+    mode: textMarkupFollowMode(gestureKind, oldText, newText, fromBox, toBox, next),
+    degrees: Number(nextEdit?.pendingRotationDegrees || 0),
+    oldText,
+    newText,
+    // The reading layer lays out selectable text with the same measure, so
+    // marks made from a reading selection map back to their characters.
+    measure: text => readingTextNaturalWidth(text, 100) || Array.from(String(text)).length,
+  };
+}
+
+// Ids of the marks with a piece on the run (bound to it now).
+function textMarkupIdsOnRun(doc, run) {
+  if (!run) return [];
+  return textMarkupBoundToBox(doc?.annotations || [], run.pageId, run.from).map(entry => entry.annotation.id);
+}
+
+// Plan for `runs` against `doc`. `token` names marks carried to another page
+// so that every projection of one gesture creates the same annotation ids.
+function textMarkupFollowPlan(doc, runs, { token = '', onlyIds = null } = {}) {
+  const usable = (runs || []).filter(Boolean);
+  if (!usable.length || !(doc?.annotations || []).some(isTextMarkupAnnotation)) return null;
+  // A mark on a locked layer stays where it is.
+  const annotations = doc.annotations.filter(annotation => !isTextMarkupAnnotation(annotation) ||
+    !layerPresentationFor(doc.layerPresentation, annotationLayerKey(annotation.id)).locked);
+  const plan = planTextMarkupFollowRuns(annotations, usable, {
+    onlyIds,
+    createId: (annotation, pageId) => `${annotation.id}~${pageId}~${token || 'moved'}`,
+  });
+  return plan.updates.size || plan.inserts.length ? plan : null;
+}
+
+// Multi-selection moves, resizes and rotations: the marks on each text run
+// join the operation list as annotation moves (marks the user selected as
+// well move as selected).
+function withTextMarkupMoveOperations(doc, operations) {
+  const selectedAnnotations = new Set(operations
+    .filter(operation => operation.kind === 'annotation').map(operation => operation.annotationId));
+  const runs = operations.filter(operation => operation.kind === 'text').map(operation => {
+    const gestureKind = operation.transformKind === 'resize'
+      ? GestureKind.RESIZE
+      : operation.transformKind === 'rotate' ? GestureKind.ROTATE : GestureKind.MOVE;
+    const run = textMarkupRunForEdit(operation.sourceId, {
+      ...(operation.previous || {}),
+      pageId: operation.previous?.pageId || operation.pageId,
+    }, operation.next, gestureKind, doc);
+    return run && gestureKind === GestureKind.ROTATE ? { ...run, degrees: Number(operation.degrees || 0) } : run;
+  });
+  const plan = textMarkupFollowPlan(doc, runs, { token: uid() });
+  if (!plan) return operations;
+  const followers = [];
+  for (const [id, next] of plan.updates) {
+    if (!next || selectedAnnotations.has(id)) continue;
+    const previous = (doc.annotations || []).find(annotation => annotation.id === id);
+    if (previous) followers.push({ kind: 'annotation', annotationId: id, pageId: previous.pageId, previous, next });
+  }
+  return followers.length ? [...operations, ...followers] : operations;
+}
+
+// The doc with a markup plan applied, Layers order included.
+function withTextMarkupPlan(doc, plan) {
+  if (!plan) return doc;
+  let nextDoc = { ...doc, annotations: applyTextMarkupPlan(doc.annotations || [], plan) };
+  for (const [id, value] of plan.updates) {
+    if (value) continue;
+    const removed = (doc.annotations || []).find(annotation => annotation.id === id);
+    if (removed) nextDoc = withoutLayerKey(nextDoc, removed.pageId, annotationLayerKey(id));
+  }
+  for (const inserted of plan.inserts || []) {
+    nextDoc = withLayerAppended(nextDoc, inserted.pageId, annotationLayerKey(inserted.id), { includeOriginalObjects: true });
+  }
+  return nextDoc;
+}
+
+// The mark changes one UI transition carries: before/after pairs of the text
+// markup annotations that differ (after null = removed, before null = added).
+function textMarkupTransitionChanges(uiTransition) {
+  const before = (uiTransition?.before?.annotations || []).filter(isTextMarkupAnnotation);
+  const after = (uiTransition?.after?.annotations || []).filter(isTextMarkupAnnotation);
+  const afterById = new Map(after.map(annotation => [annotation.id, annotation]));
+  const beforeIds = new Set(before.map(annotation => annotation.id));
+  const changes = [];
+  for (const previous of before) {
+    const next = afterById.get(previous.id) || null;
+    if (next && snapshotsEqual(previous, next)) continue;
+    changes.push({ previous, next });
+  }
+  for (const next of after) {
+    if (!beforeIds.has(next.id)) changes.push({ previous: null, next });
+  }
+  return changes;
+}
+
+// Native annotation commands for those changes. The caller makes the exact
+// pre-edit document snapshot their inverse.
+async function textMarkupChangeCommands(runtime, doc, changes, prefix) {
+  const commands = [];
+  for (const [index, { previous, next }] of changes.entries()) {
+    if (!next) {
+      if (!previous.liveStableId) continue;
+      commands.push(createPdfCommand({
+        commandId: `${prefix}:markup-${index + 1}`,
+        type: CommandType.ANNOTATION_SET,
+        targetId: previous.liveStableId,
+        payload: nativeAnnotationDeletionPayloads(doc, previous).forward,
+      }));
+      continue;
+    }
+    const prepared = await commitLiveAnnotation(runtime, doc, previous, next, previous ? 'update' : 'insert', { prepareOnly: true });
+    commands.push(...(prepared?.commands || []));
+  }
+  return commands;
+}
+
+// One native transaction for mark changes alone (reading-selection toggles).
+async function commitLiveTextMarkupTransition(runtime, doc, uiTransition, label) {
+  if (!runtime?.kernel || runtime.documentId !== doc?.id) return false;
+  const prefix = `live-markup-${uid()}`;
+  const commands = await textMarkupChangeCommands(runtime, doc, textMarkupTransitionChanges(uiTransition), prefix);
+  if (!commands.length) return false;
+  const beforeResource = await checkpointToPdfSnapshotResource(runtime.engine, { retain: true });
+  await runtime.kernel.registerResource(beforeResource);
+  const result = await runtime.kernel.execute({
+    commands,
+    inverseCommands: [createPdfCommand({
+      commandId: `${prefix}:restore-document`,
+      type: CommandType.DOCUMENT_RESTORE_SNAPSHOT,
+      targetId: doc.id,
+      payload: { resourceHash: beforeResource.hash },
+    })],
+    label,
+    uiTransition,
+  });
+  window.__fernworkLastLivePdfTransaction = {
+    transactionId: result.transactionId,
+    committedRevision: result.committedRevision,
+    effectDigest: result.effectDigest,
+    dirtyPages: result.dirtyPages,
+    normalEditPath: 'semantic-kernel-session',
+  };
+  return result;
+}
+
+// After a commit that carried mark changes: the projected marks are now the
+// confirmed native state, so a later rejected edit rolls back to them.
+function rememberCommittedTextMarkup(runtime, uiTransition) {
+  for (const { previous, next } of textMarkupTransitionChanges(uiTransition)) {
+    const id = (next || previous).id;
+    rememberConfirmedUiState(runtime, `annotation:${id}`, captureAnnotationUiState(uiTransition.after, id));
+    // A mark carried to another page is a new native annotation now.
+    if (next && !previous) runtime.liveAnnotationIds?.add(id);
+  }
+}
+
 function deletionTargetKind(target) {
   return target.type === 'text'
     ? 'text'
@@ -7785,6 +8048,15 @@ function semanticPdfAnnotationGeometry(page, annotation = {}) {
   if (isTextMarkup(annotation)) {
     const quadPoints = [];
     for (const quad of textMarkupQuads(annotation)) {
+      if (Array.isArray(quad.points) && quad.points.length === 4) {
+        for (const point of quad.points) {
+          quadPoints.push(...toPdfPoint({
+            x: Number(annotation.x || 0) + Number(point[0]),
+            y: Number(annotation.y || 0) + Number(point[1]),
+          }));
+        }
+        continue;
+      }
       const source = sourceRectForDisplayRect(page, {
         x: Number(annotation.x || 0) + Number(quad.x || 0),
         y: Number(annotation.y || 0) + Number(quad.y || 0),
@@ -11189,20 +11461,69 @@ async function restrictPdfBytes(bytes, flags = {}, ownerPassword = '', userPassw
   return asUint8Array(restricted);
 }
 
+// PDF.js throws while drawing some malformed content that PDFium still draws,
+// e.g. an uncoloured tiling pattern selected without its colour
+// (`/Pattern cs /P1 scn`, pdfjs/issue16038.pdf after an older edit). Such a
+// page is rasterised by PDFium instead of failing the whole raster copy.
+async function drawPdfiumRasterFallbackPage(fallback, pageIndex, scale, width, height) {
+  if (!fallback.engine) {
+    fallback.engine = new PdfEngineSessionOrchestrator({ transport: new PdfEngineWorkerTransport() });
+    const opened = await fallback.engine.open(asUint8Array(fallback.bytes).slice(), {
+      wasmUrl: '/tools/vendor/pdf-tools/pdfium.wasm',
+      warmFidelityBaseline: false,
+    });
+    fallback.pageIds = opened.pageIds || [];
+  }
+  const result = await fallback.engine.render({
+    pageId: fallback.pageIds[pageIndex], pageIndex, scale, byteOrder: 'RGBA', jobId: `raster-copy-${uid()}`,
+  });
+  const rasterWidth = Math.max(1, Number(result?.width) || 0);
+  const rasterHeight = Math.max(1, Number(result?.height) || 0);
+  const layer = document.createElement('canvas');
+  layer.width = rasterWidth;
+  layer.height = rasterHeight;
+  const pixels = new Uint8ClampedArray(asUint8Array(result.pixels));
+  // The page bitmap is opaque; its fourth byte is not a meaningful alpha.
+  for (let index = 3; index < pixels.length; index += 4) pixels[index] = 255;
+  layer.getContext('2d').putImageData(new ImageData(pixels, rasterWidth, rasterHeight), 0, 0);
+  // A fresh canvas: the failed PDF.js render leaves its transform and clip
+  // on the old one.
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, width, height);
+  context.drawImage(layer, 0, 0, width, height);
+  return canvas;
+}
+
+// A raster copy page stays within what browsers allow a canvas (about 268 Mpx in Chrome, less elsewhere); a map
+// sheet at 150 dpi exceeded it and toBlob returned nothing.
+const RASTER_COPY_MAX_PIXELS = 64 * 1024 * 1024;
+
 async function rasterizePdfBytes(bytes, { dpi = 150, quality = 0.74 }, onProgress) {
   const src = await openPdfJsDocument(bytes);
   const outPdf = await PDFLib.PDFDocument.create();
-  const scale = dpi / 72;
+  const fallback = { bytes, engine: null, pageIds: [] };
   try {
     for (let i = 1; i <= src.numPages; i += 1) {
       const page = await src.getPage(i);
       const baseViewport = page.getViewport({ scale: 1 });
+      const area = Math.max(1, baseViewport.width * baseViewport.height);
+      const scale = Math.min(dpi / 72, Math.sqrt(RASTER_COPY_MAX_PIXELS / area));
       const viewport = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
+      let canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(viewport.width));
       canvas.height = Math.max(1, Math.round(viewport.height));
-      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      try {
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      } catch (error) {
+        console.warn('[pdf] PDF.js could not draw page', i, 'for the raster copy; using PDFium', error);
+        canvas = await drawPdfiumRasterFallbackPage(fallback, i - 1, scale, canvas.width, canvas.height);
+      }
       const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+      if (!blob) throw new Error(`Page ${i} is too large for a raster copy in this browser.`);
       const img = await outPdf.embedJpg(new Uint8Array(await blob.arrayBuffer()));
       const nextPage = outPdf.addPage([baseViewport.width, baseViewport.height]);
       nextPage.drawImage(img, { x: 0, y: 0, width: baseViewport.width, height: baseViewport.height });
@@ -11210,6 +11531,7 @@ async function rasterizePdfBytes(bytes, { dpi = 150, quality = 0.74 }, onProgres
     }
   } finally {
     await src.destroy?.();
+    await fallback.engine?.close?.().catch?.(() => {});
   }
   return new Blob([await outPdf.save()], { type: 'application/pdf' });
 }
@@ -11225,9 +11547,14 @@ async function compressEditedPdf(doc, profileId, onProgress, materializedBytes =
     : currentBytes;
   if (profile.imageOnly) {
     onProgress?.(0.1);
+    // The worker reports every page; 90 s without one is a stuck worker.
     const optimized = await pdfiumWorkerRequest('optimizeImages', {
       bytes: bytes.slice(), dpi: profile.dpi, quality: profile.quality,
-    }, 180_000);
+    }, 90_000, {
+      onProgress: ({ page, pageCount } = {}) => {
+        if (pageCount > 0) onProgress?.(0.1 + 0.7 * Math.min(1, page / pageCount));
+      },
+    });
     if (!optimized?.bytes?.byteLength || !optimized.report) {
       throw new Error('The image optimizer did not produce a valid PDF.');
     }
@@ -11897,6 +12224,10 @@ async function loadPdfPageDescriptors(pdf, sourceId, firstPage, onProgress, stru
       const index = nextIndex;
       nextIndex += 1;
       const pdfPage = index === 0 ? firstPage : await pdf.getPage(index + 1);
+      // PDF.js gives a page without a reference when it found no page
+      // dictionary and made a blank page up (a catalog /Pages that is not a
+      // page tree). PDFium, qpdf and pdf-lib cannot address such a page.
+      if (structure && !pdfPage.ref) structure.pageWithoutObject = true;
       if (structure && pdfPage.ref) {
         const key = `${pdfPage.ref.num} ${pdfPage.ref.gen}`;
         if (pageObjects.has(key)) structure.sharedPageObject = true;
@@ -11988,6 +12319,7 @@ async function loadPdfFromBytes(name, bytes, size = bytes.byteLength, onProgress
     scene,
     editModelVersion: FERNWORK_PDF_PROJECT_VERSION,
     ...(structure.sharedPageObject ? { sharedPageObjects: true } : {}),
+    ...(structure.pageWithoutObject ? { pagesWithoutObject: true } : {}),
   };
   reportPdfLoadProgress(onProgress, 'ready', 1, `Ready - ${pdf.numPages} page${pdf.numPages === 1 ? '' : 's'}`);
   return doc;
@@ -12169,6 +12501,25 @@ async function loadPdfFile(file, onProgress = null, password = '') {
     }
     throw error;
   }
+  if (loaded.pagesWithoutObject) {
+    const { pagesWithoutObject, ...doc } = loaded;
+    const rebuilt = await pdfBytesWithRebuiltPageTree(readableBytes, doc.pages).catch(() => null);
+    const reopened = rebuilt ? await loadBytes(rebuilt.bytes).catch(() => null) : null;
+    if (reopened?.pages?.length && !reopened.pagesWithoutObject) {
+      await doc.pdf?.destroy?.().catch?.(() => {});
+      return withProtection({
+        ...reopened,
+        damageRecovery: {
+          method: rebuilt.method,
+          recoveredPages: rebuilt.method === 'blank-pages' ? 0 : reopened.pages.length,
+          expectedPages: rebuilt.expectedPages || 0,
+          ...(rebuilt.method === 'blank-pages' ? { blankPages: reopened.pages.length } : {}),
+        },
+      });
+    }
+    await reopened?.pdf?.destroy?.().catch?.(() => {});
+    return withProtection(doc);
+  }
   if (loaded.sharedPageObjects) {
     // qpdf rebuilds the page tree and gives every repeated entry its own copy
     // of the page object.
@@ -12341,6 +12692,39 @@ async function salvagePdfPageObjects(bytes) {
   return {
     bytes: asUint8Array(await PDFLib.PDFWriter.forContext(context, 50).serializeToBuffer()),
     expectedPages: expectedPages > pages.length ? expectedPages : 0,
+  };
+}
+
+// The file opened in PDF.js, but some page had no page object behind it
+// (pdfjs/issue15590.pdf: the catalog's /Pages is a JavaScript action). Every
+// later step (PDFium, pdf-lib stamps, qpdf) needs a real page tree. Page
+// objects that survived elsewhere in the file are salvaged; if there are none,
+// the blank pages PDF.js showed get real page objects of the same size, and
+// the rest of the catalog stays as it was.
+async function pdfBytesWithRebuiltPageTree(bytes, pages) {
+  const salvaged = await salvagePdfPageObjects(bytes).catch(() => null);
+  if (salvaged) return { bytes: salvaged.bytes, method: 'page-objects', expectedPages: salvaged.expectedPages };
+  const pdf = await PDFLib.PDFDocument.load(asUint8Array(bytes), { throwOnInvalidObject: false, updateMetadata: false });
+  const { context } = pdf;
+  if (context.trailerInfo.Encrypt) return null;
+  const name = key => PDFLib.PDFName.of(key);
+  const pagesRef = context.nextRef();
+  const kids = (pages?.length ? pages : [{}]).map(page => {
+    const box = Array.isArray(page.viewBox) && page.viewBox.length === 4 && page.viewBox.every(Number.isFinite)
+      ? page.viewBox
+      : [0, 0, 612, 792];
+    return context.register(context.obj({ Type: 'Page', Parent: pagesRef, MediaBox: box, Resources: {} }));
+  });
+  context.assign(pagesRef, context.obj({ Type: 'Pages', Kids: kids, Count: kids.length }));
+  let catalog = context.lookupMaybe(context.trailerInfo.Root, PDFLib.PDFDict);
+  if (!catalog) {
+    catalog = context.obj({ Type: 'Catalog' });
+    context.trailerInfo.Root = context.register(catalog);
+  }
+  catalog.set(name('Pages'), pagesRef);
+  return {
+    bytes: asUint8Array(await PDFLib.PDFWriter.forContext(context, 50).serializeToBuffer()),
+    method: 'blank-pages',
   };
 }
 
@@ -13052,15 +13436,16 @@ async function importPdfCommentAnnotationsWithPdfium(bytes, pages) {
             const corners = [0, 2, 4, 6].map(step => displayPoint(annotation.quadPoints[offset + step], annotation.quadPoints[offset + step + 1]));
             const left = Math.min(...corners.map(corner => corner.x));
             const top = Math.min(...corners.map(corner => corner.y));
-            quads.push({
+            const quad = {
               x: left - x, y: top - y,
               w: Math.max(...corners.map(corner => corner.x)) - left,
               h: Math.max(...corners.map(corner => corner.y)) - top,
-            });
+            };
+            if (quad.w > 0 && quad.h > 0) quads.push(quad);
           }
-          return quads.length > 1 || (quads[0] && (Math.abs(quads[0].w - displayRect.w) > 1 || Math.abs(quads[0].h - displayRect.h) > 1))
-            ? { quads }
-            : {};
+          // Kept even when one quad fills the whole /Rect: marked lines are
+          // what binds the mark to its text (text-markup-binding.js).
+          return quads.length ? { quads } : {};
         })()
       : {};
     const importedInkPoints = Array.isArray(annotation.inkPaths?.[0])
@@ -18518,7 +18903,9 @@ function App({ shell = null }) {
       // No success toast here: the editing session is still opening, and its
       // progress notice is the single status until the PDF is ready.
       if (loaded.some(doc => doc.damageRecovery && !pdfDamageRecoveryWasRepair(doc.damageRecovery))) {
-        showToast('The PDF was damaged. Check the recovered pages before relying on them.', 'warning');
+        showToast(loaded.every(doc => !doc.damageRecovery || doc.damageRecovery.method === 'blank-pages')
+          ? 'This PDF has no readable page, so it opens blank.'
+          : 'The PDF was damaged. Check the recovered pages before relying on them.', 'warning');
       }
     } catch (error) {
       reportOpenError(friendlyPdfOpenError(error));
@@ -20016,6 +20403,51 @@ function App({ shell = null }) {
     return next.id;
   }, [activeDoc, updateDoc]);
 
+  // Marks changed from a reading selection (removed from a range, or a range
+  // added to an existing mark): one native transaction and one Undo step.
+  const changeTextMarkup = useCallback((pageId, plan, label = 'Markup') => {
+    if (!activeDoc || !plan || (!plan.updates?.size && !plan.inserts?.length)) return false;
+    const ids = textMarkupPlanIds(plan);
+    if (ids.some(id => layerPresentationFor(activeDoc.layerPresentation, annotationLayerKey(id)).locked)) {
+      showToast('Unlock this layer in Layers before changing its markup.', 'warning');
+      return false;
+    }
+    const runtime = livePdfRuntimeRef.current;
+    const kernelBacked = Boolean(runtime?.kernel && runtime.documentId === activeDoc.id);
+    const applyPlan = doc => withTextMarkupPlan(doc, plan);
+    const rollbackContext = kernelBacked
+      ? beginOptimisticUiChange(runtime, activeDoc, ids.map(id => ({ kind: 'annotation', id })))
+      : null;
+    const uiTransition = kernelBacked
+      ? optimisticKernelUiTransition(runtime, activeDoc, rollbackContext, applyPlan)
+      : null;
+    const uiBaseline = kernelBacked ? optimisticKernelUiBaseline(runtime, activeDoc, rollbackContext) : null;
+    const updated = updateDoc(activeDoc.id, applyPlan, {
+      kernelBacked,
+      optimisticId: rollbackContext?.optimisticId,
+      resetMerge: true,
+    });
+    if (!updated || !kernelBacked) return Boolean(updated);
+    retainOptimisticTargets(runtime, rollbackContext);
+    setLiveCommitCount(count => count + 1);
+    const pending = enqueueLiveNativeCommit(runtime, async () => {
+      const result = await commitLiveTextMarkupTransition(runtime, activeDoc, uiTransition, label);
+      rememberCommittedTextMarkup(runtime, uiTransition);
+      return result;
+    }, uiBaseline).catch(error => {
+      rejectOptimisticUiCommit(runtime, setDocs, activeDoc.id, rollbackContext, error);
+      showToast(userFacingError(error, 'The markup could not be changed.'), 'error');
+    }).finally(() => {
+      runtime.pendingCommits.delete(pending);
+      runtime.onNativeQueueChanged?.();
+      releaseOptimisticTargets(runtime, rollbackContext);
+      setLiveCommitCount(count => Math.max(0, count - 1));
+    });
+    runtime.pendingCommits.add(pending);
+    runtime.onNativeQueueChanged?.();
+    return true;
+  }, [activeDoc, updateDoc]);
+
   const updateAnnotation = useCallback((annotationId, patch, options = {}) => {
     if (!activeDoc) return;
     const runtime = livePdfRuntimeRef.current;
@@ -20193,8 +20625,39 @@ function App({ shell = null }) {
       showToast('Unlock the selected layer before deleting it.', 'warning');
       return;
     }
-    const editableTargets = targets.filter(item => deletionTargetKind(item));
-    if (!editableTargets.length) return;
+    const selectedTargets = targets.filter(item => deletionTargetKind(item));
+    if (!selectedTargets.length) return;
+    // Deleting text deletes its marks; a mark that also covers other text
+    // keeps the lines there. Both belong to the same Undo step.
+    const markupDeletionPlan = textMarkupFollowPlan(activeDoc, selectedTargets
+      .filter(item => deletionTargetKind(item) === 'text')
+      .map(item => textMarkupRunForEdit(item.sourceId, {
+        ...(item.item || {}),
+        ...(item.edit || {}),
+        ...(item.rect || {}),
+        ...(activeDoc.textEdits?.[item.sourceId] || {}),
+        pageId: activeDoc.textEdits?.[item.sourceId]?.pageId || item.pageId,
+      }, { deleted: true }, null, activeDoc)), { token: uid() });
+    const selectedAnnotationIds = new Set(selectedTargets
+      .filter(item => deletionTargetKind(item) === 'annotation').map(item => item.id));
+    const editableTargets = [
+      ...selectedTargets,
+      ...[...(markupDeletionPlan?.updates || [])].flatMap(([id, value]) => {
+        if (value || selectedAnnotationIds.has(id)) return [];
+        const annotation = activeDoc.annotations.find(item => item.id === id);
+        return annotation ? [{ type: 'annotation', id, pageId: annotation.pageId }] : [];
+      }),
+    ];
+    const markupDeletionUpdates = [...(markupDeletionPlan?.updates || [])]
+      .filter(([id, value]) => value && !selectedAnnotationIds.has(id))
+      .map(([id, next]) => ({ previous: activeDoc.annotations.find(item => item.id === id), next }))
+      .filter(change => change.previous);
+    const applyDeletion = doc => withTextMarkupPlan(
+      applySelectionDeletion(doc, editableTargets, target.pageId),
+      markupDeletionUpdates.length
+        ? { updates: new Map(markupDeletionUpdates.map(change => [change.next.id, change.next])), inserts: [] }
+        : null,
+    );
     const runtime = livePdfRuntimeRef.current;
     const sourceTargets = editableTargets.filter(item => deletionTargetKind(item) !== 'annotation');
     const nativeAnnotationTargets = editableTargets.filter(item => {
@@ -20206,17 +20669,20 @@ function App({ shell = null }) {
       (sourceTargets.length || nativeAnnotationTargets.length),
     );
     const rollbackContext = kernelBacked
-      ? beginOptimisticUiChange(runtime, activeDoc, editableTargets.map(item => {
-          const kind = deletionTargetKind(item);
-          return { kind, id: kind === 'annotation' ? item.id : item.sourceId };
-        }))
+      ? beginOptimisticUiChange(runtime, activeDoc, [
+          ...editableTargets.map(item => {
+            const kind = deletionTargetKind(item);
+            return { kind, id: kind === 'annotation' ? item.id : item.sourceId };
+          }),
+          ...markupDeletionUpdates.map(change => ({ kind: 'annotation', id: change.next.id })),
+        ])
       : null;
     const uiTransition = kernelBacked
       ? optimisticKernelUiTransition(
           runtime,
           activeDoc,
           rollbackContext,
-          doc => applySelectionDeletion(doc, editableTargets, target.pageId),
+          applyDeletion,
         )
       : null;
     const uiBaseline = kernelBacked
@@ -20224,7 +20690,7 @@ function App({ shell = null }) {
       : null;
     const updated = updateDoc(
       activeDoc.id,
-      doc => applySelectionDeletion(doc, editableTargets, target.pageId),
+      applyDeletion,
       {
         kernelBacked,
         optimisticId: rollbackContext?.optimisticId,
@@ -20252,13 +20718,13 @@ function App({ shell = null }) {
       // Source objects and native annotations share one preflight and one
       // revision, so a rejected member cannot leave a half-deleted group and
       // one Undo/Redo always covers the original UI gesture.
-      await commitLiveDeletion(runtime, activeDoc, sourceTargets, annotations, { uiTransition });
+      await commitLiveDeletion(runtime, activeDoc, sourceTargets, annotations, {
+        uiTransition,
+        annotationUpdates: markupDeletionUpdates,
+      });
       for (const rollbackTarget of rollbackContext.targets) {
         const deletedState = rollbackTarget.kind === 'annotation'
-          ? captureAnnotationUiState(
-              applySelectionDeletion(activeDoc, editableTargets, target.pageId),
-              rollbackTarget.id,
-            )
+          ? captureAnnotationUiState(applyDeletion(activeDoc), rollbackTarget.id)
           : captureSourceUiState(
               applySelectionDeletion(activeDoc, editableTargets, target.pageId),
               rollbackTarget.kind,
@@ -21515,6 +21981,24 @@ function App({ shell = null }) {
         );
       }
     }
+    // Marks on this run that the gesture carried along (move, resize,
+    // rotation, retyping, deletion) commit in the same transaction. Their
+    // geometry comes from the UI transition that already shows them; the
+    // exact pre-edit document is the inverse of the whole step.
+    const markupChanges = kind === 'text' ? textMarkupTransitionChanges(options.uiTransition) : [];
+    if (markupChanges.length && commands.length) {
+      commands.push(...await textMarkupChangeCommands(runtime, doc, markupChanges, prefix));
+      if (!wholeDocumentInverse) {
+        const snapshotResource = await checkpointToPdfSnapshotResource(runtime.engine, { retain: true });
+        await runtime.kernel.registerResource(snapshotResource);
+        wholeDocumentInverse = createPdfCommand({
+          commandId: `${prefix}:inverse-markup-snapshot`,
+          type: CommandType.DOCUMENT_RESTORE_SNAPSHOT,
+          targetId: stableId,
+          payload: { resourceHash: snapshotResource.hash },
+        });
+      }
+    }
     if (wholeDocumentInverse) {
       // The snapshot predates every command produced by this gesture, so it is
       // the complete inverse for any accompanying style or geometry change as
@@ -21774,6 +22258,7 @@ function App({ shell = null }) {
       };
       const committedState = clonePlain(confirmedStateProjection, {});
       rememberConfirmedUiState(runtime, gestureKey, committedState);
+      if (markupChanges.length) rememberCommittedTextMarkup(runtime, options.uiTransition);
       // The first resize of a PDF.js text run promotes it to an owned native
       // frame. A successor gesture can already own the latest optimistic
       // generation when that promotion is acknowledged. Carry only the
@@ -21934,7 +22419,15 @@ function App({ shell = null }) {
     }
 
     if (!pending) {
-      const rollbackContext = beginOptimisticUiChange(runtime, doc, [{ kind, id: sourceId }]);
+      // The marks on a text run when the gesture starts follow every step of
+      // it; the plan is always taken from the pre-gesture baseline.
+      const markupIds = kind === 'text'
+        ? textMarkupIdsOnRun(doc, textMarkupRunForEdit(sourceId, stepPrevious, latestEdit, options.gestureKind, doc))
+        : [];
+      const rollbackContext = beginOptimisticUiChange(runtime, doc, [
+        { kind, id: sourceId },
+        ...markupIds.map(id => ({ kind: 'annotation', id })),
+      ]);
       retainOptimisticTargets(runtime, rollbackContext);
       const uiBaseline = optimisticKernelUiBaseline(runtime, doc, rollbackContext);
       let resolvePromise;
@@ -21950,6 +22443,8 @@ function App({ shell = null }) {
         steps: [],
         rollbackContext,
         uiBaseline,
+        markupIds: new Set(markupIds),
+        markupToken: uid(),
         promise,
         resolve: resolvePromise,
         timer: 0,
@@ -21972,15 +22467,20 @@ function App({ shell = null }) {
         result => { pending.predecessorFailed = result === false; },
         () => { pending.predecessorFailed = true; },
       );
+      pending.markupPlan = () => (pending.markupIds.size
+        ? textMarkupFollowPlan(pending.uiBaseline, [textMarkupRunForEdit(
+            sourceId, pending.previous, pending.latestEdit, pending.latestOptions.gestureKind, pending.uiBaseline,
+          )], { token: pending.markupToken, onlyIds: pending.markupIds })
+        : null);
       pending.publishPredicted = () => {
         if (pending.frame) window.cancelAnimationFrame(pending.frame);
         pending.frame = 0;
-        return updateDoc(pending.doc.id, currentDoc => applySourceUiEdit(
+        return updateDoc(pending.doc.id, currentDoc => withTextMarkupPlan(applySourceUiEdit(
           currentDoc,
           kind,
           sourceId,
           pending.latestEdit,
-        ), {
+        ), pending.markupPlan()), {
           kernelBacked: true,
           optimisticId: pending.rollbackContext.optimisticId,
         });
@@ -22025,12 +22525,12 @@ function App({ shell = null }) {
         }
         pending.publishPredicted();
         if (runtime.pendingObjectEdits.get(key) === pending) runtime.pendingObjectEdits.delete(key);
-        const projectedDoc = applySourceUiEdit(
+        const projectedDoc = withTextMarkupPlan(applySourceUiEdit(
           pending.uiBaseline,
           kind,
           sourceId,
           pending.latestEdit,
-        );
+        ), pending.markupPlan());
         const projectedState = captureSourceUiState(projectedDoc, kind, sourceId);
         const uiTransition = kernelUiTransition(runtime, pending.uiBaseline, projectedDoc);
         const coalescedOptions = {
@@ -22146,8 +22646,26 @@ function App({ shell = null }) {
       const coalesced = queueCoalescedSourceTransform('text', sourceId, edit, options);
       if (coalesced !== null) return coalesced;
     }
+    // A committed gesture carries the marks on this run along (drafts and
+    // UI-only state do not). The marks bound now are the ones that follow.
+    const markupFrom = textMarkupRunBox(previousForCommit)
+      ? previousForCommit
+      : { ...previousForCommit, ...(activeDoc.textEdits?.[sourceId] || {}) };
+    const markupRunFor = editValue => (options.commitGesture === true && options.uiOnly !== true
+      ? textMarkupRunForEdit(sourceId, markupFrom, editValue, options.gestureKind, activeDoc)
+      : null);
+    const markupToken = uid();
+    const markupPlanIds = textMarkupPlanIds(textMarkupFollowPlan(activeDoc, [markupRunFor(edit)], { token: markupToken }));
+    const markupOnlyIds = new Set(markupPlanIds);
+    const withFollowingMarkup = (doc, editValue = edit) => (markupPlanIds.length
+      ? withTextMarkupPlan(doc, textMarkupFollowPlan(doc, [markupRunFor(editValue)], { token: markupToken, onlyIds: markupOnlyIds }))
+      : doc);
+    const applyTextUiEdit = doc => withFollowingMarkup(applySourceUiEdit(doc, 'text', sourceId, edit));
     const rollbackContext = kernelBacked
-      ? beginOptimisticUiChange(runtime, activeDoc, [{ kind: 'text', id: sourceId }])
+      ? beginOptimisticUiChange(runtime, activeDoc, [
+          { kind: 'text', id: sourceId },
+          ...markupPlanIds.map(id => ({ kind: 'annotation', id })),
+        ])
       : null;
     const projectedState = kernelBacked
       ? captureSourceUiState(applySourceUiEdit(activeDoc, 'text', sourceId, edit), 'text', sourceId)
@@ -22157,13 +22675,13 @@ function App({ shell = null }) {
           runtime,
           activeDoc,
           rollbackContext,
-          doc => applySourceUiEdit(doc, 'text', sourceId, edit),
+          applyTextUiEdit,
         )
       : null;
     const uiBaseline = kernelBacked
       ? optimisticKernelUiBaseline(runtime, activeDoc, rollbackContext)
       : null;
-    const updated = updateDoc(activeDoc.id, doc => applySourceUiEdit(doc, 'text', sourceId, edit), {
+    const updated = updateDoc(activeDoc.id, applyTextUiEdit, {
       mergeKey: options.commitGesture ? '' : options.mergeKey || `text:${sourceId}`,
       resetMerge: options.commitGesture === true,
       kernelBacked: kernelBacked || Boolean(draftOptimisticId),
@@ -22247,7 +22765,7 @@ function App({ shell = null }) {
               runtime,
               substitutedBase,
               rollbackContext,
-              doc => applySourceUiEdit(doc, 'text', sourceId, substitutedEdit),
+              doc => withFollowingMarkup(applySourceUiEdit(doc, 'text', sourceId, substitutedEdit), substitutedEdit),
             );
             const result = await commitLiveSourceEdit(
               'text',
@@ -22855,6 +23373,8 @@ function App({ shell = null }) {
         gestureReason: options.gestureReason || `coalesced-${gestureKind}`,
       });
     }
+    // Marks on moved text runs move along in the same transaction.
+    if (options.commitGesture === true) operations = withTextMarkupMoveOperations(activeDoc, operations);
     const runtime = livePdfRuntimeRef.current;
     const kernelBacked = options.commitGesture === true && Boolean(
       runtime?.kernel && runtime.documentId === activeDoc.id,
@@ -25264,7 +25784,7 @@ function App({ shell = null }) {
       const entries = [];
       for (const targetDoc of targetDocs) entries.push(await projectEntry(targetDoc));
       const project = serializePdfProjectEntries(entries, activeCurrentDoc.id);
-      const json = JSON.stringify(project);
+      const json = pdfProjectJsonText(project);
       const blob = new Blob([json], { type: FERNWORK_PDF_PROJECT_MIME });
       let saved = false;
       let downloaded = false;
@@ -25806,7 +26326,7 @@ function App({ shell = null }) {
       const delta = originalSize ? Math.round((1 - blob.size / originalSize) * 100) : 0;
       downloadBlob(blob, `${stripExt(activeDoc.name)}-${suffix}.pdf`);
       const detail = info.imageOnly
-        ? ` ${info.optimized || 0} image${info.optimized === 1 ? '' : 's'} recompressed; ${(info.skippedTransparency || 0) + (info.skippedUnsupported || 0)} unsupported or transparent skipped; ${info.skippedOversized ? `${info.skippedOversized} too large to recompress left as they are; ` : ''}${info.skippedAlreadySmall || 0} already at target resolution. Images inside nested form content were left unchanged.${info.sizeRejected ? ' The result was not smaller, so the original bytes were kept.' : ''} Text, vectors, links, forms and bookmarks were preserved.`
+        ? ` ${info.optimized || 0} image${info.optimized === 1 ? '' : 's'} recompressed; ${(info.skippedTransparency || 0) + (info.skippedUnsupported || 0)} unsupported or transparent skipped; ${info.skippedOversized ? `${info.skippedOversized} too large to recompress left as they are; ` : ''}${info.skippedBilevel ? `${info.skippedBilevel} black-and-white scan${info.skippedBilevel === 1 ? '' : 's'} kept as ${info.skippedBilevel === 1 ? 'it is' : 'they are'}; ` : ''}${info.skippedNotSmaller ? `${info.skippedNotSmaller} kept because JPEG would not be smaller; ` : ''}${info.skippedAlreadySmall || 0} already at target resolution. Images inside nested form content were left unchanged.${info.sizeRejected ? ' The result was not smaller, so the original bytes were kept.' : ''} Text, vectors, links, forms and bookmarks were preserved.`
         : ' Text, links, forms and vector objects were preserved.';
       setUtilityStatus(`Optimized: ${formatFileSize(blob.size)} (${delta >= 0 ? '-' : '+'}${Math.abs(delta)}%).${detail}`);
       showToast(info.imageOnly ? 'Image-optimized PDF exported.' : 'Lossless PDF exported.', 'success');
@@ -25955,7 +26475,8 @@ function App({ shell = null }) {
         const pageIndex = indices[order];
         const page = scanDoc.pages[pageIndex];
         const pdfPage = await recognitionPdf.getPage(pageIndex + 1);
-        const scale = 2;
+        const unscaled = pdfPage.getViewport({ scale: 1 });
+        const scale = ocrRenderScale(unscaled.width, unscaled.height);
         const viewport = pdfPage.getViewport({ scale, rotation: page.rotation });
         const canvas = document.createElement('canvas');
         canvas.width = Math.max(1, Math.round(viewport.width));
@@ -27733,6 +28254,7 @@ function App({ shell = null }) {
             onDetachPathSubpath={detachNativePathSubpath}
             onMaterializeGroup={materializeNativeSelectionGroup}
             onAppendAnnotation={appendAnnotation}
+            onChangeTextMarkup={changeTextMarkup}
             onUpdateAnnotation={updateAnnotation}
             onSignatureDrawn={setSignatureFromDrawing}
             onToolChange={setTool}
@@ -28269,6 +28791,7 @@ function PdfViewport(props) {
     onDetachPathSubpath,
     onMaterializeGroup,
     onAppendAnnotation,
+    onChangeTextMarkup,
     onUpdateAnnotation,
     onSignatureDrawn,
     onToolChange,
@@ -28640,10 +29163,14 @@ function PdfViewport(props) {
         <div className="oo-pdf-session-notice is-actionable" role="alert" aria-label="Damaged PDF recovered">
           <strong>This PDF was damaged</strong>
           <span>
-            {doc.damageRecovery.expectedPages
-              ? `${doc.damageRecovery.recoveredPages} of ${doc.damageRecovery.expectedPages} pages could be recovered.`
-              : `${doc.damageRecovery.recoveredPages} page${doc.damageRecovery.recoveredPages === 1 ? '' : 's'} could be recovered.`}
-            {' '}Text, fonts or images may be missing. Check every page before relying on this copy.
+            {doc.damageRecovery.method === 'blank-pages'
+              ? `It has no readable page, so it opens as ${doc.damageRecovery.blankPages === 1 ? 'a blank page' : `${doc.damageRecovery.blankPages} blank pages`}.`
+              : doc.damageRecovery.expectedPages
+                ? `${doc.damageRecovery.recoveredPages} of ${doc.damageRecovery.expectedPages} pages could be recovered.`
+                : `${doc.damageRecovery.recoveredPages} page${doc.damageRecovery.recoveredPages === 1 ? '' : 's'} could be recovered.`}
+            {' '}{doc.damageRecovery.method === 'blank-pages'
+              ? 'Nothing else of the file could be shown.'
+              : 'Text, fonts or images may be missing. Check every page before relying on this copy.'}
           </span>
           <div className="oo-pdf-session-notice-actions">
             <button className="oo-pdf-ghost-button" type="button" onClick={() => onDismissDamageRecovery?.(doc.id)}>Dismiss</button>
@@ -28791,6 +29318,7 @@ function PdfViewport(props) {
               onDetachPathSubpath={onDetachPathSubpath}
               onMaterializeGroup={onMaterializeGroup}
               onAppendAnnotation={onAppendAnnotation}
+              onChangeTextMarkup={onChangeTextMarkup}
               onUpdateAnnotation={onUpdateAnnotation}
               onSignatureDrawn={onSignatureDrawn}
               onToolChange={onToolChange}
@@ -29321,21 +29849,52 @@ function textMarkupFromLineBoxes(type, pageId, lines, color, text = '', opacity 
   };
 }
 
-function PdfPageReadingText({ page, pageIndex, items, zoom, tool, markupStyle = null, onAppendAnnotation }) {
+function PdfPageReadingText({ page, pageIndex, items, zoom, tool, markupStyle = null, annotations = [], onAppendAnnotation, onChangeTextMarkup }) {
   const layerRef = useRef(null);
   const [menu, setMenu] = useState(null);
   const markupTool = TEXT_MARKUP_TYPES.has(tool) ? tool : '';
+  const annotationsRef = useRef(annotations);
+  annotationsRef.current = annotations;
 
+  // Marking behaves like a property of the text: over unmarked text it adds
+  // the mark, over text that already carries it completely it removes it from
+  // exactly the selected range, and over partly marked text it completes the
+  // marking without stacking a second mark (the gaps join the touching mark of
+  // the same colour, or become one new mark).
   const applyMarkup = useCallback((type) => {
     const lines = readingSelectionLineBoxes(layerRef.current, zoom);
     if (!lines.length) return false;
+    const marks = (annotationsRef.current || []).filter(annotation => annotation.type === type);
+    const state = textMarkupSelectionState(marks, page.id, type, lines);
+    const color = markupStyle?.markupColors?.[type] || '';
     const text = String(window.getSelection() || '').replace(/\s+/gu, ' ').trim().slice(0, 2000);
-    onAppendAnnotation(page.id, textMarkupFromLineBoxes(type, page.id, lines, markupStyle?.markupColors?.[type] || '', text,
-      Number(markupStyle?.opacity ?? 1)), { select: false, keepTool: true });
+    const label = TEXT_MARKUP_LABEL[type] || 'Markup';
+    if (state === 'full' && onChangeTextMarkup) {
+      const updates = new Map();
+      for (const annotation of marks) {
+        const next = removeLinesFromMarkup(annotation, lines);
+        if (next !== annotation) updates.set(annotation.id, next);
+      }
+      if (updates.size) onChangeTextMarkup(page.id, { updates, inserts: [] }, `Remove ${label.toLowerCase()}`);
+    } else if (state === 'mixed' && onChangeTextMarkup) {
+      const pieces = unmarkedLinePieces(marks, page.id, type, lines);
+      const paint = String(color || TEXT_MARKUP_DEFAULT_COLOR[type]).toLowerCase();
+      const touching = marks.find(annotation => String(textMarkupColor(annotation, type)).toLowerCase() === paint &&
+        markupTouchesLines(annotation, lines));
+      if (pieces.length && touching) {
+        onChangeTextMarkup(page.id, { updates: new Map([[touching.id, addPiecesToMarkup(touching, pieces)]]), inserts: [] }, label);
+      } else if (pieces.length) {
+        onAppendAnnotation(page.id, textMarkupFromLineBoxes(type, page.id, pieces, color, text,
+          Number(markupStyle?.opacity ?? 1)), { select: false, keepTool: true });
+      }
+    } else {
+      onAppendAnnotation(page.id, textMarkupFromLineBoxes(type, page.id, lines, color, text,
+        Number(markupStyle?.opacity ?? 1)), { select: false, keepTool: true });
+    }
     window.getSelection()?.removeAllRanges();
     setMenu(null);
     return true;
-  }, [onAppendAnnotation, page.id, zoom, markupStyle]);
+  }, [onAppendAnnotation, onChangeTextMarkup, page.id, zoom, markupStyle]);
 
   // After a selection gesture: a markup tool marks it at once, reading offers
   // the actions next to the end of the selection.
@@ -29345,9 +29904,14 @@ function PdfPageReadingText({ page, pageIndex, items, zoom, tool, markupStyle = 
       if (!lines.length) { setMenu(null); return; }
       if (markupTool) { applyMarkup(markupTool); return; }
       const last = lines[lines.length - 1];
-      setMenu({ x: (last.x + last.w) * zoom, y: (last.y + last.h) * zoom });
+      const marks = annotationsRef.current || [];
+      setMenu({
+        x: (last.x + last.w) * zoom,
+        y: (last.y + last.h) * zoom,
+        states: Object.fromEntries(TEXT_MARKUP_ANNOTATION_TYPES.map(type => [type, textMarkupSelectionState(marks, page.id, type, lines)])),
+      });
     }, 0);
-  }, [applyMarkup, markupTool, zoom]);
+  }, [applyMarkup, markupTool, page.id, zoom]);
 
   useEffect(() => {
     if (!menu) return undefined;
@@ -29466,9 +30030,21 @@ function PdfPageReadingText({ page, pageIndex, items, zoom, tool, markupStyle = 
           onPointerUp={event => event.stopPropagation()}
         >
           <button type="button" title="Copy (Ctrl+C)" aria-label="Copy" onClick={copySelection}><Icon name="copy" /><span>Copy</span></button>
-          <button type="button" title="Highlight" aria-label="Highlight" onClick={() => applyMarkup('highlight')}><Icon name="highlighter" /></button>
-          <button type="button" title="Underline" aria-label="Underline" onClick={() => applyMarkup('underline')}><Icon name="underline" /></button>
-          <button type="button" title="Strikethrough" aria-label="Strikethrough" onClick={() => applyMarkup('strikeout')}><Icon name="strikethrough" /></button>
+          {[['highlight', 'highlighter'], ['underline', 'underline'], ['strikeout', 'strikethrough']].map(([type, icon]) => {
+            const state = menu.states?.[type] || 'none';
+            const label = TEXT_MARKUP_LABEL[type];
+            return (
+              <button
+                key={type}
+                type="button"
+                className={state === 'full' ? 'is-pressed' : state === 'mixed' ? 'is-mixed' : undefined}
+                aria-pressed={state === 'full' ? 'true' : state === 'mixed' ? 'mixed' : 'false'}
+                title={state === 'full' ? `Remove ${label.toLowerCase()}` : state === 'mixed' ? `${label} all of the selection` : label}
+                aria-label={label}
+                onClick={() => applyMarkup(type)}
+              ><Icon name={icon} /></button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -30482,6 +31058,7 @@ const PDF_PAGE_CALLBACK_KEYS = Object.freeze([
   'onDetachPathSubpath',
   'onMaterializeGroup',
   'onAppendAnnotation',
+  'onChangeTextMarkup',
   'onUpdateAnnotation',
   'onSignatureDrawn',
   'onToolChange',
@@ -30557,6 +31134,7 @@ function PdfPageContent({
   onDetachPathSubpath,
   onMaterializeGroup,
   onAppendAnnotation,
+  onChangeTextMarkup,
   onUpdateAnnotation,
   onSignatureDrawn,
   onToolChange,
@@ -31131,6 +31709,24 @@ function PdfPageContent({
     }
     return found;
   }, [indexedTextItems, pageTextEdits, doc.layerPresentation, page, wantsReadingText]);
+  // The marks on this page, for the reading selection's pressed/mixed state.
+  const pageTextMarkups = useMemo(() => (wantsReadingText
+    ? (doc.annotations || []).filter(annotation => annotation.pageId === page.id && isTextMarkup(annotation))
+    : []), [doc.annotations, page.id, wantsReadingText]);
+  // With text handles shown, a press on marked text grabs the text: its marks
+  // are a property of it and move with it. The mark itself stays reachable in
+  // Layers (and with only Markup selectable).
+  const textBoundMarkupIds = useMemo(() => {
+    const marks = (doc.annotations || []).filter(annotation => annotation.pageId === page.id && isTextLineMarkup(annotation));
+    if (!marks.length || !textItems.length) return null;
+    const ids = new Set();
+    for (const item of textItems) {
+      const edit = doc.textEdits?.[textItemId(page, item)];
+      if (edit?.deleted || (edit?.pageId && edit.pageId !== page.id)) continue;
+      for (const entry of textMarkupBoundToBox(marks, page.id, textMarkupRunBox(edit || item))) ids.add(entry.annotation.id);
+    }
+    return ids.size ? ids : null;
+  }, [doc.annotations, doc.textEdits, page, textItems]);
   // Stable per-item props: spreading a fresh object into every MemoTextItem on
   // each render defeated its memo for all text handles on the page. The run
   // index is rebuilt from scratch whenever any text edit of the document
@@ -31153,6 +31749,30 @@ function PdfPageContent({
     textItemRenderPropsRef.current = next;
     return next;
   }, [textItems, pageTextEdits, doc.objectAspectRatios, page]);
+  // Origins and advances of the run being edited, from the live native
+  // document, for the positioned inline editor.
+  const readTextRunLayout = useCallback(async (textLike) => {
+    const engine = pdfiumRuntime?.engine;
+    if (!pdfiumRuntime?.ready || typeof engine?.textRunLayout !== 'function') return null;
+    const sourceText = String(textLike?.text ?? textLike?.currentText ?? '');
+    if (!sourceText.trim() || /[\r\n]/u.test(sourceText)) return null;
+    const revision = engine.revision;
+    try {
+      const result = await engine.textRunLayout({
+        pageId: page.id,
+        pageIndex: page.sourceIndex,
+        stableId: String(textLike.liveStableId || textLike.stableId || ''),
+        sourceText,
+        sourceX: firstFinite(textLike.targetSourceX, textLike.sourceX, textLike.x, 0),
+        sourceY: firstFinite(textLike.targetSourceY, textLike.sourceY, textLike.y, 0),
+        sourceW: firstFinite(textLike.targetSourceW, textLike.sourceW, textLike.w, 1),
+        sourceH: firstFinite(textLike.targetSourceH, textLike.sourceH, textLike.h, 1),
+      });
+      return result?.layout && engine.revision === revision ? result.layout : null;
+    } catch {
+      return null;
+    }
+  }, [pdfiumRuntime, page.id, page.sourceIndex]);
   const loadTextFrameDragPreview = useCallback((item) => {
     const engine = pdfiumRuntime?.engine;
     const stableId = String(item?.liveStableId || item?.stableId || '');
@@ -33553,7 +34173,9 @@ function PdfPageContent({
             zoom={zoom}
             tool={tool}
             markupStyle={shapeStyle}
+            annotations={pageTextMarkups}
             onAppendAnnotation={onAppendAnnotation}
+            onChangeTextMarkup={onChangeTextMarkup}
           />
         )}
         <div className={`oo-pdf-text-layer ${selectionEntries(selected).some(entry => (
@@ -33594,6 +34216,7 @@ function PdfPageContent({
                 onLoadTextFrameReflowPreview={loadTextFrameReflowPreview}
                 onOpenInspector={onOpenInspector}
                 onReadNeighbourObjects={readNeighbourObjects}
+                onReadTextRunLayout={readTextRunLayout}
                 uploadedPreviewFamilies={uploadedPreviewFamilies}
                 uploadedPreviewStatuses={uploadedPreviewStatuses}
               />
@@ -33711,6 +34334,7 @@ function PdfPageContent({
               editing={editingText?.type === 'annotation' && editingText?.id === ann.id}
               pageContentBacked={createdNativeBindings.has(ann.id)}
               pageContentPainted={createdNativePainted.has(ann.id)}
+              textBound={textBoundMarkupIds?.has(ann.id) === true}
               onSelect={selectFromPointer}
               onUpdate={onUpdateAnnotation}
               onStartEdit={onStartTextEdit}
@@ -35312,7 +35936,7 @@ function textRenderNeedsSampledAppearance(edit, editing, previewBacked, current,
   );
 }
 
-function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, selected, editing, editingDraftText, locked = false, previewBacked = false, onSelect, onStartEdit, onCommit, onMove, onCapture, onSampleTextAppearance, onLoadTextFrameDragPreview, onLoadTextFrameReflowPreview, onOpenInspector, onReadNeighbourObjects = null, uploadedPreviewFamilies = null, uploadedPreviewStatuses = null }) {
+function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, selected, editing, editingDraftText, locked = false, previewBacked = false, onSelect, onStartEdit, onCommit, onMove, onCapture, onSampleTextAppearance, onLoadTextFrameDragPreview, onLoadTextFrameReflowPreview, onOpenInspector, onReadNeighbourObjects = null, onReadTextRunLayout = null, uploadedPreviewFamilies = null, uploadedPreviewStatuses = null }) {
   const dragRef = useRef(null);
   useCancelPdfDragOnUnmount(dragRef);
   useActivePdfRectDraft(dragRef, zoom);
@@ -35513,6 +36137,131 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
     }
   }, [editing, editingDraftText, current.text]);
   const caretPointRef = useCaretAtDoubleClickPoint(textareaRef, editing, draft);
+  // A run with TJ gaps, kerning or collapsed spaces is painted by the editor
+  // itself at the positions a commit writes (positioned-text-editor.js); the
+  // textarea underneath keeps input, IME, undo and the clipboard.
+  const positionedEditorEligible = editing && typeof onReadTextRunLayout === 'function' &&
+    !richTextFrameDocument && current.textBlock !== true && current.textFrame !== true &&
+    !current.richTextDocument && Math.abs(textDisplayAngleRadians(current)) < 0.01 &&
+    normalizedDelta(page.rotation || 0) === 0;
+  const [textRunLayout, setTextRunLayout] = useState(null);
+  const [positionedSelection, setPositionedSelection] = useState(null);
+  const positionedCaretPointRef = useRef(null);
+  const positionedDragRef = useRef(null);
+  const positionedClickRef = useRef(null);
+  const positionedPaintRef = useRef(null);
+  useEffect(() => {
+    if (editing) positionedPaintRef.current = null;
+    else positionedCaretPointRef.current = null;
+  }, [editing]);
+  useEffect(() => {
+    if (!positionedEditorEligible) {
+      setTextRunLayout(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const seed = editBaselineRef.current || current;
+    const seedText = String(seed.text ?? '');
+    Promise.resolve(onReadTextRunLayout(seed)).then(layout => {
+      if (cancelled) return;
+      const measure = layout ? previewGlyphMeasurer(current, layout.fontSize) : null;
+      setTextRunLayout(layout && layout.text === seedText && runNeedsPositionedEditor(layout, measure) ? layout : null);
+    }, () => {});
+    return () => { cancelled = true; };
+  }, [positionedEditorEligible]);
+  const positionedEditor = useMemo(() => {
+    if (!editing || !textRunLayout) return null;
+    const measure = previewGlyphMeasurer(current, textRunLayout.fontSize);
+    const viewBox = Array.isArray(page?.viewBox) && page.viewBox.length === 4
+      ? page.viewBox.map(Number)
+      : [0, 0, Number(page?.width || 0), Number(page?.height || 0)];
+    return positionedEditorGlyphs(textRunLayout, draft, {
+      zoom, boxX: Number(displayedDragGeometry.x) || 0, boxY: Number(displayedDragGeometry.y) || 0, viewBox, measure,
+    });
+  }, [editing, textRunLayout, draft, zoom, displayedDragGeometry.x, displayedDragGeometry.y, current.fontFamily,
+    current.fontKey, current.fontWeight, current.fontStyle, current.embeddedFontFamily]);
+  // Kept after the commit until the native result paints, so the line does not
+  // jump back to a plain layout in between.
+  if (positionedEditor) positionedPaintRef.current = { text: draft, editor: positionedEditor, x: displayedDragGeometry.x, y: displayedDragGeometry.y, zoom };
+  const syncPositionedSelection = useCallback(() => {
+    const node = textareaRef.current;
+    if (!node) return;
+    const next = { start: node.selectionStart, end: node.selectionEnd, focused: document.activeElement === node };
+    setPositionedSelection(previous => previous && previous.start === next.start && previous.end === next.end &&
+      previous.focused === next.focused ? previous : next);
+  }, []);
+  const positionedActive = !!positionedEditor;
+  useEffect(() => {
+    if (!positionedActive) return undefined;
+    const node = textareaRef.current;
+    const point = positionedCaretPointRef.current;
+    positionedCaretPointRef.current = null;
+    const svg = node?.parentElement?.querySelector(':scope > .oo-pdf-positioned-text');
+    if (node && point && svg && positionedEditor && node.value === String(editBaselineRef.current?.text ?? node.value)) {
+      const offset = positionedEditor.offsetAt(point.x - svg.getBoundingClientRect().left);
+      try { node.setSelectionRange(offset, offset); } catch {}
+    }
+    syncPositionedSelection();
+    const onDocumentSelection = () => { if (document.activeElement === textareaRef.current) syncPositionedSelection(); };
+    document.addEventListener('selectionchange', onDocumentSelection);
+    node?.addEventListener('selectionchange', syncPositionedSelection);
+    return () => {
+      document.removeEventListener('selectionchange', onDocumentSelection);
+      node?.removeEventListener('selectionchange', syncPositionedSelection);
+    };
+  }, [positionedActive, syncPositionedSelection]);
+  useEffect(() => { if (positionedActive) syncPositionedSelection(); }, [positionedActive, draft, syncPositionedSelection]);
+  const positionedPointerOffset = (event) => {
+    const svg = event.currentTarget.parentElement?.querySelector(':scope > .oo-pdf-positioned-text');
+    if (!svg || !positionedEditor) return null;
+    return positionedEditor.offsetAt(event.clientX - svg.getBoundingClientRect().left);
+  };
+  const positionedPointerDown = (event) => {
+    if (!positionedEditor || event.button !== 0) return;
+    const node = event.currentTarget;
+    const offset = positionedPointerOffset(event);
+    if (offset == null) return;
+    // preventDefault also suppresses the compatibility mousedown, so the
+    // textarea neither places its own caret nor selects a word by its own
+    // (different) glyph layout. Clicks are counted here instead.
+    event.preventDefault();
+    event.stopPropagation();
+    const last = positionedClickRef.current;
+    const clicks = last && event.timeStamp - last.at < 500 && Math.hypot(event.clientX - last.x, event.clientY - last.y) < 5
+      ? last.clicks + 1 : 1;
+    positionedClickRef.current = { at: event.timeStamp, x: event.clientX, y: event.clientY, clicks };
+    try { node.focus({ preventScroll: true }); } catch { node.focus(); }
+    if (clicks >= 3) {
+      node.setSelectionRange(0, node.value.length);
+    } else if (clicks === 2) {
+      const [start, end] = wordRangeAt(node.value, offset);
+      node.setSelectionRange(start, end);
+    } else {
+      const anchor = event.shiftKey
+        ? (node.selectionDirection === 'backward' ? node.selectionEnd : node.selectionStart)
+        : offset;
+      node.setSelectionRange(Math.min(anchor, offset), Math.max(anchor, offset), offset < anchor ? 'backward' : 'forward');
+      positionedDragRef.current = { pointerId: event.pointerId, anchor };
+      try { node.setPointerCapture(event.pointerId); } catch {}
+    }
+    syncPositionedSelection();
+  };
+  const positionedPointerMove = (event) => {
+    const drag = positionedDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const offset = positionedPointerOffset(event);
+    if (offset == null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setSelectionRange(Math.min(drag.anchor, offset), Math.max(drag.anchor, offset),
+      offset < drag.anchor ? 'backward' : 'forward');
+    syncPositionedSelection();
+  };
+  const positionedPointerUp = (event) => {
+    if (positionedDragRef.current?.pointerId !== event.pointerId) return;
+    positionedDragRef.current = null;
+    event.stopPropagation();
+  };
   useEffect(() => { if (!editing) setOverflowChoice(''); }, [editing]);
   const overflowWarning = editing && overflowChoice !== 'keep'
     ? textLineOverflowWarning(page, current, draft, sourceText, onReadNeighbourObjects)
@@ -35530,7 +36279,6 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
     fontFamily: richStyle ? `${richStyle.family}, ${fontFamilyForText(current)}` : fontFamilyForText(current),
     ...(() => {
       const spacing = richStyle ? null : previewLetterSpacing(current, fontFamilyForText(current));
-      if (spacing?.wordSpacing != null) return { wordSpacing: `${spacing.wordSpacing * zoom}px` };
       return spacing != null ? { letterSpacing: `${spacing * zoom}px` } : {};
     })(),
     fontWeight: richStyle?.weight || current.fontWeight || '400',
@@ -36031,7 +36779,6 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
     // Form controls reset letter-spacing in the UA stylesheet; the width
     // compensation set on the text box has to be inherited explicitly.
     letterSpacing: 'inherit',
-    wordSpacing: 'inherit',
     whiteSpace: current.textBlock ? 'pre-wrap' : 'pre',
     overflowWrap: current.textBlock ? 'anywhere' : 'normal',
     ...(isCoarsePdfPointer()
@@ -36043,6 +36790,11 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
           height: `${100 / textInputScale}%`,
         }
       : growingSingleLineEditorStyle(current, editStyle)),
+    ...(positionedEditor ? {
+      color: 'transparent',
+      caretColor: 'transparent',
+      minWidth: Math.max(Number(editStyle?.width) || 0, positionedEditor.extent + 2),
+    } : {}),
   };
   const selectionPayload = (pageId = current.pageId || page.id, itemPatch = current) => ({
     type: 'text',
@@ -36106,6 +36858,7 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
           }
           window.dispatchEvent(new CustomEvent('fernwork:pdf-text-edit-start', { detail: { documentId: page?.documentId || '', sourceId: itemId, seed: current } }));
           caretPointRef.current = caretPointFromDoubleClick(event.nativeEvent || event);
+          positionedCaretPointRef.current = caretPointRef.current;
           onStartEdit({ type: 'sourceText', sourceId: itemId, pageId: page.id }, current);
         }}
       >
@@ -36118,13 +36871,22 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
           </svg>
         )}
         {editing && !richTextFrameDocument ? (
+          <>
           <textarea
             ref={node => { textareaRef.current = node; focusInlineEditorOnce(node); }}
+            className={positionedEditor ? 'is-positioned-text-input' : undefined}
+            data-positioned-text={positionedEditor ? 'true' : undefined}
             wrap="soft"
             value={draft}
             onChange={(event) => liveEdit(event.target.value)}
             style={textInputStyle}
-            onBlur={() => finishEdit(draft)}
+            onPointerDown={positionedEditor ? positionedPointerDown : undefined}
+            onPointerMove={positionedEditor ? positionedPointerMove : undefined}
+            onPointerUp={positionedEditor ? positionedPointerUp : undefined}
+            onSelect={positionedEditor ? syncPositionedSelection : undefined}
+            onKeyUp={positionedEditor ? syncPositionedSelection : undefined}
+            onFocus={positionedEditor ? syncPositionedSelection : undefined}
+            onBlur={() => { if (positionedEditor) syncPositionedSelection(); finishEdit(draft); }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
                 event.preventDefault();
@@ -36137,12 +36899,22 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
                 finishEdit(event.currentTarget.value);
                 requestAnimationFrame(() => textObject?.isConnected && textObject.focus({ preventScroll: true }));
               }
+              if (positionedEditor) requestAnimationFrame(syncPositionedSelection);
             }}
           />
+          {positionedEditor && (
+            <PositionedTextPaint editor={positionedEditor} selection={positionedSelection} color={currentColor}
+              textLike={current} borderTarget={textareaRef.current?.parentElement} />
+          )}
+          </>
         ) : nativeDragPreview || current.liveCommitted || (previewBacked && edit) ? null : (
           preservePreview && !nativeRasterDragPreview
             ? <img className="oo-pdf-text-snapshot" src={previewDataUrl} alt="" draggable="false" style={snapshotStyle} />
-            : <span className="oo-pdf-text-inline" style={editStyle ? { ...editStyle, color: currentColor } : { color: currentColor }}>
+            : edit && positionedPaintRef.current?.text === currentText && positionedPaintRef.current.zoom === zoom &&
+                positionedPaintRef.current.x === displayedDragGeometry.x && positionedPaintRef.current.y === displayedDragGeometry.y
+              ? <PositionedTextPaint editor={positionedPaintRef.current.editor} selection={null} color={currentColor}
+                  textLike={current} />
+              : <span className="oo-pdf-text-inline" style={editStyle ? { ...editStyle, color: currentColor } : { color: currentColor }}>
               {edit ? richTextDecorationPreview(current.richTextDocument, currentText) : ''}
             </span>
         )}
@@ -36180,6 +36952,41 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
 
 TextItem.displayName = 'TextItem';
 const MemoTextItem = memo(TextItem);
+
+// Glyphs, selection and caret of a positioned run (positioned-text-editor.js),
+// drawn over the transparent textarea in editor pixels. The SVG sits at the
+// text box's border edge so its coordinates match the page canvas.
+function PositionedTextPaint({ editor, selection, color, textLike = {}, borderTarget = null }) {
+  // The face the editor box (and its textarea) uses.
+  const fontFamily = fontFamilyForText(textLike);
+  const fontWeight = textLike.fontWeight || '400';
+  const fontStyle = textLike.fontStyle || 'normal';
+  const start = Math.min(selection?.start ?? 0, selection?.end ?? 0);
+  const end = Math.max(selection?.start ?? 0, selection?.end ?? 0);
+  const top = editor.baseline - editor.fontSize * 0.92;
+  const height = editor.fontSize * 1.16;
+  const left = -(Number(borderTarget?.clientLeft) || 0);
+  const offsetTop = -(Number(borderTarget?.clientTop) || 0);
+  return (
+    <svg className="oo-pdf-positioned-text" aria-hidden="true" width="1" height="1"
+      style={{ left, top: offsetTop }} data-glyph-count={editor.glyphs.length}>
+      {selection?.focused && end > start && (
+        <rect className="oo-pdf-positioned-selection" x={editor.caretX(start)} y={top}
+          width={Math.max(0, editor.caretX(end) - editor.caretX(start))} height={height} />
+      )}
+      {editor.glyphs.map((glyph, index) => (
+        <text key={index} x={glyph.x} y={glyph.y} data-offset={glyph.offset} fill={color}
+          style={{ fontFamily, fontWeight, fontStyle, fontSize: `${editor.fontSize}px`, whiteSpace: 'pre' }}>
+          {glyph.character}
+        </text>
+      ))}
+      {selection?.focused && end === start && (
+        <line className="oo-pdf-positioned-caret" x1={editor.caretX(start)} x2={editor.caretX(start)}
+          y1={top} y2={top + height} />
+      )}
+    </svg>
+  );
+}
 
 function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, selected, editing, editingDraftText, locked = false, previewBacked = false, onSelect, onStartEdit, onCommit, onMove, uploadedPreviewFamilies = null, uploadedPreviewStatuses = null }) {
   const dragRef = useRef(null);
@@ -36221,7 +37028,6 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
     fontFamily: richStyle ? `${richStyle.family}, ${fontFamilyForText(edit)}` : fontFamilyForText(edit),
     ...(() => {
       const spacing = richStyle ? null : previewLetterSpacing(edit, fontFamilyForText(edit));
-      if (spacing?.wordSpacing != null) return { wordSpacing: `${spacing.wordSpacing * zoom}px` };
       return spacing != null ? { letterSpacing: `${spacing * zoom}px` } : {};
     })(),
     fontWeight: richStyle?.weight || edit.fontWeight || '400',
@@ -36465,7 +37271,6 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
     // Form controls reset letter-spacing in the UA stylesheet; the width
     // compensation set on the text box has to be inherited explicitly.
     letterSpacing: 'inherit',
-    wordSpacing: 'inherit',
     whiteSpace: edit.textBlock ? 'pre-wrap' : 'pre',
     overflowWrap: edit.textBlock ? 'anywhere' : 'normal',
     ...(isCoarsePdfPointer()
@@ -38202,7 +39007,7 @@ function commentPopoverPlacementFor(anchorRect, popoverNode = null, bounds = nul
   };
 }
 
-function AnnotationObject({ page, ann, zoom, zIndex, selected, editing, pageContentBacked = false, pageContentPainted = false, locked = false, onSelect, onUpdate, onStartEdit, onCommitEdit, onCancelEdit, onMinimizeComment, onOpenInspector, loadNativePreview, nativePreviewVersion = '', uploadedPreviewFamilies = null, uploadedPreviewStatuses = null }) {
+function AnnotationObject({ page, ann, zoom, zIndex, selected, editing, pageContentBacked = false, pageContentPainted = false, textBound = false, locked = false, onSelect, onUpdate, onStartEdit, onCommitEdit, onCancelEdit, onMinimizeComment, onOpenInspector, loadNativePreview, nativePreviewVersion = '', uploadedPreviewFamilies = null, uploadedPreviewStatuses = null }) {
   const dragRef = useRef(null);
   useCancelPdfDragOnUnmount(dragRef);
   useActivePdfRectDraft(dragRef, zoom);
@@ -38450,7 +39255,7 @@ function AnnotationObject({ page, ann, zoom, zIndex, selected, editing, pageCont
     <>
       <div
         ref={objectRef}
-        className={`oo-pdf-object type-${ann.type} ${selected ? 'is-selected' : ''} ${coversMostOfPage(ann, page) ? 'is-full-page-object' : ''} ${paintOwner === 'canvas' && !editing && !isTextLike ? 'is-live-committed' : ''} ${hasOrientedHit ? 'has-oriented-hit-surface' : ''}`}
+        className={`oo-pdf-object type-${ann.type} ${selected ? 'is-selected' : ''} ${coversMostOfPage(ann, page) ? 'is-full-page-object' : ''} ${paintOwner === 'canvas' && !editing && !isTextLike ? 'is-live-committed' : ''} ${hasOrientedHit ? 'has-oriented-hit-surface' : ''} ${textBound && !selected ? 'is-text-bound' : ''}`}
         data-annotation-id={ann.id}
         data-selection-key={selectionItemKey({ type: 'annotation', id: ann.id })}
         tabIndex={0}
@@ -39175,14 +39980,22 @@ function renderAnnotation(ann, zoom) {
     const color = textMarkupColor(ann);
     return (
       <svg className="oo-pdf-draw-svg oo-pdf-text-markup" viewBox={`0 0 ${ann.w || 1} ${ann.h || 1}`} preserveAspectRatio="none">
-        {textMarkupQuads(ann).map((quad, index) => ann.type === 'highlight'
-          ? <rect key={index} x={quad.x} y={quad.y} width={quad.w} height={quad.h} fill={color} />
-          : <line
+        {textMarkupQuads(ann).map((quad, index) => {
+          if (ann.type === 'highlight') {
+            if (!quad.points) return <rect key={index} x={quad.x} y={quad.y} width={quad.w} height={quad.h} fill={color} />;
+            const [topLeft, topRight, bottomLeft, bottomRight] = textMarkupQuadCorners(quad);
+            return <polygon key={index} points={[topLeft, topRight, bottomRight, bottomLeft].map(point => point.join(',')).join(' ')} fill={color} />;
+          }
+          const line = textMarkupQuadLine(quad, ann.type);
+          return (
+            <line
               key={index}
-              x1={quad.x} x2={quad.x + quad.w}
-              y1={quad.y + quad.h * textMarkupLineOffset(ann.type)} y2={quad.y + quad.h * textMarkupLineOffset(ann.type)}
-              stroke={color} strokeWidth={textMarkupLineWidth(quad)}
-            />)}
+              x1={line.start[0]} x2={line.end[0]}
+              y1={line.start[1]} y2={line.end[1]}
+              stroke={color} strokeWidth={line.width}
+            />
+          );
+        })}
       </svg>
     );
   }
@@ -44507,16 +45320,22 @@ async function drawAnnotationToPdf(outPdf, page, ann, { height, fonts }) {
   if (isTextMarkup(ann) && (ann.type !== 'highlight' || ann.quads?.length)) {
     const color = rgbFromHex(textMarkupColor(ann));
     for (const quad of textMarkupQuads(ann)) {
-      if (ann.type === 'highlight') {
+      if (ann.type === 'highlight' && quad.points) {
+        const [topLeft, topRight, bottomLeft, bottomRight] = textMarkupQuadCorners(quad);
+        const path = [topLeft, topRight, bottomRight, bottomLeft]
+          .map((point, index) => `${index ? 'L' : 'M'} ${ann.x + point[0]} ${ann.y + point[1]}`).join(' ');
+        page.drawSvgPath(`${path} Z`, { x: 0, y: height, color, opacity: ann.opacity ?? 1, blendMode: PDFLib.BlendMode.Multiply });
+      } else if (ann.type === 'highlight') {
         page.drawRectangle({
           x: ann.x + quad.x, y: height - ann.y - quad.y - quad.h, width: quad.w, height: quad.h,
           color, opacity: ann.opacity ?? 1, blendMode: PDFLib.BlendMode.Multiply,
         });
       } else {
-        const lineY = height - ann.y - quad.y - quad.h * textMarkupLineOffset(ann.type);
+        const line = textMarkupQuadLine(quad, ann.type);
         page.drawLine({
-          start: { x: ann.x + quad.x, y: lineY }, end: { x: ann.x + quad.x + quad.w, y: lineY },
-          thickness: textMarkupLineWidth(quad), color, opacity: ann.opacity ?? 1,
+          start: { x: ann.x + line.start[0], y: height - ann.y - line.start[1] },
+          end: { x: ann.x + line.end[0], y: height - ann.y - line.end[1] },
+          thickness: line.width, color, opacity: ann.opacity ?? 1,
         });
       }
     }

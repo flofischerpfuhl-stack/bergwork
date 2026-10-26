@@ -32,8 +32,27 @@ function numberValue(PDFLib, context, value) {
   return Number.NaN;
 }
 
+// An inheritable page attribute (ISO 32000-1, 7.7.3.4), read the way PDFium
+// and PDF.js read it: up the /Parent chain, dictionary by dictionary. pdf-lib's
+// own getInheritableAttribute calls ascend() on the parent and throws
+// ("ascend is not a function") when a damaged file points /Parent at the
+// catalog or another non-/Pages dictionary; a looping chain stops.
+export function inheritedPageAttribute(PDFLib, node, key) {
+  const name = PDFLib.PDFName.of(key);
+  const parentName = PDFLib.PDFName.of('Parent');
+  const seen = new Set();
+  let current = node;
+  while (current instanceof PDFLib.PDFDict && !seen.has(current) && seen.size < 1024) {
+    seen.add(current);
+    const value = current.get(name);
+    if (value !== undefined) return value;
+    current = current.context.lookupMaybe(current.get(parentName), PDFLib.PDFDict);
+  }
+  return undefined;
+}
+
 function readBox(PDFLib, node, key) {
-  const value = node.getInheritableAttribute(PDFLib.PDFName.of(key));
+  const value = inheritedPageAttribute(PDFLib, node, key);
   const array = node.context.lookupMaybe(value, PDFLib.PDFArray);
   if (!array || array.size() !== 4) return null;
   const [x1, y1, x2, y2] = array.asArray().map(item => numberValue(PDFLib, node.context, item));
@@ -58,7 +77,7 @@ export function pageStampFrame(PDFLib, node) {
     };
     if (clipped.right - clipped.left > 0 && clipped.top - clipped.bottom > 0) box = clipped;
   }
-  const rotateValue = node.getInheritableAttribute(PDFLib.PDFName.of('Rotate'));
+  const rotateValue = inheritedPageAttribute(PDFLib, node, 'Rotate');
   const rawRotation = rotateValue ? numberValue(PDFLib, node.context, rotateValue) : 0;
   const rotation = Number.isFinite(rawRotation) && Math.round(rawRotation) % 90 === 0
     ? ((Math.round(rawRotation) % 360) + 360) % 360
@@ -106,7 +125,7 @@ function uniqueResourceName(dict, PDFLib, prefix) {
 // its names to a page-owned shallow copy so no other page or form changes.
 function ownedResources(PDFLib, node) {
   const { context } = node;
-  const inherited = context.lookupMaybe(node.getInheritableAttribute(PDFLib.PDFName.of('Resources')), PDFLib.PDFDict);
+  const inherited = context.lookupMaybe(inheritedPageAttribute(PDFLib, node, 'Resources'), PDFLib.PDFDict);
   const resources = inherited ? inherited.clone(context) : context.obj({});
   node.set(PDFLib.PDFName.of('Resources'), resources);
   return key => {
@@ -218,7 +237,17 @@ export async function stampPdfPages(PDFLib, bytes, stamp) {
     );
   }
   const { context } = pdf;
-  const pages = pdf.getPages();
+  let pages;
+  try {
+    pages = pdf.getPages();
+  } catch (error) {
+    // A catalog whose /Pages is not a page tree, or a tree that loops back on
+    // itself (pdf-lib recurses until the stack overflows).
+    throw new PageStampError(
+      'The page tree of this PDF is damaged, so the stamp cannot be added. Nothing was changed.',
+      { code: 'page-stamp-unreadable' },
+    );
+  }
   const pageCount = pages.length;
   const isImage = kind === PAGE_STAMP_KINDS.watermark && stamp.image;
   let font = null;
@@ -259,7 +288,8 @@ export async function stampPdfPages(PDFLib, bytes, stamp) {
         // The replaced stamp streams were the only users of this kind's
         // private resource names.
         for (const key of ['ExtGState', 'Font', 'XObject']) {
-          const dict = context.lookupMaybe(node.Resources()?.get(PDFName.of(key)), PDFLib.PDFDict);
+          const resources = context.lookupMaybe(node.get(PDFName.of('Resources')), PDFLib.PDFDict);
+          const dict = context.lookupMaybe(resources?.get(PDFName.of(key)), PDFLib.PDFDict);
           if (!dict) continue;
           const owned = subDict(key);
           for (const name of dict.keys()) {

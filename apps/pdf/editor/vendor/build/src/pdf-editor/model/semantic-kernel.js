@@ -420,7 +420,7 @@ export class PdfSemanticKernel {
       // Pre-encoded binding records (bindingsSidecar) stay encoded for the
       // journal; only an engine that does not hold them yet needs objects.
       const owned = Object.freeze({ ...plainResource, bytes: resource.bytes.slice() });
-      if (!engineResident) await this.#engine.putResource(engineResourceWithBindings(owned));
+      if (!engineResident) await this.#putEngineResourceWithinBudget(engineResourceWithBindings(owned));
       this.#residentResourceHashes.add(resource.hash);
       this.#resources.set(resource.hash, owned);
       if (persist) await this.#persist();
@@ -432,7 +432,7 @@ export class PdfSemanticKernel {
           // Persisted snapshots keep their records only in the journal.
           bindingSource = await this.#store.loadResource(this.#documentKey, resource.hash) || existing;
         }
-        await this.#engine.putResource(engineResourceWithBindings({
+        await this.#putEngineResourceWithinBudget(engineResourceWithBindings({
           ...existing,
           bindings: resourceBindingRecords(bindingSource),
           bytes: resource.bytes.slice(),
@@ -830,8 +830,44 @@ export class PdfSemanticKernel {
       if (!(resource?.bytes instanceof Uint8Array) || !resource.bytes.byteLength) {
         throw new Error(`PDF recovery resource is unavailable: ${hash}`);
       }
-      await this.#engine.putResource(engineResourceWithBindings(resource));
+      await this.#putEngineResourceWithinBudget(engineResourceWithBindings(resource), resourceHashes);
       this.#residentResourceHashes.add(hash);
+    }
+  }
+
+  // The engine session holds at most maxSessionResourceBytes (256 MB) of
+  // resources. Document snapshots of a large scan (143 MB for
+  // wikimedia-commons/NDL1235439_part1.pdf) fill that with two, so the undo
+  // of an edit whose snapshot was evicted could never be sent back. Snapshots
+  // are durable here (bytes in memory or in the journal store) and are
+  // re-sent on demand by #ensureTransactionResources, so when the engine
+  // refuses a put for its budget, the resident snapshots this transaction
+  // does not need are released and the put is tried once more.
+  async #putEngineResourceWithinBudget(resource, keepHashes = []) {
+    try {
+      return await this.#engine.putResource(resource);
+    } catch (error) {
+      if (error?.code !== 'resource-limit' || !(error?.details?.reason === 'session-resource-bytes' ||
+          /session resource byte limit/iu.test(String(error?.message || '')))) {
+        throw error;
+      }
+      const keep = new Set([resource.hash, ...keepHashes]);
+      const releasable = [...this.#residentResourceHashes].filter(hash => {
+        if (keep.has(hash)) return false;
+        const held = this.#resources.get(hash);
+        return held?.kind === 'pdf-snapshot' &&
+          ((held.bytes instanceof Uint8Array && held.bytes.byteLength > 0) || typeof this.#store.loadResource === 'function');
+      });
+      if (!releasable.length || typeof this.#engine.releaseResource !== 'function') throw error;
+      for (const hash of releasable) {
+        try {
+          await this.#engine.releaseResource(hash);
+          this.#residentResourceHashes.delete(hash);
+        } catch {
+          // Still resident; the retry below reports the budget again.
+        }
+      }
+      return this.#engine.putResource(resource);
     }
   }
 

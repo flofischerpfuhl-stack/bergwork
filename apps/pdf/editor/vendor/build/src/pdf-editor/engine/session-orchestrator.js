@@ -246,6 +246,34 @@ export class PdfEngineSessionOrchestrator {
   }
 
   /**
+   * Glyph origins and natural advances of one single-line text run, so the
+   * inline editor can show the positioned layout a text commit writes
+   * (positioned-run-layout.js). Read-only; waits for issued writes.
+   *
+   * @param {Record<string, unknown>} input
+   */
+  async textRunLayout(input) {
+    await this.#writeTail;
+    this.#requireOpen();
+    const expectedRevision = this.#revision;
+    const request = createEngineRequest({
+      requestId: this.#nextRequestId(),
+      type: EngineRequestType.TEXT_RUN_LAYOUT,
+      sessionId: this.#sessionId,
+      revision: expectedRevision,
+      payload: { ...input },
+    });
+    const response = await this.#send(request);
+    if (response.revision !== expectedRevision || response.result?.revision !== expectedRevision) {
+      throw new PdfEngineError(
+        EngineErrorCode.REVISION_CONFLICT,
+        'Text run layout does not match the requested document revision.',
+      );
+    }
+    return response.result;
+  }
+
+  /**
    * Reads a page's text in PDFium reading order with one display-space box
    * per character (Find in PDF). Read-only; the revision is reported back.
    * @param {{ pageId?: string, pageIndex?: number }} input
