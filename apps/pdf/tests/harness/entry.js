@@ -13,7 +13,7 @@ import { PdfSemanticKernel } from '@editor/pdf-editor/model/semantic-kernel.js';
 import { PAGE_STAMP_KINDS, stampPdfPages } from '@editor/pdf-editor/model/page-stamps.js';
 import { findGlyphTextMatches, glyphsFromTextGlyphResult } from '@editor/pdf-editor/model/redaction-geometry.js';
 import { createAdvanceMeasurer, subsetTrueTypeFont } from '@editor/pdf-editor/ocr/truetype-subset.js';
-import { withOcrWorker } from '@editor/pdf-editor/ocr/runtime.js';
+import * as OcrRuntime from '@editor/pdf-editor/ocr/runtime.js';
 import { ocrTextLayerWords } from '@editor/pdf-editor/ocr/text-layer.js';
 
 const VENDOR = '/tools/vendor/';
@@ -77,7 +77,7 @@ function errorInfo(error) {
 // Errors after which the shared PDFium worker cannot be trusted: a WebAssembly trap leaves PDFium's memory and
 // stack in an unknown state, and a timed-out request may still be running. The file stops there and the worker is
 // replaced, so the next file starts clean and the failure is attributed to the file that caused it.
-const POISON = /function signature mismatch|memory access out of bounds|unreachable|RuntimeError|table index is out of bounds|call stack size|Worker timed out|Worker failed|transport closed|unreadable message/i;
+const POISON = /function signature mismatch|memory access out of bounds|unreachable|RuntimeError|table index is out of bounds|call stack size|Aborted\(|Worker timed out|Worker failed|transport closed|unreadable message/i;
 const REFUSAL_CODES = new Set(['transaction-rejected', 'unsupported-operation', 'resource-limit', 'font-unavailable', 'page-stamp-unreadable']);
 // Like the editor, which inspects every page progressively after opening, content edits use pages inspected up front.
 let INSPECT_ALL_LIMIT = 40;
@@ -91,6 +91,36 @@ const codePointsText = (codes) => {
 const normText = (text) => String(text || '').replace(/\s+/g, '');
 function rectsIntersect(a, b, eps = 0.05) {
   return a.left < b.right - eps && a.right > b.left + eps && a.bottom < b.top - eps && a.top > b.bottom + eps;
+}
+// Redactions are applied when the PDF is saved, whatever their position in the plan: text, annotations or a stamp
+// added after a redaction mark that it covers are removed too. `boxes` null means the position is unknown.
+function redactedAway(model, pageId, boxes) {
+  const rects = model.redactions.filter((item) => item.pageId === pageId).flatMap((item) => item.rects);
+  if (!rects.length) return false;
+  const list = Array.isArray(boxes) ? boxes : boxes ? [boxes] : [];
+  if (!list.length) return true;
+  return list.some((box) => rects.some((rect) => rectsIntersect(rect, box)));
+}
+// Reading order of PDF.js text items: PDF.js applies Bidi inside one item only, so an RTL word whose glyphs are
+// separate text objects (one item per glyph, in visual order) joins left to right. A viewer orders them by position;
+// this reverses each run of right-to-left (or neutral) items on one baseline.
+const RTL_CHARS = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/u;
+function pdfjsReadingText(items) {
+  const out = [];
+  let group = [];
+  const flush = () => {
+    if (group.some((item) => RTL_CHARS.test(item.str))) group.reverse();
+    out.push(...group.map((item) => item.str)); group = [];
+  };
+  for (const item of items) {
+    const rtlish = RTL_CHARS.test(item.str) || !/[\p{L}\p{N}]/u.test(item.str);
+    const y = Number(item.transform?.[5]);
+    if (!rtlish) { flush(); out.push(item.str); continue; }
+    if (group.length && Math.abs(Number(group[0].transform?.[5]) - y) > 1) flush();
+    group.push(item);
+  }
+  flush();
+  return out.join('');
 }
 function pixelDiff(a, b) {
   if (!a || !b || a.width !== b.width || a.height !== b.height) return { comparable: false, ratio: 1 };
@@ -356,6 +386,8 @@ const OPS = {
     await topology(state, uid('dup'), CommandType.PAGE_DUPLICATE, source.id, { pageIndex: index + 1, newPageId }, 'Duplicate page');
     model.pages.splice(index + 1, 0, { ...source, id: newPageId, touched: true, duplicateOf: source.id }); syncPageIds(state);
     for (const item of model.markers.filter((entry) => entry.pageId === source.id)) model.markers.push({ ...item, pageId: newPageId });
+    // The page's redaction marks are duplicated with it and applied on save.
+    for (const item of model.redactions.filter((entry) => entry.pageId === source.id)) model.redactions.push({ ...item, pageId: newPageId });
     return { status: 'ok', detail: { page: index } };
   },
 
@@ -389,8 +421,12 @@ const OPS = {
     const box = pageBox(page.inspection);
     if (box.width < 72 || box.height < 72) return { status: 'n/a', detail: `page too small (${Math.round(box.width)}x${Math.round(box.height)} pt)` };
     const text = marker(rng);
-    const fontSize = pick(rng, [9, 12, 18]);
+    let fontSize = pick(rng, [9, 12, 18]);
     const bounds = placeRect(box, rng, text.length * fontSize * 0.75 + 20, fontSize * 2);
+    // A frame narrower than the marker (small pages cap it at 60 % of the width) wraps the word inside, and readers
+    // order the broken halves differently: keep the marker on one line.
+    const frameWidth = bounds.right - bounds.left;
+    if (frameWidth < text.length * fontSize * 0.75 + 20) fontSize = Math.max(4, Math.floor((frameWidth - 20) / (text.length * 0.75)));
     const id = uid('txt');
     const prefix = uid('addtext');
     await session.execute('Add text', [command(prefix, CommandType.OBJECT_INSERT, id, {
@@ -433,9 +469,15 @@ const OPS = {
     await session.execute('Edit text', [command(prefix, CommandType.TEXT_REPLACE, object.stableId, payload(replacement, object.text))],
       [semantic ? command(`${prefix}:inv`, CommandType.TEXT_REPLACE, object.stableId, payload(object.text, replacement))
         : session.restoreCommand(prefix, before)]);
+    // Text a font decodes to control characters (no real Unicode, e.g. a private calligraphy encoding) cannot be
+    // checked against extraction: readers drop or reorder such characters.
+    const undecodable = /[\u0000-\u0008\u000e-\u001f\u007f-\u009f\ufffd]/u.test(String(object.text));
+    // The edit rewrites earlier markers on this line (an OCR word, an added text).
+    const editedText = normText(object.text);
+    model.markers = model.markers.filter((item) => !(item.pageId === page.id && item.text && editedText.includes(item.text)));
     // Checked word by word: extractors may order the runs of a rewritten line differently.
     model.markers.push({ pageId: page.id, text: normText(replacement), words: replacement.split(/\s+/u).map(normText).filter(Boolean),
-      kind: 'text.edit', bounds: object.bounds, soft: normText(replacement).length < 4 });
+      kind: 'text.edit', bounds: object.bounds, soft: normText(replacement).length < 4 || undecodable });
     touch(state, page.id);
     return { status: 'ok', detail: { page: page.index, from: String(object.text).slice(0, 40), to: replacement, inverse: semantic ? 'semantic' : 'snapshot' } };
   },
@@ -662,7 +704,7 @@ const OPS = {
     if (image) stamp = { kind: PAGE_STAMP_KINDS.watermark, image: { bytes: tinyPng(), mime: 'image/png' }, opacity: 0.25 };
     await applyStamp(state, 'Add watermark', stamp);
     // Checked on a page that existed when it was stamped (a blank page inserted later has no stamp).
-    if (!image) state.model.stampTexts.push({ text, pageIds: state.model.pages.map((page) => page.id) });
+    if (!image) state.model.stampTexts.push({ text, pageIds: state.model.pages.map((page) => page.id), boxes: await stampGlyphBoxes(state, text) });
     return { status: 'ok', detail: { image, pages: state.model.pages.length } };
   },
 
@@ -684,6 +726,8 @@ const OPS = {
     const texts = [marker(rng), 'searchable', marker(rng), 'Grüße'];
     // Sized so the whole line stays inside the page: readers drop glyphs outside the crop box.
     const natural = texts.reduce((sum, text) => sum + Math.max(10, measure(text) * 14 || text.length * 14 * 0.55) + 14 * 0.4, 0);
+    // Below 2 pt the line cannot fit: readers drop the glyphs outside the crop box (a 4 pt page in the corpus).
+    if (box.width * 0.8 < natural * 2 / 14) return { status: 'n/a', detail: `page too small (${Math.round(box.width)} pt wide)` };
     const size = Math.max(2, Math.min(14, 14 * (box.width * 0.8) / natural));
     let x = box.left + box.width * 0.1; const y = box.bottom + box.height * (0.2 + 0.6 * rng());
     const words = texts.map((text) => {
@@ -707,13 +751,15 @@ const OPS = {
     let words = [];
     try {
       const pdfPage = await pdf.getPage(index + 1);
-      const viewport = pdfPage.getViewport({ scale: 2 });
+      // The editor's render size for recognition (2x, capped for map and poster pages).
+      const unscaled = pdfPage.getViewport({ scale: 1 });
+      const viewport = pdfPage.getViewport({ scale: OcrRuntime.ocrRenderScale?.(unscaled.width, unscaled.height) ?? 2 });
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(viewport.width)); canvas.height = Math.max(1, Math.round(viewport.height));
       await pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
       if (!notoSans) notoSans = new Uint8Array(await (await fetch(`${VENDOR}pdf-tools/fallback-fonts/NotoSans-Regular.ttf`)).arrayBuffer());
       const measure = createAdvanceMeasurer(notoSans);
-      const data = await withOcrWorker('eng', {}, async (worker) => (await worker.recognize(canvas, {}, { words: true, blocks: true })).data);
+      const data = await OcrRuntime.withOcrWorker('eng', {}, async (worker) => (await worker.recognize(canvas, {}, { words: true, blocks: true })).data);
       for (const word of ocrTextLayerWords(data)) {
         const origin = viewport.convertToPdfPoint(...word.origin).map(Number);
         const baseline = viewport.convertToPdfPoint(...word.baseline).map(Number);
@@ -732,6 +778,21 @@ const OPS = {
     return { status: 'ok', detail: { page: index, words: words.length } };
   },
 };
+
+// Glyph boxes of a text stamp on the first pages, so the save checks know whether a redaction covers it.
+async function stampGlyphBoxes(state, text) {
+  const wanted = normText(text);
+  const boxes = {};
+  for (let index = 0; index < Math.min(2, state.session.pageIds.length); index += 1) {
+    try {
+      const glyphs = (await state.session.glyphs(index)).filter((glyph) => glyph.hasBox && !/^\s*$/u.test(glyph.char || ''));
+      const chars = glyphs.map((glyph) => glyph.char).join('');
+      const at = chars.lastIndexOf(wanted);
+      if (at >= 0 && chars.length === glyphs.length) boxes[state.session.pageIds[index]] = glyphs.slice(at, at + wanted.length).map(({ left, bottom, right, top }) => ({ left, bottom, right, top }));
+    } catch { /* unknown position: the check skips redacted pages */ }
+  }
+  return boxes;
+}
 
 function tinyPng() {
   // 2x2 opaque PNG (red/green/blue/white) without a canvas round trip.
@@ -911,8 +972,12 @@ export async function runFile(job) {
   const outputs = [];
   const result = { id: job.id, seed: job.seed, steps, checks, outputs };
   const deadline = started + (job.budgetMs || 60_000);
+  // Step limits scaled to the document by the runner (lib/plan.mjs stepLimits); defaults otherwise.
+  const limits = job.stepLimits || {};
   const rngFor = (salt) => mulberry32((job.seed ^ Math.imul(salt + 1, 0x9E3779B1)) >>> 0);
-  const step = async (op, fn, { fatal = false, timeoutMs = 30_000 } = {}) => {
+  const step = async (op, fn, { fatal = false, timeoutMs: baseTimeoutMs = 30_000 } = {}) => {
+    // stepTimeoutScale (measurement runs only) stretches every step limit.
+    const timeoutMs = baseTimeoutMs * (job.stepTimeoutScale || 1);
     const t0 = performance.now();
     const entry = { op, status: 'ok', ms: 0 };
     steps.push(entry);
@@ -985,7 +1050,7 @@ export async function runFile(job) {
           width: inspection?.width, height: inspection?.height });
       }
       return { detail: { pages: count, inspected: Math.min(session.pageIds.length, INSPECT_ALL_LIMIT), objects } };
-    }, { timeoutMs: 60_000 });
+    }, { timeoutMs: limits.baselineMs ?? 60_000 });
     state.model.pages = session.pageIds.map((id, index) => ({ id, rotation: null, width: null, height: null, touched: false, origin: index }));
     // Rotation of pages is read lazily: rotate needs the current value.
     for (const page of state.model.pages) {
@@ -1003,12 +1068,12 @@ export async function runFile(job) {
         const outcome = await fn(state, rng, planned.params || {});
         // Edits that can remove or rewrite existing text (including the stamp line and earlier markers moved into
         // their way) make the stamp expectations unverifiable.
-        if (['redact.area', 'redact.find', 'object.delete', 'object.move', 'text.edit', 'text.font'].includes(planned.op) && outcome?.status === 'ok') {
+        if (['object.delete', 'object.move', 'text.edit', 'text.font'].includes(planned.op) && outcome?.status === 'ok') {
           for (const stamp of state.model.stampTexts) stamp.soft = true;
           if (planned.op === 'object.move') for (const item of state.model.markers) item.bounds = null;
         }
         return outcome;
-      });
+      }, { timeoutMs: planned.op === 'ocr.tesseract' ? (limits.ocrMs ?? 30_000) : (limits.editMs ?? 30_000) });
       if (session.engine.state === 'tainted') { check('session.notTainted', false, `after ${planned.op}`); break; }
     }
     const editsCommitted = session.kernel.entries.filter((entry) => entry.status === 'committed').length;
@@ -1028,7 +1093,7 @@ export async function runFile(job) {
           throw Object.assign(error, { message: `undo #${undone + 1} (${session.labels?.[session.labels.length - 1 - undone]}): ${error.message}` });
         }
         return { detail: { undone } };
-      }, { timeoutMs: 15_000 + 8_000 * editsCommitted });
+      }, { timeoutMs: (15_000 + 8_000 * editsCommitted) * (limits.historyFactor ?? 1) });
       if (!undoOk) state.redoOk = null;
       if (undoOk) {
         const checkpoint = await session.engine.checkpoint();
@@ -1059,7 +1124,7 @@ export async function runFile(job) {
             throw Object.assign(error, { message: `redo #${redone + 1} (${session.labels?.[redone]}): ${error.message}` });
           }
           return { detail: { redone } };
-        }, { timeoutMs: 15_000 + 8_000 * editsCommitted });
+        }, { timeoutMs: (15_000 + 8_000 * editsCommitted) * (limits.historyFactor ?? 1) });
         const after = await session.engine.checkpoint();
         session.pageIds = after.pageIds || session.pageIds;
         if (state.redoOk) check('redo.pageOrder', JSON.stringify(after.pageIds || []) === JSON.stringify(state.model.pages.map((page) => page.id)),
@@ -1101,10 +1166,23 @@ export async function runFile(job) {
       await step('project.roundtrip', async () => {
         const nativeState = await session.kernel.exportPortableState();
         const project = Shell.serializePdfProjectEntries([{ doc: { ...uiDoc, kernelUiRevision: session.engine.revision }, nativeState }], uiDoc.id);
-        const file = new File([JSON.stringify(project)], 'corpus.bwpdf', { type: 'application/json' });
+        // A project too large for one JSON text is refused by the editor with a typed reason (resource-limit,
+        // pdf-editor/persistence/project-json.js in Fernwork); here JSON.stringify's RangeError is that case.
+        let projectJson;
+        try {
+          projectJson = JSON.stringify(project);
+        } catch (error) {
+          if (error instanceof RangeError) throw Object.assign(new Error('This workspace is too large to save as a project file.'), { code: 'resource-limit' });
+          throw error;
+        }
+        const file = new File([projectJson], 'corpus.bwpdf', { type: 'application/json' });
         const loaded = await Shell.loadFernworkPdfProjectFile(file);
         const doc = loaded.docs[0];
-        const bytes = await Shell.materializeDurableNativePdfBytes({ ...doc, kernelUiRevision: session.engine.revision });
+        // The editor materialises native history only when there is some (revision > 0); an unedited
+        // document exports its source bytes (materializeCurrentPdfBytes).
+        const bytes = session.engine.revision > 0
+          ? await Shell.materializeDurableNativePdfBytes({ ...doc, kernelUiRevision: session.engine.revision })
+          : asBytes(Shell.sourceForLivePdfiumSession(doc)?.bytes || doc.bytes || new Uint8Array());
         if (!bytes?.byteLength) throw new Error('project reopen produced no PDF');
         const name = `${job.outPrefix}.project.pdf`;
         await upload(name, bytes);
@@ -1137,7 +1215,7 @@ export async function runFile(job) {
           try { check(`${op}.reopen`, back.pageIds.length === (value.expectPages ?? savedPages), `${back.pageIds.length}`); }
           finally { await back.close(); }
           return { detail: { bytes: value.bytes.byteLength } };
-        }, { timeoutMs: op === 'doc.rasterize' ? 120_000 : 60_000 });
+        }, { timeoutMs: op === 'doc.rasterize' ? 120_000 : op === 'doc.compressImages' ? (limits.compressImagesMs ?? 60_000) : 60_000 });
       }
     }
   } catch (error) {
@@ -1192,7 +1270,7 @@ async function verifyExport(state, bytes, baseline, { step, check, job }) {
             await uploadRender(`${job.outPrefix}.saved-p${pageIndex + 1}-after.png`, render);
           }
         }
-        for (const item of model.markers.filter((entry) => entry.pageId === page.id && !entry.soft)) {
+        for (const item of model.markers.filter((entry) => entry.pageId === page.id && !entry.soft && !redactedAway(model, page.id, entry.bounds))) {
           const pageText = await textOf(pageIndex);
           if (pageText == null) continue;
           check(`pdfium.text.${item.kind}`, (item.words || [item.text]).every((word) => pageText.includes(word)), `page ${pageIndex + 1}: ${item.text}`);
@@ -1205,7 +1283,8 @@ async function verifyExport(state, bytes, baseline, { step, check, job }) {
         }
       }
       for (const stamp of model.stampTexts.filter((item) => !item.soft)) {
-        const pageIndex = model.pages.findIndex((page) => stamp.pageIds.includes(page.id));
+        // On a page no redaction covers it on.
+        const pageIndex = model.pages.findIndex((page) => stamp.pageIds.includes(page.id) && !redactedAway(model, page.id, stamp.boxes?.[page.id] || null));
         if (pageIndex < 0 || pageIndex >= back.pageIds.length) continue;
         const pageText = await textOf(pageIndex);
         if (pageText == null) continue;
@@ -1226,18 +1305,20 @@ async function verifyExport(state, bytes, baseline, { step, check, job }) {
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(viewport.width)); canvas.height = Math.max(1, Math.round(viewport.height));
       await first.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-      const pagesWithMarkers = [...new Set(model.markers.filter((item) => !item.soft).map((item) => item.pageId))].slice(0, 6);
+      const live = (item) => !item.soft && !redactedAway(model, item.pageId, item.bounds);
+      const pagesWithMarkers = [...new Set(model.markers.filter(live).map((item) => item.pageId))].slice(0, 6);
       for (const pageId of pagesWithMarkers) {
         const pageIndex = model.pages.findIndex((page) => page.id === pageId);
         if (pageIndex < 0 || pageIndex >= pdf.numPages) continue;
         const content = await (await pdf.getPage(pageIndex + 1)).getTextContent();
         const text = normText(content.items.map((item) => item.str).join(''));
-        for (const item of model.markers.filter((entry) => entry.pageId === pageId && !entry.soft)) {
-          check(`pdfjs.text.${item.kind}`, (item.words || [item.text]).every((word) => text.includes(word)), `page ${pageIndex + 1}: ${item.text}`);
+        const reading = normText(pdfjsReadingText(content.items));
+        for (const item of model.markers.filter((entry) => entry.pageId === pageId && live(entry))) {
+          check(`pdfjs.text.${item.kind}`, (item.words || [item.text]).every((word) => text.includes(word) || reading.includes(word)), `page ${pageIndex + 1}: ${item.text}`);
         }
       }
       // Comments and text boxes must survive as annotations.
-      for (const item of model.annotationContents.slice(0, 4)) {
+      for (const item of model.annotationContents.filter((entry) => !redactedAway(model, entry.pageId, entry.bounds)).slice(0, 4)) {
         const pageIndex = model.pages.findIndex((page) => page.id === item.pageId);
         if (pageIndex < 0 || pageIndex >= pdf.numPages) continue;
         const annotations = await (await pdf.getPage(pageIndex + 1)).getAnnotations();

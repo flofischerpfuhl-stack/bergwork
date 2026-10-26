@@ -26580,7 +26580,10 @@
     "pikepdfError": "PdfError: /home/flo/AgentWork/bergwork-pdf-corpus/pdfjs/poppler-742-0-fuzzed.pdf: unable to find trailer dictionary while recovering damaged file",
     "qpdfMessage": "qpdf: /home/flo/AgentWork/bergwork-pdf-corpus/pdfjs/poppler-742-0-fuzzed.pdf: unable to find trailer dictionary while recovering damaged file"
    },
-   "expect": null
+   "expect": {
+    "open": "fail",
+    "note": "every reader fails: circular or missing page tree / syntax damage (PDFium, qpdf, PDF.js); the editor shows the damaged-file message"
+   }
   },
   {
    "id": "pdfjs/issue16500.pdf",
@@ -47656,7 +47659,10 @@
     "pikepdfError": "PdfError: /home/flo/AgentWork/bergwork-pdf-corpus/pdfium/bug_544880.pdf (object 2 0): Loop detected in /Pages structure (getAllPages)",
     "qpdfMessage": "qpdf: errors detected"
    },
-   "expect": null
+   "expect": {
+    "open": "fail",
+    "note": "every reader fails: circular or missing page tree / syntax damage (PDFium, qpdf, PDF.js); the editor shows the damaged-file message"
+   }
   },
   {
    "id": "pdfium/bug_765384.pdf",

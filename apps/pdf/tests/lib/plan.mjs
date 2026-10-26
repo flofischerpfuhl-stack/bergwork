@@ -123,3 +123,53 @@ export function planFor(file, { seed = 1, tierName = 'quick', donors = [], only 
   if (only?.length) docOps = only.filter((op) => DOC_OPS.includes(op));
   return { seed: fileSeed, ops: planned, docOps, undo: true, project: only ? only.includes('project.roundtrip') : rng() < tier.project };
 }
+
+const LETTER_OCR_PIXELS = (612 * 2) * (792 * 2);
+const OCR_MAX_PIXELS = 16 * 1024 * 1024;
+
+/**
+ * How much work a file's steps legitimately take, relative to an ordinary document, from its manifest entry. Step
+ * limits and the file budget scale with it, so a 1-page 30 MB map or a 500-page scanned book is measured against its
+ * own size instead of failing on a limit made for a ten-page paper.
+ *   page: content per page (edits regenerate, probe and re-inspect the whole page): bytes per page over 2 MB or
+ *     images per page over 1,000 (PDFium's content regeneration is quadratic in a page's images, e.g. slides stored
+ *     as thousands of inline-image strips), 1..4
+ *   ocr: pixels the editor renders a page to for OCR (2x, capped at 16 Mpx) over a letter page at 2x, 1..8.5
+ *   pages: page count, for whole-document operations that visit every page (image optimisation decodes each image)
+ * @returns {{ page: number, ocr: number, pages: number }}
+ */
+export function workWeights(file) {
+  const pages = Math.max(1, Number(file?.pages) || 1);
+  const bytesPerPage = Math.max(0, Number(file?.bytes) || 0) / pages;
+  const [width, height] = Array.isArray(file?.facts?.maxPageSizePt) ? file.facts.maxPageSizePt.map(Number) : [612, 792];
+  const ocrPixels = Math.min(OCR_MAX_PIXELS, (width * 2) * (height * 2)) || LETTER_OCR_PIXELS;
+  const imagesPerPage = Math.max(0, Number(file?.facts?.images) || 0) / pages;
+  return {
+    page: Math.min(4, Math.max(1, bytesPerPage / 2e6, imagesPerPage / 1000)),
+    ocr: Math.max(1, ocrPixels / LETTER_OCR_PIXELS),
+    pages,
+  };
+}
+
+/** The file budget: the tier's, scaled by the page weight (at most 2x), plus the expected extra time of planned OCR and image optimisation. */
+export function fileBudgetMs(tier, weights, plan) {
+  let budget = tier.budgetMs * Math.min(2, weights.page);
+  if (plan.ops.some((item) => item.op === 'ocr.tesseract')) budget += 30_000 * (weights.ocr - 1);
+  if (plan.docOps.includes('doc.compressImages')) budget += IMAGE_OPTIMIZATION_MS_PER_PAGE * weights.pages;
+  return Math.round(budget);
+}
+
+// Image optimisation decodes every image it may shrink: JPEG 2000 scans take 0.4-0.7 s per page in WebAssembly on an
+// idle machine (Wayside, 336 pages, 672 JPX: 147 s), more with three pages running.
+export const IMAGE_OPTIMIZATION_MS_PER_PAGE = 1000;
+
+/** Step limits for the harness (harness/entry.js keeps its own defaults, 30 s per edit and so on, when absent). */
+export function stepLimits(weights) {
+  return {
+    editMs: Math.round(30_000 * weights.page),
+    ocrMs: Math.round(30_000 * weights.ocr),
+    baselineMs: Math.round(60_000 * weights.page),
+    historyFactor: weights.page,
+    compressImagesMs: Math.round(60_000 + IMAGE_OPTIMIZATION_MS_PER_PAGE * weights.pages),
+  };
+}

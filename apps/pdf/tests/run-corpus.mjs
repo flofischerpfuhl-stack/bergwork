@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildHarness, outDir as harnessDir } from './harness/build-harness.mjs';
 import { startServer } from './lib/server.mjs';
-import { TIERS, selectFiles, planFor, donorPool } from './lib/plan.mjs';
+import { TIERS, selectFiles, planFor, donorPool, workWeights, fileBudgetMs, stepLimits } from './lib/plan.mjs';
 import { detectTools, qpdfCheck, qpdfPages, qpdfEncrypted, popplerWordsInRects } from './lib/oracles.mjs';
 import { writeReports } from './lib/report.mjs';
 
@@ -137,6 +137,9 @@ function classify(file, result) {
   // (expect.open = fail) may fail to open without counting.
   const expectedOpenFail = file.expect?.open === 'fail';
   const failures = [];
+  // When the editor itself cannot open such a file (open.ui failed), the engine-only steps after it are moot.
+  const editorOpenFailed = expectedOpenFail && (result.steps || []).some((step) => step.op === 'open.ui' && step.status === 'fail');
+  if (editorOpenFailed) return [];
   for (const step of result.steps || []) {
     if (step.status !== 'fail') continue;
     if (expectedOpenFail && /^open\./.test(step.op)) continue;
@@ -154,9 +157,12 @@ async function worker(slot) {
   while (queue.length) {
     const { file, index } = queue.shift();
     const plan = planFor(file, { seed: args.seed, tierName: args.tier, donors, only: args.ops });
+    // Limits scale with the document's size (maps, posters, scanned books), see workWeights.
+    const weights = workWeights(file);
+    const budgetMs = fileBudgetMs(tier, weights, plan);
     const job = {
       id: file.id, url: `/__corpus/${file.id}`, password: file.password || '', seed: plan.seed, ops: plan.ops,
-      docOps: plan.docOps, undo: plan.undo, project: plan.project, uiLoad: true, budgetMs: tier.budgetMs,
+      docOps: plan.docOps, undo: plan.undo, project: plan.project, uiLoad: true, budgetMs, stepLimits: stepLimits(weights),
       refreshAll: args.refreshAll === true, baselinePages: tier.baselinePages, inspectPages: tier.inspectPages, outPrefix: `${String(index).padStart(4, '0')}-${file.id.replace(/[^A-Za-z0-9._-]/g, '_')}`,
     };
     const t0 = Date.now();
@@ -166,7 +172,7 @@ async function worker(slot) {
     try {
       result = await Promise.race([
         page.evaluate((value) => window.BW.runFile(value), job),
-        new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error(`file timed out after ${tier.budgetMs + 60_000} ms`), { code: 'timeout' })), tier.budgetMs + 60_000); }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error(`file timed out after ${budgetMs + 60_000} ms`), { code: 'timeout' })), budgetMs + 60_000); }),
       ]);
     } catch (error) {
       const crashed = page.__events.some((event) => event.type === 'crash');
