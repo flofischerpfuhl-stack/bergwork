@@ -300,6 +300,11 @@ body.oo-pdf-workbench-route button { font-family: var(--bw-font-ui); }
 }
 
 .oo-pdf-mini-toolbar:empty { display: none; }
+/* Narrow screens: the toolbar stays inside the window and wraps onto a second row instead of running off it. */
+@media (max-width: 760px) {
+  .oo-pdf-mini-toolbar { max-width: calc(100vw - 16px); flex-wrap: wrap; row-gap: 4px; }
+  .oo-pdf-mini-toolbar :is(.oo-rich-text-inspector.is-compact, .oo-rich-text-toolbar, .oo-pdf-mini-legacy-text, .oo-pdf-mini-shape) { flex-wrap: wrap; row-gap: 4px; }
+}
 .oo-pdf-mini-toolbar.is-faint { opacity: 0.6; }
 
 .oo-pdf-mini-toolbar .oo-rich-text-inspector.is-compact,

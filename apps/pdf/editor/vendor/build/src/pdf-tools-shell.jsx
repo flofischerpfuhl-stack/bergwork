@@ -687,7 +687,8 @@ function ShortcutsDialog({ onClose }) {
 function MiniToolbarHost({ toolbar, onHost }) {
   const ref = useRef(null);
   const [position, setPosition] = useState(null);
-  const faintFirst = toolbar.reason === 'selection' || toolbar.reason === 'object';
+  // Faint until the pointer comes near (Word); a touch screen has no hover, so there it shows fully.
+  const faintFirst = (toolbar.reason === 'selection' || toolbar.reason === 'object') && !toolbar.touch;
   const [near, setNear] = useState(!faintFirst);
   useLayoutEffect(() => {
     const node = ref.current;
@@ -698,7 +699,9 @@ function MiniToolbarHost({ toolbar, onHost }) {
       // toolbar ends on-page editing, the object's toolbar takes over in the same place instead of jumping up.
       const gap = toolbar.reason === 'object' || toolbar.reason === 'selection' ? 40 : 10;
       let top = toolbar.y - rect.height - gap;
-      if (top < 64) top = faintFirst ? (toolbar.bottom || toolbar.y) + gap : toolbar.y + gap + 4;
+      // On a touch screen the system's selection bar sits above the text; the toolbar goes below it.
+      if (toolbar.touch && toolbar.bottom) top = toolbar.bottom + 16;
+      else if (top < 64) top = faintFirst ? (toolbar.bottom || toolbar.y) + gap : toolbar.y + gap + 4;
       let left = Math.min(Math.max(8, toolbar.x - (toolbar.reason === 'context' ? 12 : 0)), Math.max(8, window.innerWidth - rect.width - 8));
       // With the context menu open the toolbar sits right above it (below it when there is no room), as in Word;
       // the menu may have moved away from the pointer to stay on screen.
@@ -715,7 +718,7 @@ function MiniToolbarHost({ toolbar, onHost }) {
     const observer = new ResizeObserver(place);
     observer.observe(node);
     return () => { cancelAnimationFrame(frame); observer.disconnect(); };
-  }, [toolbar.x, toolbar.y, toolbar.bottom, toolbar.reason]);
+  }, [toolbar.x, toolbar.y, toolbar.bottom, toolbar.reason, toolbar.touch]);
   useEffect(() => {
     if (!faintFirst) { setNear(true); return undefined; }
     setNear(false);
@@ -732,6 +735,7 @@ function MiniToolbarHost({ toolbar, onHost }) {
   return (
     <div ref={node => { ref.current = node; onHost(node); }}
       className={`oo-pdf-mini-toolbar ${near ? '' : 'is-faint'}`} role="toolbar" aria-label="Format"
+      data-reason={toolbar.reason} data-touch={toolbar.touch ? 'true' : undefined}
       style={position ? { left: position.left, top: position.top } : { left: -10000, top: -10000 }}
       onFocusCapture={() => setNear(true)}
       onContextMenu={event => event.preventDefault()} />
@@ -20356,12 +20360,20 @@ function App({ shell = null }) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // berg:work: the last pointer's kind, so a touch long press is told apart from a right-click.
+  const lastPointerRef = useRef({ type: '', at: 0 });
   useEffect(() => {
     const onContextMenu = (event) => {
       const target = event.target;
       if (!activeDoc || !rootRef.current?.contains(target)) return;
+      // A long press on a touch screen fires contextmenu too. On text it belongs to the system's text selection
+      // (handles, Copy…), which preventDefault would kill; the mini toolbar follows the selection instead. On an
+      // object it still opens the object's menu.
+      const touch = event.pointerType === 'touch' || event.pointerType === 'pen' ||
+        (lastPointerRef.current.type === 'touch' && performance.now() - lastPointerRef.current.at < 2500);
       const canvasTextEditor = miniToolbarEnabled
         ? target?.closest?.('.oo-pdf-textbox textarea, .oo-pdf-object textarea') : null;
+      if (touch && (canvasTextEditor || !target?.closest?.('.oo-pdf-textbox, .oo-pdf-imagebox, .oo-pdf-native-object, .oo-pdf-object'))) return;
       if (canvasTextEditor) {
         // Right-click while typing: the mini toolbar for the selected characters (or the whole text).
         event.preventDefault();
@@ -20390,8 +20402,13 @@ function App({ shell = null }) {
           ? { reason: 'context', x: event.clientX, y: event.clientY, externalSelection: null } : null);
       });
     };
+    const onPointerDown = event => { lastPointerRef.current = { type: event.pointerType, at: performance.now() }; };
+    window.addEventListener('pointerdown', onPointerDown, true);
     window.addEventListener('contextmenu', onContextMenu);
-    return () => window.removeEventListener('contextmenu', onContextMenu);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('contextmenu', onContextMenu);
+    };
   }, [activeDoc, miniToolbarEnabled]);
 
   // Selecting characters in a canvas text editor shows the mini toolbar faintly above the text (Word); a collapsed
@@ -20408,10 +20425,11 @@ function App({ shell = null }) {
         if (current?.reason === 'context') return current;
         if (start === end) return current?.reason === 'selection' ? null : current;
         const rect = area.getBoundingClientRect();
+        const touch = lastPointerRef.current.type === 'touch';
         const same = current?.externalSelection && current.externalSelection.start === start &&
-          current.externalSelection.end === end && current.externalSelection.text === value;
+          current.externalSelection.end === end && current.externalSelection.text === value && Boolean(current.touch) === touch;
         return same ? current : { reason: 'selection', x: rect.left, y: rect.top, bottom: rect.bottom,
-          externalSelection: { text: value, start, end } };
+          externalSelection: { text: value, start, end }, touch };
       });
     };
     const onKey = event => {
@@ -20497,7 +20515,8 @@ function App({ shell = null }) {
       const rect = node?.getBoundingClientRect?.();
       if (!rect || !rect.width) return;
       setMiniToolbar(current => (current?.reason === 'context' || current?.reason === 'selection' ? current
-        : { reason: 'object', key: selectionKeyForMini, x: rect.left, y: rect.top, bottom: rect.bottom, externalSelection: null }));
+        : { reason: 'object', key: selectionKeyForMini, x: rect.left, y: rect.top, bottom: rect.bottom, externalSelection: null,
+          touch: lastPointerRef.current.type === 'touch' }));
     }));
     return () => cancelAnimationFrame(frame);
   }, [miniToolbarEnabled, tool, editingText, selectionKeyForMini, miniToolbarReshow]);
