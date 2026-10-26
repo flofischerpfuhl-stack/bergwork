@@ -694,8 +694,9 @@ function MiniToolbarHost({ toolbar, onHost }) {
     if (!node) return undefined;
     const place = () => {
       const rect = node.getBoundingClientRect();
-      // An object's toolbar clears its rotation handle above the frame.
-      const gap = toolbar.reason === 'object' ? 40 : 10;
+      // The toolbar clears the rotation handle above the frame, for a text selection too: when a click into the
+      // toolbar ends on-page editing, the object's toolbar takes over in the same place instead of jumping up.
+      const gap = toolbar.reason === 'object' || toolbar.reason === 'selection' ? 40 : 10;
       let top = toolbar.y - rect.height - gap;
       if (top < 64) top = faintFirst ? (toolbar.bottom || toolbar.y) + gap : toolbar.y + gap + 4;
       let left = Math.min(Math.max(8, toolbar.x - (toolbar.reason === 'context' ? 12 : 0)), Math.max(8, window.innerWidth - rect.width - 8));
@@ -1131,6 +1132,13 @@ function previewLetterSpacing(textLike = {}, fontFamily = '') {
   }
   const spacing = (target - measured) / (text.length - 1);
   if (!Number.isFinite(spacing) || Math.abs(spacing) < 0.01) return undefined;
+  // A run with a wide gap ("Reg.-Bez.:      Tübingen", tab-like positioning)
+  // keeps its letters and widens its spaces, as the PDF draws it; spreading
+  // the gap over every letter made the line unrecognisable while editing.
+  const spaces = (text.match(/ /gu) || []).length;
+  if (spaces && spacing > size * 0.08) {
+    return { wordSpacing: Math.min(size * 40, (target - measured) / spaces) };
+  }
   // Never squeeze glyphs into each other or spread them absurdly.
   return Math.max(-size * 0.12, Math.min(size * 0.6, spacing));
 }
@@ -7856,6 +7864,33 @@ function legacyTextRichDocument(previous = {}, resource, decoration = {}) {
     text, fontResources:[resource], defaultCharacterStyle:style,
     runs:text ? [{ start:0, end:text.length, style }] : [],
   }) };
+}
+
+// berg:work: styles one range of a freshly converted rich document. `patch` may ask for another face of the
+// family ({ weight, style }), found among `faces` (resources registered for the conversion).
+function rangeFormattedRichDocument(document, range, patch = {}, faces = []) {
+  const base = document.defaultCharacterStyle;
+  const resources = [...document.fontResources];
+  for (const face of faces) {
+    if (face && !resources.some(item => item.resourceId === face.resourceId)) resources.push(face);
+  }
+  const style = {};
+  if (patch.weight || patch.style) {
+    const weight = String(patch.weight || base.weight);
+    const fontStyle = String(patch.style || base.style);
+    const face = resources.find(item => item.family === base.family && item.weight === weight && item.style === fontStyle);
+    if (!face) throw new Error(`The ${weight === '700' ? 'bold' : 'italic'} face of ${base.family} is not available.`);
+    Object.assign(style, { resourceId: face.resourceId, family: face.family, weight: face.weight, style: face.style });
+  }
+  if (patch.decoration) style.decoration = patch.decoration;
+  if (patch.color) style.color = patch.color;
+  if (Number(patch.fontSize) > 0) style.fontSize = Number(patch.fontSize);
+  const widened = createRichTextDocument({ ...document, fontResources: resources });
+  const formatted = applyCharacterFormatting(widened, { start: range.start, end: range.end }, style);
+  // Only faces a run uses stay in the document.
+  const used = new Set(formatted.runs.map(run => run.style.resourceId).concat(formatted.defaultCharacterStyle.resourceId));
+  return { version: 1, ...createRichTextDocument({ ...formatted,
+    fontResources: formatted.fontResources.filter(item => used.has(item.resourceId)) }) };
 }
 
 function exactLegacyTextRichSeed(previous = {}, fontCatalog = []) {
@@ -22434,19 +22469,27 @@ function App({ shell = null }) {
     const textPatch = typeof extra.text === 'string' ? { text: extra.text, currentText: extra.text } : {};
     const replacesBase14RichDocument = sourceSeed.richTextCapability === 'verified-base14-rich-v1' &&
       sourceSeed.richTextDocument;
+    // berg:work: `characterRange` + `characterPatch` format only part of a text that has no rich frame yet: the
+    // conversion builds the rich document and styles the range (other faces of the family come in `richResources`).
+    const legacyRange = extra.characterRange && extra.characterPatch && typeof extra.characterPatch === 'object'
+      ? extra.characterRange : null;
     const legacyDecoration = extra.characterDecoration && typeof extra.characterDecoration === 'object'
-      ? extra.characterDecoration : null;
+      ? extra.characterDecoration : legacyRange ? {} : null;
     if ((replacesBase14RichDocument || legacyDecoration) && !face?.family) {
       throw new Error('The font program did not provide a usable face identity for this rich text conversion.');
     }
     const replacementResource = replacesBase14RichDocument || legacyDecoration
       ? { resourceId: hash, kind: 'embedded', family: face.family, weight: String(face.weight), style: String(face.style) }
       : null;
-    const replacementRichTextDocument = replacesBase14RichDocument
+    let replacementRichTextDocument = replacesBase14RichDocument
       ? replaceRichTextDocumentWholeFont(sourceSeed.richTextDocument, replacementResource)
       : legacyDecoration
         ? legacyTextRichDocument({ ...previous, ...textPatch }, replacementResource, legacyDecoration)
         : null;
+    if (legacyRange && replacementRichTextDocument) {
+      replacementRichTextDocument = rangeFormattedRichDocument(replacementRichTextDocument, legacyRange,
+        extra.characterPatch, extra.richResources || []);
+    }
     if (legacyDecoration && !replacementRichTextDocument) {
       throw new Error('This PDF text could not be converted to a decorated rich text frame.');
     }
@@ -35463,10 +35506,12 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
     top: displayedDragGeometry.y * zoom,
     width: Math.max(8, displayedDragGeometry.w * zoom),
     height: Math.max(8, displayedDragGeometry.h * zoom),
-    fontSize: Math.max(8, current.fontSize * zoom),
+    // The PDF's own size, also for small print (a minimum made 5 pt table text jump while editing).
+    fontSize: Math.max(1, current.fontSize * zoom),
     fontFamily: richStyle ? `${richStyle.family}, ${fontFamilyForText(current)}` : fontFamilyForText(current),
     ...(() => {
       const spacing = richStyle ? null : previewLetterSpacing(current, fontFamilyForText(current));
+      if (spacing?.wordSpacing != null) return { wordSpacing: `${spacing.wordSpacing * zoom}px` };
       return spacing != null ? { letterSpacing: `${spacing * zoom}px` } : {};
     })(),
     fontWeight: richStyle?.weight || current.fontWeight || '400',
@@ -35967,6 +36012,7 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
     // Form controls reset letter-spacing in the UA stylesheet; the width
     // compensation set on the text box has to be inherited explicitly.
     letterSpacing: 'inherit',
+    wordSpacing: 'inherit',
     whiteSpace: current.textBlock ? 'pre-wrap' : 'pre',
     overflowWrap: current.textBlock ? 'anywhere' : 'normal',
     ...(isCoarsePdfPointer()
@@ -36152,10 +36198,11 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
     top: (edit.y || 0) * zoom,
     width,
     height,
-    fontSize: Math.max(8, (edit.fontSize || 12) * zoom),
+    fontSize: Math.max(1, (edit.fontSize || 12) * zoom),
     fontFamily: richStyle ? `${richStyle.family}, ${fontFamilyForText(edit)}` : fontFamilyForText(edit),
     ...(() => {
       const spacing = richStyle ? null : previewLetterSpacing(edit, fontFamilyForText(edit));
+      if (spacing?.wordSpacing != null) return { wordSpacing: `${spacing.wordSpacing * zoom}px` };
       return spacing != null ? { letterSpacing: `${spacing * zoom}px` } : {};
     })(),
     fontWeight: richStyle?.weight || edit.fontWeight || '400',
@@ -36399,6 +36446,7 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
     // Form controls reset letter-spacing in the UA stylesheet; the width
     // compensation set on the text box has to be inherited explicitly.
     letterSpacing: 'inherit',
+    wordSpacing: 'inherit',
     whiteSpace: edit.textBlock ? 'pre-wrap' : 'pre',
     overflowWrap: edit.textBlock ? 'anywhere' : 'normal',
     ...(isCoarsePdfPointer()
@@ -43498,6 +43546,36 @@ function Inspector({
             if (miniToolbar?.beforeCommit) await miniToolbar.beforeCommit();
             handler(...args);
           };
+          // With characters selected in the on-page editor, a change converts the text to a rich frame in the
+          // metric-compatible library face and styles only the selection (uploadTextFont characterRange).
+          const legacySelection = miniToolbar?.externalSelection &&
+            miniToolbar.externalSelection.end > miniToolbar.externalSelection.start ? miniToolbar.externalSelection : null;
+          const legacyRangeSubstitute = legacySelection && typeof onUploadTextFont === 'function'
+            ? legacyTextLibrarySubstitution(legacySourceItem) : null;
+          const legacyRangeFormat = characterPatch => {
+            const substitute = legacyRangeSubstitute;
+            const range = { start: legacySelection.start, end: legacySelection.end };
+            return (async () => {
+              if (miniToolbar?.beforeCommit) await miniToolbar.beforeCommit();
+              const faces = [];
+              for (const face of substitute.entry.faces) {
+                if (face.weight === substitute.face.weight && face.style === substitute.face.style) continue;
+                const resource = await onUploadTextFont(layer.item.sourceId, await fetchLibraryFontFile(substitute.entry, face),
+                  { ...legacySourceItem, richTextUploadOnly: true }, {}, { silent: true });
+                if (resource?.resourceId) faces.push(resource);
+              }
+              const file = await fetchLibraryFontFile(substitute.entry, substitute.face);
+              await onUploadTextFont(layer.item.sourceId, file, {
+                ...legacySourceItem, fontWeight: substitute.weight, fontStyle: substitute.style,
+              }, { characterRange: range, characterPatch, richResources: faces }, {
+                silent: true,
+                librarySubstitute: {
+                  entryId: substitute.entry.id, entryLabel: substitute.entry.label,
+                  sourceFontName: substitute.sourceFontName, tier: substitute.tier, sourceLabel: substitute.sourceLabel,
+                },
+              });
+            })().catch(error => showToast(userFacingError(error, 'The selection could not be formatted.'), 'error'));
+          };
           const legacyBoldPatch = { fontWeight: (propertyItem.fontWeight || '400') === '700' ? '400' : '700' };
           const legacyItalicPatch = { fontStyle: (propertyItem.fontStyle || 'normal') === 'italic' ? 'normal' : 'italic' };
           const legacyTextColor = String(layer.item.color || (nativeTextFrameDescriptor?.fillColor
@@ -43505,7 +43583,7 @@ function Inspector({
           const miniToolbarLegacyText = miniToolbar && isSelected && !multiSelection && layer.type === 'text' &&
               !richTextDocument && !legacyAutofitInvalid
             ? createPortal(<div className="oo-pdf-mini-legacy-text"
-                title={miniToolbar.externalSelection ? 'This text is formatted as a whole; after the first change, parts of it can be formatted.' : undefined}>
+                title={legacySelection && !legacyRangeSubstitute ? 'This text is formatted as a whole.' : undefined}>
                 <div className="oo-pdf-font-field"><FontSelect
                   inspector
                   value={textFontSelectValue(layer.item)}
@@ -43517,24 +43595,29 @@ function Inspector({
                     .catch(error => showToast(userFacingError(error, 'Font embedding failed.'), 'error'))}
                   onChange={legacyMini(legacyFontChange)} /></div>
                 <button type="button" aria-label="Bold" title="Bold" aria-pressed={(propertyItem.fontWeight || '400') === '700'}
-                  disabled={!canToggleLegacyFontVariant(legacyBoldPatch)} onMouseDown={event => event.preventDefault()}
-                  onClick={legacyMini(() => commitLegacyFontStyle(legacyBoldPatch))}>B</button>
+                  disabled={!legacyRangeSubstitute && !canToggleLegacyFontVariant(legacyBoldPatch)} onMouseDown={event => event.preventDefault()}
+                  onClick={legacyRangeSubstitute ? () => legacyRangeFormat({ weight: legacyBoldPatch.fontWeight })
+                    : legacyMini(() => commitLegacyFontStyle(legacyBoldPatch))}>B</button>
                 <button type="button" aria-label="Italic" title="Italic" aria-pressed={(propertyItem.fontStyle || 'normal') === 'italic'}
-                  disabled={!canToggleLegacyFontVariant(legacyItalicPatch)} onMouseDown={event => event.preventDefault()}
-                  onClick={legacyMini(() => commitLegacyFontStyle(legacyItalicPatch))}>I</button>
+                  disabled={!legacyRangeSubstitute && !canToggleLegacyFontVariant(legacyItalicPatch)} onMouseDown={event => event.preventDefault()}
+                  onClick={legacyRangeSubstitute ? () => legacyRangeFormat({ style: legacyItalicPatch.fontStyle })
+                    : legacyMini(() => commitLegacyFontStyle(legacyItalicPatch))}>I</button>
                 <button type="button" aria-label="Underline" title={legacyDecorationDisabledReason || 'Underline'} aria-pressed="false"
-                  disabled={Boolean(legacyDecorationDisabledReason)} onMouseDown={event => event.preventDefault()}
-                  onClick={legacyMini(() => commitLegacyDecoration('underline', true))}>U</button>
+                  disabled={!legacyRangeSubstitute && Boolean(legacyDecorationDisabledReason)} onMouseDown={event => event.preventDefault()}
+                  onClick={legacyRangeSubstitute ? () => legacyRangeFormat({ decoration: { underline: true } })
+                    : legacyMini(() => commitLegacyDecoration('underline', true))}>U</button>
                 <button type="button" aria-label="Strikethrough" title={legacyDecorationDisabledReason || 'Strikethrough'} aria-pressed="false"
-                  disabled={Boolean(legacyDecorationDisabledReason)} onMouseDown={event => event.preventDefault()}
-                  onClick={legacyMini(() => commitLegacyDecoration('strike', true))}>S</button>
+                  disabled={!legacyRangeSubstitute && Boolean(legacyDecorationDisabledReason)} onMouseDown={event => event.preventDefault()}
+                  onClick={legacyRangeSubstitute ? () => legacyRangeFormat({ decoration: { strike: true } })
+                    : legacyMini(() => commitLegacyDecoration('strike', true))}>S</button>
                 <span className="oo-pdf-mini-width" title="Font size">
                   <GeometryNumber label="Size" draftKey={`${layerPropertyDraftScope(doc, pageId, layer)}:mini-font-size`}
                     min={fontSizeInputMinimum(layer.item)} value={layer.item.fontSize || 12}
-                    onCommit={value => void legacyMini(() => commitTextProperty(layer, fontSizeEditPatch(layer.item, value),
-                      'text-font-size-style'))()} /></span>
+                    onCommit={value => (legacyRangeSubstitute ? legacyRangeFormat({ fontSize: value })
+                      : void legacyMini(() => commitTextProperty(layer, fontSizeEditPatch(layer.item, value),
+                        'text-font-size-style'))())} /></span>
                 <ColorMenuButton label="Text" value={legacyTextColor} disabled={readOnly || nativeBusy}
-                  onChange={color => void legacyMini(() => commitTextProperty(layer, {
+                  onChange={color => legacyRangeSubstitute ? legacyRangeFormat({ color: `${color}ff` }) : void legacyMini(() => commitTextProperty(layer, {
                     color: propertyItem.textFrame === true ? textColorWithOpacity(color, firstFinite(propertyItem.opacity, 1)) : color,
                     colorOverride: true,
                     preserveSourceAppearance: false,
