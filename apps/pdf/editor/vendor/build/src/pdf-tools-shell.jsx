@@ -43467,6 +43467,81 @@ function Inspector({
                         }}
                         {...extraProps} />
           );
+          const legacyFontChange = (fontValue) => {
+                          const libraryId = libraryFontIdFromOption(fontValue);
+                          if (libraryId) {
+                            // Bundled family: embed it through the same path as an
+                            // uploaded TTF, matching the run's current weight/style.
+                            // Register its three sibling faces without applying them;
+                            // a resulting rich frame can then choose real B/I faces.
+                            const entry = libraryFontById(libraryId);
+                            if (!entry) return;
+                            const selectedFace = libraryFace(entry, layer.item.fontWeight, layer.item.fontStyle);
+                            void (async () => {
+                                await registerBundledLibrarySiblingFaces(onUploadTextFont, layer.item.sourceId,
+                                  entry, selectedFace, layer.item);
+                                const file = await fetchLibraryFontFile(entry, selectedFace);
+                                await onUploadTextFont?.(layer.item.sourceId, file, layer.item);
+                              })()
+                              .catch(error => showToast(userFacingError(error, 'Font embedding failed.'), 'error'));
+                            return;
+                          }
+                          commitTextProperty(
+                            layer,
+                            uploadedFontSelectionPatch(fontValue, doc.fontCatalog || []),
+                            'text-font-style',
+                          );
+                        };
+          // berg:work: text without a verified rich frame (an embedded subset font, as most PDFs have) still gets the
+          // mini toolbar: the whole-text controls of Properties › Font. An open on-page editor closes first.
+          const legacyMini = handler => async (...args) => {
+            if (miniToolbar?.beforeCommit) await miniToolbar.beforeCommit();
+            handler(...args);
+          };
+          const legacyBoldPatch = { fontWeight: (propertyItem.fontWeight || '400') === '700' ? '400' : '700' };
+          const legacyItalicPatch = { fontStyle: (propertyItem.fontStyle || 'normal') === 'italic' ? 'normal' : 'italic' };
+          const legacyTextColor = String(layer.item.color || (nativeTextFrameDescriptor?.fillColor
+            ? pdfiumColorToHex(nativeTextFrameDescriptor.fillColor, '#111111') : '#111111')).slice(0, 7);
+          const miniToolbarLegacyText = miniToolbar && isSelected && !multiSelection && layer.type === 'text' &&
+              !richTextDocument && !legacyAutofitInvalid
+            ? createPortal(<div className="oo-pdf-mini-legacy-text"
+                title={miniToolbar.externalSelection ? 'This text is formatted as a whole; after the first change, parts of it can be formatted.' : undefined}>
+                <div className="oo-pdf-font-field"><FontSelect
+                  inspector
+                  value={textFontSelectValue(layer.item)}
+                  uploadedFonts={doc.fontCatalog || []}
+                  allowLibrary
+                  disabled={readOnly || nativeBusy}
+                  sourceFontLabel={layer.item.embeddedFontFamily || layer.item.sourceFontName || layer.item.pdfFontName || ''}
+                  onUploadFile={(file) => void onUploadTextFont?.(layer.item.sourceId, file, layer.item)
+                    .catch(error => showToast(userFacingError(error, 'Font embedding failed.'), 'error'))}
+                  onChange={legacyMini(legacyFontChange)} /></div>
+                <button type="button" aria-label="Bold" title="Bold" aria-pressed={(propertyItem.fontWeight || '400') === '700'}
+                  disabled={!canToggleLegacyFontVariant(legacyBoldPatch)} onMouseDown={event => event.preventDefault()}
+                  onClick={legacyMini(() => commitLegacyFontStyle(legacyBoldPatch))}>B</button>
+                <button type="button" aria-label="Italic" title="Italic" aria-pressed={(propertyItem.fontStyle || 'normal') === 'italic'}
+                  disabled={!canToggleLegacyFontVariant(legacyItalicPatch)} onMouseDown={event => event.preventDefault()}
+                  onClick={legacyMini(() => commitLegacyFontStyle(legacyItalicPatch))}>I</button>
+                <button type="button" aria-label="Underline" title={legacyDecorationDisabledReason || 'Underline'} aria-pressed="false"
+                  disabled={Boolean(legacyDecorationDisabledReason)} onMouseDown={event => event.preventDefault()}
+                  onClick={legacyMini(() => commitLegacyDecoration('underline', true))}>U</button>
+                <button type="button" aria-label="Strikethrough" title={legacyDecorationDisabledReason || 'Strikethrough'} aria-pressed="false"
+                  disabled={Boolean(legacyDecorationDisabledReason)} onMouseDown={event => event.preventDefault()}
+                  onClick={legacyMini(() => commitLegacyDecoration('strike', true))}>S</button>
+                <span className="oo-pdf-mini-width" title="Font size">
+                  <GeometryNumber label="Size" draftKey={`${layerPropertyDraftScope(doc, pageId, layer)}:mini-font-size`}
+                    min={fontSizeInputMinimum(layer.item)} value={layer.item.fontSize || 12}
+                    onCommit={value => void legacyMini(() => commitTextProperty(layer, fontSizeEditPatch(layer.item, value),
+                      'text-font-size-style'))()} /></span>
+                <ColorMenuButton label="Text" value={legacyTextColor} disabled={readOnly || nativeBusy}
+                  onChange={color => void legacyMini(() => commitTextProperty(layer, {
+                    color: propertyItem.textFrame === true ? textColorWithOpacity(color, firstFinite(propertyItem.opacity, 1)) : color,
+                    colorOverride: true,
+                    preserveSourceAppearance: false,
+                  }, 'text-color-style'))()} />
+                {miniAlignControls}
+              </div>, miniToolbar.host)
+            : null;
           // Created text formats as a whole from the mini toolbar; while its canvas editor is open the editor owns it.
           const miniToolbarAnnotationEditor = miniToolbar && !miniToolbar.externalSelection && isSelected &&
               !multiSelection && createdAnnotationRichTextDocument
@@ -43503,6 +43578,7 @@ function Inspector({
               onLostPointerCapture={endLayerPress}
             >
               {miniToolbarShape}
+              {miniToolbarLegacyText}
               {hierarchy?.expandable && <button type="button" className="oo-pdf-native-group-toggle"
                 aria-label={`${hierarchy.expanded ? 'Collapse' : 'Expand'} ${presentation.name || layer.label || 'PDF group'}`}
                 aria-expanded={hierarchy.expanded}
@@ -43669,31 +43745,7 @@ function Inspector({
                         sourceFontLabel={layer.item.embeddedFontFamily || layer.item.sourceFontName || layer.item.pdfFontName || ''}
                         onUploadFile={(file) => void onUploadTextFont?.(layer.item.sourceId, file, layer.item)
                           .catch(error => showToast(userFacingError(error, 'Font embedding failed.'), 'error'))}
-                        onChange={(fontValue) => {
-                          const libraryId = libraryFontIdFromOption(fontValue);
-                          if (libraryId) {
-                            // Bundled family: embed it through the same path as an
-                            // uploaded TTF, matching the run's current weight/style.
-                            // Register its three sibling faces without applying them;
-                            // a resulting rich frame can then choose real B/I faces.
-                            const entry = libraryFontById(libraryId);
-                            if (!entry) return;
-                            const selectedFace = libraryFace(entry, layer.item.fontWeight, layer.item.fontStyle);
-                            void (async () => {
-                                await registerBundledLibrarySiblingFaces(onUploadTextFont, layer.item.sourceId,
-                                  entry, selectedFace, layer.item);
-                                const file = await fetchLibraryFontFile(entry, selectedFace);
-                                await onUploadTextFont?.(layer.item.sourceId, file, layer.item);
-                              })()
-                              .catch(error => showToast(userFacingError(error, 'Font embedding failed.'), 'error'));
-                            return;
-                          }
-                          commitTextProperty(
-                            layer,
-                            uploadedFontSelectionPatch(fontValue, doc.fontCatalog || []),
-                            'text-font-style',
-                          );
-                        }} /></div>
+                        onChange={legacyFontChange} /></div>
                       <div className="oo-pdf-prop-row two oo-pdf-style-toggles has-text-decoration">
                         <label className="oo-pdf-check" title={!canToggleLegacyFontVariant({ fontWeight: (propertyItem.fontWeight || '400') === '700' ? '400' : '700' }) ? 'Import or upload the matching regular/bold font file to enable this real face.' : ''}><input type="checkbox" disabled={!canToggleLegacyFontVariant({ fontWeight: (propertyItem.fontWeight || '400') === '700' ? '400' : '700' })} checked={(propertyItem.fontWeight || '400') === '700'} onChange={(event) => commitLegacyFontStyle({
                           fontWeight:event.target.checked ? '700' : '400',

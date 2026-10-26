@@ -300,11 +300,12 @@ body.oo-pdf-workbench-route button { font-family: var(--bw-font-ui); }
 }
 
 .oo-pdf-mini-toolbar:empty { display: none; }
-.oo-pdf-mini-toolbar.is-faint { opacity: 0.38; }
+.oo-pdf-mini-toolbar.is-faint { opacity: 0.6; }
 
 .oo-pdf-mini-toolbar .oo-rich-text-inspector.is-compact,
 .oo-pdf-mini-toolbar .oo-rich-text-toolbar,
 .oo-pdf-mini-toolbar .oo-rich-text-face-toggles,
+.oo-pdf-mini-toolbar .oo-pdf-mini-legacy-text,
 .oo-pdf-mini-toolbar .oo-pdf-mini-align {
   display: flex;
   align-items: center;
@@ -313,6 +314,10 @@ body.oo-pdf-workbench-route button { font-family: var(--bw-font-ui); }
 }
 
 .oo-pdf-mini-toolbar .oo-rich-text-toolbar { gap: 4px; }
+/* Text without a rich frame: the whole-text controls; the size field shows without its label. */
+.oo-pdf-mini-toolbar .oo-pdf-mini-legacy-text .oo-pdf-mini-width label { font-size: 0; gap: 0; }
+.oo-pdf-mini-toolbar .oo-pdf-mini-legacy-text .oo-pdf-mini-width input { font-size: var(--bw-text-small); width: 74px; }
+.oo-pdf-mini-toolbar .oo-pdf-mini-legacy-text .oo-pdf-font-field { flex: none; width: 150px; margin: 0 4px 0 0; }
 
 .oo-pdf-mini-toolbar .oo-pdf-select { width: 150px; }
 
