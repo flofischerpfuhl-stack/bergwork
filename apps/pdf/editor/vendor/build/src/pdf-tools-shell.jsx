@@ -20840,6 +20840,42 @@ function App({ shell = null }) {
       const canvasTextEditor = miniToolbarEnabled
         ? target?.closest?.('.oo-pdf-textbox textarea, .oo-pdf-object textarea') : null;
       if (touch && (canvasTextEditor || !target?.closest?.('.oo-pdf-textbox, .oo-pdf-imagebox, .oo-pdf-native-object, .oo-pdf-object'))) return;
+      // A long press on text (Google Docs, Word on phones) edits it and selects the word under the finger, with the
+      // mini toolbar below; the object menu would only stand in the way. Images and shapes keep their menu.
+      const touchText = touch && miniToolbarEnabled ? target?.closest?.('.oo-pdf-textbox, .oo-pdf-object.type-text') : null;
+      if (touchText) {
+        event.preventDefault();
+        // Selected first, as a tap would; the toolbar takes the selection over a frame later, and only while
+        // nothing is being edited, so editing starts a few frames after it (as a double tap follows a tap).
+        const wasSelected = touchText.classList.contains('is-selected');
+        if (!wasSelected && typeof touchText.focus === 'function') touchText.focus({ preventScroll: true });
+        const point = { clientX: event.clientX, clientY: event.clientY };
+        const startEditing = (frames = wasSelected ? 0 : 4) => requestAnimationFrame(() => {
+          if (frames > 0) { startEditing(frames - 1); return; }
+          touchText.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, ...point }));
+          selectWord();
+        });
+        const selectWord = (frames = 20) => requestAnimationFrame(() => {
+          const area = touchText.querySelector('textarea');
+          if (!(area instanceof HTMLTextAreaElement) || document.activeElement !== area) {
+            if (frames > 0) selectWord(frames - 1);
+            return;
+          }
+          const value = area.value;
+          const caret = Math.min(area.selectionStart ?? 0, value.length);
+          const word = /[\p{L}\p{N}_'’-]/u;
+          let start = caret;
+          let end = caret;
+          while (start > 0 && word.test(value[start - 1])) start -= 1;
+          while (end < value.length && word.test(value[end])) end += 1;
+          if (end > start) {
+            area.setSelectionRange(start, end);
+            area.dispatchEvent(new Event('select', { bubbles: true }));
+          }
+        });
+        startEditing();
+        return;
+      }
       if (canvasTextEditor) {
         // Right-click while typing: the mini toolbar for the selected characters (or the whole text).
         event.preventDefault();
