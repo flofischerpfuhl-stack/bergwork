@@ -32,8 +32,8 @@
         "url": "https://github.com/flofischerpfuhl-stack/bergwork.git",
         "tagPrefix": "upstream/fernwork-pdf/"
       },
-      "commit": "b1c323e3e329ea32c3b5dcbc5a7b1c240961ba00",
-      "digest": "e6c4582ae182347f9faebaedd8689b6009edc5407445c37d245f1661bee0df12",
+      "commit": "64d1eda540f034f2481bdecc1d8dfeacd795f1ee",
+      "digest": "cb49b01e565520cbde507559afec0a6fa3e311a5898112dae462d1a50da939ea",
       "fileCount": 473
     }
   }
