@@ -25499,11 +25499,6 @@ function App({ shell = null }) {
         ? await finalizeFlattenedPdfBytes(postprocessedBytes)
         : postprocessedBytes;
       const exportVersion = Number(exportDoc.editVersion || 0);
-      const rasterizedRedactionPages = Number(exported?.redactionReport?.rasterizedPages || 0);
-      if (report && rasterizedRedactionPages) {
-        report.summary.redactionRasterizedPages = rasterizedRedactionPages;
-        report.warnings.push(redactionRasterNotice(rasterizedRedactionPages));
-      }
       if (report && hasFormValueChanges(exportDoc) && await documentHasXfaForm(exportDoc)) {
         report.summary.xfaRemoved = true;
         report.warnings.push(PDF_XFA_REMOVED_NOTICE);
@@ -25525,8 +25520,7 @@ function App({ shell = null }) {
           : 'Download started with fidelity warnings. Check the export report for details.', 'info');
       } else if (report?.summary?.xfaRemoved) {
         showToast(`${saved ? 'PDF saved' : 'Download started'}. ${PDF_XFA_REMOVED_NOTICE}`, 'info');
-      } else if (report?.summary?.redactionRasterizedPages) {
-        showToast(`${saved ? 'PDF saved' : 'Download started'}. ${redactionRasterNotice(report.summary.redactionRasterizedPages)}`, 'info');
+
       } else {
         showToast(saved ? 'PDF saved.' : 'Download started.', 'success');
       }
@@ -30987,13 +30981,6 @@ function redactionMarkCoversAnnotation(mark, ann) {
   const [ax, ay, aw, ah] = [ann.x, ann.y, ann.w, ann.h].map(value => Number(value) || 0);
   const [mx, my, mw, mh] = [mark.x, mark.y, mark.w, mark.h].map(value => Number(value) || 0);
   return ax + aw > mx && ax < mx + mw && ay + ah > my && ay < my + mh;
-}
-
-// Pages with spot, calibrated or pattern colours, or marks over nested Forms,
-// are redacted as images (pdf-editor/engine/redaction-export.js rasterizePageRedactions).
-function redactionRasterNotice(pages) {
-  return `${pages === 1 ? 'One redacted page was' : `${pages} redacted pages were`} saved as an image so ` +
-    `${pages === 1 ? 'its' : 'their'} colours and the redaction come out right; ${pages === 1 ? 'its' : 'their'} text can no longer be selected.`;
 }
 
 function redactionPreviewLabel(characters, annotations, fields = 0) {
