@@ -19043,10 +19043,34 @@ function App({ shell = null }) {
       return true;
     };
 
+    // berg:work: with nothing selected, Undo/Redo selects what it changed (Figma): the object whose frame moved or
+    // that came back. Read from the page before and after, so it works for every kind of object.
+    const framesBefore = new Map();
+    if (!selected) {
+      for (const node of viewportRef.current?.querySelectorAll?.('[data-selection-key]') || []) {
+        const box = node.getBoundingClientRect();
+        framesBefore.set(node.getAttribute('data-selection-key'), `${Math.round(box.left)},${Math.round(box.top)},${Math.round(box.width)},${Math.round(box.height)}`);
+      }
+    }
     setLiveCommitCount(count => count + 1);
     const queued = initialRuntime?.documentId === docId
       ? enqueueLiveNativeCommit(initialRuntime, execute)
       : Promise.resolve().then(execute);
+    if (!selected && framesBefore.size) void queued.then(applied => {
+      if (!applied) return;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (selectedRef.current) return;
+        const changed = [...(viewportRef.current?.querySelectorAll?.('[data-selection-key]') || [])].find(node => {
+          const key = node.getAttribute('data-selection-key');
+          const box = node.getBoundingClientRect();
+          const frame = `${Math.round(box.left)},${Math.round(box.top)},${Math.round(box.width)},${Math.round(box.height)}`;
+          return box.width > 0 && framesBefore.get(key) !== frame;
+        });
+        if (!changed || typeof changed.focus !== 'function') return;
+        changed.focus({ preventScroll: true });
+        changed.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+      }));
+    }, () => {});
     void queued
       .catch(error => {
         if (!historyApplied) setHistoryBlocked({ documentId: docId, direction, error });
