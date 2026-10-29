@@ -686,3 +686,20 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
 /* Space held over the document: the hand (see the Space-drag handler in the fork). */
 .is-space-panning, .is-space-panning * { cursor: grab !important; }
 .is-space-panning:active, .is-space-panning:active * { cursor: grabbing !important; }
+
+/* The zoom island sits at the bottom left, so its popovers open from its left edge instead of centred or from the
+   right (Fernwork keeps the view controls at the right, where that fits). */
+.oo-pdf-shell .oo-pdf-toolbar.is-statusbar .oo-pdf-view-controls :is(.oo-pdf-chrome-popover, .oo-pdf-zoom-popover) {
+  left: -6px;
+  right: auto;
+  transform: none;
+}
+
+/* The "applying change" pill sits under the top right island, not over its labels. */
+.oo-pdf-shell.has-floating-toolbar:has(.oo-pdf-topbar.is-islands) .oo-pdf-apply-status.is-live-update {
+  top: calc(var(--bw-gap) + var(--pdf-chrome-bar) + var(--bw-gap-attached));
+  right: var(--bw-gap);
+  border-color: var(--bw-border);
+  border-radius: var(--bw-radius-island);
+  box-shadow: var(--bw-shadow-island);
+}
