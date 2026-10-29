@@ -33315,6 +33315,17 @@ function PdfPageContent({
     if (additive || candidateKeys.length < 2) {
       hitCycleRef.current = null;
       setHitCycleHint(null);
+      // berg:work: a second click on selected text with nothing below it edits the text there (PowerPoint, Canva),
+      // through the same path as a double-click.
+      if (options.cycleSelected && !additive && fallback?.type === 'text' && selectionIncludes(selected, fallback)) {
+        const box = document.elementsFromPoint(pointerEvent.clientX, pointerEvent.clientY)
+          .map(node => node.closest?.('.oo-pdf-textbox')).find(node => node && pageRef.current?.contains(node));
+        if (box) {
+          box.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, detail: 2,
+            clientX: pointerEvent.clientX, clientY: pointerEvent.clientY }));
+          return fallback;
+        }
+      }
       onSelect(fallback, { additive });
       return fallback;
     }
