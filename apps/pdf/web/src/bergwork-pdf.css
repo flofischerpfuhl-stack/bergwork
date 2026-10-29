@@ -759,3 +759,43 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
 @media (pointer: coarse) {
   .oo-pdf-shell .oo-pdf-rotate-zone { display: none; }
 }
+
+/* Command palette (Ctrl/⌘+K). */
+.oo-pdf-command-backdrop { align-items: start; padding-top: 12vh; }
+.oo-pdf-command-palette {
+  width: min(560px, calc(100vw - 32px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  max-height: min(70vh, 520px);
+  border: 1px solid var(--bw-border);
+  border-radius: var(--bw-radius-menu);
+  background: var(--bw-surface-raised);
+  box-shadow: var(--bw-shadow-popover);
+  color: var(--bw-fg);
+  overflow: hidden;
+}
+.oo-pdf-command-input {
+  margin: 0;
+  padding: 12px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--bw-border-subtle, var(--bw-border));
+  background: transparent;
+  color: var(--bw-fg-strong, var(--bw-fg));
+  font: 400 15px / 1.4 var(--bw-font-ui);
+  outline: none;
+}
+.oo-pdf-command-list { margin: 0; padding: 4px; list-style: none; overflow: auto; }
+.oo-pdf-command-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: calc(var(--bw-radius-menu) - 2px);
+  cursor: default;
+  font: 400 var(--bw-text-small, 13px) / 1.4 var(--bw-font-ui);
+}
+.oo-pdf-command-list li.is-active { background: var(--bw-control, rgba(0, 0, 0, 0.06)); }
+.oo-pdf-command-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oo-pdf-command-group { color: var(--bw-fg-muted); font-size: 12px; }
+.oo-pdf-command-list kbd { color: var(--bw-fg-muted); font: 500 12px / 1.4 var(--bw-font-ui); white-space: nowrap; }
+.oo-pdf-command-empty { color: var(--bw-fg-muted); }

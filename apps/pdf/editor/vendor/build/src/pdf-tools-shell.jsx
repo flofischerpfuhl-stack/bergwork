@@ -664,7 +664,8 @@ const SHORTCUT_MOD = /Mac|iPhone|iPad/u.test(globalThis.navigator?.platform || '
 const SHORTCUT_GROUPS = [
   ['Document', [
     ['Open', `${SHORTCUT_MOD}+O`], ['Save', `${SHORTCUT_MOD}+S`], ['Save as', `${SHORTCUT_MOD}+Shift+S`], ['Print', `${SHORTCUT_MOD}+P`],
-    ['Find text', `${SHORTCUT_MOD}+F`], ['Undo', `${SHORTCUT_MOD}+Z`], ['Redo', `${SHORTCUT_MOD}+Shift+Z`], ['This overview', '?'],
+    ['Find text', `${SHORTCUT_MOD}+F`], ['Undo', `${SHORTCUT_MOD}+Z`], ['Redo', `${SHORTCUT_MOD}+Shift+Z`],
+    ['Search commands', `${SHORTCUT_MOD}+K`], ['This overview', '?'],
   ]],
   ['Objects', [
     ['Format and actions', 'Right-click'], ['Add to the selection', 'Shift+click'], ['Select all on the page', `${SHORTCUT_MOD}+A`],
@@ -795,6 +796,79 @@ function GestureReadout({ zoom, tool }) {
     <div className="oo-pdf-gesture-readout" role="status" aria-live="off"
       style={{ left: Math.min(readout.x, window.innerWidth - 140), top: Math.min(readout.y, window.innerHeight - 36) }}>
       {readout.text}
+    </div>,
+    document.body,
+  );
+}
+
+// berg:work: the command palette (Ctrl/⌘+K, as in Figma, Linear and VS Code): every action by name, recently used
+// first, the shortcut next to each. Commands come from the shell, so they run exactly as their buttons do.
+const RECENT_COMMANDS_KEY = 'oo-pdf-recent-commands';
+function CommandPalette({ commands, onClose }) {
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
+  const inputRef = useRef(null);
+  const listRef = useRef(null);
+  const recent = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem(RECENT_COMMANDS_KEY) || '[]'); } catch { return []; }
+  }, []);
+  const matches = useMemo(() => {
+    const words = query.toLowerCase().split(/\s+/u).filter(Boolean);
+    const available = commands.filter(command => !command.disabled);
+    const scored = available.map(command => {
+      const haystack = `${command.label} ${command.group || ''} ${command.keywords || ''}`.toLowerCase();
+      if (!words.every(word => haystack.includes(word))) return null;
+      const recentIndex = recent.indexOf(command.id);
+      const starts = words.length && command.label.toLowerCase().startsWith(words[0]) ? 0 : 1;
+      return { command, rank: [recentIndex < 0 ? 99 : recentIndex, starts] };
+    }).filter(Boolean);
+    if (!words.length) scored.sort((a, b) => a.rank[0] - b.rank[0]);
+    else scored.sort((a, b) => a.rank[1] - b.rank[1] || a.rank[0] - b.rank[0]);
+    return scored.map(entry => entry.command);
+  }, [commands, query, recent]);
+  useEffect(() => { inputRef.current?.focus({ preventScroll: true }); }, []);
+  useEffect(() => { setActive(0); }, [query]);
+  useEffect(() => {
+    listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+  }, [active]);
+  const run = command => {
+    if (!command) return;
+    try {
+      const next = [command.id, ...recent.filter(id => id !== command.id)].slice(0, 8);
+      localStorage.setItem(RECENT_COMMANDS_KEY, JSON.stringify(next));
+    } catch { /* storage unavailable */ }
+    onClose();
+    // After the palette is gone, so focus and outside-click handlers see the page again.
+    requestAnimationFrame(() => command.run());
+  };
+  return createPortal(
+    <div className="oo-pdf-modal-backdrop oo-pdf-command-backdrop" role="presentation"
+      onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="oo-pdf-command-palette" role="dialog" aria-modal="true" aria-label="Commands">
+        <input ref={inputRef} className="oo-pdf-command-input" type="text" placeholder="Search commands…"
+          role="combobox" aria-expanded="true" aria-controls="oo-pdf-command-list" aria-autocomplete="list"
+          value={query} spellCheck={false} autoComplete="off"
+          onChange={event => setQuery(event.target.value)}
+          onKeyDown={event => {
+            event.stopPropagation();
+            if (event.key === 'Escape') { event.preventDefault(); onClose(); }
+            else if (event.key === 'ArrowDown') { event.preventDefault(); setActive(index => Math.min(matches.length - 1, index + 1)); }
+            else if (event.key === 'ArrowUp') { event.preventDefault(); setActive(index => Math.max(0, index - 1)); }
+            else if (event.key === 'Enter') { event.preventDefault(); run(matches[active]); }
+          }} />
+        <ul ref={listRef} id="oo-pdf-command-list" className="oo-pdf-command-list" role="listbox" aria-label="Commands">
+          {matches.map((command, index) => (
+            <li key={command.id} role="option" aria-selected={index === active}
+              className={index === active ? 'is-active' : ''}
+              onMouseMove={() => setActive(index)} onMouseDown={event => { event.preventDefault(); run(command); }}>
+              <span className="oo-pdf-command-label">{command.label}</span>
+              {command.group && <span className="oo-pdf-command-group">{command.group}</span>}
+              {command.shortcut && <kbd>{command.shortcut}</kbd>}
+            </li>
+          ))}
+          {!matches.length && <li className="oo-pdf-command-empty" role="presentation">No command matches “{query}”.</li>}
+        </ul>
+      </section>
     </div>,
     document.body,
   );
@@ -28306,6 +28380,56 @@ function App({ shell = null }) {
         disabled={fileActionsDisabled('pdf')} onClick={() => { closeChromeMenu(); void savePdfAs(); }} />
     </ChromePopoverButton>
   );
+  // berg:work: the command palette's commands (see CommandPalette).
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const paletteCommands = !activeDoc ? [
+    { id: 'open', label: 'Open PDF or project…', group: 'File', shortcut: `${SHORTCUT_MOD}+O`, run: () => fileInputRef.current?.click() },
+    { id: 'shortcuts', label: 'Keyboard shortcuts', group: 'Help', shortcut: '?', run: () => setShortcutsOpen(true) },
+  ] : [
+    { id: 'open', label: 'Open PDF or project…', group: 'File', shortcut: `${SHORTCUT_MOD}+O`, run: () => fileInputRef.current?.click() },
+    { id: 'save', label: 'Save', group: 'File', shortcut: `${SHORTCUT_MOD}+S`, disabled: fileActionsDisabled('pdf'), run: () => void exportPdf() },
+    { id: 'save-as', label: 'Save as…', group: 'File', shortcut: `${SHORTCUT_MOD}+Shift+S`, disabled: fileActionsDisabled('pdf'), run: () => void savePdfAs() },
+    { id: 'print', label: 'Print', group: 'File', shortcut: `${SHORTCUT_MOD}+P`, disabled: activeSessionOpening || activeSafety.exportBlocked, run: () => printPdf() },
+    { id: 'undo', label: 'Undo', group: 'Edit', shortcut: `${SHORTCUT_MOD}+Z`, run: () => undoDoc() },
+    { id: 'redo', label: 'Redo', group: 'Edit', shortcut: `${SHORTCUT_MOD}+Shift+Z`, run: () => redoDoc() },
+    { id: 'find', label: 'Find text', group: 'Edit', shortcut: `${SHORTCUT_MOD}+F`, keywords: 'search', run: () => setSearchOpen(true) },
+    ...[['pan', 'Pan'], ['select', 'Edit PDF']].map(([id, label]) => ({
+      id: `tool-${id}`, label, group: 'Tools', shortcut: TOOL_SHORTCUT_LABEL[id], disabled: toolDisabled(id), run: () => selectTool(id),
+    })),
+    ...TOOLBAR_TOOLS.filter(item => ADD_TOOL_IDS.includes(item.id) || MARKUP_TOOL_IDS.includes(item.id)).map(item => ({
+      id: `tool-${item.id}`, label: item.id === 'rect' ? 'Rectangle' : item.label,
+      group: MARKUP_TOOL_IDS.includes(item.id) ? 'Markup' : 'Insert', shortcut: TOOL_SHORTCUT_LABEL[item.id],
+      disabled: toolDisabled(item.id), run: () => selectTool(item.id),
+    })),
+    { id: 'pages', label: 'Pages', group: 'Panels', run: () => openDrawerPanel('document') },
+    ...DRAWER_TOOLS.filter(item => item.id !== 'document').map(item => ({
+      id: `panel-${item.id}`, label: item.label, group: 'Document tools', run: () => openDrawerPanel(item.id),
+    })),
+    { id: 'properties', label: 'Properties and layers', group: 'Panels', run: () => { setInspectorTab(selected ? 'properties' : 'layers'); setDrawerOpen(false); setInspectorOpen(true); } },
+    { id: 'zoom-fit', label: 'Fit the page', group: 'View', shortcut: 'Shift+1', run: () => { zoomAt(fitPageZoomForViewport(viewportRef.current, activeDoc.pages?.[activePage])); requestAnimationFrame(() => goToPage(activePage)); } },
+    { id: 'zoom-width', label: 'Fit width', group: 'View', run: () => zoomAt(fitWidthZoomForViewport(viewportRef.current, activeDoc.pages?.[activePage])) },
+    { id: 'zoom-100', label: 'Actual size (100 %)', group: 'View', shortcut: 'Shift+0', run: () => zoomAt(1) },
+    { id: 'zoom-in', label: 'Zoom in', group: 'View', shortcut: `${SHORTCUT_MOD}++`, run: () => zoomAt(zoomRef.current * ZOOM_BUTTON_FACTOR) },
+    { id: 'zoom-out', label: 'Zoom out', group: 'View', shortcut: `${SHORTCUT_MOD}+−`, run: () => zoomAt(zoomRef.current / ZOOM_BUTTON_FACTOR) },
+    { id: 'snap', label: snapEnabled ? 'Turn snapping off' : 'Turn snapping on', group: 'View', keywords: 'snap guides magnet', run: () => setSnapEnabled(value => !value) },
+    { id: 'rulers', label: rulersVisible ? 'Hide rulers' : 'Show rulers', group: 'View', run: () => setRulersVisible(value => !value) },
+    { id: 'guides', label: guidesVisible ? 'Hide drawing guides' : 'Show drawing guides', group: 'View', run: () => setGuidesVisible(value => !value) },
+    { id: 'rotate-left', label: 'Rotate page left', group: 'Pages', disabled: pageStructureBusy, run: () => rotateActivePage(-90) },
+    { id: 'rotate-right', label: 'Rotate page right', group: 'Pages', disabled: pageStructureBusy, run: () => rotateActivePage(90) },
+    { id: 'duplicate-page', label: 'Duplicate page', group: 'Pages', disabled: pageStructureBusy, run: () => duplicateActivePage() },
+    { id: 'shortcuts', label: 'Keyboard shortcuts', group: 'Help', shortcut: '?', run: () => setShortcutsOpen(true) },
+  ];
+  useEffect(() => {
+    const open = event => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.code !== 'KeyK') return;
+      if (event.target?.closest?.('textarea, [contenteditable="true"]')) return;
+      event.preventDefault();
+      closeChromeMenu();
+      setCommandPaletteOpen(value => !value);
+    };
+    window.addEventListener('keydown', open, true);
+    return () => window.removeEventListener('keydown', open, true);
+  }, []);
   // Phones have no room for a separate Pages button: Pages leads this menu there.
   const toolsMenu = (
     <ChromePopoverButton id="tools" label="Document tools" title={phoneLayout ? 'Pages and document tools' : 'Document tools: bookmarks, forms, sign, OCR, security and more'}
@@ -28456,6 +28580,7 @@ function App({ shell = null }) {
       {miniToolbar && <MiniToolbarHost toolbar={miniToolbar} onHost={setMiniToolbarHost} />}
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
       {activeDoc && <GestureReadout zoom={zoom} tool={tool} />}
+      {commandPaletteOpen && <CommandPalette commands={paletteCommands} onClose={() => setCommandPaletteOpen(false)} />}
       {contextMenu && (
         <PdfContextMenu x={contextMenu.x} y={contextMenu.y} onClose={how => {
           setContextMenu(null);
