@@ -1,7 +1,8 @@
-// Static server for the corpus suite: the assembled frontend (apps/pdf/dist) at the root, so the editor's
-// "/tools/vendor/…" paths resolve as in the app, the harness bundle under /__harness/, the corpus under /__corpus/
-// and an upload endpoint (POST /__out/<name>) the harness writes exported PDFs to, so the runner can check them with
-// independent tools without moving bytes through the DevTools protocol. Cross-origin isolated like the app.
+// Static server for the headless engine pages (corpus suite, agent CLI): the assembled frontend (apps/pdf/dist) at the
+// root, so the editor's "/tools/vendor/…" paths resolve as in the app, the page bundle under /__harness/, the corpus
+// (or the CLI's input files) under /__corpus/ and an upload endpoint (POST /__out/<name>) the page writes exported PDFs
+// to, so the Node side can check them with independent tools without moving bytes through the DevTools protocol.
+// Cross-origin isolated like the app.
 import { createReadStream, promises as fs } from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
