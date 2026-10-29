@@ -44,7 +44,8 @@ Selection and transform:
 - [x] **Shape tools:** a click places a 100 × 100 pt shape (arrow 120 pt); drawing tools show a crosshair.
 - [ ] **Alt-drag duplicates; Ctrl+D repeats the last offset** (Figma, Canva). Today Alt-drag moves the original.
   1–2 PD.
-- [ ] **Undo brings back the selection** and scrolls to the changed object. Today undo leaves nothing selected. 2–3 PD.
+- [x] **Undo selects what it changed:** with nothing selected, Undo/Redo select the object whose frame moved or that
+  came back, and scroll to it; a kept selection stays as before.
 - [x] **Rotate from just outside a corner** (approved): four rotate zones with a rotate cursor; the round handle is
   hidden for mice (still in the tab order) and stays on touch. Touch: two-finger rotate and scale on the selected
   object (approved, branch `feat/pdf-pages-touch`).
