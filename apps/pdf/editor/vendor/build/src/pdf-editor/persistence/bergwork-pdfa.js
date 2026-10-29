@@ -391,6 +391,82 @@ export function buildSymbolicTrueType(sourceBytes, glyphsByCode, widthsByCode) {
 // ---------------------------------------------------------------------------
 // sRGB ICC profile (version 2.1, matrix/TRC display profile, ~2.6 KB).
 
+// A CMYK "input" profile (ICC v2, lut16 A2B0) with the plain conversion most
+// viewers use for DeviceCMYK without a profile: RGB = (1 - C)(1 - K) … read as
+// sRGB. As /DefaultCMYK it makes DeviceCMYK content device independent, which
+// PDF/A allows next to an sRGB OutputIntent (6.2.4.3).
+export function naiveCmykIccProfile() {
+  const grid = 7;
+  const s15 = value => Math.round(value * 65536);
+  const linear = value => (value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+  const clutLength = grid ** 4 * 3 * 2;
+  const lut = new Uint8Array(52 + 4 * 2 * 2 + clutLength + 3 * 2 * 2);
+  const view = viewOf(lut);
+  lut.set([0x6d, 0x66, 0x74, 0x32]); // mft2
+  lut[8] = 4;
+  lut[9] = 3;
+  lut[10] = grid;
+  [1, 0, 0, 0, 1, 0, 0, 0, 1].forEach((value, index) => view.setInt32(12 + index * 4, s15(value)));
+  view.setUint16(48, 2);
+  view.setUint16(50, 2);
+  let offset = 52;
+  for (let channel = 0; channel < 4; channel += 1) { view.setUint16(offset, 0); view.setUint16(offset + 2, 65535); offset += 4; }
+  for (let c = 0; c < grid; c += 1) for (let m = 0; m < grid; m += 1) for (let y = 0; y < grid; y += 1) for (let k = 0; k < grid; k += 1) {
+    const black = 1 - k / (grid - 1);
+    const red = linear((1 - c / (grid - 1)) * black);
+    const green = linear((1 - m / (grid - 1)) * black);
+    const blue = linear((1 - y / (grid - 1)) * black);
+    const xyz = [
+      0.4361 * red + 0.3851 * green + 0.1431 * blue,
+      0.2225 * red + 0.7169 * green + 0.0606 * blue,
+      0.0139 * red + 0.0971 * green + 0.7141 * blue,
+    ];
+    for (const value of xyz) { view.setUint16(offset, Math.min(65535, Math.round(value * 32768))); offset += 2; }
+  }
+  for (let channel = 0; channel < 3; channel += 1) { view.setUint16(offset, 0); view.setUint16(offset + 2, 65535); offset += 4; }
+  const description = new TextEncoder().encode('Uncalibrated CMYK (berg:work)');
+  const desc = new Uint8Array(12 + description.length + 1 + 4 + 4 + 2 + 1 + 67);
+  desc.set([0x64, 0x65, 0x73, 0x63]);
+  viewOf(desc).setUint32(8, description.length + 1);
+  desc.set(description, 12);
+  const copyright = new TextEncoder().encode('No copyright, use freely');
+  const cprt = new Uint8Array(8 + copyright.length + 1);
+  cprt.set([0x74, 0x65, 0x78, 0x74]);
+  cprt.set(copyright, 8);
+  const wtpt = new Uint8Array(20);
+  wtpt.set([0x58, 0x59, 0x5a, 0x20]);
+  viewOf(wtpt).setInt32(8, s15(0.9642));
+  viewOf(wtpt).setInt32(12, s15(1));
+  viewOf(wtpt).setInt32(16, s15(0.8249));
+  const tags = [['desc', desc], ['cprt', cprt], ['wtpt', wtpt], ['A2B0', lut]];
+  let position = 128 + 4 + tags.length * 12;
+  const placed = tags.map(([signature, data]) => {
+    const entry = { signature, data, offset: position };
+    position += (data.length + 3) & ~3;
+    return entry;
+  });
+  const out = new Uint8Array(position);
+  const header = viewOf(out);
+  header.setUint32(0, position);
+  header.setUint32(8, 0x02100000);
+  out.set([0x73, 0x63, 0x6e, 0x72], 12); // scnr
+  out.set([0x43, 0x4d, 0x59, 0x4b], 16); // CMYK
+  out.set([0x58, 0x59, 0x5a, 0x20], 20); // XYZ
+  [2026, 1, 1, 0, 0, 0].forEach((value, index) => header.setUint16(24 + index * 2, value));
+  out.set([0x61, 0x63, 0x73, 0x70], 36);
+  header.setInt32(68, s15(0.9642));
+  header.setInt32(72, s15(1));
+  header.setInt32(76, s15(0.8249));
+  header.setUint32(128, placed.length);
+  placed.forEach((entry, index) => {
+    out.set(new TextEncoder().encode(entry.signature), 132 + index * 12);
+    header.setUint32(136 + index * 12, entry.offset);
+    header.setUint32(140 + index * 12, entry.data.length);
+    out.set(entry.data, entry.offset);
+  });
+  return out;
+}
+
 export function srgbIccProfile() {
   const s15 = value => Math.round(value * 65536);
   const tags = [];
@@ -634,6 +710,11 @@ const FORBIDDEN_ANNOTATIONS = new Set(['3D', 'Sound', 'Screen', 'Movie', 'RichMe
 const KNOWN_ANNOTATIONS = new Set(['Text', 'Link', 'FreeText', 'Line', 'Square', 'Circle', 'Polygon', 'PolyLine',
   'Highlight', 'Underline', 'Squiggly', 'StrikeOut', 'Stamp', 'Caret', 'Ink', 'Popup', 'FileAttachment', 'Widget',
   'PrinterMark', 'TrapNet', 'Watermark', 'Redact']);
+const RENDERING_INTENTS = new Set(['RelativeColorimetric', 'AbsoluteColorimetric', 'Perceptual', 'Saturation']);
+const AF_RELATIONSHIPS = new Set(['Source', 'Data', 'Alternative', 'Supplement', 'EncryptedPayload', 'FormData', 'Schema', 'Unspecified']);
+// PDF/A limits (6.1.13): 32-bit integers, reals up to 3.403e38.
+const numberInRange = value => (Number.isInteger(value) ? value >= -2147483648 && value <= 2147483647 : Math.abs(value) <= 3.403e38);
+const clampNumber = value => (Number.isInteger(value) ? Math.max(-2147483648, Math.min(2147483647, value)) : Math.sign(value) * 3.403e38);
 const FONT_SUBTYPES = new Set(['Type1', 'MMType1', 'TrueType', 'Type3', 'Type0', 'CIDFontType0', 'CIDFontType2']);
 const MIME_BY_EXTENSION = {
   pdf: 'application/pdf', xml: 'text/xml', txt: 'text/plain', csv: 'text/csv', json: 'application/json',
@@ -675,7 +756,9 @@ export async function convertPdfBytesToPdfA(PDFLib, bytes, options = {}) {
     const tr2 = state.get(name('TR2'));
     if (tr2 && nameOf(tr2) !== 'Default') state.set(name('TR2'), name('Default'));
   };
-  const visit = (object, parentKey) => {
+  const pending = [];
+  const visit = (object, parentKey) => { pending.push([object, parentKey]); };
+  const visitOne = (object, parentKey) => {
     if (!object || seen.has(object)) return;
     if (object instanceof PDFStream) {
       seen.add(object);
@@ -686,6 +769,9 @@ export async function convertPdfBytesToPdfA(PDFLib, bytes, options = {}) {
     }
     if (object instanceof PDFArray) {
       seen.add(object);
+      object.asArray().forEach((item, index) => {
+        if (item instanceof PDFNumber && !numberInRange(item.asNumber())) object.set(index, PDFNumber.of(clampNumber(item.asNumber())));
+      });
       object.asArray().forEach(item => {
         if (item instanceof PDFName) {
           const value = item.decodeText();
@@ -715,6 +801,13 @@ export async function convertPdfBytesToPdfA(PDFLib, bytes, options = {}) {
       }
     }
     // Image and form XObjects, graphics states.
+    for (const key of ['Intent', 'RI']) {
+      const intent = object.get(name(key));
+      if (intent instanceof PDFName && !RENDERING_INTENTS.has(intent.decodeText())) object.set(name(key), name('RelativeColorimetric'));
+    }
+    for (const [key, value] of object.entries()) {
+      if (value instanceof PDFNumber && !numberInRange(value.asNumber())) object.set(key, PDFNumber.of(clampNumber(value.asNumber())));
+    }
     if (subtype === 'Image') {
       if (object.get(name('Interpolate'))) object.set(name('Interpolate'), PDFLib.PDFBool.False);
       object.delete(name('Alternates'));
@@ -744,7 +837,10 @@ export async function convertPdfBytesToPdfA(PDFLib, bytes, options = {}) {
       if (!(value instanceof PDFRef)) visit(value, keyName);
     }
   };
-  for (const [, object] of context.enumerateIndirectObjects()) visit(object);
+  for (const [, object] of context.enumerateIndirectObjects()) {
+    visit(object);
+    while (pending.length) visitOne(...pending.pop());
+  }
 
   // Catalog.
   for (const key of ['AA', 'Requirements', 'NeedsRendering']) catalog.delete(name(key));
@@ -858,7 +954,7 @@ export async function convertPdfBytesToPdfA(PDFLib, bytes, options = {}) {
     const af = [];
     for (const spec of fileSpecs) {
       const dict = lookup(spec);
-      if (!dict.has(name('AFRelationship'))) dict.set(name('AFRelationship'), name('Unspecified'));
+      if (!AF_RELATIONSHIPS.has(nameOf(dict.get(name('AFRelationship'))))) dict.set(name('AFRelationship'), name('Unspecified'));
       const fileName = dict.get(name('UF')) || dict.get(name('F'));
       if (fileName) {
         if (!dict.has(name('F'))) dict.set(name('F'), fileName);
@@ -914,7 +1010,33 @@ export async function convertPdfBytesToPdfA(PDFLib, bytes, options = {}) {
     intentComponents = 3;
   }
   if (colourHits.has('cmyk') && intentComponents !== 4) {
-    reasons.push('It uses CMYK colours, and converting them to RGB is not supported yet.');
+    // DeviceCMYK gets a default colour space in every resource dictionary
+    // (pages, forms, patterns, Type 3 glyphs), so it is device independent.
+    const profile = context.register(context.flateStream(naiveCmykIccProfile(), { N: 4, Alternate: 'DeviceCMYK' }));
+    const defaultCmyk = context.register(context.obj([name('ICCBased'), profile]));
+    const resourceDicts = new Set();
+    for (const page of pdf.getPages()) {
+      page.node.normalize();
+      const resources = get(page.node, 'Resources');
+      if (resources instanceof PDFDict) resourceDicts.add(resources);
+    }
+    for (const object of seen) {
+      if (!(object instanceof PDFDict)) continue;
+      const subtype = nameOf(object.get(name('Subtype')));
+      if (subtype === 'Form' || object.has(name('PatternType')) || (subtype === 'Type3' && object.has(name('CharProcs')))) {
+        const resources = get(object, 'Resources');
+        if (resources instanceof PDFDict) resourceDicts.add(resources);
+      }
+    }
+    for (const resources of resourceDicts) {
+      let spaces = get(resources, 'ColorSpace');
+      if (!(spaces instanceof PDFDict)) { spaces = context.obj({}); resources.set(name('ColorSpace'), spaces); }
+      if (!spaces.has(name('DefaultCMYK'))) spaces.set(name('DefaultCMYK'), defaultCmyk);
+    }
+    for (const object of seen) {
+      if (object instanceof PDFDict && Number(get(object, 'OPM')?.asNumber?.() || 0) === 1) object.set(name('OPM'), PDFNumber.of(0));
+    }
+    report.cmykProfiled = true;
   }
   if (colourHits.has('rgb') && intentComponents !== 3) {
     reasons.push('It uses RGB colours, but its existing PDF/A colour profile is not RGB.');
