@@ -64,6 +64,7 @@ export class MoveSnapRuntime {
       event.clientY >= paper.top && event.clientY <= paper.bottom;
     const result = resolveMoveSnap(draft.index, draft.rect, rawDx, rawDy, {
       zoom, enabled: state.enabled && inside, altKey: event.altKey, shiftKey: event.shiftKey,
+      spacing: true, // berg:work: equal-spacing snaps and markers
     });
     const visiblePage = {
       x: Math.max(0, draft.viewport.left - paper.left),

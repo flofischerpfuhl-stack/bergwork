@@ -148,7 +148,10 @@ function closestAlignment(entries, origin, length, threshold) {
 /** Pure move constraint: no document writes, scaling, layout, or worker calls. */
 export function resolveMoveSnap(index, rect, rawDx, rawDy, options = {}) {
   const constrained = constrainMoveDelta(rawDx, rawDy, options.shiftKey === true);
-  const result = { ...constrained, guides: [], spacing: [] };
+  const result = { ...constrained, guides: [] };
+  // berg:work: equal spacing only when asked for (the gesture runtime does), so plain alignment stays as it was.
+  const spacingWanted = options.spacing === true;
+  const addSpacing = entry => { (result.spacing ||= []).push(entry); };
   const zoom = Number(options.zoom ?? 1);
   const thresholdPx = Number(options.thresholdPx ?? 6);
   if (options.enabled === false || options.altKey === true || !validRect(rect) ||
@@ -164,18 +167,19 @@ export function resolveMoveSnap(index, rect, rawDx, rawDy, options = {}) {
     const match = closestAlignment(index[axis], rect[axis] + constrained[deltaKey], rect[sizeKey], thresholdPx / zoom);
     // berg:work: an equal-spacing position wins when it is closer than the nearest alignment.
     const moving = { ...rect, x: rect.x + constrained.dx, y: rect.y + constrained.dy };
-    const spacing = closestSpacing(index.objects, moving, axis, thresholdPx / zoom);
+    const spacing = spacingWanted ? closestSpacing(index.objects, moving, axis, thresholdPx / zoom) : null;
     if (spacing && (!match || spacing.distance <= match.distance)) {
       result[deltaKey] += spacing.correction;
-      result.spacing.push({ axis, gaps: spacing.gaps });
+      addSpacing({ axis, gaps: spacing.gaps });
       continue;
     }
     if (!match) continue;
     result[deltaKey] += match.correction;
     // The aligned position may also space evenly; then both are shown.
-    const aligned = { ...moving, [axis]: moving[axis] + match.correction };
-    const evenToo = closestSpacing(index.objects, aligned, axis, 0.5);
-    if (evenToo) result.spacing.push({ axis, gaps: evenToo.gaps });
+    if (spacingWanted) {
+      const evenToo = closestSpacing(index.objects, { ...moving, [axis]: moving[axis] + match.correction }, axis, 0.5);
+      if (evenToo) addSpacing({ axis, gaps: evenToo.gaps });
+    }
     result.guides.push({ axis, position: match.target.position, targetId: match.target.id,
       targetRect: match.target.rect, source: match.target.source,
       targetAnchor: match.target.anchor, movingAnchor: match.anchor });
