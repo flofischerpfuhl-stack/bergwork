@@ -74,6 +74,8 @@ import { dependsOnUnconfirmedPdfWork, shouldCancelDependentPdfDrag } from './pdf
 import { captureDragPageAnchor, dragPageDelta, logicalDragDimension,
   pointerMovedBeyondSlop } from './pdf-editor/interaction/drag-page-geometry.js';
 import { moveSnapRuntime } from './pdf-editor/interaction/move-snap-runtime.js';
+// berg:work: Ctrl/⌘ moves without snapping (Figma); Alt-drag duplicates instead.
+moveSnapRuntime.freeMoveKey = event => event.ctrlKey === true || event.metaKey === true;
 import { ZoomCommitSnapshot } from './pdf-editor/interaction/zoom-commit-snapshot.js';
 import {
   createPrewarmCapacityRetry,
@@ -104,6 +106,8 @@ import { useThumbTouchDrag } from './pdf-editor/interaction/bergwork-thumb-touch
 // berg:work: two fingers on the selected object scale and turn it.
 import { beginTwoFingerTransform, finishTwoFingerTransform, TWO_FINGER_READOUT_EVENT, updateTwoFingerTransform,
   useTwoFingerTarget } from './pdf-editor/interaction/bergwork-two-finger-transform.js';
+// berg:work: Alt shows the selection's distances (Figma).
+import { installAltDistances } from './pdf-editor/interaction/bergwork-alt-distances.js';
 import { GeometryNumber, GeometryProperties } from './pdf-editor/interaction/geometry-properties.jsx';
 import { InspectorSelect, PropSection, SimpleInspectorSelect } from './pdf-editor/interaction/inspector-controls.jsx';
 import { RichTextInspectorEditor } from './pdf-editor/interaction/rich-text-inspector-editor.jsx';
@@ -219,6 +223,8 @@ function openPdfJsDocument(bytes, options = {}, onProgress = null) {
 window.__fernworkInteractionDraftMetrics = () => interactionDraftRuntime.metrics();
 
 const PDF_INTERACTION_CANCEL_EVENT = 'oo-pdf-cancel-interaction';
+// berg:work: asks the image region drawing a PDF object to select itself (after a paste).
+const SELECT_IMAGE_OBJECT_EVENT = 'oo-pdf-select-image-object';
 const PDF_CANCEL_DEPENDENT_DRAG_EVENT = 'oo-pdf-cancel-dependent-drag';
 
 function usePdfInteractionCancel(handler) {
@@ -696,6 +702,8 @@ const SHORTCUT_GROUPS = [
     ['Format and actions', 'Right-click'], ['Add to the selection', 'Shift+click'], ['Select all on the page', `${SHORTCUT_MOD}+A`],
     ['Nudge', 'Arrow keys'], ['Nudge further', 'Shift+arrow keys'], ['Duplicate', `${SHORTCUT_MOD}+D`],
     ['Cut / copy / paste', `${SHORTCUT_MOD}+X / C / V`], ['Delete', 'Del'], ['Deselect', 'Esc'],
+    ['Duplicate by dragging', 'Alt+drag'], ['Move without snapping', `${SHORTCUT_MOD}+drag`],
+    ['Distances to the selection', 'Alt (hover)'],
   ]],
   ['View', [
     ['Zoom in / out', `${SHORTCUT_MOD}++ / ${SHORTCUT_MOD}+−`], ['Zoom with the wheel', `${SHORTCUT_MOD}+scroll`],
@@ -713,7 +721,7 @@ const SHORTCUT_GROUPS = [
   // berg:work: Markup › Measure.
   ['Measure', [
     ['Finish a perimeter or area', 'Enter / double-click'], ['Take back the last corner', 'Backspace'],
-    ['Steps of 45°', 'Shift'], ['Without snapping', 'Alt'], ['Cancel the measurement', 'Esc'],
+    ['Steps of 45°', 'Shift'], ['Without snapping', `${SHORTCUT_MOD}`], ['Cancel the measurement', 'Esc'],
   ]],
 ];
 
@@ -24756,6 +24764,17 @@ function App({ shell = null }) {
         }
         if (workspaceSnapshotRef.current.activeDocId === doc.id && livePdfRuntimeRef.current === runtime) {
           setSelected(selections.length > 1 ? { type: 'multi', pageId: page.id, items: selections } : selections[0] || null);
+          // berg:work: a single pasted image is shown as an image region, not as the PDF object the paste knows;
+          // hand the selection to that region once it is drawn.
+          const pastedObject = selections.length === 1 && nativeIds.length === 1 ? liveObjectDescriptor(inspection, nativeIds[0]) : null;
+          if (pastedObject?.objectId && String(pastedObject.typeName || '').toLowerCase() === 'image') {
+            const claim = (frames = 0) => {
+              if (document.querySelector(`.oo-pdf-imagebox[data-object-id="${CSS.escape(pastedObject.objectId)}"]`)) {
+                window.dispatchEvent(new CustomEvent(SELECT_IMAGE_OBJECT_EVENT, { detail: { pageId: page.id, objectId: pastedObject.objectId } }));
+              } else if (frames < 120) requestAnimationFrame(() => claim(frames + 1));
+            };
+            requestAnimationFrame(() => claim());
+          }
         }
         window.__fernworkLastLivePdfTransaction = { ...result, normalEditPath: 'semantic-kernel-session' };
         return true;
@@ -24841,6 +24860,34 @@ function App({ shell = null }) {
     }
   }, [activeDoc, bindSemanticTextTarget, refreshLivePageSceneAfterCommit, updateDoc]);
 
+  // berg:work: a copy placed at an offset (Alt-drag); the offset is remembered for the copy, so Ctrl+D on it repeats
+  // the step (Figma's "duplicate with the last offset").
+  const lastDuplicateRef = useRef(null);
+  const selectionIdentity = selection => (selection?.type === 'multi' ? selection.items || [] : selection ? [selection] : [])
+    .map(item => selectionItemKey(item)).sort().join('|');
+  const duplicateWithOffset = useCallback(async (payload, offset) => {
+    const targets = payload?.type === 'multi' ? payload.items || [] : payload ? [payload] : [];
+    if (!activeDoc || !targets.length) return false;
+    if (targets.some(item => layerPresentationFor(activeDoc.layerPresentation, selectionLayerKey(item)).locked)) {
+      showToast('Unlock the selected layer before duplicating it.', 'warning');
+      return false;
+    }
+    const clip = await copySelection(payload);
+    const rects = (clip?.items || []).map(item => item.rect || item.source)
+      .filter(rect => Number.isFinite(Number(rect?.x)) && Number.isFinite(Number(rect?.y)));
+    if (clip?.kind !== 'selection-snapshot' || !rects.length) return false;
+    const at = { x: Math.min(...rects.map(rect => Number(rect.x))) + offset.x, y: Math.min(...rects.map(rect => Number(rect.y))) + offset.y };
+    const done = await pasteSelectionSnapshot(clip, payload.pageId, at);
+    // The copy's selection settles shortly after the paste (an image hands it to its region); the effect below
+    // takes the last one within that window as the selection that may repeat the offset.
+    if (done) lastDuplicateRef.current = { offset, identity: selectionIdentity(selectedRef.current), until: Date.now() + 2000 };
+    return done;
+  }, [activeDoc, copySelection, pasteSelectionSnapshot]);
+  useEffect(() => {
+    const repeat = lastDuplicateRef.current;
+    if (repeat && Date.now() < repeat.until && selected) repeat.identity = selectionIdentity(selected);
+  }, [selected]);
+
   const duplicateSelection = useCallback((payload = selected) => {
     const targets = payload?.type === 'multi' ? payload.items || [] : payload ? [payload] : [];
     if (activeDoc && targets.some(item => layerPresentationFor(activeDoc.layerPresentation, selectionLayerKey(item)).locked)) {
@@ -24851,9 +24898,14 @@ function App({ shell = null }) {
       void duplicateNestedSelection(targets[0]);
       return;
     }
+    const repeat = lastDuplicateRef.current;
+    if (repeat && payload && repeat.identity === selectionIdentity(payload)) {
+      void duplicateWithOffset(payload, repeat.offset);
+      return;
+    }
     const copied = copySelection(payload);
     if (copied) void pasteClipboard(copied);
-  }, [activeDoc, copySelection, duplicateNestedSelection, pasteClipboard, selected]);
+  }, [activeDoc, copySelection, duplicateNestedSelection, duplicateWithOffset, pasteClipboard, selected]);
 
   // Clipboard and Ctrl+D listen on window once and call the latest render's
   // handlers through a ref: re-subscribing on every selection change could
@@ -28967,6 +29019,56 @@ function App({ shell = null }) {
     window.addEventListener('keydown', pan);
     return () => window.removeEventListener('keydown', pan);
   }, [activeDocId, editingText]);
+  // berg:work: Alt-drag duplicates (Figma, Canva): releasing a move with Alt held cancels the move and drops a copy
+  // at the release point, one Undo step; the original stays. Ctrl+D right after repeats that offset.
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return undefined;
+    let press = null;
+    const down = event => {
+      press = null;
+      if (event.button !== 0 || !event.altKey || event.ctrlKey || event.metaKey || editingText) return;
+      const target = event.target;
+      if (!viewport.contains(target) || target?.closest?.('.oo-pdf-resize, .oo-pdf-rotate-handle, .oo-pdf-rotate-zone, .oo-pdf-arrow-endpoint')) return;
+      if (!target?.closest?.('[data-selection-key], .oo-pdf-multi-selection')) return;
+      press = { x: event.clientX, y: event.clientY };
+    };
+    const up = event => {
+      const start = press;
+      press = null;
+      const selection = selectedRef.current;
+      if (!start || !event.altKey || !selection || Math.hypot(event.clientX - start.x, event.clientY - start.y) < 4) return;
+      const page = activeDoc?.pages.find(item => item.id === selection.pageId);
+      if (!page || Number(page.rotation || 0) % 360) return;
+      const zoom = Math.max(0.0001, Number(zoomRef.current) || 1);
+      const offset = { x: (event.clientX - start.x) / zoom, y: (event.clientY - start.y) / zoom };
+      window.dispatchEvent(new Event(PDF_INTERACTION_CANCEL_EVENT));
+      event.stopPropagation();
+      void duplicateWithOffset(selection, offset);
+    };
+    window.addEventListener('pointerdown', down, true);
+    window.addEventListener('pointerup', up, true);
+    return () => {
+      window.removeEventListener('pointerdown', down, true);
+      window.removeEventListener('pointerup', up, true);
+    };
+  }, [activeDoc, editingText, duplicateWithOffset]);
+  // berg:work: Alt with a selection shows its distances to the hovered object or the page edges.
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return undefined;
+    return installAltDistances({
+      viewport,
+      getZoom: () => Number(zoomRef.current) || 1,
+      getSelectionElement: () => {
+        const selection = selectedRef.current;
+        if (!selection || editingText) return null;
+        if (selection.type === 'multi') return viewport.querySelector('.oo-pdf-multi-selection');
+        const key = selectionItemKey(selection);
+        return key ? viewport.querySelector(`[data-selection-key="${CSS.escape(key)}"]`) : null;
+      },
+    });
+  }, [activeDocId, editingText]);
   // Middle mouse button drags the page with any tool, as in CAD programs.
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -29285,7 +29387,7 @@ function App({ shell = null }) {
               title={guidesVisible ? 'Hide drawing guides' : 'Show drawing guides (drag from a ruler to add one)'} onClick={() => setGuidesVisible(value => !value)} />
             <ChromeMenuItem label="Rulers" iconName="ruler" pressed={rulersVisible} onClick={() => setRulersVisible(value => !value)} />
             <ChromeMenuItem label="Snap" iconName="magnet" pressed={snapEnabled}
-              title="Snap to edges and centers (hold Alt to move freely)" onClick={() => setSnapEnabled(value => !value)} />
+              title={`Snap to edges and centers (hold ${SHORTCUT_MOD} to move freely)`} onClick={() => setSnapEnabled(value => !value)} />
             <ChromeMenuItem label="Guide settings…" iconName="settings" className="oo-pdf-chrome-menu-link"
               onClick={() => { closeChromeMenu(); setPanel('guides'); setDrawerOpen(true); }} />
           </ChromePopoverButton>
@@ -39090,6 +39192,18 @@ function ImageRegion({ page, pages = [page], item, itemId, edit, preferences, zo
     item: { ...item, sourcePageId: page.id },
     edit: edit ? { ...current, ...itemPatch } : undefined,
   });
+  // berg:work: a pasted or duplicated image selects itself once it is drawn (the paste only knows its PDF object).
+  const selectSelfRef = useRef(null);
+  selectSelfRef.current = () => onSelect(selectionPayload());
+  useEffect(() => {
+    const objectId = current.objectId;
+    if (!objectId) return undefined;
+    const claim = event => {
+      if (event.detail?.pageId === page.id && event.detail?.objectId === objectId) selectSelfRef.current?.();
+    };
+    window.addEventListener(SELECT_IMAGE_OBJECT_EVENT, claim);
+    return () => window.removeEventListener(SELECT_IMAGE_OBJECT_EVENT, claim);
+  }, [current.objectId, page.id]);
 
   const start = (event, handle = null) => {
     if (event.pointerType === 'touch' && !event.isPrimary) return;

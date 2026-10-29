@@ -977,3 +977,19 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
 .oo-pdf-measure-options .oo-pdf-measure-ratio input { width: 64px; }
 .oo-pdf-measure-options .oo-pdf-measure-scale { white-space: nowrap; }
 .oo-pdf-chrome-popover-title.oo-pdf-menu-section { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--bw-border, #e7e5e4); }
+
+/* Alt with a selection: distances to the hovered object or the page edges (bergwork-alt-distances.js). */
+.oo-pdf-alt-distances { position: fixed; inset: 0; z-index: 60; pointer-events: none; }
+.oo-pdf-alt-distances > span { position: fixed; }
+.oo-pdf-alt-distances-target { outline: 1px solid #e5484d; outline-offset: 0; }
+.oo-pdf-alt-distances-line.is-horizontal { border-top: 1px solid #e5484d; height: 0 !important; }
+.oo-pdf-alt-distances-line.is-vertical { border-left: 1px solid #e5484d; width: 0 !important; }
+.oo-pdf-alt-distances-label {
+  transform: translate(-50%, -50%);
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #e5484d;
+  color: #fff;
+  font: 600 11px/1.4 var(--bw-font-sans, system-ui, sans-serif);
+  white-space: nowrap;
+}

@@ -224,7 +224,7 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
       // The 45° grid is in display space, so it follows what the user sees on rotated pages too.
       display = constrainTo45(pdfToDisplay(page, anchor), display);
       point = displayToPdf(page, display);
-    } else if (snap && !event.altKey && snapGrid) {
+    } else if (snap && !event.ctrlKey && !event.metaKey && snapGrid) { // berg:work: Ctrl/⌘ measures without snapping (Figma)
       const target = snapGrid.nearest(point, 8 / Math.max(0.05, zoom));
       if (target) {
         point = { x: target.x, y: target.y };

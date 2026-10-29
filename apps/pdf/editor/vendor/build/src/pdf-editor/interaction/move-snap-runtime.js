@@ -17,6 +17,8 @@ const union = rects => {
 export class MoveSnapRuntime {
   #contexts = new WeakMap();
   #active = new Map();
+  // berg:work: the key that moves without snapping; berg:work sets Ctrl/⌘ (Figma), Fernwork keeps Alt.
+  freeMoveKey = event => event.altKey === true;
 
   register(surface, readContext) {
     if (!surface) return () => {};
@@ -63,7 +65,7 @@ export class MoveSnapRuntime {
     const inside = event.clientX >= paper.left && event.clientX <= paper.right &&
       event.clientY >= paper.top && event.clientY <= paper.bottom;
     const result = resolveMoveSnap(draft.index, draft.rect, rawDx, rawDy, {
-      zoom, enabled: state.enabled && inside, altKey: event.altKey, shiftKey: event.shiftKey,
+      zoom, enabled: state.enabled && inside, altKey: this.freeMoveKey(event), shiftKey: event.shiftKey,
       spacing: true, // berg:work: equal-spacing snaps and markers
     });
     const visiblePage = {

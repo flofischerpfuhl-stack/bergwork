@@ -43,8 +43,10 @@ Selection and transform:
 - [x] **Click beside the pages deselects** (mouse and touch).
 - [x] **A second click on selected text edits it at the click** (PowerPoint, Canva); overlapping objects still cycle.
 - [x] **Shape tools:** a click places a 100 × 100 pt shape (arrow 120 pt); drawing tools show a crosshair.
-- [ ] **Alt-drag duplicates; Ctrl+D repeats the last offset** (Figma, Canva). Today Alt-drag moves the original.
-  1–2 PD.
+- [x] **Alt-drag duplicates; Ctrl+D repeats the last offset** (Figma; approved 2026-10-29). Releasing a move with
+  Alt cancels it and pastes a copy at that offset (one Undo step, the copy selected, the original stays); Ctrl+D on
+  that copy repeats the step. **Ctrl/⌘ now moves and measures without snapping** (was Alt). Fixed on the way: a
+  pasted or duplicated image was not selected afterwards.
 - [x] **Undo selects what it changed:** with nothing selected, Undo/Redo select the object whose frame moved or that
   came back, and scroll to it; a kept selection stays as before.
 - [x] **Rotate from just outside a corner** (approved): four rotate zones with a rotate cursor; the round handle is
@@ -53,7 +55,8 @@ Selection and transform:
 - [x] **Resize cursors follow the frame's rotation.**
 - [x] **Equal-spacing snaps** with pink gap markers (between two neighbours, or repeating a neighbour's gap); an
   option of `resolveMoveSnap` that the gesture runtime turns on, so Fernwork's 23 move-snapping unit tests still pass.
-- [ ] **Alt-hover distance measuring** (Figma). Alt already means "move freely"; needs a decision. 1–2 PD.
+- [x] **Alt-hover distances** (Figma): with a selection, holding Alt shows red distance lines in pt to the object
+  under the pointer, or to the page edges over the page itself (`bergwork-alt-distances.js`, a DOM overlay).
 - [x] **Select the object below** was already in the context menu when objects are stacked.
 - [x] **Context menu** (approved): Paste here (at the right-clicked point), Bring forward / Send backward one step
   (Ctrl+] / [, with Shift to front/back), Lock / Unlock; grouped into clipboard, arrange, properties/delete. Group
@@ -127,12 +130,12 @@ Forms:
 ## Features compared with PDF-XChange (Fernwork TODO part B, built in the fork)
 
 - [x] **Measure tools with scale** (distance, area, perimeter, calibration, CSV), merged from
-  `feat/pdf-measure-comments`. **Needs OK** (Markup menu sections Comment and Measure, option bars, Comments panel).
+  `feat/pdf-measure-comments`. Approved by Florian 2026-10-29 (Markup menu sections, option bars, Comments panel).
 - [x] **Comment workflow** (text box, callout, line, polygon, cloud, stamps, comment list, XFDF), same branch. Open
   details in the section "Measuring and comments" below.
 - [x] **Headers, footers and Bates numbers** in the Page numbers panel: text with {page}, {pages}, {date}, {file},
   start number, zero-padded digits, six positions picked on the preview page; header and footer coexist.
-  **Needs OK** (panel grew by a text field, two number fields and the position picker).
+  Approved by Florian 2026-10-29.
 - [ ] **Page tools:** blank page, crop and resize pages, split by count/bookmarks/size, merge several files by
   drop. 5–10 PD.
 - [ ] **PDF/A save** (fonts embedded, XMP, OutputIntent; check with veraPDF). 5–10 PD.
@@ -145,7 +148,7 @@ Branch `feat/pdf-measure-comments`. Everything is in the fork's own files (`pdf-
 `pdf-editor/interaction/measure-layer.jsx`, `comment-tools.jsx`, `comment-list.jsx`) plus small `berg:work:` hunks in
 the shell. The pinned worker cannot write `/Measure`, `/Vertices`, `/VP`, `/IRT`, `/CL` or stamps, so these changes
 are written into a checkpoint with pdf-lib and committed as one snapshot transaction (as page stamps do). Node tests:
-`npm run test:unit -w @bergwork/pdf`. **Needs OK** for the whole UI (Markup › Comment / Measure, the options bars,
+`npm run test:unit -w @bergwork/pdf`. Approved by Florian (2026-10-29) for the whole UI (Markup › Comment / Measure, the options bars,
 the chip over a selected measurement, the Comments panel); screenshots in
 `AgentWork/bergwork-pdf-analyse/audit/measure-comments/`.
 
