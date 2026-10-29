@@ -235,7 +235,10 @@ in a headless page. That is the basis.
 - [x] **Harness check:** `doc.encrypt` passed `{print, copy, …}` while the shell reads `noPrint`/`noCopy`/…, so no
   restriction was ever set. Fixed, and the corpus now checks the saved permissions with `qpdf --show-encryption`
   (`qpdf.permissions`).
-- [ ] **URL scheme / deep link.** Open file X at page Y, from scripts and other apps. 1–2 PD.
+- [x] **Open file X at page Y** from scripts and other apps: `bergwork-pdf plan.pdf --page 5` (`--page=5`, or before
+  the file) and `plan.pdf#page=5` as in PDF open parameters; also for a second launch into the running app.
+  **No custom URL scheme** (`bergwork-pdf://…`): any web page could then make the app open local paths, and the
+  command line covers scripts and other apps. Revisit only with a concrete need (e.g. links from berg:work web).
 
 ## Printing to berg:work PDF
 

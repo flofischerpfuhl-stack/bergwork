@@ -22,7 +22,7 @@ const OPEN_FILES_EVENT: &str = "bergwork://open-files";
 #[derive(Default)]
 struct Files {
     /// Documents from the command line of the first launch, until the page asks for them.
-    pending: Mutex<Vec<PathBuf>>,
+    pending: Mutex<Vec<Launch>>,
     /// Paths the page may read (opened documents) or write (chosen in the save dialog).
     allowed: Mutex<HashSet<PathBuf>>,
 }
@@ -38,33 +38,69 @@ impl Files {
     }
 }
 
-/// Existing files among the arguments (the program name and options are skipped).
-fn document_paths(args: &[String], cwd: Option<&Path>) -> Vec<PathBuf> {
-    args.iter()
-        .skip(1)
-        .filter(|arg| !arg.starts_with('-'))
-        .map(|arg| {
-            let path = PathBuf::from(arg.strip_prefix("file://").unwrap_or(arg));
-            match cwd {
-                Some(dir) if path.is_relative() => dir.join(path),
-                _ => path,
-            }
-        })
-        .filter(|path| path.is_file())
-        .filter_map(|path| path.canonicalize().ok())
-        .collect()
+/// A document from the command line and the page to show first (1-based), if one was asked for.
+type Launch = (PathBuf, Option<u32>);
+
+/// Existing files among the arguments (the program name and other options are skipped). A page is asked for with
+/// `--page N` / `--page=N` (for the document after it, or the one before when none follows) or with a `#page=N`
+/// suffix as in PDF open parameters (`plan.pdf#page=3`), unless a file of that very name exists.
+fn launch_documents(args: &[String], cwd: Option<&Path>) -> Vec<Launch> {
+    let resolve = |arg: &str| {
+        let path = PathBuf::from(arg.strip_prefix("file://").unwrap_or(arg));
+        let path = match cwd {
+            Some(dir) if path.is_relative() => dir.join(path),
+            _ => path,
+        };
+        path.is_file().then(|| path.canonicalize().ok()).flatten()
+    };
+    let mut documents: Vec<Launch> = Vec::new();
+    let mut page_for_next: Option<u32> = None;
+    let mut rest = args.iter().skip(1);
+    while let Some(arg) = rest.next() {
+        let page_option = if arg == "--page" {
+            Some(rest.next().map_or("", String::as_str))
+        } else {
+            arg.strip_prefix("--page=")
+        };
+        if let Some(value) = page_option {
+            page_for_next = value.parse().ok().filter(|page| *page > 0);
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        let (path, page) = match resolve(arg) {
+            Some(path) => (Some(path), None),
+            None => match arg.rsplit_once("#page=") {
+                Some((file, page)) => (resolve(file), page.parse().ok().filter(|page| *page > 0)),
+                None => (None, None),
+            },
+        };
+        if let Some(path) = path {
+            documents.push((path, page.or(page_for_next.take())));
+        }
+    }
+    if let (Some(page), Some(last)) = (page_for_next, documents.last_mut()) {
+        last.1 = last.1.or(Some(page));
+    }
+    documents
 }
 
-fn path_strings(paths: &[PathBuf]) -> Vec<String> {
-    paths.iter().map(|path| path.to_string_lossy().into_owned()).collect()
+fn launch_paths(documents: &[Launch]) -> Vec<PathBuf> {
+    documents.iter().map(|(path, _)| path.clone()).collect()
 }
 
-/// The documents the app was started with; each is handed out once.
+/// `[path, page]` pairs for the page (page is null when none was asked for).
+fn launch_payload(documents: &[Launch]) -> Vec<(String, Option<u32>)> {
+    documents.iter().map(|(path, page)| (path.to_string_lossy().into_owned(), *page)).collect()
+}
+
+/// The documents the app was started with, as `[path, page]` pairs; each is handed out once.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // Tauri hands command arguments over by value.
-fn take_launch_files(files: State<'_, Files>) -> Vec<String> {
-    let paths = std::mem::take(&mut *files.pending.lock().expect("file list poisoned"));
-    path_strings(&paths)
+fn take_launch_files(files: State<'_, Files>) -> Vec<(String, Option<u32>)> {
+    let documents = std::mem::take(&mut *files.pending.lock().expect("file list poisoned"));
+    launch_payload(&documents)
 }
 
 /// Reads a document that was opened with the app.
@@ -142,9 +178,9 @@ fn percent_decode(value: &str) -> Result<String, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let launch = document_paths(&std::env::args().collect::<Vec<_>>(), None);
+    let launch = launch_documents(&std::env::args().collect::<Vec<_>>(), None);
     let files = Files::default();
-    files.allow(&launch);
+    files.allow(&launch_paths(&launch));
     *files.pending.lock().expect("file list poisoned") = launch;
 
     let builder = tauri::Builder::default();
@@ -152,10 +188,10 @@ pub fn run() {
     // Must be the first plugin: a second launch hands its documents to the running app and exits.
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
-        let paths = document_paths(&argv, Some(Path::new(&cwd)));
-        if !paths.is_empty() {
-            app.state::<Files>().allow(&paths);
-            let _ = app.emit(OPEN_FILES_EVENT, path_strings(&paths));
+        let documents = launch_documents(&argv, Some(Path::new(&cwd)));
+        if !documents.is_empty() {
+            app.state::<Files>().allow(&launch_paths(&documents));
+            let _ = app.emit(OPEN_FILES_EVENT, launch_payload(&documents));
         }
         focus_main_window(app);
     }));
@@ -200,8 +236,30 @@ mod tests {
             file.to_string_lossy().into_owned(),
             "/does/not/exist.pdf".to_string(),
         ];
-        let paths = document_paths(&args, None);
-        assert_eq!(paths, vec![file.canonicalize().unwrap()]);
+        let documents = launch_documents(&args, None);
+        assert_eq!(documents, vec![(file.canonicalize().unwrap(), None)]);
         std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn reads_the_page_to_open() {
+        let dir = std::env::temp_dir();
+        let first = dir.join("bergwork-page-a.pdf");
+        let second = dir.join("bergwork-page-b.pdf");
+        std::fs::write(&first, b"%PDF").unwrap();
+        std::fs::write(&second, b"%PDF").unwrap();
+        let name = |path: &PathBuf| path.to_string_lossy().into_owned();
+        let launch = |args: &[String]| {
+            launch_documents(&[vec!["bergwork-pdf".to_string()], args.to_vec()].concat(), None)
+        };
+        let a = first.canonicalize().unwrap();
+        let b = second.canonicalize().unwrap();
+        assert_eq!(launch(&["--page".into(), "4".into(), name(&first)]), vec![(a.clone(), Some(4))]);
+        assert_eq!(launch(&[name(&first), "--page=2".into()]), vec![(a.clone(), Some(2))]);
+        assert_eq!(launch(&[format!("{}#page=7", name(&first)), name(&second)]), vec![(a.clone(), Some(7)), (b.clone(), None)]);
+        assert_eq!(launch(&["--page".into(), "0".into(), name(&first)]), vec![(a, None)]);
+        assert_eq!(launch(&[format!("{}#page=3", name(&dir.join("missing.pdf")))]), vec![]);
+        std::fs::remove_file(first).unwrap();
+        std::fs::remove_file(second).unwrap();
     }
 }

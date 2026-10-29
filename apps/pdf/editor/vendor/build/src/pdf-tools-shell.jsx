@@ -19414,6 +19414,9 @@ function App({ shell = null }) {
     setPdfFullscreen(value => !value);
   }, []);
 
+  // berg:work: a first page asked for by the desktop app, waiting for its document to show.
+  const openAtPageRef = useRef(null);
+  const [openAtPageTick, setOpenAtPageTick] = useState(0);
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return undefined;
@@ -19427,7 +19430,13 @@ function App({ shell = null }) {
     });
     const onOpenFile = (event) => {
       const file = event.detail?.file;
-      if (file) void openFiles([file], { showOpenCopy: true });
+      // berg:work: the desktop app may ask for a first page (`--page N`, `file.pdf#page=N`); it is shown once the
+      // document is open (see the effect after goToPage).
+      const page = Number(event.detail?.page);
+      if (file) void openFiles([file], { showOpenCopy: true }).then(() => {
+        if (Number.isInteger(page) && page > 0) openAtPageRef.current = { page, frames: 0 };
+        setOpenAtPageTick(tick => tick + 1);
+      });
     };
     document.addEventListener('oo-open-file-pdf', onOpenFile);
     return () => {
@@ -25681,6 +25690,26 @@ function App({ shell = null }) {
       targetSheet?.scrollIntoView({ block: 'center', inline: 'center' });
     });
   }, [activeDoc]);
+
+  // berg:work: show the page the desktop app was asked to open at, once its sheet is laid out.
+  useEffect(() => {
+    const request = openAtPageRef.current;
+    if (!request || !activeDoc?.pages?.length) return undefined;
+    let frame = 0;
+    const attempt = () => {
+      const index = clamp(request.page - 1, 0, activeDoc.pages.length - 1);
+      if (viewportRef.current?.querySelector(`.oo-pdf-sheet[data-page-index="${index}"]`) || request.frames > 300) {
+        openAtPageRef.current = null;
+        setActivePage(index);
+        goToPage(index);
+        return;
+      }
+      request.frames += 1;
+      frame = requestAnimationFrame(attempt);
+    };
+    frame = requestAnimationFrame(attempt);
+    return () => cancelAnimationFrame(frame);
+  }, [openAtPageTick, activeDoc, goToPage]);
 
   // Following a link annotation (see PdfPageLinks).
   useEffect(() => {

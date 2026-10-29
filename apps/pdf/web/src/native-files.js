@@ -100,16 +100,18 @@ export async function editorReady() {
   }
 }
 
-async function openPaths(paths) {
-  if (!paths?.length) return;
+// Documents arrive as [path, page] pairs (page 1-based, or null; `--page N` / `file.pdf#page=N`).
+async function openPaths(documents) {
+  if (!documents?.length) return;
   await editorReady();
-  for (const path of paths) {
+  for (const entry of documents) {
+    const [path, page] = Array.isArray(entry) ? entry : [entry, null];
     try {
       const buffer = await invoke('read_file', { path });
       const name = basename(path);
       const type = extensionOf(name) === 'pdf' ? 'application/pdf' : PROJECT_TYPE;
       const file = new File([buffer], name, { type });
-      document.dispatchEvent(new CustomEvent('oo-open-file-pdf', { detail: { file } }));
+      document.dispatchEvent(new CustomEvent('oo-open-file-pdf', { detail: { file, page } }));
     } catch (error) {
       console.error(`[bergwork] could not open ${path}`, error);
     }
