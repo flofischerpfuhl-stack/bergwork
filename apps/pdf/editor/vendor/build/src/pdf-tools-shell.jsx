@@ -25698,10 +25698,14 @@ function App({ shell = null }) {
       },
     }));
     const message = pageIds.length === 1 ? `Page ${firstIndex + 1} deleted.` : `${pageIds.length} pages deleted.`;
+    const remaining = activeDoc.pages.filter(page => !pageIds.includes(page.id));
+    const nextCurrentId = remaining[Math.min(remaining.length - 1, Math.max(0, firstIndex - 1))]?.id;
     void runPageTopologySteps(documentId, steps).then(() => {
       setSelected(null);
       setPageSelectionIds([]);
       setActivePage(Math.max(0, firstIndex - 1));
+      // The page before the deleted ones becomes current and is shown.
+      if (nextCurrentId) showPagesAfterChange(documentId, [nextCurrentId], nextCurrentId);
       const doc = workspaceSnapshotRef.current.docs.find(item => item.id === documentId);
       const mark = { history: doc?.historyPast?.length ?? -1, pages: (doc?.pages || []).map(page => page.id).join('|') };
       showToast(message, 'info', 8000, { action: { label: 'Undo', onClick: () => {
