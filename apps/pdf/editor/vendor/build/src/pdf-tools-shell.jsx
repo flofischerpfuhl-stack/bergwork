@@ -720,6 +720,86 @@ function ShortcutsDialog({ onClose }) {
   );
 }
 
+// berg:work: the live readout next to the pointer while a frame is resized or rotated or a shape is drawn (Figma,
+// PowerPoint): width × height in pt, or the angle. It reads the handles of the frame being dragged, so it follows
+// every object type without hooks into each gesture.
+const READOUT_DRAW_TOOLS = new Set(['rect', 'ellipse', 'arrow', 'redact']);
+function frameFromHandles(frame) {
+  const centre = corner => {
+    const node = frame?.querySelector?.(`:scope > .oo-pdf-resize.${corner}, .oo-pdf-resize.${corner}`);
+    const box = node?.getBoundingClientRect?.();
+    return box?.width ? { x: box.left + box.width / 2, y: box.top + box.height / 2 } : null;
+  };
+  const nw = centre('nw'); const ne = centre('ne'); const sw = centre('sw');
+  if (!nw || !ne || !sw) return null;
+  return { w: Math.hypot(ne.x - nw.x, ne.y - nw.y), h: Math.hypot(sw.x - nw.x, sw.y - nw.y),
+    angle: Math.atan2(ne.y - nw.y, ne.x - nw.x) * 180 / Math.PI };
+}
+function GestureReadout({ zoom, tool }) {
+  const [readout, setReadout] = useState(null);
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
+  useEffect(() => {
+    let gesture = null;
+    const down = event => {
+      if (event.button !== 0 || (event.pointerType === 'touch' && !event.isPrimary)) return;
+      const target = event.target;
+      const handle = target?.closest?.('.oo-pdf-resize, .oo-pdf-rotate-handle');
+      if (handle) {
+        const frame = handle.parentElement?.closest?.('[data-selection-key], .oo-pdf-selection-frame, .is-selected') || handle.parentElement;
+        gesture = { kind: handle.classList.contains('oo-pdf-rotate-handle') ? 'angle' : 'size', frame };
+        return;
+      }
+      if (READOUT_DRAW_TOOLS.has(toolRef.current) && target?.closest?.('.oo-pdf-page-surface')) {
+        gesture = { kind: 'draw', x: event.clientX, y: event.clientY };
+      }
+    };
+    const move = event => {
+      if (!gesture || !event.buttons) return;
+      const scale = zoomRef.current || 1;
+      let text = '';
+      if (gesture.kind === 'draw') {
+        const w = Math.abs(event.clientX - gesture.x) / scale;
+        const h = Math.abs(event.clientY - gesture.y) / scale;
+        if (w < 2 && h < 2) return;
+        text = toolRef.current === 'arrow'
+          ? `${Math.round(Math.hypot(w, h))} pt · ${Math.round((Math.atan2(gesture.y - event.clientY, event.clientX - gesture.x) * 180 / Math.PI + 360) % 360)}°`
+          : `${Math.round(w)} × ${Math.round(h)} pt`;
+      } else {
+        const box = frameFromHandles(gesture.frame?.isConnected ? gesture.frame : document.querySelector('.oo-pdf-viewport .is-selected'));
+        if (!box) return;
+        text = gesture.kind === 'angle'
+          ? `${Math.round(((box.angle % 360) + 360) % 360)}°`
+          : `${Math.round(box.w / scale)} × ${Math.round(box.h / scale)} pt`;
+      }
+      setReadout({ text, x: event.clientX + 16, y: event.clientY + 18 });
+    };
+    const up = () => { gesture = null; setReadout(null); };
+    window.addEventListener('pointerdown', down, true);
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerup', up, true);
+    window.addEventListener('pointercancel', up, true);
+    window.addEventListener('blur', up);
+    return () => {
+      window.removeEventListener('pointerdown', down, true);
+      window.removeEventListener('pointermove', move, true);
+      window.removeEventListener('pointerup', up, true);
+      window.removeEventListener('pointercancel', up, true);
+      window.removeEventListener('blur', up);
+    };
+  }, []);
+  if (!readout) return null;
+  return createPortal(
+    <div className="oo-pdf-gesture-readout" role="status" aria-live="off"
+      style={{ left: Math.min(readout.x, window.innerWidth - 140), top: Math.min(readout.y, window.innerHeight - 36) }}>
+      {readout.text}
+    </div>,
+    document.body,
+  );
+}
+
 function MiniToolbarHost({ toolbar, onHost }) {
   const ref = useRef(null);
   const [position, setPosition] = useState(null);
@@ -28232,6 +28312,7 @@ function App({ shell = null }) {
       )}
       {miniToolbar && <MiniToolbarHost toolbar={miniToolbar} onHost={setMiniToolbarHost} />}
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+      {activeDoc && <GestureReadout zoom={zoom} tool={tool} />}
       {contextMenu && (
         <PdfContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)} items={[
           ...(selected && selected.type !== 'multi' && contextMenu.objectKind === 'text' ? [{

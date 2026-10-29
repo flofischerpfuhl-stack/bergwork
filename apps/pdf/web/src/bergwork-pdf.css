@@ -716,3 +716,18 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
 
 /* Drawing tools aim with a crosshair, as in Figma and PowerPoint. */
 .oo-pdf-shell .oo-pdf-page-surface:is(.tool-rect, .tool-ellipse, .tool-arrow, .tool-draw, .tool-redact) { cursor: crosshair; }
+
+/* Live size / angle next to the pointer while resizing, rotating or drawing. */
+.oo-pdf-gesture-readout {
+  position: fixed;
+  z-index: 3000;
+  padding: 3px 7px;
+  border-radius: var(--bw-radius-menu, 6px);
+  background: var(--bw-fg, #222);
+  color: var(--bw-bg, #fff);
+  font: 500 var(--bw-text-small, 12px) / 1.4 var(--bw-font-ui, system-ui);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--bw-shadow-popover);
+}
