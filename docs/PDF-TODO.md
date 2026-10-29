@@ -64,7 +64,7 @@ Text:
 - [x] **Readable font names** in the picker: "Arial (from the PDF)" instead of "Original PDF font · AAAAAA+ArialMT";
   the duplicate caption under the picker is gone.
 - [ ] **Font preview on hover** in the font list, on the selected text (Figma). 2–3 PD.
-- [ ] **The selection frame grows while typing**, not only after the commit. 1–2 PD (with Fernwork's text editor).
+- [x] **The selection frame grows while typing**, with its handles, and returns to its own size when editing ends.
 
 Panels and fields:
 - [x] **Number fields scrub on their label and take arithmetic** (210/2, 72+12, decimal comma).
