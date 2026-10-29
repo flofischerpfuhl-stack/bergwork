@@ -1021,3 +1021,45 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
   font: 600 11px/1.4 var(--bw-font-sans, system-ui, sans-serif);
   white-space: nowrap;
 }
+
+/* (i) next to a panel title: the panel's explanations show on hover, focus or a tap (PanelHint, InfoTip). */
+.oo-pdf-shell .oo-pdf-info { position: relative; display: inline-flex; vertical-align: middle; margin-left: 6px; }
+.oo-pdf-shell .oo-pdf-info:not(:has(.oo-pdf-info-text, .oo-pdf-info-notes > *)) { display: none; }
+.oo-pdf-shell .oo-pdf-info-button {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--bw-fg-muted, var(--bw-fg));
+  font: italic 600 10px/1 Georgia, 'Times New Roman', serif;
+  cursor: help;
+  opacity: 0.7;
+}
+.oo-pdf-shell .oo-pdf-info-button:hover, .oo-pdf-shell .oo-pdf-info-button:focus-visible { opacity: 1; }
+.oo-pdf-shell .oo-pdf-info-bubble {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: -8px;
+  z-index: 40;
+  display: none;
+  width: max-content;
+  max-width: 260px;
+  padding: 8px 10px;
+  border: 1px solid var(--bw-border);
+  border-radius: 8px;
+  background: var(--bw-surface-raised, var(--bw-bg));
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.14);
+  color: var(--bw-fg);
+  font: 400 12px/1.45 var(--bw-font-sans, system-ui, sans-serif);
+  text-transform: none;
+  letter-spacing: normal;
+}
+.oo-pdf-shell .oo-pdf-info:hover .oo-pdf-info-bubble,
+.oo-pdf-shell .oo-pdf-info:focus-within .oo-pdf-info-bubble { display: block; }
+.oo-pdf-shell .oo-pdf-info-bubble p { margin: 0; }
+.oo-pdf-shell .oo-pdf-info-bubble p + p, .oo-pdf-shell .oo-pdf-info-text + .oo-pdf-info-notes > p:first-child { margin-top: 6px; }
+.oo-pdf-shell .oo-pdf-info-notes { display: block; }

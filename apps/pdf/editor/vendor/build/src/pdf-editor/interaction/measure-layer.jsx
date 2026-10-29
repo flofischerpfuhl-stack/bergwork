@@ -607,8 +607,7 @@ function CalloutTextDialog({ anchor, onApply, onCancel }) {
       <textarea ref={inputRef} rows="3" aria-label="Callout text" value={value} placeholder="Text"
         onChange={event => { setValue(event.target.value); setError(''); }} />
       <div className="oo-pdf-measure-calibrate-row">
-        <span className="oo-pdf-measure-hint">Ctrl+Enter adds it</span>
-        <button type="submit" className="oo-pdf-primary-button" disabled={busy}>Add</button>
+        <button type="submit" className="oo-pdf-primary-button" disabled={busy} title="Ctrl+Enter">Add</button>
         <button type="button" className="oo-pdf-ghost-button" onClick={onCancel}>Cancel</button>
       </div>
       {error && <span className="oo-pdf-measure-error" role="alert">{error}</span>}
@@ -678,9 +677,9 @@ function CalibrationDialog({ points, anchor, defaultUnit = 'm', onApply, onCance
       onSubmit={submit}
       onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); onCancel(); } }}>
       <strong>Calibrate scale</strong>
-      <span className="oo-pdf-measure-hint">The line is {formatNumber(pt * PT_IN_METERS * 1000, 1)} mm on the page. How long is it in reality?</span>
       <div className="oo-pdf-measure-calibrate-row">
-        <input ref={inputRef} type="text" inputMode="decimal" aria-label="Real length" value={value} placeholder="Length"
+        <input ref={inputRef} type="text" inputMode="decimal" aria-label="Real length" value={value} placeholder="Real length"
+          title={`The line is ${formatNumber(pt * PT_IN_METERS * 1000, 1)} mm on the page. How long is it in reality?`}
           onChange={event => { setValue(event.target.value); setError(''); }} />
         <select aria-label="Unit" value={unit} onChange={event => setUnit(event.target.value)}>
           {MEASURE_UNIT_IDS.map(id => <option key={id} value={id}>{MEASURE_UNITS[id].label}</option>)}

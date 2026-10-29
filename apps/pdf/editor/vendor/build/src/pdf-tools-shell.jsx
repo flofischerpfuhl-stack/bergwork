@@ -43121,8 +43121,27 @@ function PanelSection({ title, aside, className = '', children }) {
   );
 }
 
-function PanelHint({ children, role, id, className = '' }) {
+// berg:work: explanations do not stand in the panels (few apps show running help text); they go into the (i) next to
+// the panel title. Status lines (`role`) and hints marked `visible` (empty states, warnings) stay where they are.
+const PanelInfoTargetContext = React.createContext(null);
+function PanelHint({ children, role, id, className = '', visible = false }) {
+  const infoTarget = React.useContext(PanelInfoTargetContext);
+  if (infoTarget && !role && !visible) return createPortal(<p className="oo-pdf-info-note" id={id}>{children}</p>, infoTarget);
   return <p className={`oo-pdf-panel-hint ${className}`} role={role} id={id}>{children}</p>;
+}
+
+// berg:work: a small (i) in a circle; its text shows on hover, keyboard focus or a tap.
+function InfoTip({ label = 'More information', children, targetRef }) {
+  return (
+    <span className="oo-pdf-info">
+      <button type="button" className="oo-pdf-info-button" aria-label={label}
+        onPointerDown={event => { if (event.pointerType !== 'mouse') event.currentTarget.focus(); }}>i</button>
+      <span className="oo-pdf-info-bubble" role="tooltip">
+        {children}
+        {targetRef && <span className="oo-pdf-info-notes" ref={targetRef} />}
+      </span>
+    </span>
+  );
 }
 
 // Two or three exclusive choices. Real radio inputs keep keyboard and
@@ -43228,8 +43247,9 @@ function SegmentedChoice({ label, name, value, options, onChange, disabled = fal
 
 function PanelSwitch({ id, label, hint, checked, onChange, disabled = false, title }) {
   return (
-    <label className="oo-pdf-switch" title={title}>
-      <span className="oo-pdf-switch-text"><span>{label}</span>{hint && <small>{hint}</small>}</span>
+    // berg:work: a switch's hint is its tooltip, not a second line of text.
+    <label className="oo-pdf-switch" title={title || hint}>
+      <span className="oo-pdf-switch-text"><span>{label}</span></span>
       <input id={id} type="checkbox" role="switch" aria-label={label} checked={checked} disabled={disabled}
         onChange={event => onChange(event.target.checked)} />
     </label>
@@ -43867,6 +43887,9 @@ function ToolDrawer(props) {
   const raster = !['vector', 'images'].includes(compressProfile);
 
   let subtitle = '';
+  // berg:work: what a panel is for goes into the (i) by its title, not under it.
+  let info = '';
+  const [panelInfoTarget, setPanelInfoTarget] = useState(null);
   let tabs = null;
   let body = null;
   let footer = null;
@@ -43874,11 +43897,11 @@ function ToolDrawer(props) {
 
   if (panel === 'comments') {
     // berg:work: the document's comments (comment-list.jsx); actions come from the shell through measureStore.
-    subtitle = 'Filter, reply, set a status, exchange as XFDF';
-    body = doc ? <CommentListPanel docId={doc.id} revision={Number(doc.editVersion || 0)} /> : <PanelHint>Open a PDF to see its comments.</PanelHint>;
+    info = 'Filter, reply, set a status, exchange as XFDF';
+    body = doc ? <CommentListPanel docId={doc.id} revision={Number(doc.editVersion || 0)} /> : <PanelHint visible>Open a PDF to see its comments.</PanelHint>;
   } else if (panel === 'guides') {
-    subtitle = 'Ruler units and exact guide positions';
-    body = placementPanel || <PanelHint>Open a PDF to set up rulers and guides.</PanelHint>;
+    info = 'Ruler units and exact guide positions';
+    body = placementPanel || <PanelHint visible>Open a PDF to set up rulers and guides.</PanelHint>;
   } else if (panel === 'document') {
     // berg:work: the page actions act on every selected page (Shift-/Ctrl-click in the grid).
     const several = selectedPages.length > 1;
@@ -43951,6 +43974,10 @@ function ToolDrawer(props) {
             {exportMode === 'range'
               ? <button type="button" className="oo-pdf-panel-button" aria-label="Export range" disabled={!doc || structureBusy} onClick={() => onExportRange(rangeText)}><Icon name="download" /><span>Export</span></button>
               : <button type="button" className="oo-pdf-panel-button" aria-label="Split" aria-busy={splitBusy} disabled={!doc || structureBusy || splitBusy || pageCount < 2}
+                title={exportMode === 'count'
+                  ? `Makes ${Math.max(1, Math.ceil(pageCount / Math.max(1, Number(splitCount) || 1)))} PDFs of ${Math.max(1, Number(splitCount) || 1)} page${Number(splitCount) === 1 ? '' : 's'} each, saved as one zip.`
+                  : exportMode === 'bookmarks' ? 'One PDF per top-level bookmark, named after it, saved as one zip.'
+                    : 'PDFs as large as possible up to that size, saved as one zip.'}
                 onClick={async () => {
                   setSplitBusy(true);
                   try {
@@ -43958,10 +43985,6 @@ function ToolDrawer(props) {
                   } finally { setSplitBusy(false); }
                 }}><Icon name="scissors" /><span>{splitBusy ? 'Splitting…' : 'Split'}</span></button>}
           </div>
-          {exportMode !== 'range' && <PanelHint>{exportMode === 'count'
-            ? `Makes ${Math.max(1, Math.ceil(pageCount / Math.max(1, Number(splitCount) || 1)))} PDFs of ${Math.max(1, Number(splitCount) || 1)} page${Number(splitCount) === 1 ? '' : 's'} each, saved as one zip.`
-            : exportMode === 'bookmarks' ? 'One PDF per top-level bookmark, named after it, saved as one zip.'
-              : 'PDFs as large as possible up to that size, saved as one zip.'}</PanelHint>}
         </PanelSection>
       </>
     );
@@ -44103,10 +44126,10 @@ function ToolDrawer(props) {
                   onChange={(event) => setResizeCustom(current => ({ ...current, height: event.target.value.replace(',', '.') }))} /></PanelField>
               </div>
             )}
-            <PanelSwitch label="Scale the content to fit" checked={resizeScale} onChange={setResizeScale} />
-            <PanelHint>{format ? 'Landscape pages stay landscape. ' : ''}{resizeScale
-              ? 'The content shrinks or grows to fit and is centred.'
-              : 'The content keeps its size and stays centred; the page grows or is cut around it.'}</PanelHint>
+            <PanelSwitch label="Scale the content to fit" checked={resizeScale} onChange={setResizeScale}
+              hint={`${format ? 'Landscape pages stay landscape. ' : ''}${resizeScale
+                ? 'The content shrinks or grows to fit and is centred.'
+                : 'The content keeps its size and stays centred; the page grows or is cut around it.'}`} />
           </>
         )}
         <OperationNotice notice={operationNotices.pageBoxes} onDismiss={() => onDismissOperationNotice?.('pageBoxes')} />
@@ -44117,7 +44140,7 @@ function ToolDrawer(props) {
       onClick={() => { void apply(); }}>
       {boxBusy ? (boxProgress || 'Working…') : `${boxMode === 'crop' ? 'Crop' : 'Resize'} ${scopeCount > 1 ? `${scopeCount} pages` : 'page'}`}</button>;
   } else if (panel === 'find') {
-    subtitle = 'Ctrl+F opens the same search';
+    info = 'Ctrl+F opens the same search';
     body = (
       <PanelSection>
         <PanelField label="Find"><input value={searchQuery || ''} type="search" placeholder="Search text" onFocus={onOpenSearch} onChange={(e) => { onOpenSearch?.(); onSearchQuery?.(e.target.value); }} onKeyDown={(event) => {
@@ -44135,7 +44158,6 @@ function ToolDrawer(props) {
     );
   } else if (panel === 'outline') {
     subtitle = outlineLoading ? 'Loading bookmarks…' : outlineItems.length ? `${outlineItems.length} bookmark${outlineItems.length === 1 ? '' : 's'}` : 'No bookmarks yet';
-    const selectedBookmark = outlineSelectedId && outlineItems.some(item => item.id === outlineSelectedId);
     body = (
       <>
         <PanelSection>
@@ -44161,7 +44183,6 @@ function ToolDrawer(props) {
               }}
             ><Icon name="plus" /><span>Add</span></button>
           </div>
-          <PanelHint>{selectedBookmark ? 'Type a new title above and press Rename to change the selected bookmark.' : `Adds a bookmark to page ${activePage + 1}.`}</PanelHint>
         </PanelSection>
         {outlineItems.length > 0 ? (
           <PanelSection title="In this PDF">
@@ -44229,18 +44250,18 @@ function ToolDrawer(props) {
           </span>
           <figcaption>{numberPosition.startsWith('top') ? 'Header' : 'Footer'} on every page · 12 pt</figcaption>
         </figure>
-        <PanelField label="Text"><input value={numberText} placeholder="{page}" spellCheck={false}
+        <PanelField label="Text" title="{page} number · {pages} count · {date} · {file}. For Bates numbers: e.g. ACME-{page} with 6 digits.">
+          <input value={numberText} placeholder="{page}" spellCheck={false}
           onChange={(e) => setNumberText(e.target.value)} /></PanelField>
-        <PanelHint>{'{page}'} number · {'{pages}'} count · {'{date}'} · {'{file}'}. For Bates numbers: e.g. ACME-{'{page}'} with 6 digits.</PanelHint>
         <div className="oo-pdf-panel-row is-even">
           <PanelField label="Start at"><input inputMode="numeric" value={numberStart} onChange={(e) => setNumberStart(e.target.value.replace(/[^\d]/gu, ''))} /></PanelField>
           <PanelField label="Digits"><input inputMode="numeric" value={numberDigits} onChange={(e) => setNumberDigits(e.target.value.replace(/[^\d]/gu, '').slice(0, 2))} /></PanelField>
         </div>
-        <PanelHint>Running it again replaces the earlier {numberPosition.startsWith('top') ? 'header' : 'numbers or footer'} instead of adding a second set.</PanelHint>
         <OperationNotice notice={operationNotices.pageNumbers} onDismiss={() => onDismissOperationNotice?.('pageNumbers')} />
       </PanelSection>
     );
     footer = <button type="button" className="oo-pdf-primary" disabled={!doc || structureBusy || !numberText.trim()}
+      title={`Running it again replaces the earlier ${numberPosition.startsWith('top') ? 'header' : 'numbers or footer'} instead of adding a second set.`}
       onClick={() => { void onAddPageNumbers({ text: numberText, position: numberPosition, start: numberStart || 1, digits: numberDigits }); }}>
       {numberText.trim() === '{page}' ? 'Add page numbers' : `Add ${numberPosition.startsWith('top') ? 'header' : 'footer'}`}</button>;
   } else if (panel === 'watermark') {
@@ -44499,15 +44520,14 @@ function ToolDrawer(props) {
         <>
           {statusLine}
           {doc?.protectionRemoved?.kind && (
-            <PanelHint>
+            <PanelHint visible>
               {doc.protectionRemoved.kind === 'password'
                 ? 'This PDF was opened with its password. Saved copies have no password until you protect them here.'
                 : 'This PDF came with usage restrictions, removed when it was opened. Saved copies have none until you protect them here.'}
             </PanelHint>
           )}
           <PanelSection title="Passwords">
-            <PanelField label="Owner password" aside="required"><input type="password" autoComplete="new-password" required value={restrictOwnerPassword} onChange={(e) => setRestrictOwnerPassword(e.target.value)} /></PanelField>
-            <PanelHint className="is-tight">Needed later to lift the restrictions below.</PanelHint>
+            <PanelField label="Owner password" aside="required" title="Needed later to lift the restrictions below."><input type="password" autoComplete="new-password" required value={restrictOwnerPassword} onChange={(e) => setRestrictOwnerPassword(e.target.value)} /></PanelField>
             <PanelField label="Opening password" aside="optional"><input type="password" autoComplete="new-password" value={restrictUserPassword} onChange={(e) => setRestrictUserPassword(e.target.value)} /></PanelField>
             <PanelField label="Confirm opening password"><input type="password" autoComplete="new-password" value={restrictUserPasswordConfirmation} onChange={(e) => setRestrictUserPasswordConfirmation(e.target.value)} /></PanelField>
             {restrictUserPassword !== restrictUserPasswordConfirmation && (
@@ -44539,7 +44559,7 @@ function ToolDrawer(props) {
       footer = <button type="button" className="oo-pdf-primary" disabled={!unlockFile} onClick={() => onUnlockPdf({ file: unlockFile, password: unlockPassword })}><Icon name="unlock" /><span>Unlock</span></button>;
     }
   } else if (panel === 'certificateSignature') {
-    subtitle = 'Signs locally, nothing is uploaded';
+    info = 'Signs locally, nothing is uploaded';
     tabs = <SegmentedChoice label="Signature type" name="oo-sign-tab" value={signTab} onChange={setSignTab}
       options={[{ value: 'visual', label: 'Handwritten', icon: 'pen-tool' }, { value: 'certificate', label: 'Certificate', icon: 'key-round' }]} />;
     if (signTab === 'visual') {
@@ -44693,7 +44713,7 @@ function ToolDrawer(props) {
       );
     }
   } else if (panel === 'ocr') {
-    subtitle = 'Text recognition runs on this device';
+    info = 'Text recognition runs on this device';
     const runOcr = async (addLayer) => {
       setOcrBusy(true);
       try { setOcrText(await onOcr({ lang: ocrLang, range: ocrRange, addLayer })); }
@@ -44738,7 +44758,7 @@ function ToolDrawer(props) {
       </>
     );
   } else if (panel === 'compare') {
-    subtitle = 'Shows what changed between two PDFs';
+    info = 'Shows what changed between two PDFs';
     const enoughDocs = (docs || []).length >= 2;
     body = (
       <>
@@ -44822,7 +44842,7 @@ function ToolDrawer(props) {
       </>
     );
   } else if (panel === 'batch') {
-    subtitle = 'Apply one step to several PDFs';
+    info = 'Apply one step to several PDFs';
     body = (
       <>
         {statusLine}
@@ -44878,15 +44898,21 @@ function ToolDrawer(props) {
       <div className="oo-pdf-drawer-main">
         <div className="oo-pdf-drawer-head">
           <div className="oo-pdf-drawer-titles">
-            <h2 className="oo-pdf-drawer-title">{activeDrawerTool.label}</h2>
+            <h2 className="oo-pdf-drawer-title">{activeDrawerTool.label}
+              {/* berg:work: the panel's explanations (and its PanelHints) behind an (i). */}
+              <InfoTip label={`About ${activeDrawerTool.label}`} targetRef={setPanelInfoTarget}>
+                {info && <span className="oo-pdf-info-text">{info}</span>}
+              </InfoTip></h2>
             {subtitle && <p className="oo-pdf-drawer-subtitle" title={subtitle}>{subtitle}</p>}
           </div>
           {headExtra}
           <button className="oo-pdf-icon-button" type="button" aria-label="Close" title="Close" onClick={onClose}><Icon name="x" /></button>
         </div>
-        {tabs && <div className="oo-pdf-drawer-tabs">{tabs}</div>}
-        <div className="oo-pdf-drawer-panel">{body}</div>
-        {footer && <div className="oo-pdf-drawer-foot">{footer}</div>}
+        <PanelInfoTargetContext.Provider value={panelInfoTarget}>
+          {tabs && <div className="oo-pdf-drawer-tabs">{tabs}</div>}
+          <div className="oo-pdf-drawer-panel">{body}</div>
+          {footer && <div className="oo-pdf-drawer-foot">{footer}</div>}
+        </PanelInfoTargetContext.Provider>
       </div>
     </aside>
     <CompareViewer
@@ -46747,8 +46773,9 @@ function Inspector({
           <button type="button" className="oo-pdf-icon-button small" aria-label="Next object at this point" title="Object below" onClick={() => onStackStep?.(1)}><Icon name="chevron-right" /></button>
         </div>
       )}
+      {/* berg:work: the empty state says what is, the how goes into its tooltip. */}
       {propertiesTab && !selectedKeys.size && (
-        <p className="oo-pdf-inspector-empty">Nothing selected. Choose <strong>Select</strong> and click an object, or pick one under <strong>Layers</strong>.</p>
+        <p className="oo-pdf-inspector-empty" title="Click an object with Edit PDF, or pick one under Layers.">Nothing selected</p>
       )}
       {propertiesTab && multiSelection && (
         <div className="oo-pdf-mini-stat">{selectedKeys.size} objects selected</div>
