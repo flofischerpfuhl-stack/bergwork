@@ -26,9 +26,10 @@ the fork, kept to small `berg:work:` hunks; Fernwork gets engine and worker fixe
 - [x] **Shortcut overview lists everything.** View keys (fit, 100 %, Space-drag) and the one-letter tools.
 - [x] **The context menu closes** on an outside click and on Escape. It used to miss the click whenever the mini
   toolbar was open (it re-subscribed during that very pointerdown).
-- [ ] **Edit as paragraph is not on `main`.** It lives on `feat/pdf-paragraph-edit` (`9a0124f`), but the sync skill
-  describes it as present. Either finish and merge it, or hand it to Fernwork (the Fernwork TODO asks for semantic
-  lines and paragraphs, which would replace it). Then correct the skill.
+- [x] **Edit as paragraph** merged from `feat/pdf-paragraph-edit` (Florian's OK, 2026-10-29), together with the text
+  marks that follow their text (both join the same transaction and its snapshot inverse). Checked: four single lines
+  in one font become one reflowing box; mixed fonts are refused with a reason. Semantic paragraphs in Fernwork
+  (part A2) would later replace it.
 
 ## Direct manipulation compared with Figma, Canva and PowerPoint (second review, 2026-10-29)
 

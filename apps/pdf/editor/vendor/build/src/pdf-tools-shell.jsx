@@ -128,6 +128,7 @@ import {
 import { createTileCoverage, tileCoveragePublished, updateTileCoverage } from './pdf-editor/rendering/tile-coverage.js';
 import { shouldAcceptRaster } from './pdf-editor/rendering/revisions.js';
 import { detectSemanticTextBlocks } from './pdf-editor/text/block-detection.js';
+import { planParagraphMerge, texProducedDocument } from './pdf-editor/model/paragraph-merge.js';
 import { boxedTextFractions, buildPageSearchIndex, findSearchMatches, normalizeSearchQuery, pdfiumPageSearchItems, searchMatchRects } from './pdf-editor/text/search-index.js';
 import { deriveTrueTypeCmap } from './pdf-editor/text/derived-truetype-cmap.js';
 import { fontProgramIdentity } from './pdf-editor/text/font-program-identity.js';
@@ -1387,7 +1388,9 @@ function previewFaceLoaded(fontFamily, weight, style) {
 
 function previewLetterSpacing(textLike = {}, fontFamily = '') {
   if (typeof document === 'undefined' || !fontFamily) return undefined;
-  if (textLike.textFrame === true || textLike.block || textLike.richTextDocument) return undefined;
+  // berg:work: a text box (also one just made from a paragraph, before its frame metadata arrives) wraps; squeezing its
+  // whole text into one line's width would condense the glyphs.
+  if (textLike.textFrame === true || textLike.textBlock === true || textLike.block || textLike.richTextDocument) return undefined;
   const text = String(textLike.text ?? textLike.sourceText ?? '');
   const size = Number(textLike.fontSize || 0);
   const target = Number(textLike.w || 0);
@@ -6400,6 +6403,50 @@ function pdfiumColorWithOpacity(hex, opacity = 1) {
     parseInt(value.slice(4, 6), 16),
     Math.round(Math.max(0, Math.min(1, Number(opacity))) * 255),
   ];
+}
+
+// berg:work: "Edit as paragraph" is offered on lines of a detected multi-line paragraph that is not a text box yet.
+function paragraphActionOffered(plan) {
+  return Boolean(plan && (plan.ok || !['single-line', 'frame'].includes(plan.reason)));
+}
+
+// berg:work: "Edit as paragraph" deletes the paragraph's other lines in the same transaction as the frame that takes
+// their text. Bound like commitLiveDeletion's targets; the caller's whole-document snapshot is the inverse.
+async function paragraphLineDeletionCommands(runtime, doc, lines, prefix) {
+  const commands = [];
+  for (const line of lines) {
+    const edit = doc.textEdits?.[line.sourceId] || line.item;
+    const page = doc.pages.find(item => item.id === (edit.pageId || line.pageId));
+    if (!page) throw new Error('A line of the paragraph is no longer on its page.');
+    let stableId = resolveLiveStableId(runtime, line.sourceId, edit, 'text');
+    let descriptor = stableId ? liveObjectDescriptor(runtime.pageInspections.get(page.id), stableId) : null;
+    if (!stableId || !descriptor) {
+      await runtime.ensurePageInspection?.(page, page.sourceIndex, { force: true });
+      stableId = resolveLiveStableId(runtime, line.sourceId, edit, 'text');
+      descriptor = stableId ? liveObjectDescriptor(runtime.pageInspections.get(page.id), stableId) : null;
+    }
+    if (!stableId || !descriptor) {
+      throw new Error('A line of the paragraph could not be matched to its PDF text object.');
+    }
+    commands.push(createPdfCommand({
+      commandId: `${prefix}:paragraph-line-${commands.length + 1}`,
+      type: CommandType.OBJECT_DELETE,
+      targetId: stableId,
+      payload: {
+        pageId: page.id,
+        pageIndex: page.sourceIndex,
+        snapshot: deletionSnapshotFromDescriptor(descriptor, edit),
+        semanticText: true,
+        sourceText: String(edit.currentText ?? edit.text ?? edit.str ?? ''),
+        sourceX: firstFinite(edit.liveCommitted?.x, edit.targetSourceX, edit.sourceX, edit.x, 0),
+        sourceY: firstFinite(edit.liveCommitted?.y, edit.targetSourceY, edit.sourceY, edit.y, 0),
+        sourceW: firstFinite(edit.liveCommitted?.w, edit.targetSourceW, edit.sourceW, edit.w, 1),
+        sourceH: firstFinite(edit.liveCommitted?.h, edit.targetSourceH, edit.sourceH, edit.h, 1),
+        semanticSourceId: line.sourceId,
+      },
+    }));
+  }
+  return commands;
 }
 
 function nativeAnnotationDeletionPayloads(doc, annotation) {
@@ -21572,7 +21619,7 @@ function App({ shell = null }) {
     const commitGeneration = options.rollbackContext?.targets?.[0]?.generation ??
       beginLiveEditCommit(runtime, gestureKey);
     const legacyTextCommit = kind === 'text' &&
-      ['text-commit', 'text-inspector-commit'].includes(options.gestureReason);
+      ['text-commit', 'text-inspector-commit', 'text-paragraph'].includes(options.gestureReason);
     const semanticNextText = kind === 'text'
       ? legacyTextCommit && typeof nextEdit.text === 'string'
         ? nextEdit.text.replace(/\r\n?/gu, '\n')
@@ -21934,6 +21981,8 @@ function App({ shell = null }) {
               ...(typeof nextEdit.block?.autoWidth === 'boolean'
                 ? { autoWidth:nextEdit.block.autoWidth }
                 : {}),
+              // berg:work: "Edit as paragraph" gives justified text natural word spacing (its lines were stretched).
+              ...(Number.isFinite(nextEdit.block?.wordSpacing) ? { wordSpacing: nextEdit.block.wordSpacing } : {}),
               ...(Number.isSafeInteger(nextEdit.maxLines) ? { maxLines: nextEdit.maxLines } : {}),
               ...(nextEdit.semanticBlock
                 ? {
@@ -22484,13 +22533,17 @@ function App({ shell = null }) {
     // geometry comes from the UI transition that already shows them; the
     // exact pre-edit document is the inverse of the whole step.
     const markupChanges = kind === 'text' ? textMarkupTransitionChanges(options.uiTransition) : [];
-    if (markupChanges.length && commands.length) {
-      commands.push(...await textMarkupChangeCommands(runtime, doc, markupChanges, prefix));
+    // berg:work: "Edit as paragraph". The frame command above takes the paragraph's text; its other lines go in the
+    // same transaction, and the pre-edit snapshot undoes all of it in one step.
+    const paragraphLines = kind === 'text' ? options.paragraphLines || [] : [];
+    if ((markupChanges.length || paragraphLines.length) && commands.length) {
+      if (markupChanges.length) commands.push(...await textMarkupChangeCommands(runtime, doc, markupChanges, prefix));
+      if (paragraphLines.length) commands.push(...await paragraphLineDeletionCommands(runtime, doc, paragraphLines, prefix));
       if (!wholeDocumentInverse) {
         const snapshotResource = await checkpointToPdfSnapshotResource(runtime.engine, { retain: true });
         await runtime.kernel.registerResource(snapshotResource);
         wholeDocumentInverse = createPdfCommand({
-          commandId: `${prefix}:inverse-markup-snapshot`,
+          commandId: `${prefix}:inverse-${paragraphLines.length ? 'paragraph' : 'markup'}-snapshot`,
           type: CommandType.DOCUMENT_RESTORE_SNAPSHOT,
           targetId: stableId,
           payload: { resourceHash: snapshotResource.hash },
@@ -22690,7 +22743,14 @@ function App({ shell = null }) {
         result,
         pageIndex: page.sourceIndex,
       });
-      let inspection = patchedInspection;
+      // berg:work: "Edit as paragraph" also deleted the paragraph's other lines; drop them from the patched inspection
+      // until the deferred page inspection replaces it.
+      const paragraphDeletedIds = new Set(options.paragraphLines?.length
+        ? commands.filter(command => command.type === CommandType.OBJECT_DELETE).map(command => command.targetId) : []);
+      let inspection = paragraphDeletedIds.size && patchedInspection
+        ? { ...patchedInspection, objects: (patchedInspection.objects || [])
+          .filter(object => !paragraphDeletedIds.has(object.stableId)) }
+        : patchedInspection;
       let inspectionMs = 0;
       let inspectionDegraded = false;
       if (requiresImmediateRebind) {
@@ -23137,6 +23197,11 @@ function App({ shell = null }) {
       if (liveStableId) edit = { ...edit, liveStableId };
     }
     const nextForCommit = { ...previousForCommit, ...edit };
+    // berg:work: "Edit as paragraph" (editTextAsParagraph) deletes the paragraph's other lines in this same commit.
+    const paragraphLines = kernelBacked && options.paragraphLines?.length ? options.paragraphLines : null;
+    const applyTextEdit = (doc, value) => paragraphLines
+      ? applySelectionDeletion(applySourceUiEdit(doc, 'text', sourceId, value), paragraphLines, value.pageId)
+      : applySourceUiEdit(doc, 'text', sourceId, value);
     const draftOptimisticId = !options.commitGesture && runtime?.kernel && runtime.documentId === activeDoc.id
       ? seedConfirmedUiStateForDraft(runtime, activeDoc, 'text', sourceId)
       : '';
@@ -23158,15 +23223,16 @@ function App({ shell = null }) {
     const withFollowingMarkup = (doc, editValue = edit) => (markupPlanIds.length
       ? withTextMarkupPlan(doc, textMarkupFollowPlan(doc, [markupRunFor(editValue)], { token: markupToken, onlyIds: markupOnlyIds }))
       : doc);
-    const applyTextUiEdit = doc => withFollowingMarkup(applySourceUiEdit(doc, 'text', sourceId, edit));
+    const applyTextUiEdit = doc => withFollowingMarkup(applyTextEdit(doc, edit));
     const rollbackContext = kernelBacked
       ? beginOptimisticUiChange(runtime, activeDoc, [
           { kind: 'text', id: sourceId },
           ...markupPlanIds.map(id => ({ kind: 'annotation', id })),
+          ...(paragraphLines || []).map(line => ({ kind: 'text', id: line.sourceId })),
         ])
       : null;
     const projectedState = kernelBacked
-      ? captureSourceUiState(applySourceUiEdit(activeDoc, 'text', sourceId, edit), 'text', sourceId)
+      ? captureSourceUiState(applyTextEdit(activeDoc, edit), 'text', sourceId)
       : null;
     const uiTransition = kernelBacked
       ? optimisticKernelUiTransition(
@@ -23257,13 +23323,13 @@ function App({ shell = null }) {
                 catalogEntry,
               ],
             }), { resetMerge: true, kernelBacked: false, history: false, internal: true });
-            const substitutedDoc = applySourceUiEdit(substitutedBase, 'text', sourceId, substitutedEdit);
+            const substitutedDoc = applyTextEdit(substitutedBase, substitutedEdit);
             const substitutedProjectedState = captureSourceUiState(substitutedDoc, 'text', sourceId);
             const substitutedUiTransition = optimisticKernelUiTransition(
               runtime,
               substitutedBase,
               rollbackContext,
-              doc => withFollowingMarkup(applySourceUiEdit(doc, 'text', sourceId, substitutedEdit), substitutedEdit),
+              doc => withFollowingMarkup(applyTextEdit(doc, substitutedEdit), substitutedEdit),
             );
             const result = await commitLiveSourceEdit(
               'text',
@@ -23336,6 +23402,11 @@ function App({ shell = null }) {
                 message: error?.message || String(error),
                 details: error?.details || null,
               };
+            }
+            if (paragraphLines) {
+              // berg:work: the font choice banner retries a single line; a paragraph stays as it was and says why.
+              showToast(userFacingError(error, 'The paragraph could not be joined into one text box.'), 'error');
+              return false;
             }
             const fontFailure = explicitFontChoiceFailure(error);
             if (fontFailure) {
@@ -23430,6 +23501,131 @@ function App({ shell = null }) {
       return () => cancelSeededUiDraft(runtime, setDocs, activeDoc.id, 'text', sourceId);
     }
   }, [activeDoc, activePage, commitLiveSourceEdit, fontActionWarning, queueCoalescedSourceTransform, requestSourceEditAutoApply, updateDoc]);
+
+  // berg:work: "Edit as paragraph" (context menu, mini toolbar). The detected paragraph around a source line becomes one
+  // reflowing text frame: the first line takes the paragraph's text, width, line spacing and alignment in its own font,
+  // the other lines are deleted, in one transaction and one undo step (model/paragraph-merge.js plans it).
+  const paragraphMergePlan = useCallback((target) => {
+    if (!activeDoc || target?.type !== 'text' || !target.sourceId) return null;
+    const pageId = sourcePageIdFromLayerSource(target.sourceId, 'text') || target.sourcePageId || target.pageId;
+    const blocks = activeDoc.scene?.pages?.[pageId]?.textBlocks;
+    if (!pageId || !blocks?.length) return null;
+    const layers = makeOriginalPdfObjectLayers(activeDoc, pageId).filter(layer => layer.type === 'text');
+    const runtime = livePdfRuntimeRef.current;
+    const inspection = runtime?.documentId === activeDoc.id ? runtime.pageInspections?.get(pageId) : null;
+    const nativeText = item => {
+      const stableId = item.liveStableId || item.stableId;
+      const object = inspection && stableId ? liveObjectDescriptor(inspection, stableId) : null;
+      return object?.typeName === 'text' && typeof object.text === 'string' ? object.text : '';
+    };
+    return planParagraphMerge({ pageId, sourceId: target.sourceId, blocks, layers, nativeText,
+      texDocument: texProducedDocument(activeDoc.metadata) });
+  }, [activeDoc]);
+
+  const editTextAsParagraph = useCallback((target, { openEditor = true } = {}) => {
+    const plan = paragraphMergePlan(target);
+    if (!plan) return false;
+    if (!plan.ok) {
+      window.__bergworkLastParagraphEditError = { code: plan.reason, message: plan.message, lines: plan.lines || [] };
+      showToast(plan.message, 'warning');
+      return false;
+    }
+    const runtime = livePdfRuntimeRef.current;
+    if (!runtime?.kernel || runtime.documentId !== activeDoc.id) {
+      showToast('The PDF is still opening; try again in a moment.', 'warning');
+      return false;
+    }
+    const safety = liveRuntimeSafetyState(runtime, activeDoc.id);
+    if (safety.mutationBlocked) {
+      showToast(safety.reason, 'warning');
+      return false;
+    }
+    const lineLayers = [plan.first, ...plan.others];
+    if (lineLayers.some(layer => layerPresentationFor(activeDoc.layerPresentation, layer.key).locked)) {
+      showToast('Unlock the lines of this paragraph in Layers first.', 'warning');
+      return false;
+    }
+    const firstItem = plan.first.item;
+    const sourceId = firstItem.sourceId;
+    const pageId = firstItem.pageId;
+    const page = activeDoc.pages.find(item => item.id === pageId);
+    if (!page) return false;
+    const { block } = plan;
+    const sourceX = block.placement?.x ?? firstFinite(firstItem.targetSourceX, firstItem.sourceX, firstItem.x, 0);
+    const sourceY = block.placement?.y ?? firstFinite(firstItem.targetSourceY, firstItem.sourceY, firstItem.y, 0);
+    const display = displayRectForSourceRect(page, { x: sourceX, y: sourceY, w: block.width, h: block.height });
+    const edit = {
+      ...firstItem,
+      sourceId,
+      pageId,
+      text: plan.text,
+      currentText: plan.text,
+      // The line's derived formatting document describes only that line; the frame gets its own on commit.
+      richTextDocument: undefined,
+      textBlock: true,
+      textAlign: block.align,
+      verticalAlign: 'top',
+      textOverflow: 'visible',
+      lineHeight: block.lineHeight,
+      inlineSize: block.width,
+      blockSize: block.height,
+      // The frame keeps the first line's top-left corner, so the worker pins the first baseline where it was; an
+      // indented first line places it at the body's left edge, the first baseline one font size below its top.
+      targetSourceX: sourceX,
+      targetSourceY: sourceY,
+      targetSourceW: block.width,
+      targetSourceH: block.height,
+      targetSourceBaselineX: block.placement ? sourceX
+        : firstFinite(firstItem.targetSourceBaselineX, firstItem.sourceBaselineX, sourceX),
+      targetSourceBaselineY: block.placement ? sourceY + block.fontSize
+        : firstFinite(firstItem.targetSourceBaselineY, firstItem.sourceBaselineY),
+      ...display,
+      preserveSourceAppearance: false,
+      dataUrl: '',
+      ...(block.justified ? { block: { ...(firstItem.block || {}), wordSpacing: 0 } } : {}),
+    };
+    const others = plan.others.map(layer => ({
+      type: 'text', sourceId: layer.item.sourceId, pageId: layer.item.pageId || pageId, item: layer.item, edit: layer.item,
+    }));
+    setSelected(null);
+    setEditingText(null);
+    // The normal text commit, so a font that cannot reflow as it is gets the same bundled substitute as a typed edit.
+    return Promise.resolve(updateTextEdit(sourceId, edit, {
+      commitGesture: true,
+      gestureReason: 'text-paragraph',
+      gestureKind: GestureKind.TEXT_COMMIT,
+      previousForCommit: clonePlain(firstItem, {}),
+      paragraphLines: others,
+      keepEditorClosed: true,
+    })).then(result => {
+      if (result !== true) {
+        window.__bergworkLastParagraphEditError = { sourceId, ...(window.__fernworkLastTextCommitError || {}), text: plan.text };
+        return false;
+      }
+      // A frame lays the text out with the font's own metrics. Where they do not reproduce the lines (a font without a
+      // space glyph, as in pdfTeX output, loses its word gaps in the pinned worker), joining is undone, not kept.
+      const frameEffect = (window.__fernworkPdfSession?.transactionLog || []).at(-1)?.effects
+        ?.find(effect => effect?.textFrame && effect.semanticSourceId === sourceId);
+      const laidOutLines = Number(frameEffect?.textFrame?.lineCount);
+      if (laidOutLines > 0 && Math.abs(laidOutLines - plan.lineCount) > Math.max(0.5, plan.lineCount * 0.1)) {
+        window.__bergworkLastParagraphEditError = { sourceId, code: 'layout-mismatch', lineCount: plan.lineCount,
+          laidOutLines, text: plan.text };
+        void undoDoc();
+        showToast(`This paragraph's font cannot be laid out with its original spacing (${plan.lineCount} lines became ${laidOutLines}), so it stays as separate lines.`, 'warning', 8000);
+        return false;
+      }
+      const merged = applySelectionDeletion(activeDoc, others, pageId);
+      for (const line of others) {
+        rememberConfirmedUiState(runtime, `text:${line.sourceId}`, captureSourceUiState(merged, 'text', line.sourceId));
+      }
+      window.__bergworkLastParagraphEdit = { sourceId, pageId, lineCount: plan.lineCount, laidOutLines, text: plan.text, block };
+      if (workspaceSnapshotRef.current.activeDocId === activeDoc.id && livePdfRuntimeRef.current === runtime) {
+        setSelected({ type: 'text', sourceId, pageId });
+        if (openEditor) setEditingText({ type: 'sourceText', sourceId, pageId });
+      }
+      return true;
+    });
+  }, [activeDoc, paragraphMergePlan, undoDoc, updateTextEdit]);
 
   const useStandardFontForWarning = useCallback((warning) => {
     if (!activeDoc || warning?.documentId !== activeDoc.id || !warning.sourceId || !warning.pageId) return;
@@ -29374,6 +29570,12 @@ function App({ shell = null }) {
             label: 'Edit text', icon: 'pencil', shortcut: 'Dbl-click',
             run: () => contextMenu.objectElement?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })),
           }] : []),
+          // berg:work: offered on a line of a detected multi-line paragraph; a refusal says why when chosen.
+          ...(selected?.type === 'text' && contextMenu.objectKind === 'text' &&
+              paragraphActionOffered(paragraphMergePlan(selected)) ? [{
+            label: 'Edit as paragraph', icon: 'pilcrow',
+            run: () => void editTextAsParagraph(selected),
+          }] : []),
           ...(selected && selected.type !== 'multi' && contextMenu.objectKind === 'path' ? [{
             label: 'Edit points', icon: 'pen-tool',
             run: () => document.querySelector('.oo-pdf-path-edit-trigger')?.click(),
@@ -29800,7 +30002,11 @@ function App({ shell = null }) {
         headless={!inspectorOpen}
         miniToolbar={miniToolbar && miniToolbarHost
           ? { host: miniToolbarHost, externalSelection: miniToolbar.externalSelection || null,
-            beforeCommit: miniToolbar.externalSelection ? endCanvasTextEditing : null } : null}
+            beforeCommit: miniToolbar.externalSelection ? endCanvasTextEditing : null,
+            paragraph: miniToolbar.externalSelection ? null : {
+              offered: target => paragraphActionOffered(paragraphMergePlan(target)),
+              run: target => { setMiniToolbar(null); void editTextAsParagraph(target); },
+            } } : null}
         tab={inspectorOpen ? inspectorTab : 'properties'}
         onTabChange={setInspectorTab}
         stack={selectionStack}
@@ -38198,6 +38404,8 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
     letterSpacing: 'inherit',
     whiteSpace: current.textBlock ? 'pre-wrap' : 'pre',
     overflowWrap: current.textBlock ? 'anywhere' : 'normal',
+    // berg:work: a text box edits at its own line spacing and grows downwards while typing, as it will on the page.
+    ...(current.textBlock ? { lineHeight: firstFinite(current.lineHeight, current.block?.lineHeight, 1.2) } : {}),
     ...(isCoarsePdfPointer()
       ? {
           fontSize: 16,
@@ -38206,7 +38414,9 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
           width: `${100 / textInputScale}%`,
           height: `${100 / textInputScale}%`,
         }
-      : growingSingleLineEditorStyle(current, editStyle)),
+      : current.textBlock && FIELD_SIZING_SUPPORTED && Number.isFinite(editStyle?.height)
+        ? { fieldSizing: 'content', height: 'auto', minHeight: editStyle.height }
+        : growingSingleLineEditorStyle(current, editStyle)),
     ...(positionedEditor ? {
       color: 'transparent',
       caretColor: 'transparent',
@@ -45967,7 +46177,20 @@ function Inspector({
                         }}
                         {...extraProps} />
           );
-          const miniAlignControls = textAlignButtons('oo-pdf-mini-align');
+          // berg:work: on a line of a multi-line paragraph the mini toolbar also offers "Edit as paragraph".
+          const paragraphTarget = miniToolbar?.paragraph && isSelected && !multiSelection && layer.type === 'text' &&
+              layer.item?.sourceId
+            ? { type: 'text', sourceId: layer.item.sourceId, pageId: layer.pageId } : null;
+          const miniParagraphButton = paragraphTarget && miniToolbar?.paragraph?.offered(paragraphTarget)
+            ? <span className="oo-pdf-mini-align" role="group" aria-label="Paragraph">
+              <button type="button" className="oo-pdf-icon-button" aria-label="Edit as paragraph"
+                title="Edit as paragraph: one text box for the whole paragraph, so it reflows as you type"
+                onMouseDown={event => event.preventDefault()}
+                onClick={() => miniToolbar.paragraph.run(paragraphTarget)}><Icon name="pilcrow" /></button>
+            </span> : null;
+          const miniAlignControls = miniParagraphButton
+            ? <>{textAlignButtons('oo-pdf-mini-align')}{miniParagraphButton}</>
+            : textAlignButtons('oo-pdf-mini-align');
           const renderCreatedRichEditor = (editorKey = `${layerPropertyDraftScope(doc, pageId, layer)}:created-rich`, extraProps = {}) => (
                       <RichTextInspectorEditor
                         key={editorKey}
