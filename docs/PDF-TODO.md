@@ -173,8 +173,10 @@ in a headless page. That is the basis.
 
 ## Web, Android, phones
 
-- [ ] **PWA.** Installable manifest, `file_handlers` (desktop Chromium: open PDFs from the file manager) and
-  `share_target` (Android: “Share → berg:work PDF”). 2–5 PD.
+- [x] **PWA.** The site manifest declares `file_handlers` (open PDFs/projects from the file manager, via
+  `launchQueue`) and a `share_target` (Android "Share → berg:work PDF": the service worker keeps the files and the
+  app opens them from `?shared`); the app page on the site links the manifest and registers the service worker.
+  Share flow checked headless. Open: check "Open with" and Share on a real Android phone and desktop Chrome/Edge.
 - [ ] **Android app for Googlebooks** (as planned in `docs/ARCHITECTURE.md`).
   - The Android WebView has no cross-origin isolation, so no SharedArrayBuffer or WASM threads: PDFium and Tesseract
     need single-thread builds, or native builds through Rust.
