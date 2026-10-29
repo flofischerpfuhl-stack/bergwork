@@ -101,6 +101,9 @@ import { clipboardPlacementOffset } from './pdf-editor/interaction/clipboard-pla
 import { effectivePageSelection, pageBlockMoves, pageMoveDestination, pageNeighbourMoves,
   pageRangeText, pageSelectionAfterClick } from './pdf-editor/interaction/bergwork-page-selection.js';
 import { useThumbTouchDrag } from './pdf-editor/interaction/bergwork-thumb-touch-drag.js';
+// berg:work: an image file dropped onto an image replaces it.
+import { annotationFrameQuad, fillImageForFrame, imageFrameAspect, pointInAnnotationFrame, pointInQuad,
+  topmostImageHit } from './pdf-editor/interaction/bergwork-image-drop-replace.js';
 // berg:work: two fingers on the selected object scale and turn it.
 import { beginTwoFingerTransform, finishTwoFingerTransform, TWO_FINGER_READOUT_EVENT, updateTwoFingerTransform,
   useTwoFingerTarget } from './pdf-editor/interaction/bergwork-two-finger-transform.js';
@@ -22299,6 +22302,17 @@ function App({ shell = null }) {
           const previousResource = await imageDataUrlToRgbaResource(previousDataUrl);
           await runtime.kernel.registerResource(previousResource);
           inversePayload = { resourceHash: previousResource.hash };
+        } else if (!wholeDocumentInverse) {
+          // berg:work: the PDF's own image has no RGBA copy on this side (drop-to-replace). The exact pre-edit
+          // document is the inverse, so Undo brings back the original image stream unchanged.
+          const snapshotResource = await checkpointToPdfSnapshotResource(runtime.engine, { retain: true });
+          await runtime.kernel.registerResource(snapshotResource);
+          wholeDocumentInverse = createPdfCommand({
+            commandId: `${prefix}:inverse-image-snapshot`,
+            type: CommandType.DOCUMENT_RESTORE_SNAPSHOT,
+            targetId: stableId,
+            payload: { resourceHash: snapshotResource.hash },
+          });
         }
         addCommand(
           CommandType.IMAGE_REPLACE,
@@ -28519,17 +28533,115 @@ function App({ shell = null }) {
     }
     sheet?.classList.add('is-image-drop-target');
   };
+  // berg:work: one image file dropped onto an image replaces it (Canva frames): the picture is cut to the frame's
+  // proportions and takes its place; position, size and turn stay, one undo step. The target comes from the PDFium
+  // inspection (native images, also unselected and in Pan) and the inserted image annotations, not from the DOM.
+  const imageReplaceCandidatesRef = useRef({ inspection: null, page: null, imageEdits: null, annotations: null, items: [] });
+  const imageReplaceTargetAt = (clientX, clientY) => {
+    const point = sheetPointAt(clientX, clientY);
+    if (!point || !activeDoc) return null;
+    const { page, at } = point;
+    const presentation = activeDoc.layerPresentation;
+    const usable = key => {
+      const state = layerPresentationFor(presentation, key);
+      return !state.hidden && !state.locked;
+    };
+    const annotationHits = activeDoc.annotations
+      .filter(ann => ann.pageId === page.id && ann.type === 'image' && ann.purpose !== 'signature' && ann.dataUrl &&
+        usable(annotationLayerKey(ann.id)) && pointInAnnotationFrame(at, ann))
+      .map(ann => ({
+        kind: 'annotation', id: ann.id, page, point, quad: annotationFrameQuad(ann),
+        aspect: imageFrameAspect({ w: ann.w, h: ann.h }),
+      }));
+    const inspection = livePdfRuntimeRef.current?.pageInspections?.get(page.id);
+    // dragover fires many times a second: bind the page's images once per inspection.
+    const cache = imageReplaceCandidatesRef.current;
+    if (cache.inspection !== inspection || cache.page !== page || cache.imageEdits !== activeDoc.imageEdits ||
+        cache.annotations !== activeDoc.annotations) {
+      const ownStableIds = new Set(activeDoc.annotations.map(ann => ann.liveStableId).filter(Boolean));
+      const objects = inspection
+        ? (sessionInspectionToScenePage(page, inspection).objects || []).filter(object => !ownStableIds.has(object.stableId))
+        : [];
+      imageReplaceCandidatesRef.current = {
+        inspection, page, imageEdits: activeDoc.imageEdits, annotations: activeDoc.annotations,
+        items: bindPdfImageItemsToNativeObjects(page, [], objects, activeDoc.imageEdits),
+      };
+    }
+    const nativeHits = imageReplaceCandidatesRef.current.items
+      .filter(item => !item.nestedEditBlockedReason)
+      .map(item => ({ item, sourceId: imageItemId(page, item) }))
+      .filter(({ item, sourceId }) => !activeDoc.imageEdits?.[sourceId]?.deleted && usable(imageLayerKey(sourceId)) && (
+        Array.isArray(item.quad) && item.quad.length === 4
+          ? pointInQuad(at, item.quad)
+          : at.x >= item.x && at.x <= item.x + item.w && at.y >= item.y && at.y <= item.y + item.h))
+      .map(({ item, sourceId }) => ({
+        kind: 'image', id: sourceId, item, page, point, objectIndex: item.objectIndex,
+        quad: Array.isArray(item.quad) && item.quad.length === 4 ? item.quad : [
+          { x: item.x, y: item.y }, { x: item.x + item.w, y: item.y },
+          { x: item.x + item.w, y: item.y + item.h }, { x: item.x, y: item.y + item.h },
+        ],
+        aspect: imageFrameAspect({ matrix: item.pageMatrix || item.matrix, w: item.w, h: item.h }),
+      }));
+    return topmostImageHit(annotationHits, nativeHits);
+  };
+  const imageReplaceOutlineRef = useRef(null);
+  const markImageReplaceTarget = target => {
+    let outline = imageReplaceOutlineRef.current;
+    if (!target) {
+      outline?.remove();
+      return;
+    }
+    const surface = target.point.sheet.querySelector('.oo-pdf-page-surface') || target.point.sheet;
+    if (!outline) {
+      outline = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      outline.setAttribute('class', 'oo-pdf-image-replace-target');
+      outline.setAttribute('aria-hidden', 'true');
+      outline.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'polygon'));
+      imageReplaceOutlineRef.current = outline;
+    }
+    const scale = zoomRef.current || 1;
+    outline.setAttribute('viewBox', `0 0 ${target.point.rect.width / scale} ${target.point.rect.height / scale}`);
+    outline.firstChild.setAttribute('points', target.quad.map(corner => `${corner.x},${corner.y}`).join(' '));
+    if (outline.parentNode !== surface) surface.appendChild(outline);
+  };
+  const replaceImageFromFile = (target, file) => {
+    void (async () => {
+      try {
+        const image = await normalizeImageFile(file);
+        const fitted = await fillImageForFrame(await loadImageElement(image.dataUrl), target.aspect);
+        const patch = {
+          dataUrl: fitted.dataUrl, assetWidth: fitted.width, assetHeight: fitted.height,
+        };
+        if (target.kind === 'annotation') {
+          updateAnnotation(target.id, { ...patch, mime: 'image/png', width: fitted.width, height: fitted.height,
+            name: file.name || 'image' }, { commitGesture: true, gestureReason: 'image-replace' });
+        } else {
+          const previous = activeDoc.imageEdits?.[target.id] || initialPdfImageEdit(target.page, target.item, target.id);
+          updateImageEdit(target.id, { ...previous, ...patch }, {
+            commitGesture: true, gestureReason: 'image-replace', previousForCommit: previous,
+          });
+        }
+      } catch (error) {
+        showToast(userFacingError(error, 'The image could not be replaced.'), 'error');
+      }
+    })();
+  };
   const handleDocumentDragOver = event => {
     if (!externalFileDrag(event) || documentLoadProgress) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
     const sheet = imageDropSheet(event);
-    markImageDropSheet(sheet);
+    // berg:work: over an image (one file) the image is the target, not the page.
+    const replaceTarget = sheet && event.dataTransfer.items.length === 1
+      ? imageReplaceTargetAt(event.clientX, event.clientY) : null;
+    markImageReplaceTarget(replaceTarget);
+    markImageDropSheet(replaceTarget ? null : sheet);
     setDocumentDropActive(!sheet);
   };
   const handleDocumentDragLeave = event => {
     if (event.currentTarget.contains(event.relatedTarget)) return;
     markImageDropSheet(null);
+    markImageReplaceTarget(null);
     setDocumentDropActive(false);
   };
   const handleDocumentDrop = event => {
@@ -28538,10 +28650,16 @@ function App({ shell = null }) {
     event.stopPropagation();
     const sheet = imageDropSheet(event);
     markImageDropSheet(null);
+    markImageReplaceTarget(null);
     setDocumentDropActive(false);
     const files = fileList(event.dataTransfer?.files);
     const page = sheet && activeDoc.pages.find(item => item.id === sheet.dataset.pageId);
     if (page && files.length && files.every(acceptsImage)) {
+      const replaceTarget = files.length === 1 ? imageReplaceTargetAt(event.clientX, event.clientY) : null;
+      if (replaceTarget) {
+        replaceImageFromFile(replaceTarget, files[0]);
+        return;
+      }
       placeImageFiles(page, sheetPointAt(event.clientX, event.clientY)?.at || { x: 0, y: 0 }, files);
       return;
     }

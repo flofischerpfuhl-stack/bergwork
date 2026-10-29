@@ -713,6 +713,23 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
   outline: 2px dashed var(--pdf-accent-strong, var(--bw-fg));
   outline-offset: 4px;
 }
+/* An image dragged over an image: that image is outlined and the drop replaces it. */
+.oo-pdf-shell .oo-pdf-image-replace-target {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 60;
+}
+.oo-pdf-shell .oo-pdf-image-replace-target polygon {
+  fill: color-mix(in srgb, var(--pdf-accent-strong, var(--bw-fg)) 18%, transparent);
+  stroke: var(--pdf-accent-strong, var(--bw-fg));
+  stroke-width: 2px;
+  stroke-dasharray: 6 4;
+  vector-effect: non-scaling-stroke;
+}
 
 /* Drawing tools aim with a crosshair, as in Figma and PowerPoint. */
 .oo-pdf-shell .oo-pdf-page-surface:is(.tool-rect, .tool-ellipse, .tool-arrow, .tool-draw, .tool-redact) { cursor: crosshair; }
