@@ -53,6 +53,9 @@ const ICONS = {
   'clipboard': '<rect width="14" height="18" x="5" y="3" rx="2"/><path d="M9 3V1h6v2"/><path d="M9 7h6"/><path d="M9 11h6"/>',
   'combine': '<rect width="8" height="8" x="2" y="2" rx="2"/><path d="M14 2c-1.1 0-2 .9-2 2v6c0 1.1.9 2 2 2h6c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2Z"/><path d="M5 14v6c0 1.1.9 2 2 2h6"/><path d="M9 18h6"/>',
   'copy': '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  // berg:work: page tools (Lucide "crop" and "file-plus").
+  'crop': '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
+  'file-plus': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 18v-6"/>',
   // Three pages stacked behind each other.
   'files': '<path d="M21 11v9a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2h6z"/><path d="M18 8v3h3"/><path d="M7 19V7a2 2 0 0 1 2-2h8"/><path d="M4 16V4a2 2 0 0 1 2-2h8"/>',
   'database': '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/>',
