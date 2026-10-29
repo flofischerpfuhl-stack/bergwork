@@ -41518,8 +41518,26 @@ const ANNOTATION_QUICK_COLORS = [
   ['#fff176', 'Yellow'], ['#86efac', 'Green'], ['#93c5fd', 'Light blue'], ['#f9a8d4', 'Pink'], ['#fdba74', 'Orange'],
   ['#dc2626', 'Red'], ['#2563eb', 'Blue'], ['#111111', 'Black'],
 ];
+// berg:work: colours used lately (beyond the quick colours), shared by every colour field and remembered.
+const RECENT_COLORS_KEY = 'oo-pdf-recent-colors';
+function readRecentColors() {
+  try { return JSON.parse(localStorage.getItem(RECENT_COLORS_KEY) || '[]').filter(color => /^#[0-9a-f]{6}$/u.test(color)); }
+  catch { return []; }
+}
+function rememberRecentColor(color) {
+  const value = String(color || '').toLowerCase();
+  if (!/^#[0-9a-f]{6}$/u.test(value) || ANNOTATION_QUICK_COLORS.some(([quick]) => quick === value)) return;
+  try { localStorage.setItem(RECENT_COLORS_KEY, JSON.stringify([value, ...readRecentColors().filter(item => item !== value)].slice(0, 8))); }
+  catch { /* storage unavailable */ }
+}
+
 function ColorSwatchField({ label = 'Color', value, onChange, disabled = false, title, compact = false }) {
   const current = String(value || '').toLowerCase();
+  // berg:work: a chosen colour is remembered; recent colours and, where the browser has one, a screen eyedropper
+  // (pick a colour off the PDF) follow the quick colours.
+  const [recent] = useState(readRecentColors);
+  const pick = color => { rememberRecentColor(color); onChange(color); };
+  const eyedropper = typeof globalThis.EyeDropper === 'function';
   return (
     <div className={`oo-pdf-swatch-field ${compact ? 'is-compact' : ''}`} role="group" aria-label={label} title={title}>
       {!compact && <span className="oo-pdf-caption">{label}</span>}
@@ -41531,9 +41549,20 @@ function ColorSwatchField({ label = 'Color', value, onChange, disabled = false, 
         ))}
         <label className="oo-pdf-swatch-custom" title="Other colour">
           <input type="color" aria-label={`${label}: other colour`} value={/^#[0-9a-f]{6}$/u.test(current) ? current : '#000000'}
-            disabled={disabled} onChange={event => onChange(event.target.value)} />
+            disabled={disabled} onChange={event => pick(event.target.value)} />
         </label>
+        {eyedropper && <button type="button" className="oo-pdf-swatch-eyedropper" aria-label={`${label}: pick from the screen`}
+          title="Pick a colour from the page" disabled={disabled} onMouseDown={event => event.preventDefault()}
+          onClick={() => { void new globalThis.EyeDropper().open().then(result => pick(String(result.sRGBHex || '').toLowerCase()), () => {}); }}>
+          <Icon name="pipette" /></button>}
       </span>
+      {recent.length > 0 && <span className="oo-pdf-swatches is-recent" aria-label="Recent colours">
+        {recent.map(color => (
+          <button key={color} type="button" className="oo-pdf-swatch" aria-label={`Recent ${color}`} title={color} disabled={disabled}
+            aria-pressed={current === color} style={{ '--oo-pdf-swatch': color }}
+            onMouseDown={event => event.preventDefault()} onClick={() => onChange(color)} />
+        ))}
+      </span>}
     </div>
   );
 }

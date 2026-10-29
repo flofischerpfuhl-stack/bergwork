@@ -840,3 +840,19 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
 .oo-pdf-shell .oo-pdf-stamp-spot.is-bottom-left { bottom: 3px; left: 4px; }
 .oo-pdf-shell .oo-pdf-stamp-spot.is-bottom-center { bottom: 3px; left: 50%; transform: translateX(-50%); }
 .oo-pdf-shell .oo-pdf-stamp-spot.is-bottom-right { bottom: 3px; right: 4px; }
+
+/* Colour fields: recent colours as a second row; the eyedropper sits after the custom colour. */
+.oo-pdf-shell .oo-pdf-swatch-field .oo-pdf-swatches.is-recent { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--bw-border-subtle, var(--bw-border)); }
+.oo-pdf-shell .oo-pdf-swatch-eyedropper {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--bw-border);
+  border-radius: 50%;
+  background: var(--bw-surface-raised);
+  color: var(--bw-fg);
+  cursor: pointer;
+}
+.oo-pdf-shell .oo-pdf-swatch-eyedropper svg { width: 13px; height: 13px; }
