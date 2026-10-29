@@ -101,6 +101,22 @@ Touch:
 - [ ] **Larger touch targets for handles** (≥ 44 px hit area, drawn smaller). 1 PD.
 - [ ] **Pages: reorder by touch, Shift-range selection, the selection follows a moved page.** 2–3 PD.
 
+Forms:
+- [x] **Fields that read the same are told apart** (own field name where it says something, else a number); radio
+  groups prefer a meaningful field name over their first option's caption.
+
+## Features compared with PDF-XChange (Fernwork TODO part B, built in the fork)
+
+- [ ] **Measure tools with scale** (distance, area, perimeter, calibration, CSV). Branch `feat/pdf-measure-comments`.
+- [ ] **Comment workflow** (text box, callout, line, polygon, cloud, stamps, comment list, XFDF). Same branch.
+- [x] **Headers, footers and Bates numbers** in the Page numbers panel: text with {page}, {pages}, {date}, {file},
+  start number, zero-padded digits, six positions picked on the preview page; header and footer coexist.
+  **Needs OK** (panel grew by a text field, two number fields and the position picker).
+- [ ] **Page tools:** blank page, crop and resize pages, split by count/bookmarks/size, merge several files by
+  drop. 5–10 PD.
+- [ ] **PDF/A save** (fonts embedded, XMP, OutputIntent; check with veraPDF). 5–10 PD.
+- [ ] **OCR:** more languages on demand, deskew, OCR of a region. 5–8 PD.
+
 ## Desktop apps (`apps/pdf/src-tauri`, `packages/host-tauri`)
 
 Today: the Linux release build works (5:50 min, 72 MB binary with embedded assets), opens a PDF passed on the command
