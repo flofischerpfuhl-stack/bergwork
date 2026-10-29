@@ -81,15 +81,27 @@ Navigation:
 
 Feedback and discovery:
 - [ ] **Command palette (Ctrl+K)** over every action, with recently used. **Needs OK.** 3–5 PD.
-- [ ] **Toasts with Undo** after destructive actions (delete page, delete object, flatten). 1 PD.
+- [x] **Toast with Undo after deleting pages** (all pages of a multi-delete come back, selected).
+- [ ] **Toasts with Undo** after the other destructive actions (delete object, flatten). 0.5 PD.
 - [ ] **Saved state visible** ("Saved" / "Unsaved changes" by the file name) instead of only a dot; the dot stays
   after undoing back to the saved state. 1 PD.
 
 Touch:
 - [ ] **Bottom context bar on phones** instead of the floating mini toolbar, which covers two thirds of the visible
   text on a 390 px screen (Canva's model). **Needs OK.** 3–5 PD.
-- [ ] **Larger touch targets for handles** (≥ 44 px hit area, drawn smaller). 1 PD.
-- [ ] **Pages: reorder by touch, Shift-range selection, the selection follows a moved page.** 2–3 PD.
+- [x] **Larger touch targets for handles:** resize handles take a tap within 48 px, drawn as before (the rotate handle
+  already is 44 px on touch). On phones the mini toolbar still covers the lower handles' hit area by a few px.
+- [x] **Pages: Shift-click a range, Ctrl/⌘-click single pages;** move, duplicate, delete, rotate and export act on all
+  of them. Dragging shows an insertion line and moves the whole selection; the moved pages stay selected and in view.
+  **Touch:** a 350 ms press lifts a page, the panel scrolls at its edges. Fixed on the way: thumbnails showed the old
+  order after a move, delete or duplicate.
+- [ ] **Multi-page actions in one step** (Fernwork): PDFium takes one page-topology command per transaction, so N
+  pages are N transactions, N full snapshots and N Undo steps (the toast's Undo takes all). GeoTopo (117 pages):
+  deleting 1 page 1 s, 5 pages 11 s, Undo of the 5 15 s. Needs several page commands per transaction in the worker.
+- [x] **Two fingers on the selected object scale and turn it** (Canva): first finger on the object or within 16 px of
+  its frame, proportional scale about the centre, snapping at 0/45/90/… (±4°), live readout, one Undo step. Elsewhere
+  two fingers zoom the page as before. Text only turns (its resize reflows); locked objects and text being edited
+  stay. Checked with CDP multi-touch headless; the feel on a real phone (and iOS Safari) still needs a try.
 
 ## Desktop apps (`apps/pdf/src-tauri`, `packages/host-tauri`)
 
