@@ -1044,10 +1044,11 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
   position: absolute;
   top: calc(100% + 6px);
   left: -8px;
-  z-index: 40;
+  z-index: 100;
   display: none;
   width: max-content;
   max-width: 260px;
+  pointer-events: none;
   padding: 8px 10px;
   border: 1px solid var(--bw-border);
   border-radius: 8px;
@@ -1058,8 +1059,9 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
   text-transform: none;
   letter-spacing: normal;
 }
-.oo-pdf-shell .oo-pdf-info:hover .oo-pdf-info-bubble,
-.oo-pdf-shell .oo-pdf-info:focus-within .oo-pdf-info-bubble { display: block; }
+/* Only while the (i) itself is hovered or focused (a tap focuses it), so the text never covers the controls. */
+.oo-pdf-shell .oo-pdf-info-button:hover + .oo-pdf-info-bubble,
+.oo-pdf-shell .oo-pdf-info-button:focus + .oo-pdf-info-bubble { display: block; }
 .oo-pdf-shell .oo-pdf-info-bubble p { margin: 0; }
 .oo-pdf-shell .oo-pdf-info-bubble p + p, .oo-pdf-shell .oo-pdf-info-text + .oo-pdf-info-notes > p:first-child { margin-top: 6px; }
 .oo-pdf-shell .oo-pdf-info-notes { display: block; }

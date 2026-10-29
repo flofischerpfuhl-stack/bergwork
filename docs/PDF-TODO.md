@@ -84,7 +84,7 @@ Panels and fields:
   reorder already worked (grip, mouse after 6 px, touch after a press).
 - [x] **Recent colours and eyedropper** in the colour wells (recent row remembered across sessions; eyedropper where
   the browser has one, Chrome/Edge). Document colours (colours already used in the PDF) still open. 1 PD.
-- [x] **"Mixed" in fields of a multi-selection** (**needs OK**): an "All selected" group above the objects in
+- [x] **"Mixed" in fields of a multi-selection** (approved 2026-10-30): an "All selected" group above the objects in
   Properties with X, Y, Width, Height and Angle; differing values show Mixed. A value applies to every object, and
   in a Mixed field +10, -10, *2, /2 change each object by that amount (arrow keys too). X/Y/W/H are one undo step
   (per-object offsets and scales through the multi-selection transaction); Angle is one step for images, shapes and
@@ -165,7 +165,7 @@ Forms:
   - *Export or split* in Pages: every N pages, at the top-level bookmarks (named after them) or by size, one zip.
   - No engine change: crop/resize is a pdf-lib pass committed as a snapshot transaction (like page stamps); GeoTopo
     (117 pages) crops one page in 2.8 s, white margins of all pages in 15 s, Undo 1–4 s.
-  - **Needs OK:** the thumbnail context menu, the *Crop & resize pages* panel (new Document tools entry), the
+  - Approved by Florian 2026-10-30: the thumbnail context menu, the *Crop & resize pages* panel (new Document tools entry), the
     *Export or split* row (mode select in front of the range field) and the placement select in Add pages.
   - [ ] Later (Fernwork): a native `page.set-boxes` command (`FPDFPage_SetCropBox`/`SetMediaBox` are in the build)
     would make a crop instant instead of a full-document snapshot round trip.
@@ -178,7 +178,7 @@ Forms:
   (portable JRE in `~/AgentWork/bergwork-pdf-pdfa/`): of 300 random corpus files 287 converted (9 encrypted or
   broken, 3 with missing fonts without widths refused), 255 of them compliant; the rest are mostly veraPDF/TWG
   "fail" test files and fuzzed PDFs. The app path (qpdf WASM) gives a compliant file for google-doc-document.pdf.
-  - **Needs OK:** the Save menu entry and the toasts.
+  - Approved by Florian 2026-10-30: the Save menu entry and the toasts.
   - [ ] Open: widths of *embedded* fonts that disagree with their program (6.2.11.5), `.notdef` references
     (6.2.11.8), push buttons with a stream appearance (6.3.3), signed PDFs (refused), PDF/A-1 and level A/U
     (tags), a CMYK profile closer to print than the plain conversion, refusing before the save dialog opens.
@@ -188,7 +188,7 @@ Forms:
   - Deskew before recognition (projection profile, 0.3–6°); the invisible text follows the skewed lines. A scan
     rotated by 4° reads like the straight one (Tesseract alone loses the paragraph and garbles the numbers).
   - *Only an area*: a marked area of the current page (Crop pages preview), rendered at up to 216 dpi.
-  - **Needs OK:** language list with "Downloaded when first used", the *Only an area* switch and preview.
+  - Approved by Florian 2026-10-30: language list with "Downloaded when first used", the *Only an area* switch and preview.
   - [ ] Open: perspective correction, straightening the page image itself, other scripts (Arabic, CJK, Devanagari
     need their fonts in the text layer), several languages in one run.
 

@@ -44860,7 +44860,7 @@ function ToolDrawer(props) {
               paint={(canvas, cssWidth) => paintDocPagePreview(canvas, { doc, page: ocrPage, pdfiumRuntime, cssWidth })}
               paintKey={`ocr:${doc.id}:${ocrPage.id}:${pdfiumRevision}:${ocrPage.width}x${ocrPage.height}`} />
           )}
-          <PanelHint>Nothing is uploaded. English, German, French, Spanish, Italian and Portuguese ship with the app; other languages are downloaded once from jsDelivr when first used and then work offline. Skewed scans are straightened for recognition, and the searchable text follows the lines as they lie on the page.</PanelHint>
+          <PanelHint>Nothing is uploaded. Other languages are downloaded once when first used.</PanelHint>
         </PanelSection>
         {ocrText && (
           <PanelSection title="Recognised text">
