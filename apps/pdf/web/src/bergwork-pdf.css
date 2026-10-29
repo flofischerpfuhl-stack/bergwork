@@ -731,6 +731,17 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
   vector-effect: non-scaling-stroke;
 }
 
+/* The hovered font in the font list, drawn over the selected PDF text (the text itself is left out of the raster). */
+.oo-pdf-shell .oo-pdf-font-hover-preview {
+  position: absolute;
+  z-index: 30;
+  pointer-events: none;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  font-kerning: normal;
+}
+
 /* Drawing tools aim with a crosshair, as in Figma and PowerPoint. */
 .oo-pdf-shell .oo-pdf-page-surface:is(.tool-rect, .tool-ellipse, .tool-arrow, .tool-draw, .tool-redact) { cursor: crosshair; }
 
