@@ -872,7 +872,12 @@ function PdfContextMenu({ x, y, items, onClose }) {
     const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
     setPosition({ left: Math.min(x, maxLeft), top: Math.min(y, maxTop) });
   }, [x, y]);
+  // berg:work: subscribed once. The mini toolbar's outside-click handler re-renders the shell during the same
+  // pointerdown; re-subscribing on that render dropped this listener for exactly that click, so the menu stayed open.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
+    const onClose = () => onCloseRef.current?.();
     const close = event => { if (!menuRef.current?.contains(event.target)) onClose(); };
     const key = event => {
       if (event.key !== 'Escape') return;
@@ -892,7 +897,7 @@ function PdfContextMenu({ x, y, items, onClose }) {
       window.removeEventListener('resize', onClose);
       window.removeEventListener('blur', onClose);
     };
-  }, [onClose]);
+  }, []);
   useEffect(() => {
     menuRef.current?.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
   }, []);
