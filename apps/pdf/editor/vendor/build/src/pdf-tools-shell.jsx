@@ -97,6 +97,10 @@ import { displayPageGuides, EMPTY_GUIDES, normalizeLayoutGuides, normalizePageGu
 import { anyLayerPresentationLocked, layerPresentationFor, layerPresentationHasHidden, layersWithoutMaterializedMembers, layerVisibilityRenderTargets, mergeExactNativeFrameLayer, normalizeLayerPresentation, patchLayerPresentation, topLevelLayerStack } from './pdf-editor/model/layer-presentation.js';
 import { projectNativeObjectHierarchyLayers } from './pdf-editor/model/native-object-hierarchy.js';
 import { clipboardPlacementOffset } from './pdf-editor/interaction/clipboard-placement.js';
+// berg:work: several pages selected in the Pages panel; touch reordering there.
+import { effectivePageSelection, pageBlockMoves, pageDropGap, pageMoveDestination, pageNeighbourMoves,
+  pageRangeText, pageSelectionAfterClick } from './pdf-editor/interaction/bergwork-page-selection.js';
+import { useThumbTouchDrag } from './pdf-editor/interaction/bergwork-thumb-touch-drag.js';
 import { GeometryNumber, GeometryProperties } from './pdf-editor/interaction/geometry-properties.jsx';
 import { InspectorSelect, PropSection, SimpleInspectorSelect } from './pdf-editor/interaction/inspector-controls.jsx';
 import { RichTextInspectorEditor } from './pdf-editor/interaction/rich-text-inspector-editor.jsx';
@@ -1743,7 +1747,8 @@ function parsePageRanges(input, total) {
   for (const part of text.split(',')) {
     const trimmed = part.trim();
     if (!trimmed) continue;
-    const match = trimmed.match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+    // berg:work: an en dash too, as the field's placeholder ("1–3, 5") shows it.
+    const match = trimmed.match(/^(\d+)(?:\s*[-–]\s*(\d+))?$/u);
     if (!match) return [];
     const start = clamp(parseInt(match[1], 10), 1, total);
     const end = clamp(parseInt(match[2] || match[1], 10), 1, total);
@@ -17308,6 +17313,9 @@ function App({ shell = null }) {
   const [signaturePadRequest, setSignaturePadRequest] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [activePage, setActivePage] = useState(0);
+  // berg:work: the pages selected in the Pages panel (IDs; see effectivePageSelection) and the Shift-click anchor.
+  const [pageSelectionIds, setPageSelectionIds] = useState([]);
+  const pageSelectionAnchorRef = useRef('');
   const [selected, setSelected] = useState(null);
   // Inspector selection deliberately trails canvas selection by one painted
   // frame. Keeping a separate snapshot also prevents an already-open
@@ -18955,6 +18963,9 @@ function App({ shell = null }) {
       .finally(() => setLiveCommitCount(count => Math.max(0, count - 1)));
   }, [activeDocId, normalizingRotation, selected]);
 
+  // berg:work: the Undo button in a toast calls the current history action.
+  const runDocHistoryActionRef = useRef(runDocHistoryAction);
+  runDocHistoryActionRef.current = runDocHistoryAction;
   const undoDoc = useCallback(() => runDocHistoryAction('undo'), [runDocHistoryAction]);
 
   const redoDoc = useCallback(() => runDocHistoryAction('redo'), [runDocHistoryAction]);
@@ -25108,10 +25119,21 @@ function App({ shell = null }) {
     }
   }, [activeDoc, enqueuePageStructureChange, normalizingRotation, updateDoc]);
 
+  // berg:work: the pages the page actions act on (one or several selected in the Pages panel). A new document
+  // starts with none selected.
+  const selectedPageIndices = useMemo(() => effectivePageSelection(
+    (activeDoc?.pages || []).map(page => page.id), activePage, pageSelectionIds,
+  ), [activeDoc?.pages, activePage, pageSelectionIds]);
+  useEffect(() => {
+    setPageSelectionIds([]);
+    pageSelectionAnchorRef.current = '';
+  }, [activeDocId]);
+
   const rotateActivePage = useCallback((delta) => {
     if (!activeDoc) return;
-    void rotatePages([activePage], delta);
-  }, [activeDoc, activePage, rotatePages]);
+    // berg:work: rotates every selected page.
+    void rotatePages(selectedPageIndices, delta);
+  }, [activeDoc, rotatePages, selectedPageIndices]);
 
   const rotateAllPages = useCallback((delta) => {
     if (!activeDoc) return;
@@ -25507,6 +25529,173 @@ function App({ shell = null }) {
       }
     }).catch(error => showToast(userFacingError(error, 'Could not duplicate the page.'), 'error'));
   }, [activeDoc, activePage, enqueuePageStructureChange, executeNativePageTopology, updateDoc]);
+
+  // berg:work: page actions on a multi-selection and drag reordering with an insertion point. PDFium takes one
+  // page-topology command per transaction, so N pages are N steps (and N Undo steps; the toast's Undo takes all).
+  // Each step goes native first and falls back to the page model exactly as the single-page actions above do.
+  const runPageTopologySteps = useCallback(async (documentId, steps, { consolidateAfterFallback = false } = {}) => {
+    const risks = new Set();
+    let changedByFallback = false;
+    for (const step of steps) {
+      try {
+        const result = await executeNativePageTopology(documentId, step);
+        if (!result) throw Object.assign(new Error('Native topology is unavailable.'), { code: 'unsupported-operation' });
+      } catch (error) {
+        if (!nativeTopologyFallbackAllowed(error)) throw error;
+        for (const risk of nativeTopologyFallbackRisks(error)) risks.add(risk);
+        const changed = await enqueuePageStructureChange(documentId, () => {
+          updateDoc(documentId, doc => step.project(doc, typeof step.payload === 'function' ? step.payload(doc) : step.payload),
+            { resetMerge: true, kernelBacked: false, internal: true });
+          return true;
+        }, { materializeLive: true });
+        changedByFallback = changedByFallback || Boolean(changed);
+      }
+    }
+    if (risks.size) setConsolidationRisks({ docId: documentId, risks: [...risks], canRestoreOriginalOrder: true });
+    else if (changedByFallback && consolidateAfterFallback) {
+      await consolidatePagesForEditing({ documentId, canRestoreOriginalOrder: true });
+    }
+  }, [consolidatePagesForEditing, enqueuePageStructureChange, executeNativePageTopology, updateDoc]);
+
+  const pageMoveStep = useCallback((move) => ({
+    type: CommandType.PAGE_MOVE,
+    targetId: move.id,
+    label: 'Move page',
+    payload: doc => {
+      const pageIds = doc.pages.map(page => page.id);
+      const destination = pageMoveDestination(pageIds, move);
+      return { destinationIndex: destination >= 0 ? destination : Math.max(0, pageIds.indexOf(move.id)) };
+    },
+    project: (doc, payload) => {
+      const moved = doc.pages.find(page => page.id === move.id);
+      if (!moved) return doc;
+      const next = doc.pages.filter(page => page.id !== move.id);
+      next.splice(payload.destinationIndex, 0, moved);
+      return { ...doc, pages: next };
+    },
+  }), []);
+
+  // After a page change: select these pages, make one of them current and bring it into view.
+  const showPagesAfterChange = useCallback((documentId, pageIds, currentId) => {
+    requestAnimationFrame(() => {
+      const doc = workspaceSnapshotRef.current.docs.find(item => item.id === documentId);
+      const index = doc?.pages.findIndex(page => page.id === currentId) ?? -1;
+      if (index < 0) return;
+      setPageSelectionIds(pageIds);
+      pageSelectionAnchorRef.current = currentId;
+      setActivePage(index);
+      requestAnimationFrame(() => viewportRef.current
+        ?.querySelector(`.oo-pdf-sheet[data-page-index="${index}"]`)
+        ?.scrollIntoView({ block: 'center', inline: 'nearest' }));
+    });
+  }, []);
+
+  // A thumbnail click: plain selects that page, Shift a range, Ctrl/⌘ adds or removes one page.
+  const selectThumbPage = useCallback((index, { shift = false, toggle = false } = {}) => {
+    const pageIds = (activeDoc?.pages || []).map(page => page.id);
+    const next = pageSelectionAfterClick({
+      pageIds, activeIndex: activePage, selectedIds: pageSelectionIds,
+      anchorId: pageSelectionAnchorRef.current, index, shift, toggle,
+    });
+    if (!next) return;
+    setPageSelectionIds(next.ids);
+    pageSelectionAnchorRef.current = next.anchorId;
+    if ((!shift && !toggle) || next.go !== activePage) goToPage(next.go);
+  }, [activeDoc, activePage, goToPage, pageSelectionIds]);
+
+  // Drop at a gap between thumbnails: the dragged page, or all selected pages when it is one of them. `single`
+  // (Alt+↑/↓ on a focused thumbnail) moves only that page.
+  const movePagesToGap = useCallback((draggedId, gap, { single = false } = {}) => {
+    if (!activeDoc) return;
+    const documentId = activeDoc.id;
+    const pageIds = activeDoc.pages.map(page => page.id);
+    const selectedIds = selectedPageIndices.map(index => pageIds[index]);
+    const moving = !single && selectedIds.length > 1 && selectedIds.includes(draggedId) ? selectedIds : [draggedId];
+    const moves = pageBlockMoves(pageIds, moving, gap);
+    if (!moves.length) return;
+    const currentId = moving.includes(pageIds[activePage]) ? pageIds[activePage] : draggedId;
+    void runPageTopologySteps(documentId, moves.map(pageMoveStep), { consolidateAfterFallback: true })
+      .then(() => showPagesAfterChange(documentId, moving, currentId))
+      .catch(error => showToast(userFacingError(error, 'Could not reorder the page.'), 'error'));
+  }, [activeDoc, activePage, pageMoveStep, runPageTopologySteps, selectedPageIndices, showPagesAfterChange]);
+
+  const moveSelectedPages = useCallback((dir) => {
+    if (!activeDoc) return;
+    if (selectedPageIndices.length < 2) { moveActivePage(dir); return; }
+    const documentId = activeDoc.id;
+    const pageIds = activeDoc.pages.map(page => page.id);
+    const moves = pageNeighbourMoves(pageIds, selectedPageIndices, dir);
+    if (!moves) return;
+    const ids = selectedPageIndices.map(index => pageIds[index]);
+    void runPageTopologySteps(documentId, moves.map(pageMoveStep), { consolidateAfterFallback: true })
+      .then(() => showPagesAfterChange(documentId, ids, pageIds[activePage]))
+      .catch(error => showToast(userFacingError(error, 'Could not move the pages.'), 'error'));
+  }, [activeDoc, activePage, moveActivePage, pageMoveStep, runPageTopologySteps, selectedPageIndices, showPagesAfterChange]);
+
+  const duplicateSelectedPages = useCallback(() => {
+    if (!activeDoc) return;
+    if (selectedPageIndices.length < 2) { duplicateActivePage(); return; }
+    const documentId = activeDoc.id;
+    const pageIds = activeDoc.pages.map(page => page.id);
+    const copies = selectedPageIndices.map(index => ({ sourceId: pageIds[index], newPageId: uid() }));
+    // Each copy lands right after its page; the copies become the selection.
+    const steps = [...copies].reverse().map(({ sourceId, newPageId }) => ({
+      type: CommandType.PAGE_DUPLICATE,
+      targetId: sourceId,
+      label: 'Duplicate page',
+      payload: doc => ({ pageIndex: doc.pages.findIndex(page => page.id === sourceId) + 1, newPageId }),
+      project: (doc, payload) => withDuplicatedPageState(doc, payload.pageIndex - 1, newPageId),
+    }));
+    const currentCopy = copies.find(copy => copy.sourceId === pageIds[activePage]) || copies[0];
+    void runPageTopologySteps(documentId, steps)
+      .then(() => showPagesAfterChange(documentId, copies.map(copy => copy.newPageId), currentCopy.newPageId))
+      .catch(error => showToast(userFacingError(error, 'Could not duplicate the pages.'), 'error'));
+  }, [activeDoc, activePage, duplicateActivePage, runPageTopologySteps, selectedPageIndices, showPagesAfterChange]);
+
+  // Delete page(s), then a toast whose Undo restores them, unless other changes came after.
+  const deleteSelectedPages = useCallback(() => {
+    if (!activeDoc || selectedPageIndices.length >= activeDoc.pages.length) return;
+    const documentId = activeDoc.id;
+    const pageIds = selectedPageIndices.map(index => activeDoc.pages[index].id);
+    const firstIndex = selectedPageIndices[0];
+    const steps = pageIds.map(pageId => ({
+      type: CommandType.PAGE_DELETE,
+      targetId: pageId,
+      label: 'Delete page',
+      project: doc => {
+        const withoutPage = withoutPageOwnedState(doc, pageId);
+        const pages = doc.pages.filter(page => page.id !== pageId);
+        return { ...withoutPage, pages,
+          ...(Array.isArray(doc.bookmarks) ? { bookmarks: normalizeBookmarks(doc.bookmarks, pages) } : {}) };
+      },
+    }));
+    const message = pageIds.length === 1 ? `Page ${firstIndex + 1} deleted.` : `${pageIds.length} pages deleted.`;
+    void runPageTopologySteps(documentId, steps).then(() => {
+      setSelected(null);
+      setPageSelectionIds([]);
+      setActivePage(Math.max(0, firstIndex - 1));
+      const doc = workspaceSnapshotRef.current.docs.find(item => item.id === documentId);
+      const mark = { history: doc?.historyPast?.length ?? -1, pages: (doc?.pages || []).map(page => page.id).join('|') };
+      showToast(message, 'info', 8000, { action: { label: 'Undo', onClick: () => {
+        const snapshot = workspaceSnapshotRef.current;
+        const latest = snapshot.docs.find(item => item.id === documentId);
+        if (snapshot.activeDocId !== documentId || !latest || (latest.historyPast?.length ?? -1) !== mark.history ||
+            latest.pages.map(page => page.id).join('|') !== mark.pages) {
+          showToast('Other changes came after. Use Undo in the toolbar to step back.', 'info');
+          return;
+        }
+        for (let step = 0; step < steps.length; step += 1) runDocHistoryActionRef.current('undo');
+        // Select the restored pages once the queued Undo steps have brought them back.
+        const reselect = (frames = 0) => {
+          const restored = workspaceSnapshotRef.current.docs.find(item => item.id === documentId);
+          if (restored && pageIds.every(id => restored.pages.some(page => page.id === id))) {
+            showPagesAfterChange(documentId, pageIds, pageIds[0]);
+          } else if (frames < 600) requestAnimationFrame(() => reselect(frames + 1));
+        };
+        reselect();
+      } } });
+    }).catch(error => showToast(userFacingError(error, 'Could not delete the page.'), 'error'));
+  }, [activeDoc, runPageTopologySteps, selectedPageIndices, showPagesAfterChange]);
 
   const performPdfExport = useCallback(async (options = {}) => {
     if (!activeDoc) return;
@@ -28306,10 +28495,10 @@ function App({ shell = null }) {
         queue itself (also after a rejected edit). A button that turns
         disabled when a queued commit starts can flip between a click's
         pointerdown and pointerup and silently drop the rotation. */}
-    <button className="oo-pdf-chrome-button oo-pdf-rotate-control" type="button" aria-label="Rotate page left" title="Rotate page left" onClick={() => rotateActivePage(-90)} disabled={pageActionsDisabled}>
+    <button className="oo-pdf-chrome-button oo-pdf-rotate-control" type="button" aria-label="Rotate page left" title={selectedPageIndices.length > 1 ? `Rotate ${selectedPageIndices.length} pages left` : "Rotate page left"} /* berg:work */ onClick={() => rotateActivePage(-90)} disabled={pageActionsDisabled}>
       <Icon name="rotate-ccw" />
     </button>
-    <button className="oo-pdf-chrome-button oo-pdf-rotate-control" type="button" aria-label="Rotate page right" title="Rotate page right" onClick={() => rotateActivePage(90)} disabled={pageActionsDisabled}>
+    <button className="oo-pdf-chrome-button oo-pdf-rotate-control" type="button" aria-label="Rotate page right" title={selectedPageIndices.length > 1 ? `Rotate ${selectedPageIndices.length} pages right` : "Rotate page right"} /* berg:work */ onClick={() => rotateActivePage(90)} disabled={pageActionsDisabled}>
       <Icon name="rotate-cw" />
     </button>
     </>
@@ -28743,9 +28932,14 @@ function App({ shell = null }) {
         onRotateAll={rotateAllPages}
         rotationBusy={activeSessionOpening || normalizingRotation || liveCommitCount > 0}
         structureBusy={applyingEdits || normalizingRotation || pageStructureBusy || activeSessionOpening || activeSafety.mutationBlocked || liveCommitCount > 0}
-        onDeletePage={deleteActivePage}
-        onDuplicatePage={duplicateActivePage}
-        onMovePage={moveActivePage}
+        // berg:work: the page actions act on the pages selected in the panel (deleteActivePage and reorderPageById
+        // are superseded by these).
+        selectedPages={selectedPageIndices}
+        onSelectPage={selectThumbPage}
+        onMovePagesTo={movePagesToGap}
+        onDeletePage={deleteSelectedPages}
+        onDuplicatePage={duplicateSelectedPages}
+        onMovePage={moveSelectedPages}
         onGoToPage={goToPage}
         onUpdateBookmarks={updateBookmarks}
         onReorderPage={reorderPageById}
@@ -41374,8 +41568,26 @@ function ToolDrawer(props) {
     onReorderPage,
     onMetadata,
     onStripMetadata,
+    // berg:work: pages selected in the Pages panel.
+    selectedPages: selectedPagesProp,
+    onSelectPage,
+    onMovePagesTo,
   } = props;
+  const selectedPages = selectedPagesProp?.length ? selectedPagesProp : [activePage];
   const [rangeText, setRangeText] = useState('');
+  // berg:work: a multi-selection fills the export range; the filled range goes again with the selection.
+  const selectedPagesKey = selectedPages.join(',');
+  const autoRangeRef = useRef('');
+  useEffect(() => {
+    if (selectedPages.length > 1) {
+      autoRangeRef.current = pageRangeText(selectedPages, '-');
+      setRangeText(autoRangeRef.current);
+    } else if (autoRangeRef.current) {
+      const filled = autoRangeRef.current;
+      autoRangeRef.current = '';
+      setRangeText(current => (current === filled ? '' : current));
+    }
+  }, [selectedPagesKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const watermarkImageInputRef = useRef(null);
   const [watermarkMode, setWatermarkMode] = useState('text');
   const [watermarkText, setWatermarkText] = useState('');
@@ -41831,16 +42043,21 @@ function ToolDrawer(props) {
     subtitle = 'Ruler units and exact guide positions';
     body = placementPanel || <PanelHint>Open a PDF to set up rulers and guides.</PanelHint>;
   } else if (panel === 'document') {
-    subtitle = doc ? `${pagesLabel} · page ${activePage + 1} selected` : 'No document open';
+    // berg:work: the page actions act on every selected page (Shift-/Ctrl-click in the grid).
+    const several = selectedPages.length > 1;
+    const firstSelected = selectedPages[0] ?? activePage;
+    const lastSelected = selectedPages.at(-1) ?? activePage;
+    const keepsNoPage = selectedPages.length >= pageCount;
+    subtitle = doc ? `${pagesLabel} · ${several ? `${selectedPages.length} pages` : `page ${activePage + 1}`} selected` : 'No document open';
     body = (
       <>
         <PanelSection>
           <div className="oo-pdf-panel-toolbar" role="toolbar" aria-label="Page actions">
-            <span className="oo-pdf-panel-toolbar-label">Page {doc ? activePage + 1 : '–'}</span>
-            <button type="button" className="oo-pdf-icon-button" aria-label="Move up" title="Move page up" disabled={!doc || structureBusy || activePage <= 0} onClick={() => onMovePage(-1)}><Icon name="arrow-up" /></button>
-            <button type="button" className="oo-pdf-icon-button" aria-label="Move down" title="Move page down" disabled={!doc || structureBusy || activePage >= pageCount - 1} onClick={() => onMovePage(1)}><Icon name="arrow-down" /></button>
-            <button type="button" className="oo-pdf-icon-button" aria-label="Duplicate" title="Duplicate page" disabled={!doc || structureBusy} onClick={onDuplicatePage}><Icon name="copy" /></button>
-            <button type="button" className="oo-pdf-icon-button is-danger" aria-label="Delete page" title={pageCount <= 1 ? 'A PDF must keep at least one page.' : 'Delete page'} disabled={!doc || structureBusy || pageCount <= 1} onClick={onDeletePage}><Icon name="trash-2" /></button>
+            <span className="oo-pdf-panel-toolbar-label" title={several ? `Pages ${pageRangeText(selectedPages)}` : undefined}>{several ? `${selectedPages.length} pages` : `Page ${doc ? activePage + 1 : '–'}`}</span>
+            <button type="button" className="oo-pdf-icon-button" aria-label="Move up" title={several ? (firstSelected <= 0 ? 'Page 1 is selected and cannot move further up.' : 'Move the selected pages up') : 'Move page up'} disabled={!doc || structureBusy || firstSelected <= 0} onClick={() => onMovePage(-1)}><Icon name="arrow-up" /></button>
+            <button type="button" className="oo-pdf-icon-button" aria-label="Move down" title={several ? (lastSelected >= pageCount - 1 ? 'The last page is selected and cannot move further down.' : 'Move the selected pages down') : 'Move page down'} disabled={!doc || structureBusy || lastSelected >= pageCount - 1} onClick={() => onMovePage(1)}><Icon name="arrow-down" /></button>
+            <button type="button" className="oo-pdf-icon-button" aria-label="Duplicate" title={several ? 'Duplicate the selected pages' : 'Duplicate page'} disabled={!doc || structureBusy} onClick={onDuplicatePage}><Icon name="copy" /></button>
+            <button type="button" className="oo-pdf-icon-button is-danger" aria-label="Delete page" title={keepsNoPage ? 'A PDF must keep at least one page.' : several ? 'Delete the selected pages' : 'Delete page'} disabled={!doc || structureBusy || keepsNoPage} onClick={onDeletePage}><Icon name="trash-2" /></button>
             <span className="oo-pdf-panel-toolbar-gap" aria-hidden="true" />
             <span className="oo-pdf-panel-toolbar-label">All</span>
             <button type="button" className="oo-pdf-icon-button" aria-label="Rotate all left" title="Rotate all pages left" disabled={!doc || rotationBusy} onClick={() => onRotateAll(-90)}><Icon name="rotate-ccw" /></button>
@@ -41852,13 +42069,16 @@ function ToolDrawer(props) {
               pdfiumRuntime={pdfiumRuntime}
               pdfiumRevision={pdfiumRevision}
               activePage={activePage}
+              selectedPages={selectedPages}
+              onSelectPage={onSelectPage}
+              onMovePagesTo={onMovePagesTo}
               onGoToPage={onGoToPage}
               onReorderPage={onReorderPage}
               onAppend={onAppend}
               structureBusy={structureBusy}
             />
           )}
-          {pageCount > 1 && <PanelHint>Drag a page to reorder it, or press Alt+↑/↓ on a focused page.</PanelHint>}
+          {pageCount > 1 && <PanelHint>Drag a page to reorder it (on touch, press and hold first). Shift- or {SHORTCUT_MOD}-click selects several.</PanelHint>}
         </PanelSection>
         <PanelSection title="Export pages">
           <div className="oo-pdf-panel-row">
@@ -42764,9 +42984,23 @@ function VirtualPageThumbGrid({
   onReorderPage,
   onAppend,
   structureBusy = false,
+  // berg:work: multi-selection and touch reordering.
+  selectedPages = [activePage],
+  onSelectPage = null,
+  onMovePagesTo = null,
 }) {
   const scrollerRef = useRef(null);
   const [viewport, setViewport] = useState({ width: 0, height: 300, scrollTop: 0 });
+  const touchDrag = useThumbTouchDrag({ scrollerRef, doc, structureBusy, onMovePagesTo,
+    selectedPageIds: selectedPages.map(index => doc?.pages?.[index]?.id).filter(Boolean) });
+  const selectedSet = new Set(selectedPages);
+  // A drop that would leave every page where it is shows no insertion line.
+  const touchDropMoves = Boolean(touchDrag.drag) && touchDrag.drag.gap >= 0 && pageBlockMoves(
+    (doc?.pages || []).map(page => page.id), touchDrag.drag.movingIds, touchDrag.drag.gap).length > 0;
+  const selectThumb = (index, event) => {
+    if (onSelectPage) onSelectPage(index, { shift: Boolean(event?.shiftKey), toggle: Boolean(event?.ctrlKey || event?.metaKey) });
+    else onGoToPage(index);
+  };
 
   useLayoutEffect(() => {
     const node = scrollerRef.current;
@@ -42818,8 +43052,9 @@ function VirtualPageThumbGrid({
     <>
       <div
       ref={scrollerRef}
-      className="oo-pdf-thumb-grid oo-pdf-thumb-grid-virtual"
+      className={`oo-pdf-thumb-grid oo-pdf-thumb-grid-virtual${touchDrag.drag ? ' is-touch-dragging' : ''}`}
       aria-label="Reorder pages"
+      {...touchDrag.handlers}
       onScroll={(event) => {
         const node = event.currentTarget;
         setViewport(current => ({ ...current, scrollTop: node.scrollTop || 0 }));
@@ -42855,6 +43090,12 @@ function VirtualPageThumbGrid({
                 onGo={() => onGoToPage(itemIndex)}
                 onReorder={onReorderPage}
                 structureBusy={structureBusy}
+                selected={selectedSet.has(itemIndex)}
+                selectedPageIds={selectedPages.map(index => doc.pages[index]?.id).filter(Boolean)}
+                onSelect={event => selectThumb(itemIndex, event)}
+                onMoveToGap={onMovePagesTo}
+                touchDragging={Boolean(touchDrag.drag) && touchDrag.drag.movingIds.includes(page.id)}
+                touchDropSide={touchDropMoves && touchDrag.drag.index === itemIndex ? touchDrag.drag.side : ''}
               />
             );
           })}
@@ -42879,6 +43120,13 @@ function PageThumbnail({
   onGo,
   onReorder,
   structureBusy = false,
+  // berg:work: multi-selection, drops at a gap (insertion line), touch drag state from the grid.
+  selected = active,
+  selectedPageIds = [],
+  onSelect = null,
+  onMoveToGap = null,
+  touchDragging = false,
+  touchDropSide = '',
 }) {
   const canvasRef = useRef(null);
   const [dragOver, setDragOver] = useState('');
@@ -42887,21 +43135,44 @@ function PageThumbnail({
     event.preventDefault();
     event.stopPropagation();
     const target = doc.pages[index - 1];
-    if (target) onReorder(page.id, target.id);
+    if (target && onMoveToGap) onMoveToGap(page.id, index - 1, { single: true });
+    else if (target) onReorder(page.id, target.id);
   };
   const moveDown = (event) => {
     event.preventDefault();
     event.stopPropagation();
     const target = doc.pages[index + 1];
-    if (target) onReorder(page.id, target.id);
+    if (target && onMoveToGap) onMoveToGap(page.id, index + 2, { single: true });
+    else if (target) onReorder(page.id, target.id);
   };
-  const activate = () => onGo();
+  const activate = (event) => (onSelect ? onSelect(event) : onGo());
+  // The side of this thumbnail the pointer is on: where the dragged page lands.
+  const dropSideAt = (event) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return event.clientX > rect.left + rect.width / 2 ? 'after' : 'before';
+  };
+  const markMovingThumbs = (event, on) => {
+    const grid = event.currentTarget.closest('.oo-pdf-thumb-grid');
+    if (!grid || selectedPageIds.length < 2 || !selectedPageIds.includes(page.id)) return;
+    for (const node of grid.querySelectorAll('.oo-pdf-thumb[data-page-id]')) {
+      if (selectedPageIds.includes(node.dataset.pageId)) node.classList.toggle('is-dragging', on);
+    }
+  };
+  const dropMarker = touchDropSide || dragOver;
 
   useEffect(() => {
     let cancelled = false;
     let renderTask = null;
     (async () => {
       if (pdfiumRuntime?.ready && pdfiumRuntime.documentId === doc.id) {
+        // berg:work: a page move, delete or duplicate shows the new order before PDFium has it. Rendering this
+        // page's new index then would paint (and cache, carried into the next revision) its old neighbour, so
+        // the thumbnails kept the old order. Wait for the pending commit; the revision change re-renders.
+        if (pdfiumRuntime.nativeCommitTail) {
+          const revision = pdfiumRuntime.engine?.revision;
+          await Promise.resolve(pdfiumRuntime.nativeCommitTail).catch(() => {});
+          if (cancelled || pdfiumRuntime.engine?.revision !== revision) return;
+        }
         const dimensions = pageDimensions(page);
         const scale = 92 / Math.max(1, dimensions.width);
         const raster = await requestPdfiumRaster(pdfiumRuntime, {
@@ -42958,17 +43229,23 @@ function PageThumbnail({
   return (
     <div
       role="button"
-      aria-pressed={active}
+      aria-pressed={selected}
       tabIndex={0}
       draggable={!structureBusy}
-      className={`oo-pdf-thumb ${active ? 'is-active' : ''} ${dragOver ? `is-over is-over-${dragOver}` : ''} ${dragging ? 'is-dragging' : ''}`}
+      data-page-index={index}
+      data-page-id={page.id}
+      className={`oo-pdf-thumb ${active ? 'is-active' : ''} ${selected ? 'is-selected' : ''} ${dropMarker ? `is-over is-over-${dropMarker}` : ''} ${dragging || touchDragging ? 'is-dragging' : ''}`}
       title={structureBusy ? undefined : `Page ${index + 1} · drag or press Alt+↑/↓ to reorder`}
       aria-label={`Page ${index + 1}`}
       onClick={activate}
+      onMouseDown={(event) => {
+        // berg:work: Shift-click selects pages, not the labels' text.
+        if (event.shiftKey) event.preventDefault();
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
-          onGo();
+          if (onSelect) onSelect(event); else onGo();
         } else if (event.altKey && !structureBusy && ['ArrowUp', 'ArrowLeft'].includes(event.key)) {
           moveUp(event);
         } else if (event.altKey && !structureBusy && ['ArrowDown', 'ArrowRight'].includes(event.key)) {
@@ -42984,15 +43261,24 @@ function PageThumbnail({
         event.dataTransfer.setData('text/plain', page.id);
         draggedThumbPageId = page.id;
         setDragging(true);
+        markMovingThumbs(event, true);
       }}
-      onDragEnd={() => {
+      onDragEnd={(event) => {
         draggedThumbPageId = '';
         setDragging(false);
+        markMovingThumbs(event, false);
       }}
       onDragOver={(event) => {
         if (structureBusy) return;
+        // berg:work: only a page from this grid; files from outside go on to the document drop.
+        if (onMoveToGap && !draggedThumbPageId) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = 'move';
+        if (onMoveToGap) {
+          // berg:work: the page lands on the side of this thumbnail the pointer is on (insertion line).
+          setDragOver(draggedThumbPageId === page.id ? '' : dropSideAt(event));
+          return;
+        }
         // The page takes the target's place: dragged forward it lands after
         // the target, dragged backward before it.
         const fromIndex = doc.pages.findIndex(candidate => candidate.id === draggedThumbPageId);
@@ -43000,11 +43286,13 @@ function PageThumbnail({
       }}
       onDragLeave={() => setDragOver('')}
       onDrop={(event) => {
+        if (onMoveToGap && !draggedThumbPageId) return;
         event.preventDefault();
         setDragOver('');
         if (structureBusy) return;
-        const fromId = event.dataTransfer.getData('text/plain');
-        if (fromId) onReorder(fromId, page.id);
+        const fromId = event.dataTransfer.getData('text/plain') || draggedThumbPageId;
+        if (fromId && onMoveToGap) onMoveToGap(fromId, index + (dropSideAt(event) === 'after' ? 1 : 0));
+        else if (fromId) onReorder(fromId, page.id);
       }}
     >
       <span className="oo-pdf-thumb-preview">
