@@ -853,8 +853,13 @@ export async function convertPdfBytesToPdfA(PDFLib, bytes, options = {}) {
     acroForm.delete(name('XFA'));
     acroForm.delete(name('NeedAppearances'));
   }
-  const perms = get(catalog, 'Perms');
-  if (perms instanceof PDFDict) for (const [key] of perms.entries()) if (!['UR3', 'DocMDP'].includes(key.decodeText())) perms.delete(key);
+  // A signed signature field would be broken by the rewrite. Usage rights
+  // (/Perms /UR3, Reader extensions as in many tax forms) only unlock Reader
+  // features; they go, as they would be invalid afterwards.
+  const signedField = [...seen].some(object => object instanceof PDFDict &&
+    nameOf(object.get(name('FT'))) === 'Sig' && lookup(object.get(name('V'))) instanceof PDFDict);
+  if (signedField && options.refuseSigned !== false) reasons.push('It is digitally signed, and converting it would break the signature.');
+  catalog.delete(name('Perms'));
 
   // Optional content configurations need a Name and no AS.
   const ocProperties = get(catalog, 'OCProperties');

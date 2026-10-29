@@ -135,7 +135,7 @@ import { arrangeSelection } from './pdf-editor/interaction/arrange-selection.js'
 import { PdfDraftWriterLease } from './pdf-editor/persistence/writer-lease.js';
 import { DocumentSaveCoordinator } from './pdf-editor/persistence/document-save-coordinator.js';
 // berg:work: Save as PDF/A.
-import { convertPdfBytesToPdfA, PdfAConversionError } from './pdf-editor/persistence/bergwork-pdfa.js';
+import { convertPdfBytesToPdfA } from './pdf-editor/persistence/bergwork-pdfa.js';
 import { BUNDLED_FONT_BASE } from './pdf-editor/interaction/bundled-font-library.js';
 import { RasterCache } from './pdf-editor/rendering/raster-cache.js';
 import { RenderPriority, RenderScheduler } from './pdf-editor/rendering/render-scheduler.js';
@@ -11661,9 +11661,7 @@ async function packExportPdfBytes(bytes) {
 // endstream, which PDF/A requires (6.1.7.1).
 async function pdfABytesFromExport(bytes) {
   const source = asUint8Array(bytes);
-  if (pdfBytesHaveIntactSignature(source)) {
-    throw new PdfAConversionError(['It is digitally signed, and converting it would break the signature.']);
-  }
+  // Signed signature fields are refused by the conversion; usage rights (UR3) are dropped.
   const result = await convertPdfBytesToPdfA(PDFLib, source, {
     loadFont: async file => {
       const response = await fetch(`${BUNDLED_FONT_BASE}${file}`);
