@@ -102,6 +102,12 @@ written with pdf-lib (`pdf-editor/engine/measure-annotations.js`, `markup-annota
 the pinned worker cannot write those keys. The shell publishes the document's measurements and markups
 (`doc.pageMarkup`) and the actions through `measureStore`. Tests: `npm run test:unit -w @bergwork/pdf`.
 
+Also berg:work's own: an image file dropped onto an image replaces it (`pdf-editor/interaction/bergwork-image-drop-replace.js`,
+hit test and fill crop; the shell commits an image edit), and a multi-selection's shared X/Y/Width/Height/Angle fields
+with Mixed (`bergwork-shared-fields.jsx`; the page applies them as one transaction through `moveSelectionItems`'
+`perItemTransforms`). Hovering the font list previews the font on the selected text (`InspectorSelect` sends
+`bergwork:font-hover`; the page hides the text in its raster and draws the hovered font over it).
+
 In the web app (outside Tauri) the mark and wordmark link back to https://bergwork.app/ (`web/src/homeLink.tsx`, a
 link laid over the design base's title bar), and the host passes `shell.sample` (`{ label, open }`, a berg:work
 addition to the fork's `normalizeShellHost`): the empty state then offers "Try a sample PDF" next to "Choose PDF or

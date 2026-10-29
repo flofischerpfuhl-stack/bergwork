@@ -107,12 +107,17 @@ import { useThumbTouchDrag } from './pdf-editor/interaction/bergwork-thumb-touch
 import { applyPageBoxes, inkMarginsFromRaster, marginsFromFractions, PAGE_TOOL_UNITS, pagesInsertedAt,
   splitAtBookmarks, splitBySize, splitEveryN, splitPartFileNames } from './pdf-editor/model/bergwork-page-tools.js';
 import { PageBoxPreview, UnitNumberInput } from './pdf-editor/interaction/bergwork-page-box-preview.jsx';
+// berg:work: an image file dropped onto an image replaces it.
+import { annotationFrameQuad, fillImageForFrame, imageFrameAspect, pointInAnnotationFrame, pointInQuad,
+  topmostImageHit } from './pdf-editor/interaction/bergwork-image-drop-replace.js';
 // berg:work: two fingers on the selected object scale and turn it.
 import { beginTwoFingerTransform, finishTwoFingerTransform, TWO_FINGER_READOUT_EVENT, updateTwoFingerTransform,
   useTwoFingerTarget } from './pdf-editor/interaction/bergwork-two-finger-transform.js';
 // berg:work: Alt shows the selection's distances (Figma).
 import { installAltDistances } from './pdf-editor/interaction/bergwork-alt-distances.js';
 import { GeometryNumber, GeometryProperties } from './pdf-editor/interaction/geometry-properties.jsx';
+// berg:work: shared fields of a multi-selection (Mixed).
+import { SharedSelectionFields } from './pdf-editor/interaction/bergwork-shared-fields.jsx';
 import { InspectorSelect, PropSection, SimpleInspectorSelect } from './pdf-editor/interaction/inspector-controls.jsx';
 import { RichTextInspectorEditor } from './pdf-editor/interaction/rich-text-inspector-editor.jsx';
 import { richTextDocumentForVerifiedFrame, richTextInspectorPropertyItem, verifiedTextFrameLayoutProperties } from './pdf-editor/model/rich-text-frame-projection.js';
@@ -22472,6 +22477,17 @@ function App({ shell = null }) {
           const previousResource = await imageDataUrlToRgbaResource(previousDataUrl);
           await runtime.kernel.registerResource(previousResource);
           inversePayload = { resourceHash: previousResource.hash };
+        } else if (!wholeDocumentInverse) {
+          // berg:work: the PDF's own image has no RGBA copy on this side (drop-to-replace). The exact pre-edit
+          // document is the inverse, so Undo brings back the original image stream unchanged.
+          const snapshotResource = await checkpointToPdfSnapshotResource(runtime.engine, { retain: true });
+          await runtime.kernel.registerResource(snapshotResource);
+          wholeDocumentInverse = createPdfCommand({
+            commandId: `${prefix}:inverse-image-snapshot`,
+            type: CommandType.DOCUMENT_RESTORE_SNAPSHOT,
+            targetId: stableId,
+            payload: { resourceHash: snapshotResource.hash },
+          });
         }
         addCommand(
           CommandType.IMAGE_REPLACE,
@@ -29090,6 +29106,99 @@ function App({ shell = null }) {
   };
   // berg:work: the Pages panel's thumbnails take dropped files themselves (inserted at the drop position).
   const thumbGridDrop = event => Boolean(event.target?.closest?.('.oo-pdf-thumb-grid'));
+  // berg:work: one image file dropped onto an image replaces it (Canva frames): the picture is cut to the frame's
+  // proportions and takes its place; position, size and turn stay, one undo step. The target comes from the PDFium
+  // inspection (native images, also unselected and in Pan) and the inserted image annotations, not from the DOM.
+  const imageReplaceCandidatesRef = useRef({ inspection: null, page: null, imageEdits: null, annotations: null, items: [] });
+  const imageReplaceTargetAt = (clientX, clientY) => {
+    const point = sheetPointAt(clientX, clientY);
+    if (!point || !activeDoc) return null;
+    const { page, at } = point;
+    const presentation = activeDoc.layerPresentation;
+    const usable = key => {
+      const state = layerPresentationFor(presentation, key);
+      return !state.hidden && !state.locked;
+    };
+    const annotationHits = activeDoc.annotations
+      .filter(ann => ann.pageId === page.id && ann.type === 'image' && ann.purpose !== 'signature' && ann.dataUrl &&
+        usable(annotationLayerKey(ann.id)) && pointInAnnotationFrame(at, ann))
+      .map(ann => ({
+        kind: 'annotation', id: ann.id, page, point, quad: annotationFrameQuad(ann),
+        aspect: imageFrameAspect({ w: ann.w, h: ann.h }),
+      }));
+    const inspection = livePdfRuntimeRef.current?.pageInspections?.get(page.id);
+    // dragover fires many times a second: bind the page's images once per inspection.
+    const cache = imageReplaceCandidatesRef.current;
+    if (cache.inspection !== inspection || cache.page !== page || cache.imageEdits !== activeDoc.imageEdits ||
+        cache.annotations !== activeDoc.annotations) {
+      const ownStableIds = new Set(activeDoc.annotations.map(ann => ann.liveStableId).filter(Boolean));
+      const objects = inspection
+        ? (sessionInspectionToScenePage(page, inspection).objects || []).filter(object => !ownStableIds.has(object.stableId))
+        : [];
+      imageReplaceCandidatesRef.current = {
+        inspection, page, imageEdits: activeDoc.imageEdits, annotations: activeDoc.annotations,
+        items: bindPdfImageItemsToNativeObjects(page, [], objects, activeDoc.imageEdits),
+      };
+    }
+    const nativeHits = imageReplaceCandidatesRef.current.items
+      .filter(item => !item.nestedEditBlockedReason)
+      .map(item => ({ item, sourceId: imageItemId(page, item) }))
+      .filter(({ item, sourceId }) => !activeDoc.imageEdits?.[sourceId]?.deleted && usable(imageLayerKey(sourceId)) && (
+        Array.isArray(item.quad) && item.quad.length === 4
+          ? pointInQuad(at, item.quad)
+          : at.x >= item.x && at.x <= item.x + item.w && at.y >= item.y && at.y <= item.y + item.h))
+      .map(({ item, sourceId }) => ({
+        kind: 'image', id: sourceId, item, page, point, objectIndex: item.objectIndex,
+        quad: Array.isArray(item.quad) && item.quad.length === 4 ? item.quad : [
+          { x: item.x, y: item.y }, { x: item.x + item.w, y: item.y },
+          { x: item.x + item.w, y: item.y + item.h }, { x: item.x, y: item.y + item.h },
+        ],
+        aspect: imageFrameAspect({ matrix: item.pageMatrix || item.matrix, w: item.w, h: item.h }),
+      }));
+    return topmostImageHit(annotationHits, nativeHits);
+  };
+  const imageReplaceOutlineRef = useRef(null);
+  const markImageReplaceTarget = target => {
+    let outline = imageReplaceOutlineRef.current;
+    if (!target) {
+      outline?.remove();
+      return;
+    }
+    const surface = target.point.sheet.querySelector('.oo-pdf-page-surface') || target.point.sheet;
+    if (!outline) {
+      outline = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      outline.setAttribute('class', 'oo-pdf-image-replace-target');
+      outline.setAttribute('aria-hidden', 'true');
+      outline.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'polygon'));
+      imageReplaceOutlineRef.current = outline;
+    }
+    const scale = zoomRef.current || 1;
+    outline.setAttribute('viewBox', `0 0 ${target.point.rect.width / scale} ${target.point.rect.height / scale}`);
+    outline.firstChild.setAttribute('points', target.quad.map(corner => `${corner.x},${corner.y}`).join(' '));
+    if (outline.parentNode !== surface) surface.appendChild(outline);
+  };
+  const replaceImageFromFile = (target, file) => {
+    void (async () => {
+      try {
+        const image = await normalizeImageFile(file);
+        const fitted = await fillImageForFrame(await loadImageElement(image.dataUrl), target.aspect);
+        const patch = {
+          dataUrl: fitted.dataUrl, assetWidth: fitted.width, assetHeight: fitted.height,
+        };
+        if (target.kind === 'annotation') {
+          updateAnnotation(target.id, { ...patch, mime: 'image/png', width: fitted.width, height: fitted.height,
+            name: file.name || 'image' }, { commitGesture: true, gestureReason: 'image-replace' });
+        } else {
+          const previous = activeDoc.imageEdits?.[target.id] || initialPdfImageEdit(target.page, target.item, target.id);
+          updateImageEdit(target.id, { ...previous, ...patch }, {
+            commitGesture: true, gestureReason: 'image-replace', previousForCommit: previous,
+          });
+        }
+      } catch (error) {
+        showToast(userFacingError(error, 'The image could not be replaced.'), 'error');
+      }
+    })();
+  };
   const handleDocumentDragOver = event => {
     if (thumbGridDrop(event)) {
       markImageDropSheet(null);
@@ -29100,12 +29209,17 @@ function App({ shell = null }) {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
     const sheet = imageDropSheet(event);
-    markImageDropSheet(sheet);
+    // berg:work: over an image (one file) the image is the target, not the page.
+    const replaceTarget = sheet && event.dataTransfer.items.length === 1
+      ? imageReplaceTargetAt(event.clientX, event.clientY) : null;
+    markImageReplaceTarget(replaceTarget);
+    markImageDropSheet(replaceTarget ? null : sheet);
     setDocumentDropActive(!sheet);
   };
   const handleDocumentDragLeave = event => {
     if (event.currentTarget.contains(event.relatedTarget)) return;
     markImageDropSheet(null);
+    markImageReplaceTarget(null);
     setDocumentDropActive(false);
   };
   const handleDocumentDrop = event => {
@@ -29115,10 +29229,16 @@ function App({ shell = null }) {
     event.stopPropagation();
     const sheet = imageDropSheet(event);
     markImageDropSheet(null);
+    markImageReplaceTarget(null);
     setDocumentDropActive(false);
     const files = fileList(event.dataTransfer?.files);
     const page = sheet && activeDoc.pages.find(item => item.id === sheet.dataset.pageId);
     if (page && files.length && files.every(acceptsImage)) {
+      const replaceTarget = files.length === 1 ? imageReplaceTargetAt(event.clientX, event.clientY) : null;
+      if (replaceTarget) {
+        replaceImageFromFile(replaceTarget, files[0]);
+        return;
+      }
       placeImageFiles(page, sheetPointAt(event.clientX, event.clientY)?.at || { x: 0, y: 0 }, files);
       return;
     }
@@ -33328,10 +33448,62 @@ function PdfPageContent({
   const createdNativeStableIds = useMemo(() => new Set(
     [...createdNativeBindings.values()].map(object => object.stableId),
   ), [createdNativeBindings]);
+  // berg:work: font preview while the font list is hovered (Figma): the selected PDF text is left out of the page
+  // raster (as a hidden layer would be) and drawn in the hovered font above it. Nothing is committed.
+  const [fontHoverFamily, setFontHoverFamily] = useState('');
+  const fontHoverHoldRef = useRef(null);
+  const fontHoverRevisionRef = useRef(pdfiumRevision);
+  fontHoverRevisionRef.current = pdfiumRevision;
+  useEffect(() => {
+    if (fontHoverHoldRef.current == null || fontHoverHoldRef.current === pdfiumRevision) return;
+    fontHoverHoldRef.current = null;
+    setFontHoverFamily('');
+  }, [pdfiumRevision]);
+  useEffect(() => {
+    // Ending the preview waits a moment, so passing over an entry without a preview does not re-render the page.
+    // A chosen font (`hold`) stays until the page raster has the committed change, at most a few seconds.
+    let clearTimer = 0;
+    const hover = event => {
+      window.clearTimeout(clearTimer);
+      const family = String(event.detail?.family || '');
+      fontHoverHoldRef.current = event.detail?.hold === true ? fontHoverRevisionRef.current : null;
+      if (family) setFontHoverFamily(family);
+      if (!family || event.detail?.hold === true) {
+        clearTimer = window.setTimeout(() => setFontHoverFamily(''),
+          event.detail?.hold === true ? 4000 : event.detail?.now ? 0 : 160);
+      }
+    };
+    window.addEventListener('bergwork:font-hover', hover);
+    return () => {
+      window.clearTimeout(clearTimer);
+      window.removeEventListener('bergwork:font-hover', hover);
+    };
+  }, []);
+  const fontPreviewSourceId = fontHoverFamily && selected?.type === 'text' && selected.pageId === page.id &&
+    !editingText ? selected.sourceId : '';
+  // berg:work: the hovered font drawn over the selected text (see fontHoverFamily). Upright text only.
+  const fontPreviewBox = useMemo(() => {
+    if (!fontPreviewSourceId) return null;
+    const item = sourceTextItems.find(entry => textItemId(page, entry) === fontPreviewSourceId);
+    const current = { ...(item || {}), ...(doc.textEdits?.[fontPreviewSourceId] || {}) };
+    const text = String(current.currentText ?? current.text ?? '');
+    const angle = Number(current.orientationDegrees || 0) % 360;
+    if (!text.trim() || !(current.w > 0) || Math.min(Math.abs(angle), 360 - Math.abs(angle)) > 0.5) return null;
+    return {
+      text, x: current.x || 0, y: current.y || 0, w: current.w, h: current.h || 0,
+      fontSize: Number(current.fontSize) || 12, lineHeight: Number(current.lineHeight) || 1.2,
+      color: String(current.color || '#111111').slice(0, 7), align: current.textAlign || 'left',
+      weight: current.fontWeight || '400', style: current.fontStyle || 'normal',
+      wrap: current.textBlock === true || current.textFrame === true || /\n/u.test(text),
+    };
+  }, [doc.textEdits, fontPreviewSourceId, page, sourceTextItems]);
+  const hiddenPresentation = useMemo(() => fontPreviewBox
+    ? patchLayerPresentation(doc.layerPresentation, textLayerKey(fontPreviewSourceId), { hidden: true })
+    : doc.layerPresentation, [doc.layerPresentation, fontPreviewBox, fontPreviewSourceId]);
   const hiddenNativeStableIds = useMemo(() => {
     // Nothing hidden -> nothing to compute. Building the full layer list of a
     // plan page (thousands of rows) after every commit cost ~300 ms otherwise.
-    if (!layerPresentationHasHidden(doc.layerPresentation)) return EMPTY_HIDDEN_TARGETS;
+    if (!layerPresentationHasHidden(hiddenPresentation)) return EMPTY_HIDDEN_TARGETS;
     const layers = layersWithCreatedPageContentBindings([
       ...makeOriginalPdfObjectLayers(doc, page.id),
       ...makePageLayers(doc, page.id),
@@ -33341,15 +33513,15 @@ function PdfPageContent({
         : layer
     ));
     const exactLayerTargets = layerVisibilityRenderTargets(
-      doc.layerPresentation, layers, doc.annotations, page.id,
+      hiddenPresentation, layers, doc.annotations, page.id,
     ).hiddenNativeStableIds;
     const nativeObjectTargets = sceneNativeObjects.flatMap(object => {
       const sourceId = nativeObjectItemId(page, object);
-      return layerPresentationFor(doc.layerPresentation, objectLayerKey(sourceId)).hidden && object.stableId
+      return layerPresentationFor(hiddenPresentation, objectLayerKey(sourceId)).hidden && object.stableId
         ? [object.stableId] : [];
     });
     return [...new Set([...exactLayerTargets, ...nativeObjectTargets])];
-  }, [createdNativeBindings, doc, page, sceneNativeObjects]);
+  }, [createdNativeBindings, doc, hiddenPresentation, page, sceneNativeObjects]);
   const hiddenAnnotationObjectNumbers = useMemo(() => layerPresentationHasHidden(doc.layerPresentation)
     ? layerVisibilityRenderTargets(doc.layerPresentation, [], doc.annotations, page.id).hiddenAnnotationObjectNumbers
     : EMPTY_HIDDEN_TARGETS, [doc.annotations, doc.layerPresentation, page.id]);
@@ -35487,16 +35659,19 @@ function PdfPageContent({
   }, [page]);
 
   const moveSelectionItems = useCallback((items, dx, dy, options = {}) => {
-    const groupTransform = options.groupTransform || null;
-    if (!doc || !items?.length || (!dx && !dy && !options.offsets?.size && !groupTransform)) return;
-    const groupBounds = groupTransform ? selectionBounds(items) : null;
-    if (groupTransform && (!groupBounds || items.some(entry =>
+    // berg:work: `perItemTransforms` (selection key → { kind, scaleX, scaleY | degrees }) scales or turns each object
+    // about its own frame, all in one transaction: the multi-selection's shared Width, Height and Angle fields.
+    const perItemTransforms = options.perItemTransforms?.size ? options.perItemTransforms : null;
+    const sharedTransform = perItemTransforms ? null : options.groupTransform || null;
+    if (!doc || !items?.length || (!dx && !dy && !options.offsets?.size && !sharedTransform && !perItemTransforms)) return;
+    const sharedBounds = sharedTransform ? selectionBounds(items) : null;
+    if ((sharedTransform || perItemTransforms) && ((sharedTransform && !sharedBounds) || items.some(entry =>
       entry.item?.nested || (Array.isArray(entry.item?.formPath) && entry.item.formPath.length) ||
       (entry.type === 'nativeObject' && (!entry.item?.typeName || entry.item.typeName === 'unknown')) ||
       !['text', 'imageRegion', 'nativeObject', 'annotation'].includes(entry.type)))) {
       return false;
     }
-    const transformRect = rect => {
+    const transformRectWith = (groupTransform, groupBounds, rect) => {
       if (!groupTransform || !groupBounds) return rect;
       if (groupTransform.kind === 'resize') {
         return {
@@ -35523,9 +35698,10 @@ function PdfPageContent({
       const target = targetSourceRectForPatch(page, value, value);
       return { ...value, targetSourceX: target.x, targetSourceY: target.y, targetSourceW: target.w, targetSourceH: target.h };
     };
-    const groupAnchorPdf = groupBounds ? pdfPointForDisplayPoint(page, groupTransform?.kind === 'rotate'
+    const anchorPdfFor = (groupTransform, groupBounds) => groupBounds ? pdfPointForDisplayPoint(page, groupTransform?.kind === 'rotate'
       ? { x: groupBounds.x + groupBounds.w / 2, y: groupBounds.y + groupBounds.h / 2 }
       : { x: groupBounds.x, y: groupBounds.y }) : null;
+    const sharedAnchorPdf = anchorPdfFor(sharedTransform, sharedBounds);
     const previousMoveState = (next, existing, dx, dy) => {
       const previous = { ...next, ...(existing || {}), x: next.x - dx, y: next.y - dy };
       const target = targetSourceRectForPatch(page, next, {
@@ -35541,6 +35717,11 @@ function PdfPageContent({
       };
     };
     const operations = items.map(entry => {
+      const groupTransform = perItemTransforms ? perItemTransforms.get(selectionItemKey(entry)) || null : sharedTransform;
+      if (perItemTransforms && !groupTransform) return null;
+      const groupBounds = perItemTransforms ? entry.rect : sharedBounds;
+      const transformRect = rect => transformRectWith(groupTransform, groupBounds, rect);
+      const groupAnchorPdf = perItemTransforms ? anchorPdfFor(groupTransform, groupBounds) : sharedAnchorPdf;
       const delta = options.offsets?.get(selectionItemKey(entry));
       const itemDx = options.offsets ? delta?.dx || 0 : dx;
       const itemDy = options.offsets ? delta?.dy || 0 : dy;
@@ -35610,13 +35791,39 @@ function PdfPageContent({
       return null;
     }).filter(Boolean);
     if (!operations.length) return;
+    const labelKind = operations[0].transformKind;
 
     return onMoveSelectionItems?.(operations, {
       commitGesture: options.commitGesture === true,
       mergeKey: `selection:${page.id}`,
-      label: groupTransform?.kind === 'resize' ? 'Resize' : groupTransform?.kind === 'rotate' ? 'Rotate' : 'Move',
+      label: labelKind === 'resize' ? 'Resize' : labelKind === 'rotate' ? 'Rotate' : 'Move',
     });
   }, [doc, imageEditForSelectionMove, nativeObjectEditForSelectionMove, onMoveSelectionItems, page.id, textEditForSelectionMove]);
+  // berg:work: the shared fields of a multi-selection (Properties) change every selected object of this page in one
+  // transaction: per-object offsets for X/Y, per-object scales or turns for Width/Height/Angle. Keys are layer keys.
+  const sharedFieldsRef = useRef(null);
+  sharedFieldsRef.current = { doc, items: selectedPageItems, move: moveSelectionItems };
+  useEffect(() => {
+    const apply = event => {
+      const { documentId, pageId, offsets, positions, transforms } = event.detail || {};
+      const { doc: currentDoc, items, move } = sharedFieldsRef.current || {};
+      if (!currentDoc || documentId !== currentDoc.id || pageId !== page.id || !items?.length) return;
+      const byLayerKey = new Map(items.map(entry => [selectionLayerKey(entry), entry]));
+      const keyed = (list, map = (entry, value) => value) => new Map((list || [])
+        .map(([layerKey, value]) => [byLayerKey.get(layerKey), value])
+        .filter(([entry]) => entry).map(([entry, value]) => [selectionItemKey(entry), map(entry, value)]));
+      if (offsets?.length) {
+        move(items, 0, 0, { commitGesture: true, offsets: keyed(offsets) });
+      } else if (positions?.length) {
+        move(items, 0, 0, { commitGesture: true, offsets: keyed(positions, (entry, target) => ({
+          dx: Number.isFinite(target.x) ? target.x - Number(entry.rect?.x || 0) : 0,
+          dy: Number.isFinite(target.y) ? target.y - Number(entry.rect?.y || 0) : 0,
+        })) });
+      } else if (transforms?.length) move(items, 0, 0, { commitGesture: true, perItemTransforms: keyed(transforms) });
+    };
+    window.addEventListener('bergwork:selection-shared-fields', apply);
+    return () => window.removeEventListener('bergwork:selection-shared-fields', apply);
+  }, [page.id]);
 
   const keyDown = (event) => {
     if (event.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
@@ -36473,6 +36680,18 @@ function PdfPageContent({
               zoom={zoom}
               zIndex={9998}
             />
+          )}
+          {fontPreviewBox && (
+            <div className="oo-pdf-font-hover-preview" aria-hidden="true" style={{
+              left: fontPreviewBox.x * zoom, top: fontPreviewBox.y * zoom,
+              width: fontPreviewBox.wrap ? fontPreviewBox.w * zoom : undefined,
+              minWidth: fontPreviewBox.wrap ? undefined : fontPreviewBox.w * zoom,
+              minHeight: fontPreviewBox.h * zoom,
+              fontFamily: `${fontHoverFamily}, sans-serif`, fontSize: fontPreviewBox.fontSize * zoom,
+              lineHeight: fontPreviewBox.lineHeight, color: fontPreviewBox.color, textAlign: fontPreviewBox.align,
+              fontWeight: fontPreviewBox.weight, fontStyle: fontPreviewBox.style,
+              whiteSpace: fontPreviewBox.wrap ? 'pre-wrap' : 'pre',
+            }}>{fontPreviewBox.text}</div>
           )}
           {/* berg:work: measuring (Markup › Measure); in Edit PDF its measurements are selectable here. */}
           <MeasureLayer page={page} zoom={zoom} tool={tool} snapObjects={sceneNativeObjects}
@@ -42948,8 +43167,27 @@ function PanelSection({ title, aside, className = '', children }) {
   );
 }
 
-function PanelHint({ children, role, id, className = '' }) {
+// berg:work: explanations do not stand in the panels (few apps show running help text); they go into the (i) next to
+// the panel title. Status lines (`role`) and hints marked `visible` (empty states, warnings) stay where they are.
+const PanelInfoTargetContext = React.createContext(null);
+function PanelHint({ children, role, id, className = '', visible = false }) {
+  const infoTarget = React.useContext(PanelInfoTargetContext);
+  if (infoTarget && !role && !visible) return createPortal(<p className="oo-pdf-info-note" id={id}>{children}</p>, infoTarget);
   return <p className={`oo-pdf-panel-hint ${className}`} role={role} id={id}>{children}</p>;
+}
+
+// berg:work: a small (i) in a circle; its text shows on hover, keyboard focus or a tap.
+function InfoTip({ label = 'More information', children, targetRef }) {
+  return (
+    <span className="oo-pdf-info">
+      <button type="button" className="oo-pdf-info-button" aria-label={label}
+        onPointerDown={event => { if (event.pointerType !== 'mouse') event.currentTarget.focus(); }}>i</button>
+      <span className="oo-pdf-info-bubble" role="tooltip">
+        {children}
+        {targetRef && <span className="oo-pdf-info-notes" ref={targetRef} />}
+      </span>
+    </span>
+  );
 }
 
 // Two or three exclusive choices. Real radio inputs keep keyboard and
@@ -43055,8 +43293,9 @@ function SegmentedChoice({ label, name, value, options, onChange, disabled = fal
 
 function PanelSwitch({ id, label, hint, checked, onChange, disabled = false, title }) {
   return (
-    <label className="oo-pdf-switch" title={title}>
-      <span className="oo-pdf-switch-text"><span>{label}</span>{hint && <small>{hint}</small>}</span>
+    // berg:work: a switch's hint is its tooltip, not a second line of text.
+    <label className="oo-pdf-switch" title={title || hint}>
+      <span className="oo-pdf-switch-text"><span>{label}</span></span>
       <input id={id} type="checkbox" role="switch" aria-label={label} checked={checked} disabled={disabled}
         onChange={event => onChange(event.target.checked)} />
     </label>
@@ -43122,11 +43361,13 @@ function FileDrop({ id, inputRef, accept, label, ariaLabel, icon = 'file', file,
 }
 
 function PanelEmpty({ icon, title, children }) {
+  // berg:work: the empty state shows its title; the explanation goes into the panel's (i) like a PanelHint.
+  const infoTarget = React.useContext(PanelInfoTargetContext);
   return (
     <div className="oo-pdf-panel-empty">
       <span className="oo-pdf-panel-empty-icon"><Icon name={icon} /></span>
       <b>{title}</b>
-      {children && <span>{children}</span>}
+      {children && (infoTarget ? createPortal(<p className="oo-pdf-info-note">{children}</p>, infoTarget) : <span>{children}</span>)}
     </div>
   );
 }
@@ -43694,6 +43935,9 @@ function ToolDrawer(props) {
   const raster = !['vector', 'images'].includes(compressProfile);
 
   let subtitle = '';
+  // berg:work: what a panel is for goes into the (i) by its title, not under it.
+  let info = '';
+  const [panelInfoTarget, setPanelInfoTarget] = useState(null);
   let tabs = null;
   let body = null;
   let footer = null;
@@ -43701,11 +43945,11 @@ function ToolDrawer(props) {
 
   if (panel === 'comments') {
     // berg:work: the document's comments (comment-list.jsx); actions come from the shell through measureStore.
-    subtitle = 'Filter, reply, set a status, exchange as XFDF';
-    body = doc ? <CommentListPanel docId={doc.id} revision={Number(doc.editVersion || 0)} /> : <PanelHint>Open a PDF to see its comments.</PanelHint>;
+    info = 'Filter, reply, set a status, exchange as XFDF';
+    body = doc ? <CommentListPanel docId={doc.id} revision={Number(doc.editVersion || 0)} /> : <PanelHint visible>Open a PDF to see its comments.</PanelHint>;
   } else if (panel === 'guides') {
-    subtitle = 'Ruler units and exact guide positions';
-    body = placementPanel || <PanelHint>Open a PDF to set up rulers and guides.</PanelHint>;
+    info = 'Ruler units and exact guide positions';
+    body = placementPanel || <PanelHint visible>Open a PDF to set up rulers and guides.</PanelHint>;
   } else if (panel === 'document') {
     // berg:work: the page actions act on every selected page (Shift-/Ctrl-click in the grid).
     const several = selectedPages.length > 1;
@@ -43778,6 +44022,10 @@ function ToolDrawer(props) {
             {exportMode === 'range'
               ? <button type="button" className="oo-pdf-panel-button" aria-label="Export range" disabled={!doc || structureBusy} onClick={() => onExportRange(rangeText)}><Icon name="download" /><span>Export</span></button>
               : <button type="button" className="oo-pdf-panel-button" aria-label="Split" aria-busy={splitBusy} disabled={!doc || structureBusy || splitBusy || pageCount < 2}
+                title={exportMode === 'count'
+                  ? `Makes ${Math.max(1, Math.ceil(pageCount / Math.max(1, Number(splitCount) || 1)))} PDFs of ${Math.max(1, Number(splitCount) || 1)} page${Number(splitCount) === 1 ? '' : 's'} each, saved as one zip.`
+                  : exportMode === 'bookmarks' ? 'One PDF per top-level bookmark, named after it, saved as one zip.'
+                    : 'PDFs as large as possible up to that size, saved as one zip.'}
                 onClick={async () => {
                   setSplitBusy(true);
                   try {
@@ -43785,10 +44033,6 @@ function ToolDrawer(props) {
                   } finally { setSplitBusy(false); }
                 }}><Icon name="scissors" /><span>{splitBusy ? 'Splitting…' : 'Split'}</span></button>}
           </div>
-          {exportMode !== 'range' && <PanelHint>{exportMode === 'count'
-            ? `Makes ${Math.max(1, Math.ceil(pageCount / Math.max(1, Number(splitCount) || 1)))} PDFs of ${Math.max(1, Number(splitCount) || 1)} page${Number(splitCount) === 1 ? '' : 's'} each, saved as one zip.`
-            : exportMode === 'bookmarks' ? 'One PDF per top-level bookmark, named after it, saved as one zip.'
-              : 'PDFs as large as possible up to that size, saved as one zip.'}</PanelHint>}
         </PanelSection>
       </>
     );
@@ -43930,10 +44174,10 @@ function ToolDrawer(props) {
                   onChange={(event) => setResizeCustom(current => ({ ...current, height: event.target.value.replace(',', '.') }))} /></PanelField>
               </div>
             )}
-            <PanelSwitch label="Scale the content to fit" checked={resizeScale} onChange={setResizeScale} />
-            <PanelHint>{format ? 'Landscape pages stay landscape. ' : ''}{resizeScale
-              ? 'The content shrinks or grows to fit and is centred.'
-              : 'The content keeps its size and stays centred; the page grows or is cut around it.'}</PanelHint>
+            <PanelSwitch label="Scale the content to fit" checked={resizeScale} onChange={setResizeScale}
+              hint={`${format ? 'Landscape pages stay landscape. ' : ''}${resizeScale
+                ? 'The content shrinks or grows to fit and is centred.'
+                : 'The content keeps its size and stays centred; the page grows or is cut around it.'}`} />
           </>
         )}
         <OperationNotice notice={operationNotices.pageBoxes} onDismiss={() => onDismissOperationNotice?.('pageBoxes')} />
@@ -43944,7 +44188,7 @@ function ToolDrawer(props) {
       onClick={() => { void apply(); }}>
       {boxBusy ? (boxProgress || 'Working…') : `${boxMode === 'crop' ? 'Crop' : 'Resize'} ${scopeCount > 1 ? `${scopeCount} pages` : 'page'}`}</button>;
   } else if (panel === 'find') {
-    subtitle = 'Ctrl+F opens the same search';
+    info = 'Ctrl+F opens the same search';
     body = (
       <PanelSection>
         <PanelField label="Find"><input value={searchQuery || ''} type="search" placeholder="Search text" onFocus={onOpenSearch} onChange={(e) => { onOpenSearch?.(); onSearchQuery?.(e.target.value); }} onKeyDown={(event) => {
@@ -43962,7 +44206,6 @@ function ToolDrawer(props) {
     );
   } else if (panel === 'outline') {
     subtitle = outlineLoading ? 'Loading bookmarks…' : outlineItems.length ? `${outlineItems.length} bookmark${outlineItems.length === 1 ? '' : 's'}` : 'No bookmarks yet';
-    const selectedBookmark = outlineSelectedId && outlineItems.some(item => item.id === outlineSelectedId);
     body = (
       <>
         <PanelSection>
@@ -43988,7 +44231,6 @@ function ToolDrawer(props) {
               }}
             ><Icon name="plus" /><span>Add</span></button>
           </div>
-          <PanelHint>{selectedBookmark ? 'Type a new title above and press Rename to change the selected bookmark.' : `Adds a bookmark to page ${activePage + 1}.`}</PanelHint>
         </PanelSection>
         {outlineItems.length > 0 ? (
           <PanelSection title="In this PDF">
@@ -44056,18 +44298,18 @@ function ToolDrawer(props) {
           </span>
           <figcaption>{numberPosition.startsWith('top') ? 'Header' : 'Footer'} on every page · 12 pt</figcaption>
         </figure>
-        <PanelField label="Text"><input value={numberText} placeholder="{page}" spellCheck={false}
+        <PanelField label="Text" title="{page} number · {pages} count · {date} · {file}. For Bates numbers: e.g. ACME-{page} with 6 digits.">
+          <input value={numberText} placeholder="{page}" spellCheck={false}
           onChange={(e) => setNumberText(e.target.value)} /></PanelField>
-        <PanelHint>{'{page}'} number · {'{pages}'} count · {'{date}'} · {'{file}'}. For Bates numbers: e.g. ACME-{'{page}'} with 6 digits.</PanelHint>
         <div className="oo-pdf-panel-row is-even">
           <PanelField label="Start at"><input inputMode="numeric" value={numberStart} onChange={(e) => setNumberStart(e.target.value.replace(/[^\d]/gu, ''))} /></PanelField>
           <PanelField label="Digits"><input inputMode="numeric" value={numberDigits} onChange={(e) => setNumberDigits(e.target.value.replace(/[^\d]/gu, '').slice(0, 2))} /></PanelField>
         </div>
-        <PanelHint>Running it again replaces the earlier {numberPosition.startsWith('top') ? 'header' : 'numbers or footer'} instead of adding a second set.</PanelHint>
         <OperationNotice notice={operationNotices.pageNumbers} onDismiss={() => onDismissOperationNotice?.('pageNumbers')} />
       </PanelSection>
     );
     footer = <button type="button" className="oo-pdf-primary" disabled={!doc || structureBusy || !numberText.trim()}
+      title={`Running it again replaces the earlier ${numberPosition.startsWith('top') ? 'header' : 'numbers or footer'} instead of adding a second set.`}
       onClick={() => { void onAddPageNumbers({ text: numberText, position: numberPosition, start: numberStart || 1, digits: numberDigits }); }}>
       {numberText.trim() === '{page}' ? 'Add page numbers' : `Add ${numberPosition.startsWith('top') ? 'header' : 'footer'}`}</button>;
   } else if (panel === 'watermark') {
@@ -44326,15 +44568,14 @@ function ToolDrawer(props) {
         <>
           {statusLine}
           {doc?.protectionRemoved?.kind && (
-            <PanelHint>
+            <PanelHint visible>
               {doc.protectionRemoved.kind === 'password'
                 ? 'This PDF was opened with its password. Saved copies have no password until you protect them here.'
                 : 'This PDF came with usage restrictions, removed when it was opened. Saved copies have none until you protect them here.'}
             </PanelHint>
           )}
           <PanelSection title="Passwords">
-            <PanelField label="Owner password" aside="required"><input type="password" autoComplete="new-password" required value={restrictOwnerPassword} onChange={(e) => setRestrictOwnerPassword(e.target.value)} /></PanelField>
-            <PanelHint className="is-tight">Needed later to lift the restrictions below.</PanelHint>
+            <PanelField label="Owner password" aside="required" title="Needed later to lift the restrictions below."><input type="password" autoComplete="new-password" required value={restrictOwnerPassword} onChange={(e) => setRestrictOwnerPassword(e.target.value)} /></PanelField>
             <PanelField label="Opening password" aside="optional"><input type="password" autoComplete="new-password" value={restrictUserPassword} onChange={(e) => setRestrictUserPassword(e.target.value)} /></PanelField>
             <PanelField label="Confirm opening password"><input type="password" autoComplete="new-password" value={restrictUserPasswordConfirmation} onChange={(e) => setRestrictUserPasswordConfirmation(e.target.value)} /></PanelField>
             {restrictUserPassword !== restrictUserPasswordConfirmation && (
@@ -44366,7 +44607,7 @@ function ToolDrawer(props) {
       footer = <button type="button" className="oo-pdf-primary" disabled={!unlockFile} onClick={() => onUnlockPdf({ file: unlockFile, password: unlockPassword })}><Icon name="unlock" /><span>Unlock</span></button>;
     }
   } else if (panel === 'certificateSignature') {
-    subtitle = 'Signs locally, nothing is uploaded';
+    info = 'Signs locally, nothing is uploaded';
     tabs = <SegmentedChoice label="Signature type" name="oo-sign-tab" value={signTab} onChange={setSignTab}
       options={[{ value: 'visual', label: 'Handwritten', icon: 'pen-tool' }, { value: 'certificate', label: 'Certificate', icon: 'key-round' }]} />;
     if (signTab === 'visual') {
@@ -44520,7 +44761,7 @@ function ToolDrawer(props) {
       );
     }
   } else if (panel === 'ocr') {
-    subtitle = 'Text recognition runs on this device';
+    info = 'Text recognition runs on this device';
     const runOcr = async (addLayer) => {
       setOcrBusy(true);
       try { setOcrText(await onOcr({ lang: ocrLang, range: ocrRange, addLayer })); }
@@ -44565,7 +44806,7 @@ function ToolDrawer(props) {
       </>
     );
   } else if (panel === 'compare') {
-    subtitle = 'Shows what changed between two PDFs';
+    info = 'Shows what changed between two PDFs';
     const enoughDocs = (docs || []).length >= 2;
     body = (
       <>
@@ -44649,7 +44890,7 @@ function ToolDrawer(props) {
       </>
     );
   } else if (panel === 'batch') {
-    subtitle = 'Apply one step to several PDFs';
+    info = 'Apply one step to several PDFs';
     body = (
       <>
         {statusLine}
@@ -44705,15 +44946,21 @@ function ToolDrawer(props) {
       <div className="oo-pdf-drawer-main">
         <div className="oo-pdf-drawer-head">
           <div className="oo-pdf-drawer-titles">
-            <h2 className="oo-pdf-drawer-title">{activeDrawerTool.label}</h2>
+            <h2 className="oo-pdf-drawer-title">{activeDrawerTool.label}
+              {/* berg:work: the panel's explanations (and its PanelHints) behind an (i). */}
+              <InfoTip label={`About ${activeDrawerTool.label}`} targetRef={setPanelInfoTarget}>
+                {info && <span className="oo-pdf-info-text">{info}</span>}
+              </InfoTip></h2>
             {subtitle && <p className="oo-pdf-drawer-subtitle" title={subtitle}>{subtitle}</p>}
           </div>
           {headExtra}
           <button className="oo-pdf-icon-button" type="button" aria-label="Close" title="Close" onClick={onClose}><Icon name="x" /></button>
         </div>
-        {tabs && <div className="oo-pdf-drawer-tabs">{tabs}</div>}
-        <div className="oo-pdf-drawer-panel">{body}</div>
-        {footer && <div className="oo-pdf-drawer-foot">{footer}</div>}
+        <PanelInfoTargetContext.Provider value={panelInfoTarget}>
+          {tabs && <div className="oo-pdf-drawer-tabs">{tabs}</div>}
+          <div className="oo-pdf-drawer-panel">{body}</div>
+          {footer && <div className="oo-pdf-drawer-foot">{footer}</div>}
+        </PanelInfoTargetContext.Provider>
       </div>
     </aside>
     <CompareViewer
@@ -45769,6 +46016,8 @@ function Inspector({
   const suppressLayerClickRef = useRef(false);
   const propertyGestureRef = useRef(new Map());
   const cancelledPropertyGesturesRef = useRef(new Set());
+  // berg:work: the shared fields' last complete values, kept while a commit briefly re-keys a selected layer.
+  const sharedEntriesRef = useRef({ key: '', entries: [] });
   const selectedKey = selectionLayerKey(selected);
   const selectedEntries = selectionEntries(selected);
   const selectedKeys = new Set(selectedEntries.map(entry => selectionLayerKey(entry)).filter(Boolean));
@@ -46183,6 +46432,74 @@ function Inspector({
     }
     return Number.isFinite(layer.item.angle) ? layer.item.angle * 180 / Math.PI : undefined;
   };
+  // berg:work: the multi-selection's shared fields. Every selected object on the page changes in one transaction
+  // (the page applies it, see moveSelectionItems' perItemTransforms); a change that reaches one object only takes
+  // that object's own path.
+  const sharedFieldLayers = multiSelection
+    ? listedLayers.map(({ layer }) => layer).filter(layer => selectedKeys.has(layer.key) && !layer.deleted &&
+      layer.item?.w > 0 && layer.item?.h > 0)
+    : [];
+  // The values each object's own Position & size shows (text: its verified native frame and local size).
+  const sharedGeometryOf = layer => {
+    let item = layer.item;
+    if (layer.type === 'text' && item?.sourceId) {
+      const capability = pdfiumRuntime?.semanticTextCapabilityDescriptors?.get(item.sourceId);
+      const inspection = capability?.pageId === layer.pageId ? pdfiumRuntime?.pageInspections?.get(layer.pageId) : null;
+      if (capability && Number(capability.pageEpoch) === Number(inspection?.pageEpoch) &&
+          Number(capability.revision) === Number(inspection?.revision)) {
+        item = { ...item, ...capability.descriptor, sourceId: item.sourceId };
+      }
+      const confirmed = doc.textEdits?.[item.sourceId];
+      if (confirmed && confirmed.pageId === layer.pageId) item = richTextInspectorPropertyItem(item, confirmed);
+    }
+    return layer.type === 'text' || (layer.type === 'annotation' && item.type === 'text' && item.imported !== true)
+      ? textGeometryDimensions(item) : item;
+  };
+  const sharedEntries = (() => {
+    if (!multiSelection) return [];
+    const entries = sharedFieldLayers.map(layer => {
+      const geometry = sharedGeometryOf(layer);
+      return { key: layer.key, x: geometry.x, y: geometry.y, w: geometry.w, h: geometry.h,
+        angle: layerOrientationDegrees(layer) };
+    });
+    if (entries.length === selectedKeys.size) sharedEntriesRef.current = { key: selectedKey, entries };
+    return entries.length < selectedKeys.size && sharedEntriesRef.current.key === selectedKey
+      ? sharedEntriesRef.current.entries : entries;
+  })();
+  const commitSharedField = (field, resolve) => {
+    const normalizedAngle = degrees => ((degrees % 360) + 360) % 360;
+    const changes = sharedFieldLayers.map(layer => {
+      const current = field === 'angle' ? normalizedAngle(layerOrientationDegrees(layer)) : Number(sharedGeometryOf(layer)[field]);
+      return { layer, current, next: resolve(current) };
+    }).filter(change => Number.isFinite(change.current) && Number.isFinite(change.next) &&
+      Math.abs(change.next - change.current) > 0.0005);
+    if (!changes.length) return;
+    const angleDelta = change => ((normalizedAngle(change.next) - change.current + 540) % 360) - 180;
+    // The one-transaction turn does not yet refresh a PDF text's own frame afterwards (its hit area stays
+    // upright), so a selection with text turns object by object.
+    if (changes.length === 1 || (field === 'angle' && changes.some(({ layer }) => layer.type === 'text'))) {
+      for (const change of changes) {
+        if (field === 'angle') rotateLayer(change.layer, angleDelta(change));
+        else commitGeometry(change.layer, field, change.next, false);
+      }
+      return;
+    }
+    const detail = { documentId: doc.id, pageId: selected?.pageId || pageId };
+    if ((field === 'x' || field === 'y') && resolve.relative) {
+      detail.offsets = changes.map(({ layer, current, next }) => [layer.key,
+        { dx: field === 'x' ? next - current : 0, dy: field === 'y' ? next - current : 0 }]);
+    } else if (field === 'x' || field === 'y') {
+      // A value for all: the page measures it from each object's own frame, as a typed X/Y does.
+      detail.positions = changes.map(({ layer, next }) => [layer.key, { [field]: next }]);
+    } else if (field === 'w' || field === 'h') {
+      detail.transforms = changes.map(({ layer, current, next }) => [layer.key, {
+        kind: 'resize', scaleX: field === 'w' ? next / current : 1, scaleY: field === 'h' ? next / current : 1,
+      }]);
+    } else {
+      detail.transforms = changes.map(change => [change.layer.key, { kind: 'rotate', degrees: angleDelta(change) }]);
+    }
+    window.dispatchEvent(new CustomEvent('bergwork:selection-shared-fields', { detail }));
+  };
   const deleteLayer = (layer) => onDelete(layerPayload(layer));
   const navigateLayer = layer => {
     if (!layer) return;
@@ -46504,11 +46821,16 @@ function Inspector({
           <button type="button" className="oo-pdf-icon-button small" aria-label="Next object at this point" title="Object below" onClick={() => onStackStep?.(1)}><Icon name="chevron-right" /></button>
         </div>
       )}
+      {/* berg:work: the empty state says what is, the how goes into its tooltip. */}
       {propertiesTab && !selectedKeys.size && (
-        <p className="oo-pdf-inspector-empty">Nothing selected. Choose <strong>Select</strong> and click an object, or pick one under <strong>Layers</strong>.</p>
+        <p className="oo-pdf-inspector-empty" title="Click an object with Edit PDF, or pick one under Layers.">Nothing selected</p>
       )}
       {propertiesTab && multiSelection && (
         <div className="oo-pdf-mini-stat">{selectedKeys.size} objects selected</div>
+      )}
+      {/* berg:work: fields shared by the selected objects (Mixed where they differ), above the list of objects. */}
+      {propertiesTab && multiSelection && sharedEntries.length > 1 && (
+        <SharedSelectionFields entries={sharedEntries} onCommit={commitSharedField} />
       )}
       {!propertiesTab && <input className="oo-pdf-layer-search" type="search" aria-label="Find a layer" placeholder="Find a layer…"
         value={layerQuery} onChange={event => { setEditingLayerKey(''); setLayerQuery(event.target.value); }} />}

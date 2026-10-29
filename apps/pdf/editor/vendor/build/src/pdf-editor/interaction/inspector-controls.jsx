@@ -129,6 +129,12 @@ export function InspectorSelect({
   }, [disabled, onOpenChange, options, value]);
   const choose = option => {
     if (!option || option.disabled) return;
+    // berg:work: a chosen font stays previewed until the page shows the committed change.
+    if (fontPreview && fontHoverSentRef.current && String(option.value) === String(activeValue)) {
+      const family = fontHoverSentRef.current;
+      fontHoverSentRef.current = '';
+      window.dispatchEvent(new CustomEvent('bergwork:font-hover', { detail: { family, hold: true } }));
+    }
     close(false);
     onChange?.(option.value);
   };
@@ -199,6 +205,33 @@ export function InspectorSelect({
       setActiveValue(String(visibleOptions[0].value));
     }
   }, [activeValue, open, visibleOptions]);
+  // berg:work: a font list tells the page which font is under the pointer or the arrow keys, so the selected
+  // text can show it (preview only; nothing is committed). Closing the list ends the preview.
+  const fontHoverSentRef = useRef('');
+  useEffect(() => {
+    if (!fontPreview || !open) return undefined;
+    let cancelled = false;
+    const send = family => {
+      if (cancelled || (!family && !fontHoverSentRef.current)) return;
+      fontHoverSentRef.current = family || '';
+      window.dispatchEvent(new CustomEvent('bergwork:font-hover', { detail: { family: family || '' } }));
+    };
+    const option = String(activeValue) !== String(value)
+      ? options.find(entry => String(entry.value) === String(activeValue) && !entry.disabled) : null;
+    if (option?.fontFamily) send(option.fontFamily);
+    else if (option?.preview) void ensurePreviewFace(option.preview).then(send);
+    else send('');
+    return () => { cancelled = true; };
+  }, [activeValue, fontPreview, open, options, value]);
+  useEffect(() => {
+    if (open || !fontHoverSentRef.current) return undefined;
+    fontHoverSentRef.current = '';
+    window.dispatchEvent(new CustomEvent('bergwork:font-hover', { detail: { family: '', now: true } }));
+    return undefined;
+  }, [open]);
+  useEffect(() => () => {
+    if (fontHoverSentRef.current) window.dispatchEvent(new CustomEvent('bergwork:font-hover', { detail: { family: '', now: true } }));
+  }, []);
   const activeVisibleIndex = visibleOptions.findIndex(option => String(option.value) === String(activeValue));
   const popover = open ? <div className="oo-pdf-select-sheet-backdrop">
     <div ref={panel} id={listboxId} className={`oo-pdf-select-popover ${fontPreview ? 'is-font-picker' : ''}`}
