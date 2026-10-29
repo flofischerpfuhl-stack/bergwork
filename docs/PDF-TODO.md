@@ -109,6 +109,10 @@ Navigation:
 - [x] **Arrow keys pan when nothing is selected** (40 px, Shift 200 px).
 
 Feedback and discovery:
+- [x] **No help text in the panels** (Florian, 2026-10-30: few apps show running help). A hint about one control is
+  its tooltip; what a panel is for sits behind an (i) by its title (`PanelHint` and the explanation of `PanelEmpty`
+  portal there); switch hints are tooltips. Status lines, warnings and empty-state titles stay visible. New UI follows
+  the same rule.
 - [x] **Command palette (Ctrl+K)** (approved): file, edit, tools, panels, view and page actions by name, recently used
   first, group and shortcut per row.
 - [x] **Toast with Undo after deleting pages** (all pages of a multi-delete come back, selected).
