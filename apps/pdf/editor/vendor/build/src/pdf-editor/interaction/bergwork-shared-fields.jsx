@@ -25,7 +25,7 @@ export function sharedInputResolver(text, mixed) {
   if (!source) return null;
   if (mixed && /^[+\-*/]/u.test(source)) {
     if (!Number.isFinite(evaluateNumberInput(`0${source.replace(/^[*/]/u, '+')}`))) return null;
-    return current => evaluateNumberInput(`(${Number(current)})${source}`);
+    return Object.assign(current => evaluateNumberInput(`(${Number(current)})${source}`), { relative: true });
   }
   const absolute = evaluateNumberInput(source);
   return Number.isFinite(absolute) ? () => absolute : null;
@@ -63,7 +63,7 @@ function SharedNumber({ label, values, min, onCommit, step = 1 }) {
     const delta = stepDelta.current;
     stepDelta.current = 0;
     changed.current = false;
-    const resolve = current => current + delta;
+    const resolve = Object.assign(current => current + delta, { relative: true });
     if (delta && valid(resolve)) onCommit(resolve);
     setDraft(shown);
   };
@@ -105,7 +105,8 @@ function SharedNumber({ label, values, min, onCommit, step = 1 }) {
 }
 
 // `entries`: [{ key, x, y, w, h, angle }] in points and degrees (angle undefined where an object has none).
-// `onCommit(field, resolve)`: resolve maps an object's current value to its new one.
+// `onCommit(field, resolve)`: resolve maps an object's current value to its new one; `resolve.relative` marks a
+// change by an amount (+10, arrow keys) rather than a value for all.
 export function SharedSelectionFields({ entries, onCommit }) {
   if (!entries?.length) return null;
   const column = key => entries.map(entry => Number(entry[key]));

@@ -35136,14 +35136,21 @@ function PdfPageContent({
   sharedFieldsRef.current = { doc, items: selectedPageItems, move: moveSelectionItems };
   useEffect(() => {
     const apply = event => {
-      const { documentId, pageId, offsets, transforms } = event.detail || {};
+      const { documentId, pageId, offsets, positions, transforms } = event.detail || {};
       const { doc: currentDoc, items, move } = sharedFieldsRef.current || {};
       if (!currentDoc || documentId !== currentDoc.id || pageId !== page.id || !items?.length) return;
       const byLayerKey = new Map(items.map(entry => [selectionLayerKey(entry), entry]));
-      const keyed = list => new Map((list || []).map(([layerKey, value]) => [byLayerKey.get(layerKey), value])
-        .filter(([entry]) => entry).map(([entry, value]) => [selectionItemKey(entry), value]));
-      if (offsets?.length) move(items, 0, 0, { commitGesture: true, offsets: keyed(offsets) });
-      else if (transforms?.length) move(items, 0, 0, { commitGesture: true, perItemTransforms: keyed(transforms) });
+      const keyed = (list, map = (entry, value) => value) => new Map((list || [])
+        .map(([layerKey, value]) => [byLayerKey.get(layerKey), value])
+        .filter(([entry]) => entry).map(([entry, value]) => [selectionItemKey(entry), map(entry, value)]));
+      if (offsets?.length) {
+        move(items, 0, 0, { commitGesture: true, offsets: keyed(offsets) });
+      } else if (positions?.length) {
+        move(items, 0, 0, { commitGesture: true, offsets: keyed(positions, (entry, target) => ({
+          dx: Number.isFinite(target.x) ? target.x - Number(entry.rect?.x || 0) : 0,
+          dy: Number.isFinite(target.y) ? target.y - Number(entry.rect?.y || 0) : 0,
+        })) });
+      } else if (transforms?.length) move(items, 0, 0, { commitGesture: true, perItemTransforms: keyed(transforms) });
     };
     window.addEventListener('bergwork:selection-shared-fields', apply);
     return () => window.removeEventListener('bergwork:selection-shared-fields', apply);
@@ -44972,6 +44979,8 @@ function Inspector({
   const suppressLayerClickRef = useRef(false);
   const propertyGestureRef = useRef(new Map());
   const cancelledPropertyGesturesRef = useRef(new Set());
+  // berg:work: the shared fields' last complete values, kept while a commit briefly re-keys a selected layer.
+  const sharedEntriesRef = useRef({ key: '', entries: [] });
   const selectedKey = selectionLayerKey(selected);
   const selectedEntries = selectionEntries(selected);
   const selectedKeys = new Set(selectedEntries.map(entry => selectionLayerKey(entry)).filter(Boolean));
@@ -45393,10 +45402,37 @@ function Inspector({
     ? listedLayers.map(({ layer }) => layer).filter(layer => selectedKeys.has(layer.key) && !layer.deleted &&
       layer.item?.w > 0 && layer.item?.h > 0)
     : [];
+  // The values each object's own Position & size shows (text: its verified native frame and local size).
+  const sharedGeometryOf = layer => {
+    let item = layer.item;
+    if (layer.type === 'text' && item?.sourceId) {
+      const capability = pdfiumRuntime?.semanticTextCapabilityDescriptors?.get(item.sourceId);
+      const inspection = capability?.pageId === layer.pageId ? pdfiumRuntime?.pageInspections?.get(layer.pageId) : null;
+      if (capability && Number(capability.pageEpoch) === Number(inspection?.pageEpoch) &&
+          Number(capability.revision) === Number(inspection?.revision)) {
+        item = { ...item, ...capability.descriptor, sourceId: item.sourceId };
+      }
+      const confirmed = doc.textEdits?.[item.sourceId];
+      if (confirmed && confirmed.pageId === layer.pageId) item = richTextInspectorPropertyItem(item, confirmed);
+    }
+    return layer.type === 'text' || (layer.type === 'annotation' && item.type === 'text' && item.imported !== true)
+      ? textGeometryDimensions(item) : item;
+  };
+  const sharedEntries = (() => {
+    if (!multiSelection) return [];
+    const entries = sharedFieldLayers.map(layer => {
+      const geometry = sharedGeometryOf(layer);
+      return { key: layer.key, x: geometry.x, y: geometry.y, w: geometry.w, h: geometry.h,
+        angle: layerOrientationDegrees(layer) };
+    });
+    if (entries.length === selectedKeys.size) sharedEntriesRef.current = { key: selectedKey, entries };
+    return entries.length < selectedKeys.size && sharedEntriesRef.current.key === selectedKey
+      ? sharedEntriesRef.current.entries : entries;
+  })();
   const commitSharedField = (field, resolve) => {
     const normalizedAngle = degrees => ((degrees % 360) + 360) % 360;
     const changes = sharedFieldLayers.map(layer => {
-      const current = field === 'angle' ? normalizedAngle(layerOrientationDegrees(layer)) : Number(layer.item[field]);
+      const current = field === 'angle' ? normalizedAngle(layerOrientationDegrees(layer)) : Number(sharedGeometryOf(layer)[field]);
       return { layer, current, next: resolve(current) };
     }).filter(change => Number.isFinite(change.current) && Number.isFinite(change.next) &&
       Math.abs(change.next - change.current) > 0.0005);
@@ -45412,9 +45448,12 @@ function Inspector({
       return;
     }
     const detail = { documentId: doc.id, pageId: selected?.pageId || pageId };
-    if (field === 'x' || field === 'y') {
+    if ((field === 'x' || field === 'y') && resolve.relative) {
       detail.offsets = changes.map(({ layer, current, next }) => [layer.key,
         { dx: field === 'x' ? next - current : 0, dy: field === 'y' ? next - current : 0 }]);
+    } else if (field === 'x' || field === 'y') {
+      // A value for all: the page measures it from each object's own frame, as a typed X/Y does.
+      detail.positions = changes.map(({ layer, next }) => [layer.key, { [field]: next }]);
     } else if (field === 'w' || field === 'h') {
       detail.transforms = changes.map(({ layer, current, next }) => [layer.key, {
         kind: 'resize', scaleX: field === 'w' ? next / current : 1, scaleY: field === 'h' ? next / current : 1,
@@ -45752,11 +45791,8 @@ function Inspector({
         <div className="oo-pdf-mini-stat">{selectedKeys.size} objects selected</div>
       )}
       {/* berg:work: fields shared by the selected objects (Mixed where they differ), above the list of objects. */}
-      {propertiesTab && multiSelection && sharedFieldLayers.length > 1 && (
-        <SharedSelectionFields entries={sharedFieldLayers.map(layer => ({
-          key: layer.key, x: layer.item.x, y: layer.item.y, w: layer.item.w, h: layer.item.h,
-          angle: layerOrientationDegrees(layer),
-        }))} onCommit={commitSharedField} />
+      {propertiesTab && multiSelection && sharedEntries.length > 1 && (
+        <SharedSelectionFields entries={sharedEntries} onCommit={commitSharedField} />
       )}
       {!propertiesTab && <input className="oo-pdf-layer-search" type="search" aria-label="Find a layer" placeholder="Find a layer…"
         value={layerQuery} onChange={event => { setEditingLayerKey(''); setLayerQuery(event.target.value); }} />}
