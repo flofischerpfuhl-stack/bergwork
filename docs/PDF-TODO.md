@@ -48,13 +48,16 @@ Selection and transform:
 - [x] **Rotate from just outside a corner** (approved): four rotate zones with a rotate cursor; the round handle is
   hidden for mice (still in the tab order) and stays on touch. Touch: two-finger rotate and scale on the selected
   object (approved, branch `feat/pdf-pages-touch`).
-- [ ] **Resize cursors follow the frame's rotation.** 0.5 PD.
-- [ ] **Equal-spacing guides** (pink markers between three or more objects) and Alt-hover distance measuring. 3–5 PD.
+- [x] **Resize cursors follow the frame's rotation.**
+- [x] **Equal-spacing snaps** with pink gap markers (between two neighbours, or repeating a neighbour's gap); an
+  option of `resolveMoveSnap` that the gesture runtime turns on, so Fernwork's 23 move-snapping unit tests still pass.
+- [ ] **Alt-hover distance measuring** (Figma). Alt already means "move freely"; needs a decision. 1–2 PD.
 - [x] **Select the object below** was already in the context menu when objects are stacked.
 - [x] **Context menu** (approved): Paste here (at the right-clicked point), Bring forward / Send backward one step
   (Ctrl+] / [, with Shift to front/back), Lock / Unlock; grouped into clipboard, arrange, properties/delete. Group
   stays in the multi-selection bar (a right-click selects one object, by design).
-- [ ] **Copy / paste style** (Ctrl+Alt+C / V; menu entries). 2 PD.
+- [x] **Copy / paste style** (Ctrl+Alt+C / V and the context menu): fill, stroke, width, opacity between drawn shapes
+  and PDF paths, type settings between text boxes. Open: text from the PDF (goes through the rich-text path). 1–2 PD.
 
 Text:
 - [x] **Readable font names** in the picker: "Arial (from the PDF)" instead of "Original PDF font · AAAAAA+ArialMT";
