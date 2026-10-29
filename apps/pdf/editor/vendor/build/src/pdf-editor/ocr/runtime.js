@@ -1,3 +1,5 @@
+import { extraOcrLanguageUrl, isExtraOcrLanguage } from './bergwork-ocr-languages.js';
+
 const OCR_ASSET_ROOT = '/tools/vendor/tesseract-5.0.4';
 
 export const OCR_LANGUAGES = Object.freeze(['eng', 'deu', 'fra', 'spa', 'ita', 'por']);
@@ -23,7 +25,8 @@ function asError(error, fallback) {
 
 function validateLanguage(language) {
   const value = String(language || 'eng');
-  if (!OCR_LANGUAGES.includes(value)) {
+  // berg:work: or a language downloaded on first use (bergwork-ocr-languages.js).
+  if (!OCR_LANGUAGES.includes(value) && !isExtraOcrLanguage(value)) {
     throw new Error(`OCR language data is not installed: ${value}`);
   }
   return value;
@@ -67,7 +70,7 @@ export async function createOcrWorker(language = 'eng', options = {}) {
     worker = await Tesseract.createWorker(lang, 1, {
       workerPath: `${OCR_ASSET_ROOT}/worker.min.js`,
       corePath: `${OCR_ASSET_ROOT}/core`,
-      langPath: `${OCR_ASSET_ROOT}/lang`,
+      langPath: isExtraOcrLanguage(lang) ? extraOcrLanguageUrl(lang) : `${OCR_ASSET_ROOT}/lang`,
       gzip: true,
       logger: typeof logger === 'function' ? logger : () => {},
       errorHandler: (error) => {

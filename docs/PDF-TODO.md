@@ -170,8 +170,27 @@ Forms:
   - [ ] Later (Fernwork): a native `page.set-boxes` command (`FPDFPage_SetCropBox`/`SetMediaBox` are in the build)
     would make a crop instant instead of a full-document snapshot round trip.
   - [ ] Split: save the parts into a chosen folder (`showDirectoryPicker`, a Tauri command) instead of a zip.
-- [ ] **PDF/A save** (fonts embedded, XMP, OutputIntent; check with veraPDF). 5–10 PD.
-- [ ] **OCR:** more languages on demand, deskew, OCR of a region. 5–8 PD.
+- [x] **PDF/A save** (branch `feat/pdf-pdfa-ocr`): *Save as PDF/A…* in the Save menu and the palette, PDF/A-2b
+  (-3b automatically when the PDF has attachments), in the fork's `pdf-editor/persistence/bergwork-pdfa.js`, no
+  engine change. Fonts embedded (metric-compatible subsets, Symbol/ZapfDingbats from DejaVu Sans at the original
+  widths, other fonts with widths as Liberation look-alikes), sRGB OutputIntent, DefaultCMYK for CMYK content, XMP,
+  actions/XFA/transfer functions removed, annotations printable with appearances. Checked with veraPDF 1.30.3
+  (portable JRE in `~/AgentWork/bergwork-pdf-pdfa/`): of 300 random corpus files 287 converted (9 encrypted or
+  broken, 3 with missing fonts without widths refused), 255 of them compliant; the rest are mostly veraPDF/TWG
+  "fail" test files and fuzzed PDFs. The app path (qpdf WASM) gives a compliant file for google-doc-document.pdf.
+  - **Needs OK:** the Save menu entry and the toasts.
+  - [ ] Open: widths of *embedded* fonts that disagree with their program (6.2.11.5), `.notdef` references
+    (6.2.11.8), push buttons with a stream appearance (6.3.3), signed PDFs (refused), PDF/A-1 and level A/U
+    (tags), a CMYK profile closer to print than the plain conversion, refusing before the save dialog opens.
+- [x] **OCR** (same branch), all in the fork (Tesseract.js runs in the page, no Fernwork change):
+  - 40 more languages (Latin, Greek, Cyrillic scripts: the text layer font is Noto Sans) downloaded from jsDelivr on
+    first use, pinned by size and SHA-256, cached in Tesseract's IndexedDB; CSP `connect-src` allows jsDelivr.
+  - Deskew before recognition (projection profile, 0.3–6°); the invisible text follows the skewed lines. A scan
+    rotated by 4° reads like the straight one (Tesseract alone loses the paragraph and garbles the numbers).
+  - *Only an area*: a marked area of the current page (Crop pages preview), rendered at up to 216 dpi.
+  - **Needs OK:** language list with "Downloaded when first used", the *Only an area* switch and preview.
+  - [ ] Open: perspective correction, straightening the page image itself, other scripts (Arabic, CJK, Devanagari
+    need their fonts in the text layer), several languages in one run.
 
 ## Measuring and comments compared with PDF-XChange (Fernwork TODO part B, items 1 and 2)
 

@@ -125,7 +125,10 @@ import { replaceRichTextDocumentWholeFont } from './pdf-editor/model/rich-text-w
 import { applyCharacterFormatting, createRichTextDocument, replaceRichTextPlainProjection } from './pdf-editor/model/rich-text-document.js';
 import { exactTextFrameMarkedContentOwnership, hasExactTextFrameOwnerMark } from './pdf-editor/model/text-frame-marked-content-ownership.js';
 import { VirtualLayerList } from './pdf-editor/interaction/virtual-layer-list.jsx';
-import { ocrRenderScale, withOcrWorker } from './pdf-editor/ocr/runtime.js';
+import { OCR_MAX_PIXELS, ocrRenderScale, withOcrWorker } from './pdf-editor/ocr/runtime.js';
+// berg:work: OCR languages on demand, straightening skewed scans.
+import { ensureExtraOcrLanguage, isExtraOcrLanguage, OCR_EXTRA_LANGUAGES } from './pdf-editor/ocr/bergwork-ocr-languages.js';
+import { canvasGray, estimateSkewDegrees, MIN_DESKEW_DEGREES, straightenCanvas } from './pdf-editor/ocr/bergwork-deskew.js';
 import { ocrTextLayerWords } from './pdf-editor/ocr/text-layer.js';
 import { createAdvanceMeasurer, subsetTrueTypeFont } from './pdf-editor/ocr/truetype-subset.js';
 import { arrangeSelection } from './pdf-editor/interaction/arrange-selection.js';
@@ -27942,7 +27945,8 @@ function App({ shell = null }) {
     ocrRunRef.current?.abort();
   }, []);
 
-  const runOcr = useCallback(async ({ lang, range, addLayer }) => {
+  // berg:work: `region` ({ pageIndex, fractions: { left, top, right, bottom } of the page as seen }) reads one area.
+  const runOcr = useCallback(async ({ lang, range, addLayer, region = null }) => {
     if (!activeDoc) return '';
     if (ocrRunRef.current) {
       showToast('OCR is already running.', 'info');
@@ -27955,9 +27959,10 @@ function App({ shell = null }) {
     })));
     const requestedTopology = topologyKey(requestedDoc);
     const requestedEditVersion = Number(requestedDoc.editVersion || 0);
-    const indices = range?.trim()
-      ? parsePageRanges(range, requestedDoc.pages.length)
-      : requestedDoc.pages.map((_, index) => index);
+    const indices = region ? [region.pageIndex].filter(index => index >= 0 && index < requestedDoc.pages.length)
+      : range?.trim()
+        ? parsePageRanges(range, requestedDoc.pages.length)
+        : requestedDoc.pages.map((_, index) => index);
     if (!indices.length) {
       showToast('Enter a valid OCR page range.', 'info');
       return '';
@@ -27977,6 +27982,15 @@ function App({ shell = null }) {
         }
       }
       setUtilityStatus('Loading OCR...');
+      // berg:work: a language that does not ship with the app is downloaded once (verified, then kept).
+      if (isExtraOcrLanguage(lang)) {
+        const label = OCR_EXTRA_LANGUAGES.find(entry => entry.code === lang)?.label || lang;
+        const { downloaded } = await ensureExtraOcrLanguage(lang, {
+          signal: controller.signal,
+          onProgress: fraction => setUtilityStatus(`Downloading ${label} for OCR… ${Math.round(fraction * 100)}%`),
+        });
+        if (downloaded) setUtilityStatus('Loading OCR...');
+      }
       const recognitionBytes = await materializeDocForUtility(requestedDoc);
       controller.signal.throwIfAborted?.();
       const scanDoc = workspaceSnapshotRef.current.docs.find(doc => doc.id === requestedDoc.id);
@@ -28013,34 +28027,60 @@ function App({ shell = null }) {
       }, async worker => {
       let text = '';
       const ocrPages = [];
+      const straightened = [];
       for (let order = 0; order < indices.length; order += 1) {
         controller.signal.throwIfAborted?.();
         const pageIndex = indices[order];
         const page = scanDoc.pages[pageIndex];
         const pdfPage = await recognitionPdf.getPage(pageIndex + 1);
         const unscaled = pdfPage.getViewport({ scale: 1 });
-        const scale = ocrRenderScale(unscaled.width, unscaled.height);
+        // berg:work: an area is rendered alone, up to 3x (216 dpi) when it is small.
+        const seen = pdfPage.getViewport({ scale: 1, rotation: page.rotation });
+        const area = region ? {
+          x: seen.width * region.fractions.left, y: seen.height * region.fractions.top,
+          width: seen.width * (1 - region.fractions.left - region.fractions.right),
+          height: seen.height * (1 - region.fractions.top - region.fractions.bottom),
+        } : null;
+        if (area && (area.width < 2 || area.height < 2)) throw new Error('Mark a larger area to recognise.');
+        const scale = area ? Math.min(3, Math.sqrt(OCR_MAX_PIXELS / (area.width * area.height)))
+          : ocrRenderScale(unscaled.width, unscaled.height);
         const viewport = pdfPage.getViewport({ scale, rotation: page.rotation });
         const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(viewport.width));
-        canvas.height = Math.max(1, Math.round(viewport.height));
-        await pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+        const cropX = area ? area.x * scale : 0;
+        const cropY = area ? area.y * scale : 0;
+        canvas.width = Math.max(1, Math.round(area ? area.width * scale : viewport.width));
+        canvas.height = Math.max(1, Math.round(area ? area.height * scale : viewport.height));
+        const renderContext = canvas.getContext('2d');
+        renderContext.fillStyle = '#ffffff';
+        renderContext.fillRect(0, 0, canvas.width, canvas.height);
+        await pdfPage.render({ canvasContext: renderContext, viewport, ...(area ? { transform: [1, 0, 0, 1, -cropX, -cropY] } : {}) }).promise;
+        // berg:work: a skewed scan is read straightened; recognised points map back onto the page.
+        let image = canvas;
+        let toViewport = ([x, y]) => [x + cropX, y + cropY];
+        const { gray, width: grayWidth, height: grayHeight } = canvasGray(canvas);
+        const skew = estimateSkewDegrees(gray, grayWidth, grayHeight);
+        if (Math.abs(skew) >= MIN_DESKEW_DEGREES) {
+          const turned = straightenCanvas(canvas, skew);
+          image = turned.canvas;
+          toViewport = point => { const [x, y] = turned.toSource(point); return [x + cropX, y + cropY]; };
+          straightened.push(skew);
+        }
         ocrPageLabel = `OCR page ${order + 1} / ${indices.length}`;
         setUtilityStatus(ocrPageLabel);
         // Test hook: holds recognition open so specs can change the document
         // while OCR runs, like the other __fernworkPdf*DelayMs hooks.
         const testDelay = Number(typeof window !== 'undefined' ? window.__fernworkOcrRecognizeDelayMs : 0);
         if (testDelay > 0) await new Promise(resolve => window.setTimeout(resolve, clamp(testDelay, 0, 10_000)));
-        const { data } = await worker.recognize(canvas, {}, { words: true, blocks: true });
+        const { data } = await worker.recognize(image, {}, { words: true, blocks: true });
         text += `--- Page ${pageIndex + 1} ---\n${(data.text || '').trim()}\n\n`;
         if (addLayer) {
           const words = [];
           // Reading order and one baseline/text height per recognised line.
           for (const word of ocrTextLayerWords(data)) {
             const value = word.text;
-            const origin = viewport.convertToPdfPoint(...word.origin).map(Number);
-            const baseline = viewport.convertToPdfPoint(...word.baseline).map(Number);
-            const ascent = viewport.convertToPdfPoint(...word.ascent).map(Number);
+            const origin = viewport.convertToPdfPoint(...toViewport(word.origin)).map(Number);
+            const baseline = viewport.convertToPdfPoint(...toViewport(word.baseline)).map(Number);
+            const ascent = viewport.convertToPdfPoint(...toViewport(word.ascent)).map(Number);
             const baselineVector = [baseline[0] - origin[0], baseline[1] - origin[1]];
             const ascentVector = [ascent[0] - origin[0], ascent[1] - origin[1]];
             if (Math.hypot(...baselineVector) < 0.5 || Math.hypot(...ascentVector) < 0.5 ||
@@ -28121,7 +28161,10 @@ function App({ shell = null }) {
       }
       const trimmed = text.trim();
       const wordCount = ocrPages.reduce((sum, item) => sum + item.words.length, 0);
-      setUtilityStatus(addLayer ? `Searchable text added: ${wordCount} words.` : 'OCR done.');
+      const straightNote = straightened.length
+        ? ` ${straightened.length === 1 ? `Read straightened by ${Math.abs(straightened[0]).toLocaleString(undefined, { maximumFractionDigits: 1 })}°` : `${straightened.length} skewed pages read straightened`}.`
+        : '';
+      setUtilityStatus(`${addLayer ? `Searchable text added: ${wordCount} words.` : 'OCR done.'}${straightNote}`);
       showToast('OCR complete.', 'success');
       return trimmed;
       });
@@ -43534,6 +43577,9 @@ function ToolDrawer(props) {
   const [ocrRange, setOcrRange] = useState('');
   const [ocrText, setOcrText] = useState('');
   const [ocrBusy, setOcrBusy] = useState(false);
+  // berg:work: OCR of one marked area of the current page (margins in points, as in Crop pages).
+  const [ocrArea, setOcrArea] = useState(false);
+  const [ocrRegion, setOcrRegion] = useState(null);
   const [compareLeft, setCompareLeft] = useState('');
   const [compareRight, setCompareRight] = useState('');
   const [compareGranularity, setCompareGranularity] = useState('word');
@@ -44762,17 +44808,32 @@ function ToolDrawer(props) {
     }
   } else if (panel === 'ocr') {
     info = 'Text recognition runs on this device';
+    // berg:work: one area of the current page instead of whole pages (the preview as in Crop pages).
+    const ocrPageIndex = clamp(activePage, 0, Math.max(0, pageCount - 1));
+    const ocrPage = doc?.pages?.[ocrPageIndex] || null;
+    const ocrSeen = ocrPage ? pageDimensions(ocrPage) : { width: 595.28, height: 841.89 };
+    const defaultRegion = { top: ocrSeen.height * 0.1, right: ocrSeen.width * 0.1, bottom: ocrSeen.height * 0.6, left: ocrSeen.width * 0.1 };
+    const regionMargins = ocrRegion?.pageId === ocrPage?.id ? ocrRegion.margins : defaultRegion;
     const runOcr = async (addLayer) => {
       setOcrBusy(true);
-      try { setOcrText(await onOcr({ lang: ocrLang, range: ocrRange, addLayer })); }
-      finally { setOcrBusy(false); }
+      try {
+        const region = ocrArea && ocrPage ? {
+          pageIndex: ocrPageIndex,
+          fractions: {
+            left: regionMargins.left / ocrSeen.width, right: regionMargins.right / ocrSeen.width,
+            top: regionMargins.top / ocrSeen.height, bottom: regionMargins.bottom / ocrSeen.height,
+          },
+        } : null;
+        setOcrText(await onOcr({ lang: ocrLang, range: ocrRange, addLayer, region }));
+      } finally { setOcrBusy(false); }
     };
+    const megabytes = size => `${(size / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 1 })} MB`;
     body = (
       <>
         {statusLine}
         <PanelSection>
           <div className="oo-pdf-panel-row is-even">
-            <PanelField label="Language">
+            <PanelField label="Language" title="The first six languages ship with the app; the others are downloaded once when first used and kept on this device">
               <select value={ocrLang} onChange={(e) => setOcrLang(e.target.value)}>
                 <option value="eng">English</option>
                 <option value="deu">German</option>
@@ -44780,11 +44841,28 @@ function ToolDrawer(props) {
                 <option value="spa">Spanish</option>
                 <option value="ita">Italian</option>
                 <option value="por">Portuguese</option>
+                <optgroup label="Downloaded when first used">
+                  {OCR_EXTRA_LANGUAGES.map(entry => (
+                    <option key={entry.code} value={entry.code}>{entry.label} ({megabytes(entry.size)})</option>
+                  ))}
+                </optgroup>
               </select>
             </PanelField>
-            <PanelField label="Pages"><input value={ocrRange} placeholder="All" onChange={(e) => setOcrRange(e.target.value)} /></PanelField>
+            <PanelField label="Pages" title={ocrArea ? 'The area is read on the current page' : undefined}>
+              <input value={ocrArea ? `${ocrPageIndex + 1}` : ocrRange} placeholder="All" disabled={ocrArea}
+                onChange={(e) => setOcrRange(e.target.value)} />
+            </PanelField>
           </div>
-          <PanelHint>The engine and all languages ship with the app; nothing is uploaded.</PanelHint>
+          <PanelSwitch id="ocr-area" label="Only an area" hint={`Recognise only a marked area of page ${ocrPageIndex + 1}; drag on the preview to mark it`}
+            checked={ocrArea} disabled={!doc} onChange={setOcrArea} />
+          {ocrArea && doc && ocrPage && (
+            <PageBoxPreview pageSize={ocrSeen} margins={regionMargins}
+              onMargins={margins => setOcrRegion({ pageId: ocrPage.id, margins })}
+              label="Area to recognise: drag an edge, or drag on the page to draw a new area"
+              paint={(canvas, cssWidth) => paintDocPagePreview(canvas, { doc, page: ocrPage, pdfiumRuntime, cssWidth })}
+              paintKey={`ocr:${doc.id}:${ocrPage.id}:${pdfiumRevision}:${ocrPage.width}x${ocrPage.height}`} />
+          )}
+          <PanelHint>Nothing is uploaded. English, German, French, Spanish, Italian and Portuguese ship with the app; other languages are downloaded once from jsDelivr when first used and then work offline. Skewed scans are straightened for recognition, and the searchable text follows the lines as they lie on the page.</PanelHint>
         </PanelSection>
         {ocrText && (
           <PanelSection title="Recognised text">

@@ -16,7 +16,8 @@ function fitSize(width, height, maxWidth = MAX_W, maxHeight = MAX_H) {
  * pageSize: the page as seen, in points. margins: { top, right, bottom, left } in points (crop mode).
  * resize: { width, height, scaleContent } in points as seen, or null. paint(canvas, cssWidth) draws the page.
  */
-export function PageBoxPreview({ pageSize, margins, onMargins, resize = null, paint, paintKey = '' }) {
+export function PageBoxPreview({ pageSize, margins, onMargins, resize = null, paint, paintKey = '',
+  label = 'Crop area: drag an edge, or drag on the page to draw a new area' }) {
   const canvasRef = useRef(null);
   const frameRef = useRef(null);
   const dragRef = useRef(null);
@@ -121,7 +122,7 @@ export function PageBoxPreview({ pageSize, margins, onMargins, resize = null, pa
     event.currentTarget.style.cursor = h && v ? (diagonal ? 'nwse-resize' : 'nesw-resize') : h ? 'ew-resize' : v ? 'ns-resize' : 'crosshair';
   };
   return (
-    <figure className="oo-pdf-pagebox-preview" aria-label="Crop area: drag an edge, or drag on the page to draw a new area">
+    <figure className="oo-pdf-pagebox-preview" aria-label={label}>
       <div ref={frameRef} className="oo-pdf-pagebox-stage is-crop" style={{ width: page.width, height: page.height }}
         onPointerDown={onPointerDown} onPointerMove={event => { cursorAt(event); onPointerMove(event); }}
         onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>

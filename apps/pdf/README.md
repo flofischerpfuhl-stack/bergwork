@@ -126,6 +126,24 @@ fit or kept centred) for the current, selected or all pages; it is one snapshot 
 previous document. The *Export or split* row of Pages splits into several PDFs (every N pages, at the top-level
 bookmarks, or by size) saved as one zip. The command palette has entries for all of these.
 
+**Save as PDF/A…** (Save menu, palette; `pdf-editor/persistence/bergwork-pdfa.js`) writes an archival copy of the
+finished export bytes as PDF/A-2b, or PDF/A-3b when the PDF carries attachments, in pdf-lib without an engine change:
+missing fonts are embedded as TrueType subsets (Helvetica/Arial, Times/Times New Roman, Courier, Calibri, Cambria,
+Georgia, Segoe UI by their metric-compatible bundled faces; Symbol and ZapfDingbats with DejaVu Sans glyphs at the
+original widths; any other missing font that gives its widths as the closest Liberation face with those widths), an
+sRGB OutputIntent from a generated ICC profile (DeviceCMYK gets a plain CMYK profile as `DefaultCMYK`), XMP with
+`pdfaid` that matches the Info dictionary, and forbidden content (JavaScript and other actions, `/AA`, XFA, transfer
+functions, unknown annotation types) is removed; annotations become printable with an appearance. Encrypted and
+signed PDFs and missing fonts without widths are refused with the reason. qpdf packs the result with an end-of-line
+before every `endstream`. The document keeps its own file; the copy is saved as `<name>-PDFA.pdf`.
+
+**OCR** (Document tools): besides the six bundled languages, 40 Latin, Greek and Cyrillic languages are downloaded
+from jsDelivr on first use (`pdf-editor/ocr/bergwork-ocr-languages.js`: Tesseract.js's own packages, pinned by size
+and SHA-256, kept in the engine's IndexedDB cache; `connect-src` allows `https://cdn.jsdelivr.net` for this only).
+Skewed scans are straightened before recognition (`bergwork-deskew.js`, projection profile) and the searchable text is
+mapped back onto the skewed lines. *Only an area* reads one marked area of the current page (the preview of Crop
+pages), rendered at up to 216 dpi.
+
 Files (`web/src/native-files.js`, commands in `src-tauri/src/lib.rs`):
 
 - Opening a PDF or `.bwpdf`/`.fwdoc` project from the file manager, or passing it on the command line, opens it
