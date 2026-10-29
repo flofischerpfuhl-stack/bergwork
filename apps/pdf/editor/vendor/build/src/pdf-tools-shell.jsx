@@ -46199,7 +46199,13 @@ function Inspector({
                     navigateLayer(parentLayer);
                   }
                 }}
-                onClick={() => { if (!suppressLayerClickRef.current) toggleLayer(layer); }}>
+                onClick={() => { if (!suppressLayerClickRef.current) toggleLayer(layer); }}
+                // berg:work: a double-click on the name renames the layer (Figma), like the pencil in its toolbar.
+                onDoubleClick={() => {
+                  if (!propertiesTab || readOnly || nestedReadOnly) return;
+                  if (multiSelection) setExpandedKey(layer.key);
+                  setRenamingKey(layer.key);
+                }}>
                 {propertiesTab
                   ? <span className={`oo-pdf-layer-kind-icon is-${kind}`} aria-hidden="true"><Icon name={LAYER_KIND_ICONS[kind]} /></span>
                   : <span className={`oo-pdf-layer-grip is-${kind}`} title="Drag to reorder" aria-hidden="true"><Icon name={LAYER_KIND_ICONS[kind]} /></span>}

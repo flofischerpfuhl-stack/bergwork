@@ -72,7 +72,8 @@ Panels and fields:
   no Angle field.
 - [x] **Readable layer names:** Line, Shape, Image instead of "Path #1064", "img_p0_6".
 - [x] **Hovering a layer row outlines the object on the page.**
-- [ ] **Layers: drag rows to reorder; double-click to rename** (renaming exists in Properties). 2 PD.
+- [x] **Layers: double-click a name to rename** (Properties tab; in Layers a click opens Properties). Dragging rows to
+  reorder already worked (grip, mouse after 6 px, touch after a press).
 - [x] **Recent colours and eyedropper** in the colour wells (recent row remembered across sessions; eyedropper where
   the browser has one, Chrome/Edge). Document colours (colours already used in the PDF) still open. 1 PD.
 - [ ] **"Mixed" in fields of a multi-selection** and edits that apply to each object (Figma's Mixed+10). 2–3 PD.
