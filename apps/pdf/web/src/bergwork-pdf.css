@@ -799,3 +799,14 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
 .oo-pdf-command-group { color: var(--bw-fg-muted); font-size: 12px; }
 .oo-pdf-command-list kbd { color: var(--bw-fg-muted); font: 500 12px / 1.4 var(--bw-font-ui); white-space: nowrap; }
 .oo-pdf-command-empty { color: var(--bw-fg-muted); }
+
+/* Phones: the mini toolbar docks above the bottom bar, the full width of the window (Canva), instead of covering the
+   text it formats. */
+.oo-pdf-mini-toolbar[data-docked='true'] {
+  left: 8px !important;
+  right: 8px;
+  width: auto;
+  max-width: none;
+  justify-content: center;
+  opacity: 1;
+}

@@ -903,6 +903,17 @@ function MiniToolbarHost({ toolbar, onHost }) {
         top = menu.top - rect.height - 6 >= 64 ? menu.top - rect.height - 6 : menu.bottom + 6;
         left = Math.min(Math.max(8, menu.left), Math.max(8, window.innerWidth - rect.width - 8));
       }
+      // berg:work: on phones the toolbar docks above the bottom bar (Canva), full width and scrolling sideways, so it
+      // never covers the text being formatted; with the on-screen keyboard open it sits above the keyboard.
+      if (window.matchMedia?.('(max-width: 600px)').matches && !menu) {
+        const visualBottom = window.visualViewport
+          ? window.visualViewport.offsetTop + window.visualViewport.height : window.innerHeight;
+        const bottomBars = [...document.querySelectorAll('.oo-pdf-toolbar, .oo-pdf-mobile-actionbar')]
+          .map(bar => bar.getBoundingClientRect()).filter(box => box.height && box.top > window.innerHeight / 2);
+        const above = Math.min(visualBottom, ...bottomBars.map(box => box.top));
+        setPosition({ left: 8, top: Math.max(8, above - rect.height - 8), docked: true });
+        return;
+      }
       setPosition({ left, top: Math.min(Math.max(8, top), Math.max(8, window.innerHeight - rect.height - 8)) });
     };
     place();
@@ -929,6 +940,7 @@ function MiniToolbarHost({ toolbar, onHost }) {
     <div ref={node => { ref.current = node; onHost(node); }}
       className={`oo-pdf-mini-toolbar ${near ? '' : 'is-faint'}`} role="toolbar" aria-label="Format"
       data-reason={toolbar.reason} data-touch={toolbar.touch ? 'true' : undefined}
+      data-docked={position?.docked ? 'true' : undefined}
       style={position ? { left: position.left, top: position.top } : { left: -10000, top: -10000 }}
       onFocusCapture={() => setNear(true)}
       onContextMenu={event => event.preventDefault()} />
