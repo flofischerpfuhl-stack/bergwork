@@ -735,9 +735,12 @@ function MiniToolbarHost({ toolbar, onHost }) {
       // toolbar ends on-page editing, the object's toolbar takes over in the same place instead of jumping up.
       const gap = toolbar.reason === 'object' || toolbar.reason === 'selection' ? 40 : 10;
       let top = toolbar.y - rect.height - gap;
+      // berg:work: the toolbar keeps clear of the top bars (islands or Fernwork's bar), not of a fixed 64 px.
+      const chromeBottom = Math.max(64, ...[...document.querySelectorAll('.oo-pdf-island, .oo-pdf-topbar, .oo-pdf-toolbar')]
+        .map(bar => bar.getBoundingClientRect()).filter(box => box.height && box.top < window.innerHeight / 3).map(box => box.bottom + 6));
       // On a touch screen the system's selection bar sits above the text; the toolbar goes below it.
       if (toolbar.touch && toolbar.bottom) top = toolbar.bottom + 16;
-      else if (top < 64) top = faintFirst ? (toolbar.bottom || toolbar.y) + gap : toolbar.y + gap + 4;
+      else if (top < chromeBottom) top = faintFirst ? (toolbar.bottom || toolbar.y) + gap : toolbar.y + gap + 4;
       let left = Math.min(Math.max(8, toolbar.x - (toolbar.reason === 'context' ? 12 : 0)), Math.max(8, window.innerWidth - rect.width - 8));
       // With the context menu open the toolbar sits right above it (below it when there is no room), as in Word;
       // the menu may have moved away from the pointer to stay on screen.
@@ -21057,6 +21060,20 @@ function App({ shell = null }) {
     window.addEventListener('pointerup', up, true);
     return () => window.removeEventListener('pointerup', up, true);
   }, [miniToolbarEnabled, tool, editingText, miniToolbar, selectionKeyForMini]);
+  // berg:work: an object's toolbar stays with the object when it moves without a drag (undo, nudge, Properties,
+  // a landing move): the frame is checked a few times a second and the toolbar follows when it has moved.
+  useEffect(() => {
+    if (miniToolbar?.reason !== 'object') return undefined;
+    const timer = setInterval(() => {
+      if (document.querySelector('.oo-pdf-viewport :active')) return;
+      const rect = rootRef.current?.querySelector('.oo-pdf-viewport .is-selected')?.getBoundingClientRect?.();
+      if (!rect?.width) return;
+      setMiniToolbar(current => current?.reason !== 'object' || current.key !== miniToolbar.key ||
+        (Math.abs(current.x - rect.left) < 2 && Math.abs(current.y - rect.top) < 2 && Math.abs((current.bottom || 0) - rect.bottom) < 2)
+        ? current : { ...current, x: rect.left, y: rect.top, bottom: rect.bottom });
+    }, 150);
+    return () => clearInterval(timer);
+  }, [miniToolbar?.reason, miniToolbar?.key]);
 
   // Panels dock below the real toolbar edge. The toolbars wrap on narrow
   // windows, so a hard-coded offset let the Layers panel cover them.
