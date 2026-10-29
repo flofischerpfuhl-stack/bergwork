@@ -63,7 +63,11 @@ Selection and transform:
 Text:
 - [x] **Readable font names** in the picker: "Arial (from the PDF)" instead of "Original PDF font · AAAAAA+ArialMT";
   the duplicate caption under the picker is gone.
-- [ ] **Font preview on hover** in the font list, on the selected text (Figma). 2–3 PD.
+- [x] **Font preview on hover** in the font list (pointer or arrow keys), on the selected PDF text (Figma): the text
+  is left out of the page raster, as a hidden layer is, and drawn in that font above it; nothing is committed and
+  Undo is untouched; Escape or leaving the list restores it, a chosen font stays until the committed page shows.
+  Entries also show in their own font. Not for turned text, fonts from the PDF (no browser face), several styles
+  in one run (previewed in one style), or text being typed in.
 - [x] **The selection frame grows while typing**, with its handles, and returns to its own size when editing ends.
 
 Panels and fields:
@@ -76,13 +80,23 @@ Panels and fields:
   reorder already worked (grip, mouse after 6 px, touch after a press).
 - [x] **Recent colours and eyedropper** in the colour wells (recent row remembered across sessions; eyedropper where
   the browser has one, Chrome/Edge). Document colours (colours already used in the PDF) still open. 1 PD.
-- [ ] **"Mixed" in fields of a multi-selection** and edits that apply to each object (Figma's Mixed+10). 2–3 PD.
+- [x] **"Mixed" in fields of a multi-selection** (**needs OK**): an "All selected" group above the objects in
+  Properties with X, Y, Width, Height and Angle; differing values show Mixed. A value applies to every object, and
+  in a Mixed field +10, -10, *2, /2 change each object by that amount (arrow keys too). X/Y/W/H are one undo step
+  (per-object offsets and scales through the multi-selection transaction); Angle is one step for images, shapes and
+  marks, one per object when PDF text is selected (the one-transaction turn leaves a text's hit area upright).
+  Open: opacity, colours and stroke width for all (no multi-object property transaction yet; Fernwork). 1–2 PD.
 
 Clipboard and drop:
 - [x] **Images dropped on a page are placed at the pointer**; the page is outlined while dragging.
 - [x] **Paste lands where you look:** pasted text at the pointer over a page, else the middle of the visible part of
   the page; pasted image files (screenshots) become images there.
-- [ ] **Drop an image onto an image to replace it** (Canva frames). 2 PD.
+- [x] **Drop an image onto an image to replace it** (Canva frames): one image file over a PDF image or an inserted
+  image outlines that image (dashed, follows its turn) instead of the page; the drop cuts the picture to the
+  frame's proportions (Canva's fill), keeps position, size and turn, one undo step. Hit-tested from the PDFium
+  inspection, so unselected images and Pan work too; several files, or a drop beside images, are still placed. The
+  first replacement of a PDF image takes the pre-edit document as its inverse, so Undo brings back the original
+  image stream (`pdfimages -list`: old 128×128 gone after the save, back after Undo).
 
 Navigation:
 - [x] **Space-drag hand** (Space no longer pages down), **Shift+1 / Ctrl+0 fit, Shift+0 / Ctrl+1 100 %**, a gentler
