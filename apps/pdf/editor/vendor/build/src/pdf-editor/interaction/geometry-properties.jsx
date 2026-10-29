@@ -7,6 +7,53 @@ const displayNumber = displayGeometryNumber;
 const pendingGeometryDrafts = new Map();
 export const STEP_COMMIT_DELAY_MS = 250;
 
+// berg:work: a number field accepts simple arithmetic (210/2, 72+12, (10+5)*2) and a decimal comma, as Figma and
+// Office do. Returns NaN for anything else; nothing is evaluated as code.
+export function evaluateNumberInput(text) {
+  const source = String(text ?? '').replace(/,/gu, '.').replace(/\s+/gu, '');
+  if (!source || !/^[\d.+\-*/()]+$/u.test(source)) return Number.NaN;
+  let index = 0;
+  const peek = () => source[index];
+  const number = () => {
+    const match = /^\d*\.?\d+(?:e[+-]?\d+)?|^\d+\.?/u.exec(source.slice(index));
+    if (!match) return Number.NaN;
+    index += match[0].length;
+    return Number(match[0]);
+  };
+  const factor = () => {
+    if (peek() === '-') { index += 1; return -factor(); }
+    if (peek() === '+') { index += 1; return factor(); }
+    if (peek() === '(') {
+      index += 1;
+      const value = sum();
+      if (peek() !== ')') return Number.NaN;
+      index += 1;
+      return value;
+    }
+    return number();
+  };
+  const product = () => {
+    let value = factor();
+    while (peek() === '*' || peek() === '/') {
+      const op = source[index++];
+      const right = factor();
+      value = op === '*' ? value * right : value / right;
+    }
+    return value;
+  };
+  function sum() {
+    let value = product();
+    while (peek() === '+' || peek() === '-') {
+      const op = source[index++];
+      const right = product();
+      value = op === '+' ? value + right : value - right;
+    }
+    return value;
+  }
+  const result = sum();
+  return index === source.length && Number.isFinite(result) ? result : Number.NaN;
+}
+
 function rememberGeometryDraft(key, value) {
   if (!key) return;
   pendingGeometryDrafts.delete(key);
@@ -61,7 +108,7 @@ export function GeometryNumber({ label, value, min, max, step = 1, onCommit, dis
     window.clearTimeout(stepTimer.current);
     if (!changed.current) return;
     const nextDraft = draftRef.current;
-    const next = Number(nextDraft);
+    const next = evaluateNumberInput(nextDraft);
     if (!nextDraft.trim() || !Number.isFinite(next) || (min != null && next < min) || (max != null && next > max)) {
       setInvalid(true);
       return;
@@ -75,9 +122,42 @@ export function GeometryNumber({ label, value, min, max, step = 1, onCommit, dis
     }
   };
   finishRef.current = finish;
+  // berg:work: dragging the label sideways changes the value (Figma's scrubbing): one step per 2 px, ten with Shift;
+  // the change commits once, on release.
+  const scrubRef = useRef(null);
+  const scrubDown = event => {
+    if (disabled || event.button !== 0 || event.target?.closest?.('input')) return;
+    const start = Number.isFinite(evaluateNumberInput(draftRef.current)) ? evaluateNumberInput(draftRef.current) : value;
+    scrubRef.current = { id: event.pointerId, x: event.clientX, start, moved: false };
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* synthetic */ }
+    event.preventDefault();
+  };
+  const scrubMove = event => {
+    const scrub = scrubRef.current;
+    if (!scrub || scrub.id !== event.pointerId) return;
+    const steps = Math.trunc((event.clientX - scrub.x) / 2);
+    if (!steps && !scrub.moved) return;
+    scrub.moved = true;
+    const precision = step >= 1 ? 0 : String(step).split('.')[1]?.length || 2;
+    const next = Math.min(max ?? Infinity, Math.max(min ?? -Infinity, scrub.start + steps * step * (event.shiftKey ? 10 : 1)));
+    const text = displayNumber(Number(next.toFixed(precision)));
+    changed.current = true;
+    setInvalid(false);
+    draftRef.current = text;
+    rememberGeometryDraft(draftKey, text);
+    setDraft(text);
+  };
+  const scrubUp = event => {
+    const scrub = scrubRef.current;
+    if (!scrub || scrub.id !== event.pointerId) return;
+    scrubRef.current = null;
+    if (scrub.moved) finish();
+    else event.currentTarget.querySelector('input')?.focus();
+  };
   return (
-    <label>{label}<input
-      type="number" step="any" min={min} max={max} value={draft} disabled={disabled}
+    <label className={disabled ? undefined : 'oo-pdf-scrub-label'}
+      onPointerDown={scrubDown} onPointerMove={scrubMove} onPointerUp={scrubUp} onPointerCancel={scrubUp}>{label}<input
+      type="text" inputMode="decimal" spellCheck={false} autoComplete="off" value={draft} disabled={disabled}
       required data-pdf-property-input="true"
       aria-invalid={invalid || undefined}
       title={invalid ? (min != null && max != null ? `Enter a number between ${min} and ${max}.` : min != null ? `Enter a number of at least ${min}.` : 'Enter a valid number.') : undefined}
@@ -95,7 +175,7 @@ export function GeometryNumber({ label, value, min, max, step = 1, onCommit, dis
         if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
           event.preventDefault();
           const currentDraft = draftRef.current;
-          const current = currentDraft.trim() && Number.isFinite(Number(currentDraft)) ? Number(currentDraft) : value;
+          const current = currentDraft.trim() && Number.isFinite(evaluateNumberInput(currentDraft)) ? evaluateNumberInput(currentDraft) : value;
           const delta = step * (event.shiftKey ? 10 : 1) * (event.key === 'ArrowUp' ? 1 : -1);
           changed.current = true;
           setInvalid(false);
@@ -164,7 +244,8 @@ export function GeometryProperties({ item, dimensions = item, text = false, keep
           const delta = ((next - current + 540) % 360) - 180;
           if (Math.abs(delta) > 0.0005) onRotate(delta);
         }} />}
-      {canRotate && <form className="oo-pdf-geometry-rotation" onSubmit={applyRotation}>
+      {/* berg:work: "Rotate by" only where there is no Angle field to type into (e.g. a mixed selection). */}
+      {canRotate && !Number.isFinite(orientationDegrees) && <form className="oo-pdf-geometry-rotation" onSubmit={applyRotation}>
         <label>Rotate by (°)<input type="number" step="any" value={rotation} title="Positive angles rotate clockwise"
           onChange={event => setRotation(event.target.value)}
           onKeyDown={event => {

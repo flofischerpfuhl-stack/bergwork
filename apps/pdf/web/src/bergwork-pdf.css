@@ -703,3 +703,7 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
   border-radius: var(--bw-radius-island);
   box-shadow: var(--bw-shadow-island);
 }
+
+/* Number fields: drag the label sideways to change the value (see GeometryNumber in the fork). */
+.oo-pdf-shell .oo-pdf-scrub-label { cursor: ew-resize; user-select: none; touch-action: none; }
+.oo-pdf-shell .oo-pdf-scrub-label input { cursor: text; user-select: text; touch-action: auto; }

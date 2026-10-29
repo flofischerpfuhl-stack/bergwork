@@ -27958,7 +27958,7 @@ function App({ shell = null }) {
         {toolGroupButton('markup', 'Markup', MARKUP_TOOL_IDS, 'highlighter', 'Highlight, underline, strike through or redact')}
         {!narrowPhone && (
           <ChromePopoverButton id="guides" label="Guides" title="Guides, rulers and snapping" iconName="ruler"
-            text={phoneLayout ? '' : 'Guides'} on={guidesVisible || rulersVisible || snapEnabled} placement={toolMenuPlacement} {...chromeMenuProps('guides')}
+            text={phoneLayout ? '' : 'Guides'} on={guidesVisible || rulersVisible /* berg:work: snap is on by default */} placement={toolMenuPlacement} {...chromeMenuProps('guides')}
             disabled={!activeDoc} panelLabel="Guides, rulers and snapping" className="oo-pdf-tool-group-guides">
             <ChromeMenuItem label="Drawing guides" iconName="guides" pressed={guidesVisible}
               title={guidesVisible ? 'Hide drawing guides' : 'Show drawing guides (drag from a ruler to add one)'} onClick={() => setGuidesVisible(value => !value)} />
@@ -44992,16 +44992,7 @@ function Inspector({
                     <PropSection sectionKey="appearance" title="Appearance"
                       summary={`${Math.round(100 * nativeImageOpacityControlValue(imageEdit?.sourceId === layer.item.sourceId ? imageEdit : null, imageDescriptor))} %`}>
                       {imageOpacityControl(layer, imageDescriptor)}
-                      <label className="oo-pdf-check"><input
-                        type="checkbox"
-                        disabled={nativeBusy}
-                        checked={(layer.item.keepAspectRatio ?? true) !== false}
-                        onChange={(event) => onUpdateImage(
-                          layer.item.sourceId,
-                          { keepAspectRatio: event.target.checked },
-                          { uiOnly: true },
-                        )}
-                      /> Keep ratio</label>
+                      {/* berg:work: "Keep proportions" next to Width and Height is the same setting; no second copy here. */}
                     </PropSection>
                   )}
 
@@ -45221,7 +45212,7 @@ function Inspector({
                               }, 'signature-color-commit');
                             }} /></label>
                           )}
-                          <label className="oo-pdf-check"><input type="checkbox" disabled={nativeBusy} checked={(layer.item.keepAspectRatio ?? true) !== false} onChange={(event) => onUpdateAnnotation(layer.item.id, { keepAspectRatio: event.target.checked }, { uiOnly: true })} /> Keep ratio</label>
+                          {/* berg:work: Keep proportions sits with Width and Height (Position & size). */}
                         </>
                       )}
                       {((layer.item.type === 'image' && layer.item.purpose === 'signature') || (layer.item.type === 'draw' && layer.item.purpose === 'signature')) && (
