@@ -2886,6 +2886,10 @@ function withDocHistory(doc, nextDoc, options = {}) {
       historyMerge: options.resetMerge ? null : doc.historyMerge || null,
     };
   }
+  // berg:work: the first edit after a save (or after opening) remembers what the saved state looked like.
+  const savedStateKey = Number(doc.editVersion || 0) === Number(doc.savedEditVersion || 0)
+    ? editableSnapshotKey(before)
+    : doc.savedStateKey;
   const now = Date.now();
   const mergeKey = options.mergeKey || '';
   const previousMerge = doc.historyMerge;
@@ -2908,7 +2912,29 @@ function withDocHistory(doc, nextDoc, options = {}) {
       : [...historyPast, snapshotWithHistoryTransition(doc, options)].slice(-MAX_DOC_HISTORY),
     historyFuture: [],
     historyMerge: mergeKey ? { key: mergeKey, at: now } : null,
+    savedStateKey,
   };
+}
+
+// berg:work: a short fingerprint of a document's editable state (same canonical form as snapshotsEqual), so Undo/Redo
+// can tell when it lands on the saved state again without keeping a copy of that state.
+function editableSnapshotKey(snapshot) {
+  const text = JSON.stringify(snapshot, (_key, item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+    return Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]]));
+  }) || '';
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < text.length; index += 1) hash = Math.imul(hash ^ text.charCodeAt(index), 0x01000193);
+  return `${text.length}:${(hash >>> 0).toString(36)}`;
+}
+
+function withSavedStateCheck(before, after) {
+  const clean = Number(before.editVersion || 0) === Number(before.savedEditVersion || 0);
+  const savedStateKey = clean ? editableSnapshotKey(editableDocSnapshot(before)) : before.savedStateKey;
+  if (!savedStateKey) return after;
+  return editableSnapshotKey(editableDocSnapshot(after)) === savedStateKey
+    ? { ...after, savedStateKey, savedEditVersion: Number(after.editVersion || 0) }
+    : { ...after, savedStateKey };
 }
 
 function serializePdfDoc(doc) {
@@ -19083,9 +19109,11 @@ function App({ shell = null }) {
         if (doc.id !== docId) return doc;
         const historyDoc = applyHistorySnapshot(doc);
         const merged = mergeProjectedHistoryPages(historyDoc, reconciledTargetDoc, result?.dirtyPages || []);
-        return refreshedTopologySource
+        // berg:work: Undo/Redo back to the saved state makes the document clean again.
+        const adopted = refreshedTopologySource
           ? adoptNativeTopologyDocumentSource(merged, refreshedTopologySource)
           : merged;
+        return withSavedStateCheck(doc, adopted);
       }));
       const expectedSelection = expectedSelectionAfterHistory(selectionBeforeHistory, reconciledTargetDoc);
       const reconciledSelection = reconcileHistorySelectionFromPages(
@@ -26078,11 +26106,12 @@ function App({ shell = null }) {
         showToast(saved ? 'PDF saved.' : 'Download started.', 'success');
       }
       if (!requestedOptions.pages && !requestedOptions.flatten) {
-        // The document now carries the name of the file it was saved to.
+        // The document now carries the name of the file it was saved to. berg:work: the saved-state fingerprint is
+        // taken afresh on the next edit.
         const savedName = saved && typeof nativeSaveHandle?.name === 'string' && nativeSaveHandle.name ? nativeSaveHandle.name : '';
         setDocs(current => current.map(doc => doc.id === documentId
           ? saved
-            ? { ...doc, savedEditVersion: exportVersion, ...(savedName ? { name: savedName } : {}) }
+            ? { ...doc, savedEditVersion: exportVersion, savedStateKey: undefined, ...(savedName ? { name: savedName } : {}) }
             : { ...doc, lastDownloadedEditVersion: exportVersion }
           : doc));
       }
@@ -26378,10 +26407,11 @@ function App({ shell = null }) {
         downloadBlob(blob, suggestedName);
         downloaded = true;
       }
+      // berg:work: saving drops the old saved-state fingerprint (see withSavedStateCheck).
       const savedVersions = new Map(entries.map(entry => [entry.doc.id, Number(entry.doc.editVersion || 0)]));
       setDocs(current => current.map(doc => savedVersions.has(doc.id)
         ? saved
-          ? { ...doc, savedEditVersion: savedVersions.get(doc.id) }
+          ? { ...doc, savedEditVersion: savedVersions.get(doc.id), savedStateKey: undefined }
           : { ...doc, lastDownloadedEditVersion: savedVersions.get(doc.id) }
         : doc));
       showToast(saved ? 'Workspace saved.' : 'Workspace download started.', 'success');

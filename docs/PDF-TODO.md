@@ -94,8 +94,10 @@ Feedback and discovery:
   first, group and shortcut per row.
 - [x] **Toast with Undo after deleting pages** (all pages of a multi-delete come back, selected).
 - [ ] **Toasts with Undo** after the other destructive actions (delete object, flatten). 0.5 PD.
-- [ ] **Saved state visible** ("Saved" / "Unsaved changes" by the file name) instead of only a dot; the dot stays
-  after undoing back to the saved state. 1 PD.
+- [x] **Undo back to the saved state clears the unsaved dot** (also back to the opened state; one more step sets it
+  again). Compared by a fingerprint of the editable state, taken at the first edit after opening or saving.
+- [ ] **"Saved" / "Unsaved changes" as text** by the file name instead of only the dot. Optional, **needs OK** (more
+  text in the top bar). 0.5 PD.
 
 Touch:
 - [x] **Bottom context bar on phones** (approved): the mini toolbar docks above the bottom bar (above the keyboard
