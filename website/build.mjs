@@ -102,6 +102,19 @@ async function copyWebApps() {
       filter: (source) => !/\.map$|bundle-report\.json$|[\\/]\.vite([\\/]|$)/.test(source),
     });
   }
+  // On the site the PDF app is part of the installable web app: its page names the site's manifest and registers
+  // the site's service worker, which takes shared files (share_target). The app's own build stays standalone.
+  const pdfIndex = path.join(dist, 'app', 'pdf', 'index.html');
+  if (existsSync(pdfIndex)) {
+    const html = await readFile(pdfIndex, 'utf8');
+    if (!html.includes('rel="manifest"')) {
+      // A file, not an inline script: the app's CSP allows only 'self' scripts.
+      await writeText('app/pdf/register-sw.js',
+        "if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});\n");
+      await writeFile(pdfIndex, html.replace('</head>', '    <link rel="manifest" href="/manifest.webmanifest" />\n'
+        + '    <script src="/app/pdf/register-sw.js" defer></script>\n  </head>'), 'utf8');
+    }
+  }
 }
 
 async function writeText(relative, text) {
@@ -214,6 +227,18 @@ async function build() {
       { src: iconMaskable, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
       { src: logo, sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
     ],
+    // Installed, the app opens PDFs from the file manager ("Open with") and takes shared PDFs on Android
+    // (apps/pdf/web/src/launch-files.ts, src/sw-template.js).
+    file_handlers: [{
+      action: '/app/pdf/',
+      accept: { 'application/pdf': ['.pdf'], 'application/vnd.fernwork.pdf-project+json': ['.bwpdf'] },
+    }],
+    share_target: {
+      action: '/app/pdf/share-target',
+      method: 'POST',
+      enctype: 'multipart/form-data',
+      params: { files: [{ name: 'file', accept: ['application/pdf', '.pdf'] }] },
+    },
   };
   await writeText('manifest.webmanifest', `${JSON.stringify(manifest, null, 2)}\n`);
 

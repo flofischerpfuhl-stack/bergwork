@@ -11,6 +11,7 @@ import { appVersion, desktopWindow, setWindowTitle, windowCall, wireDesktopWindo
 import { mountEditor } from './editor';
 import { HomeLink } from './homeLink';
 import { SAMPLE_LABEL, openSample, takeSampleRequest } from './sample';
+import { installLaunchQueue, openSharedFiles } from './launch-files';
 // @ts-expect-error plain ES module without types
 import { showLicences } from './licenses-view.js';
 // @ts-expect-error plain ES module without types
@@ -43,6 +44,8 @@ function Shell() {
         openDocumentsFromSystem();
         // bergwork.app links to /app/pdf/?sample: the sample opens once the editor has restored its workspace.
         if (sample && takeSampleRequest()) void editorReady().then(openSample);
+        // The installed web app: "Open with" and "Share" (see launch-files.ts).
+        if (!inDesktopApp) void editorReady().then(() => { installLaunchQueue(); void openSharedFiles(); });
       });
   }, []);
 

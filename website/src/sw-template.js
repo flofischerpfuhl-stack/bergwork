@@ -7,9 +7,31 @@ self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(APP_CACHE).then((cache) => cache.addAll(PRECACHE)).then(() => self.skipWaiting()));
 });
 
+// Files shared to the installed app wait here until /app/pdf/?shared opens them (apps/pdf/web/src/launch-files.ts).
+const SHARE_CACHE = 'bergwork-share';
+
 self.addEventListener('activate', (event) => {
-  event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== APP_CACHE && key !== RUNTIME_CACHE).map((key) => caches.delete(key)))).then(() => self.clients.claim()));
+  event.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== APP_CACHE && key !== RUNTIME_CACHE && key !== SHARE_CACHE).map((key) => caches.delete(key)))).then(() => self.clients.claim()));
 });
+
+// The manifest's share_target ("Share → berg:work PDF" on Android) posts the files here.
+async function receiveShare(request) {
+  try {
+    const form = await request.formData();
+    const cache = await caches.open(SHARE_CACHE);
+    let index = 0;
+    for (const file of form.getAll('file')) {
+      if (!(file instanceof File) || !file.size) continue;
+      const name = encodeURIComponent(file.name || 'shared.pdf');
+      await cache.put(new Request(`/app/pdf/share-target/${Date.now()}-${index++}-${name}`), new Response(file, {
+        headers: { 'content-type': file.type || 'application/pdf', 'x-file-name': name },
+      }));
+    }
+  } catch {
+    // Nothing usable was shared; the app opens without a file.
+  }
+  return Response.redirect('/app/pdf/?shared', 303);
+}
 
 async function trim(cacheName, maximum) {
   const cache = await caches.open(cacheName);
@@ -43,6 +65,10 @@ async function staleWhileRevalidate(request) {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+  if (url.origin === self.location.origin && event.request.method === 'POST' && url.pathname === '/app/pdf/share-target') {
+    event.respondWith(receiveShare(event.request));
+    return;
+  }
   if (url.origin !== self.location.origin || event.request.method !== 'GET') return;
   // The web apps under /app/ run cross-origin isolated and manage their own files; the site's cache stays out.
   if (url.pathname.startsWith('/app/')) return;
