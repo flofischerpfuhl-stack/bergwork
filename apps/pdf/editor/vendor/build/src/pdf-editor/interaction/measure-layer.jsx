@@ -1,4 +1,5 @@
-// berg:work: measuring on the page (Markup › Measure): distance, perimeter, area and scale calibration.
+// berg:work: measuring on the page (Markup › Measure): distance, perimeter, area and scale calibration; and the
+// comment markups drawn the same way (Markup › Comment): polyline, polygon, cloud, callout, stamp.
 //
 // The layer draws what is being measured, snaps to corners and line ends of the page's PDF paths (and of other
 // measurements), constrains to 45° with Shift and shows the value at the pointer. In Edit PDF it makes the page's
@@ -16,6 +17,7 @@ import {
   constrainTo45, defaultScale, formatMeasure, formatNumber, MEASURE_LABELS, MEASURE_UNIT_IDS, MEASURE_UNITS,
   nearestPoint, pathVerticesFromObjects, PT_IN_METERS, scaleForPoint, viewportForPoint,
 } from '../model/pdf-measure.js';
+import { useCommentToolSettings } from './comment-tools.jsx';
 
 export const MEASURE_TOOL_IDS = Object.freeze(['measure-distance', 'measure-perimeter', 'measure-area', 'measure-calibrate']);
 export const MEASURE_TOOL_SET = new Set(MEASURE_TOOL_IDS);
@@ -27,6 +29,19 @@ export const MEASURE_TOOLBAR_TOOLS = Object.freeze([
 ]);
 const KIND_FOR_TOOL = { 'measure-distance': 'distance', 'measure-perimeter': 'perimeter', 'measure-area': 'area',
   'measure-calibrate': 'calibrate' };
+const MEASURE_KIND_SET = new Set(['distance', 'perimeter', 'area']);
+const TWO_POINT_KINDS = new Set(['distance', 'calibrate', 'callout']);
+const CLOSED_KINDS = new Set(['area', 'polygon', 'cloud']);
+const MARKUP_LABELS = { polyline: 'Polyline', polygon: 'Polygon', cloud: 'Cloud', stamp: 'Stamp', callout: 'Callout' };
+
+/** What a click with `tool` draws: a measure kind, a markup kind (from the comment tool settings) or ''. */
+function kindForTool(tool, comment) {
+  if (KIND_FOR_TOOL[tool]) return KIND_FOR_TOOL[tool];
+  if (tool === 'markup-shape') return comment.shapeKind || 'polygon';
+  if (tool === 'textbox' && comment.textboxStyle === 'callout') return 'callout';
+  if (tool === 'stamp') return 'stamp';
+  return '';
+}
 
 const SETTINGS_KEY = 'bergwork.pdf.measure';
 const DEFAULT_SETTINGS = Object.freeze({ color: '#e03131', width: 1, fontSize: 9, unit: 'm' });
@@ -152,7 +167,8 @@ const Icon = ({ name }) => <span className="oo-pdf-icon" aria-hidden="true" dang
 const isTypingTarget = target => Boolean(target?.closest?.('input, textarea, select, [contenteditable="true"]'));
 
 function itemDisplayPoints(page, item) {
-  return (item.points || []).map(point => pdfToDisplay(page, point));
+  const points = item.kind === 'stamp' ? rectCorners(item.rect) : (item.points || []);
+  return points.map(point => pdfToDisplay(page, point));
 }
 
 function pathData(points, zoom, closed = false) {
@@ -166,14 +182,17 @@ function pathData(points, zoom, closed = false) {
 /** The measuring layer of one page. Renders nothing unless a measure tool is active or the page has measurements. */
 export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = false }) {
   const measure = useMeasureState();
-  const kind = KIND_FOR_TOOL[tool] || '';
+  const comment = useCommentToolSettings();
+  const kind = kindForTool(tool, comment);
   const active = Boolean(kind) && measure.docId && measure.ready;
-  const items = useMemo(() => measure.items.filter(item => item.pageId === page.id), [measure.items, page.id]);
+  const items = useMemo(() => [...measure.items, ...(measure.markups || [])].filter(item => item.pageId === page.id),
+    [measure.items, measure.markups, page.id]);
   const viewports = measure.viewports[page.id] || [];
   const svgRef = useRef(null);
   const [draft, setDraft] = useState(null); // { kind, points: [pdf], hover: pdf | null, snapped: bool }
   const [ghost, setGhost] = useState(null); // committed but not yet back from the PDF
   const [calibration, setCalibration] = useState(null); // { points: [pdf, pdf] }
+  const [calloutDraft, setCalloutDraft] = useState(null); // { points: [tip, anchor] } waiting for its text
   const [edit, setEdit] = useState(null); // { id, points } while dragging a measurement or one of its corners
   const [hoverPoint, setHoverPoint] = useState(null); // { point, snapped, clientX, clientY }
   const gestureRef = useRef(null);
@@ -192,7 +211,8 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
   useEffect(() => {
     setDraft(null);
     setCalibration(null);
-  }, [tool, page.id]);
+    setCalloutDraft(null);
+  }, [tool, page.id, kind]);
 
   const eventPoint = useCallback((event, anchor = null, { snap = true } = {}) => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -222,13 +242,19 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
       setCalibration({ points });
       return;
     }
-    const minimum = finishedKind === 'area' ? 3 : 2;
+    if (finishedKind === 'callout') {
+      setCalloutDraft({ points });
+      return;
+    }
+    const minimum = CLOSED_KINDS.has(finishedKind) ? 3 : finishedKind === 'stamp' ? 1 : 2;
     if (points.length < minimum) return;
-    const scale = scaleAt(points[0]);
-    setGhost({ kind: finishedKind, points, scale });
-    Promise.resolve(measure.actions.commit?.({ pageId: page.id, kind: finishedKind, points, scale }))
-      .catch(() => {})
-      .finally(() => setGhost(null));
+    const run = MEASURE_KIND_SET.has(finishedKind)
+      ? measure.actions.commit?.({ pageId: page.id, kind: finishedKind, points, scale: scaleAt(points[0]) })
+      : finishedKind === 'stamp'
+        ? measure.actions.commitStamp?.({ pageId: page.id, center: points[0] })
+        : measure.actions.commitShape?.({ pageId: page.id, kind: finishedKind, points });
+    if (finishedKind !== 'stamp') setGhost({ kind: finishedKind, points });
+    Promise.resolve(run).catch(() => {}).finally(() => setGhost(null));
   }, [measure.actions, page.id, scaleAt]);
 
   // Keys while drawing: Enter finishes a perimeter or area, Backspace takes the last corner back, Escape cancels.
@@ -241,7 +267,7 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
       if (current) {
         if (event.key === 'Escape') {
           setDraft(null);
-        } else if (event.key === 'Enter' && current.kind !== 'distance' && current.kind !== 'calibrate') {
+        } else if (event.key === 'Enter' && !TWO_POINT_KINDS.has(current.kind)) {
           finish(current.points, current.kind);
         } else if (event.key === 'Backspace' || event.key === 'Delete') {
           if (current.points.length <= 1) setDraft(null);
@@ -279,7 +305,7 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
 
   // --- drawing ------------------------------------------------------------------------------------------------
   const drawDown = event => {
-    if (!active || calibration || (event.button != null && event.button !== 0)) return;
+    if (!active || calibration || calloutDraft || (event.button != null && event.button !== 0)) return;
     if (event.pointerType === 'touch' && !event.isPrimary) return;
     event.preventDefault();
     event.stopPropagation();
@@ -290,7 +316,11 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
     if (!point) return;
     try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch { /* synthetic pointer */ }
     gestureRef.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
-    const twoPoint = kind === 'distance' || kind === 'calibrate';
+    const twoPoint = TWO_POINT_KINDS.has(kind);
+    if (kind === 'stamp') {
+      finish([point], 'stamp');
+      return;
+    }
     if (!current) {
       setDraft({ kind, points: [point], hover: point, snapped });
       return;
@@ -304,7 +334,7 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
     const display = pdfToDisplay(page, point);
     const sameAsLast = Math.hypot(lastDisplay.x - display.x, lastDisplay.y - display.y) * zoom < 4;
     const firstDisplay = pdfToDisplay(page, current.points[0]);
-    const onFirst = kind === 'area' && current.points.length >= 3 &&
+    const onFirst = CLOSED_KINDS.has(kind) && current.points.length >= 3 &&
       Math.hypot(firstDisplay.x - display.x, firstDisplay.y - display.y) * zoom < 8;
     if (onFirst) {
       finish(current.points, kind);
@@ -315,7 +345,7 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
   };
 
   const drawMove = event => {
-    if (!active || calibration) return;
+    if (!active || calibration || calloutDraft) return;
     const current = draftRef.current;
     const anchor = current?.points[current.points.length - 1] || null;
     const { point, snapped } = eventPoint(event, anchor);
@@ -329,7 +359,7 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
     gestureRef.current = null;
     if (!active || !gesture || gesture.id !== event.pointerId) return;
     const current = draftRef.current;
-    if (!current || current.points.length !== 1 || !['distance', 'calibrate'].includes(current.kind)) return;
+    if (!current || current.points.length !== 1 || !TWO_POINT_KINDS.has(current.kind)) return;
     // Press, drag, release draws a distance in one gesture; a click without drag waits for the second click.
     if (Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) < 5) return;
     const { point } = eventPoint(event, current.points[0]);
@@ -338,7 +368,7 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
 
   const drawDoubleClick = event => {
     const current = draftRef.current;
-    if (!active || !current || current.kind === 'distance' || current.kind === 'calibrate') return;
+    if (!active || !current || TWO_POINT_KINDS.has(current.kind)) return;
     event.preventDefault();
     event.stopPropagation();
     finish(current.points, current.kind);
@@ -364,7 +394,7 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
     if (!gesture?.item || gesture.id !== event.pointerId) return;
     if (!gesture.moved && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) < 3) return;
     gesture.moved = true;
-    const original = gesture.item.points;
+    const original = gesture.item.kind === 'stamp' ? rectCorners(gesture.item.rect) : gesture.item.points;
     if (gesture.vertexIndex >= 0) {
       const neighbour = original[gesture.vertexIndex - 1] || original[gesture.vertexIndex + 1] || null;
       const { point } = eventPoint(event, neighbour);
@@ -374,7 +404,7 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
       const { point } = eventPoint(event, null, { snap: false });
       if (!point) return;
       const dx = point.x - gesture.start.x, dy = point.y - gesture.start.y;
-      setEdit({ id: gesture.item.id, points: original.map(value => ({ x: value.x + dx, y: value.y + dy })) });
+      setEdit({ id: gesture.item.id, points: original.map(value => ({ x: value.x + dx, y: value.y + dy })), dx, dy });
     }
     setHoverPoint({ clientX: event.clientX, clientY: event.clientY });
   };
@@ -387,7 +417,13 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
       setEdit(null);
       return;
     }
-    Promise.resolve(measure.actions.update?.(gesture.item, changed)).catch(() => {}).finally(() => setEdit(null));
+    // A whole measurement is rewritten (its caption follows); markups move as they are, a corner edit redraws them.
+    const run = MEASURE_KIND_SET.has(gesture.item.kind)
+      ? measure.actions.update?.(gesture.item, changed)
+      : gesture.vertexIndex < 0
+        ? measure.actions.translate?.(gesture.item, edit.dx, edit.dy)
+        : measure.actions.updateShape?.(gesture.item, changed);
+    Promise.resolve(run).catch(() => {}).finally(() => setEdit(null));
   };
 
   if (!active && !(selectable && items.length) && !ghost) return null;
@@ -399,7 +435,13 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
   const readoutPoints = edit ? edit.points : draftPoints;
   const readoutKind = edit ? (items.find(item => item.id === edit.id)?.kind || '') : draft?.kind || '';
   let readout = '';
-  if (readoutKind && readoutPoints.length >= 2) {
+  if (!MEASURE_KIND_SET.has(readoutKind) && readoutKind !== 'calibrate' && kind !== 'calibrate' && !MEASURE_KIND_SET.has(kind)) {
+    readout = edit ? ''
+      : kind === 'stamp' ? 'Click to place the stamp'
+        : draft && CLOSED_KINDS.has(draft.kind) ? 'Click the corners; Enter finishes'
+          : draft?.kind === 'polyline' ? 'Click the points; Enter finishes'
+            : draft?.kind === 'callout' ? 'Click where the text goes' : kind === 'callout' ? 'Click what the callout points at' : '';
+  } else if (readoutKind && readoutPoints.length >= 2) {
     if (readoutKind === 'calibrate') {
       const pt = Math.hypot(readoutPoints[1].x - readoutPoints[0].x, readoutPoints[1].y - readoutPoints[0].y);
       readout = `${formatNumber(pt * PT_IN_METERS * 1000, 1)} mm on the page`;
@@ -432,14 +474,22 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
         onPointerCancel={() => { gestureRef.current = null; setEdit(null); }}
         onPointerLeave={() => setHoverPoint(null)}
         onDoubleClick={active ? drawDoubleClick : undefined}
-        aria-label={active ? `${MEASURE_LABELS[kind] || 'Calibrate scale'}: click on the page` : 'Measurements'}
+        aria-label={active ? `${MEASURE_LABELS[kind] || MARKUP_LABELS[kind] || 'Calibrate scale'}: click on the page` : 'Measurements and markups'}
       >
         {active && <rect className="oo-pdf-measure-capture" x="0" y="0" width={width} height={height} />}
         {items.map(item => {
           const points = edit?.id === item.id ? edit.points.map(point => pdfToDisplay(page, point)) : itemDisplayPoints(page, item);
           const isSelected = selected?.id === item.id;
           const interactive = selectable && !active;
-          const closed = item.kind === 'area';
+          const closed = CLOSED_KINDS.has(item.kind);
+          if (item.kind === 'stamp') {
+            return (
+              <g key={item.id} className={`oo-pdf-measure-item is-stamp ${isSelected ? 'is-selected' : ''}`} data-measure-id={item.id}>
+                {interactive && <path className="oo-pdf-measure-hit is-area" d={pathData(points, zoom, true)} onPointerDown={event => editDown(event, item)} />}
+                {(isSelected || edit?.id === item.id) && <path className="oo-pdf-measure-outline" d={pathData(points, zoom, true)} />}
+              </g>
+            );
+          }
           return (
             <g key={item.id} className={`oo-pdf-measure-item ${isSelected ? 'is-selected' : ''}`} data-measure-id={item.id}>
               {interactive && (
@@ -458,20 +508,20 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
         })}
         {ghost && (
           <path className="oo-pdf-measure-draft is-pending" style={{ stroke: measure.settings.color }}
-            d={pathData(ghost.points.map(point => pdfToDisplay(page, point)), zoom, ghost.kind === 'area')} />
+            d={pathData(ghost.points.map(point => pdfToDisplay(page, point)), zoom, CLOSED_KINDS.has(ghost.kind))} />
         )}
-        {calibration && (
+        {(calibration || calloutDraft) && (
           <path className="oo-pdf-measure-draft is-calibration"
-            d={pathData(calibration.points.map(point => pdfToDisplay(page, point)), zoom)} />
+            d={pathData((calibration || calloutDraft).points.map(point => pdfToDisplay(page, point)), zoom)} />
         )}
         {draft && draftDisplay.length >= 1 && (
           <>
-            {draft.kind === 'area' && draftDisplay.length >= 3 && (
+            {(draft.kind === 'area' || draft.kind === 'polygon') && draftDisplay.length >= 3 && (
               <path className="oo-pdf-measure-fill" style={{ fill: measure.settings.color }} d={pathData(draftDisplay, zoom, true)} />
             )}
             <path className={`oo-pdf-measure-draft ${draft.kind === 'calibrate' ? 'is-calibration' : ''}`}
-              style={draft.kind === 'calibrate' ? undefined : { stroke: measure.settings.color }}
-              d={pathData(draftDisplay, zoom, draft.kind === 'area' && draftDisplay.length >= 3)} />
+              style={draft.kind === 'calibrate' ? undefined : { stroke: MEASURE_KIND_SET.has(draft.kind) ? measure.settings.color : comment.shapeColor }}
+              d={pathData(draftDisplay, zoom, CLOSED_KINDS.has(draft.kind) && draftDisplay.length >= 3)} />
             {draftDisplay.slice(0, draft.points.length).map((point, index) => (
               <circle key={index} className="oo-pdf-measure-vertex" cx={point.x * zoom} cy={point.y * zoom} r="3" />
             ))}
@@ -490,6 +540,20 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
       )}
       {selected && !edit && svgRect && createPortal(
         <MeasureChip item={selected} page={page} zoom={zoom} svgRect={svgRect} onRemove={() => measure.actions.remove?.(selected)} />,
+        document.body,
+      )}
+      {calloutDraft && svgRect && createPortal(
+        <CalloutTextDialog
+          anchor={(() => {
+            const b = pdfToDisplay(page, calloutDraft.points[1]);
+            return { x: svgRect.left + b.x * zoom, y: svgRect.top + b.y * zoom };
+          })()}
+          onCancel={() => setCalloutDraft(null)}
+          onApply={async value => {
+            await measure.actions.commitCallout?.({ pageId: page.id, tip: calloutDraft.points[0], anchor: calloutDraft.points[1], value });
+            setCalloutDraft(null);
+          }}
+        />,
         document.body,
       )}
       {calibration && svgRect && createPortal(
@@ -514,10 +578,60 @@ export function MeasureLayer({ page, zoom, tool, snapObjects = [], selectable = 
   );
 }
 
+function rectCorners(rect) {
+  if (!rect) return [];
+  return [{ x: rect[0], y: rect[1] }, { x: rect[2], y: rect[1] }, { x: rect[2], y: rect[3] }, { x: rect[0], y: rect[3] }];
+}
+
+function CalloutTextDialog({ anchor, onApply, onCancel }) {
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const inputRef = useRef(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+  const submit = async event => {
+    event?.preventDefault();
+    if (!value.trim()) { setError('Type the callout text.'); return; }
+    setBusy(true);
+    try { await onApply(value); } catch (applyError) { setError(applyError?.message || 'The callout could not be added.'); setBusy(false); }
+  };
+  return (
+    <form className="oo-pdf-measure-calibrate oo-pdf-callout-dialog" data-measure-ui="" role="dialog" aria-label="Callout text"
+      style={{ left: Math.max(8, Math.min(anchor.x - 20, window.innerWidth - 316)), top: Math.min(anchor.y + 14, window.innerHeight - 170) }}
+      onSubmit={submit}
+      onKeyDown={event => {
+        if (event.key === 'Escape') { event.stopPropagation(); onCancel(); }
+        if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) submit(event);
+      }}>
+      <strong>Callout</strong>
+      <textarea ref={inputRef} rows="3" aria-label="Callout text" value={value} placeholder="Text"
+        onChange={event => { setValue(event.target.value); setError(''); }} />
+      <div className="oo-pdf-measure-calibrate-row">
+        <span className="oo-pdf-measure-hint">Ctrl+Enter adds it</span>
+        <button type="submit" className="oo-pdf-primary-button" disabled={busy}>Add</button>
+        <button type="button" className="oo-pdf-ghost-button" onClick={onCancel}>Cancel</button>
+      </div>
+      {error && <span className="oo-pdf-measure-error" role="alert">{error}</span>}
+    </form>
+  );
+}
+
 function MeasureChip({ item, page, zoom, svgRect, onRemove }) {
   const points = itemDisplayPoints(page, item);
   const top = Math.min(...points.map(point => point.y)) * zoom + svgRect.top;
   const left = Math.min(...points.map(point => point.x)) * zoom + svgRect.left;
+  if (!MEASURE_KIND_SET.has(item.kind)) {
+    return (
+      <div className="oo-pdf-measure-chip" data-measure-ui="" role="toolbar" aria-label={MARKUP_LABELS[item.kind] || 'Markup'}
+        style={{ left: Math.max(8, Math.min(left, window.innerWidth - 260)), top: Math.max(8, top - 44) }}>
+        <strong>{MARKUP_LABELS[item.kind] || 'Markup'}</strong>
+        {item.author && <span className="oo-pdf-measure-chip-kind">{item.author}</span>}
+        <button type="button" className="oo-pdf-icon-button" aria-label="Delete" title="Delete (Del)" onClick={onRemove}>
+          <Icon name="trash-2" />
+        </button>
+      </div>
+    );
+  }
   const value = `${formatNumber(item.value, item.scale?.precision ?? 2)} ${item.unitLabel}`;
   return (
     <div className="oo-pdf-measure-chip" data-measure-ui="" role="toolbar" aria-label={`${MEASURE_LABELS[item.kind]} measurement`}

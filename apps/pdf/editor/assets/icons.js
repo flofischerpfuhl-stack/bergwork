@@ -94,6 +94,9 @@ const ICONS = {
   'measure-distance': '<path d="M4 12h16"/><path d="M4 8v8"/><path d="M20 8v8"/><path d="M9 7h6" opacity=".55"/>',
   'measure-perimeter': '<path d="M4 19V9l7-5 9 6"/><circle cx="4" cy="19" r="1.6"/><circle cx="20" cy="10" r="1.6"/>',
   'measure-area': '<path d="M4 19 3 8l9-5 9 6-3 10Z"/><path d="M8 13h8" opacity=".55"/><path d="M9 16h6" opacity=".55"/>',
+  // berg:work: comment tools (text box, cloud shape).
+  'text-box': '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 9h8"/><path d="M12 9v6"/>',
+  'cloud': '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
   'menu': '<path d="M4 12h16"/><path d="M4 6h16"/><path d="M4 18h16"/>',
   'minus': '<path d="M5 12h14"/>',
   'monitor': '<rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/>',

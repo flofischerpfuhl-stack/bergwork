@@ -40,7 +40,7 @@ const HELVETICA_WIDTHS = (() => {
 const WIN_ANSI_EXTRA = new Map(Object.entries({ '€': 0x80, '…': 0x85, '•': 0x95, '–': 0x96, '—': 0x97,
   '‘': 0x91, '’': 0x92, '“': 0x93, '”': 0x94 }).map(([char, code]) => [char.charCodeAt(0), code]));
 
-function winAnsiCodes(text) {
+export function winAnsiCodes(text) {
   return [...String(text)].map(char => {
     const code = char.charCodeAt(0);
     if (WIN_ANSI_EXTRA.has(code)) return WIN_ANSI_EXTRA.get(code);
@@ -55,8 +55,8 @@ export function captionWidth(text, fontSize) {
     fontSize / 1000;
 }
 
-const hex = text => `<${winAnsiCodes(text).map(code => code.toString(16).padStart(2, '0')).join('')}>`;
-const n = value => {
+export const hex = text => `<${winAnsiCodes(text).map(code => code.toString(16).padStart(2, '0')).join('')}>`;
+export const n = value => {
   const rounded = Math.round(Number(value) * 1000) / 1000;
   return Object.is(rounded, -0) ? '0' : String(rounded);
 };
@@ -67,7 +67,7 @@ export function colorComponents(color = '#e03131') {
   return [(value >> 16) & 255, (value >> 8) & 255, value & 255].map(channel => Math.round(channel / 255 * 1000) / 1000);
 }
 
-function pdfDate(date = new Date()) {
+export function pdfDate(date = new Date()) {
   const pad = (value, length = 2) => String(Math.abs(Math.trunc(value))).padStart(length, '0');
   const offset = -date.getTimezoneOffset();
   const sign = offset >= 0 ? '+' : '-';
@@ -85,7 +85,7 @@ export function parsePdfDate(text = '') {
 }
 
 /** A caption on a light box, centred at (cx, cy), turned by `angle` (radians), kept upright. */
-function captionOps(text, cx, cy, angle, fontSize, rgb) {
+export function captionOps(text, cx, cy, angle, fontSize, rgb) {
   let turn = angle;
   if (turn > Math.PI / 2 + 1e-6) turn -= Math.PI;
   if (turn < -Math.PI / 2 - 1e-6) turn += Math.PI;
@@ -191,17 +191,17 @@ export function plainPdfValue(PDFLib, context, value, depth = 0) {
   return undefined;
 }
 
-function text(PDFLib, dict, key) {
+export function text(PDFLib, dict, key) {
   const value = dict.lookup(PDFLib.PDFName.of(key));
   return value instanceof PDFLib.PDFString || value instanceof PDFLib.PDFHexString ? value.decodeText() : '';
 }
 
-function name(PDFLib, dict, key) {
+export function name(PDFLib, dict, key) {
   const value = dict.lookup(PDFLib.PDFName.of(key));
   return value instanceof PDFLib.PDFName ? value.decodeText() : '';
 }
 
-function numbers(PDFLib, dict, key) {
+export function numbers(PDFLib, dict, key) {
   const value = dict.lookup(PDFLib.PDFName.of(key));
   if (!(value instanceof PDFLib.PDFArray)) return null;
   const out = value.asArray().map(item => {
@@ -211,7 +211,7 @@ function numbers(PDFLib, dict, key) {
   return out.every(Number.isFinite) ? out : null;
 }
 
-function pageAnnots(PDFLib, page) {
+export function pageAnnots(PDFLib, page) {
   const annots = page.node.lookup(PDFLib.PDFName.of('Annots'));
   return annots instanceof PDFLib.PDFArray ? annots : null;
 }
@@ -316,12 +316,13 @@ export async function readMeasureData(PDFLib, bytes) {
 }
 
 /**
- * Cheap test before a full parse: does the raw file name /Measure or /VP? Compressed object streams hide names, so
+ * Cheap test before a full parse: does the raw file name /Measure, /VP, a polygon or a stamp? Compressed object streams hide names, so
  * with `objectStreams` a file that has any (/ObjStm) counts as a maybe too.
  */
 export function bytesMayHaveMeasurements(bytes, { objectStreams = false } = {}) {
   const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
-  const needles = ['/Measure', '/VP', ...(objectStreams ? ['/ObjStm'] : [])].map(word => [...word].map(char => char.charCodeAt(0)));
+  // /Poly and /Stamp: polygons, polylines and stamps (engine/markup-annotations.js) are read at the same time.
+  const needles = ['/Measure', '/VP', '/Poly', '/Stamp', ...(objectStreams ? ['/ObjStm'] : [])].map(word => [...word].map(char => char.charCodeAt(0)));
   for (let index = 0; index < view.length; index += 1) {
     if (view[index] !== 0x2f) continue;
     for (const needle of needles) {
@@ -365,18 +366,18 @@ function measureDict(PDFLib, context, values) {
   return convert(values);
 }
 
-function annotationRefs(PDFLib, document) {
+export function annotationRefs(PDFLib, document) {
   return document.getPages().map(page => {
     const annots = pageAnnots(PDFLib, page);
     return annots ? annots.asArray().map(item => (item instanceof PDFLib.PDFRef ? `${item.objectNumber} ${item.generationNumber}` : null)) : [];
   });
 }
 
-function indexMaps(before, after) {
+export function indexMaps(before, after) {
   return before.map((refs, pageIndex) => refs.map(ref => (ref ? after[pageIndex].indexOf(ref) : -1)));
 }
 
-function findAnnotation(PDFLib, document, pageIndex, objectNumber) {
+export function findAnnotation(PDFLib, document, pageIndex, objectNumber) {
   const page = document.getPage(pageIndex);
   const annots = pageAnnots(PDFLib, page);
   if (!annots) return null;
@@ -387,7 +388,7 @@ function findAnnotation(PDFLib, document, pageIndex, objectNumber) {
 }
 
 /** Drop an appearance stream this module wrote (marked with /BWMeasure), so edits leave no orphans behind. */
-function releaseOwnAppearance(PDFLib, document, dict) {
+export function releaseOwnAppearance(PDFLib, document, dict) {
   const ap = dict.lookup(PDFLib.PDFName.of('AP'));
   if (!(ap instanceof PDFLib.PDFDict)) return;
   const normalRef = ap.get(PDFLib.PDFName.of('N'));
@@ -426,7 +427,7 @@ function setGeometry(PDFLib, context, dict, kind, points) {
   }
 }
 
-function cleanPoints(points) {
+export function cleanPoints(points) {
   const clean = (points || []).map(point => ({ x: Number(point.x), y: Number(point.y) }))
     .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y))
     .map(point => ({ x: Math.round(point.x * 1000) / 1000, y: Math.round(point.y * 1000) / 1000 }));
@@ -441,18 +442,18 @@ function validate(kind, points) {
   }
 }
 
-async function loadForEdit(PDFLib, bytes) {
+export async function loadForEdit(PDFLib, bytes) {
   return PDFLib.PDFDocument.load(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes), {
     updateMetadata: false,
     ignoreEncryption: false,
   });
 }
 
-async function saveEdited(PDFLib, document) {
+export async function saveEdited(PDFLib, document) {
   return new Uint8Array(await document.save({ useObjectStreams: false, addDefaultPage: false, updateFieldAppearances: false }));
 }
 
-function randomId() {
+export function randomId() {
   const values = new Uint8Array(8);
   (globalThis.crypto || { getRandomValues: array => array.map(() => Math.floor(Math.random() * 256)) }).getRandomValues(values);
   return Array.from(values, value => value.toString(16).padStart(2, '0')).join('');

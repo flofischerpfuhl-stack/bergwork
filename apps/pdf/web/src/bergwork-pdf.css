@@ -759,6 +759,15 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
 .oo-pdf-measure-snap { fill: none; stroke: #0b7285; stroke-width: 2px; }
 .oo-pdf-measure-hit { fill: none; stroke: transparent; stroke-width: 12px; pointer-events: stroke; cursor: pointer; }
 .oo-pdf-measure-item:hover .oo-pdf-measure-hit { stroke: rgb(11 114 133 / 0.18); }
+.oo-pdf-measure-hit.is-area { fill: transparent; pointer-events: all; cursor: move; }
+.oo-pdf-measure-item:hover .oo-pdf-measure-hit.is-area { fill: rgb(11 114 133 / 0.06); }
+.oo-pdf-shell .oo-pdf-page-surface:is(.tool-line, .tool-markup-shape, .tool-stamp, .tool-textbox) { cursor: crosshair; }
+.oo-pdf-callout-dialog textarea { width: 100%; min-height: 64px; resize: vertical; font: inherit; }
+.oo-pdf-comment-segmented { display: inline-flex; border: 1px solid var(--bw-border, #d6d3d1); border-radius: var(--bw-radius-row, 6px); overflow: hidden; }
+.oo-pdf-comment-segmented button { border: 0; border-radius: 0; background: transparent; padding: 3px 9px; }
+.oo-pdf-comment-segmented button.is-active { background: var(--pdf-accent-soft, rgb(120 113 108 / 0.18)); font-weight: 600; }
+.oo-pdf-comment-options input[type=number] { width: 56px; }
+.oo-pdf-comment-options input[type=text] { width: 110px; }
 .oo-pdf-measure-outline { fill: none; stroke: var(--pdf-accent-strong, #44403c); stroke-width: 1px; stroke-dasharray: 4 3; pointer-events: none; }
 .oo-pdf-measure-handle { fill: #fff; stroke: var(--pdf-accent-strong, #44403c); stroke-width: 1.5px; pointer-events: all; cursor: move; }
 .oo-pdf-measure-chip,

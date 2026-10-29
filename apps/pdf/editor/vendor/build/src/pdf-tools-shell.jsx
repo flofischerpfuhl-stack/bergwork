@@ -146,8 +146,11 @@ import { pdfBytesMayHaveRedactedWidgets, removeRedactedFormFieldsFromPdf } from 
 import { compactSparsePdfObjectNumbers } from './pdf-editor/model/object-numbering.js';
 // berg:work: measuring with a scale (Markup › Measure), as PDF /Measure annotations.
 import { bytesMayHaveMeasurements, readMeasureData, removeMeasurement, writeMeasurement, writePageScale } from './pdf-editor/engine/measure-annotations.js';
+import { readPageMarkup, removeAnnotationObject, stampDetail, translateMarkupAnnotation, writeCalloutAnnotation, writeShapeAnnotation, writeStampAnnotation } from './pdf-editor/engine/markup-annotations.js';
 import { measurementsToCsv, scaleFromCalibration, scaleFromRatio } from './pdf-editor/model/pdf-measure.js';
 import { MEASURE_TOOL_IDS, MEASURE_TOOL_SET, MEASURE_TOOLBAR_TOOLS, MeasureLayer, MeasureOptionsBar, measureStore } from './pdf-editor/interaction/measure-layer.jsx';
+// berg:work: comment tools (Markup › Comment): text box, typewriter, callout, line, shapes, stamps.
+import { COMMENT_TOOL_IDS, COMMENT_TOOL_SET, COMMENT_TOOLBAR_TOOLS, CommentOptionsBar, commentToolStore, STAMP_PRESETS, textboxAnnotationAt } from './pdf-editor/interaction/comment-tools.jsx';
 import { findGlyphTextMatches, glyphsFromTextGlyphResult, redactionRemovedGlyphs, replaceQueryInText, snapRedactionRect, textContainsQuery } from './pdf-editor/model/redaction-geometry.js';
 import { addPiecesToMarkup, applyTextMarkupPlan, isTextLineMarkup, isTextMarkupAnnotation, markupTouchesLines, markupWithAbsoluteQuads, planTextMarkupFollowRuns, removeLinesFromMarkup, textMarkupBoundToBox, textMarkupPlanIds, textMarkupSelectionState, unmarkedLinePieces } from './pdf-editor/model/text-markup-binding.js';
 import { buildPageTextDiffReport } from './pdf-editor/model/compare-text-report.js';
@@ -436,7 +439,8 @@ const TOOLBAR_TOOLS = [
   { id: 'comment', label: 'Comment', icon: 'sticky-note' },
   { id: 'redact', label: 'Redact', icon: 'scissors' },
   { id: 'sign', label: 'Visual signature', icon: 'stamp' },
-  // berg:work: measure tools, listed under Markup › Measure.
+  // berg:work: comment and measure tools, listed under Markup › Comment and Markup › Measure.
+  ...COMMENT_TOOLBAR_TOOLS,
   ...MEASURE_TOOLBAR_TOOLS,
 ];
 
@@ -455,7 +459,8 @@ const anyObjectHandleFilter = filters => PDF_OBJECT_HANDLE_FILTERS.some(item => 
 const ROTATION_EAGER_INSPECTION_LIMIT = 12;
 const ROTATION_EAGER_INSPECTION_RADIUS = 3;
 
-const OVERLAY_ADD_TOOLS = new Set(['text', 'image', 'highlight', 'underline', 'strikeout', 'rect', 'ellipse', 'arrow', 'draw', 'comment', 'redact', 'sign']);
+const OVERLAY_ADD_TOOLS = new Set(['text', 'image', 'highlight', 'underline', 'strikeout', 'rect', 'ellipse', 'arrow', 'draw', 'comment', 'redact', 'sign',
+  'textbox', 'line' /* berg:work: comment tools */]);
 // Text markup: PDF Highlight, Underline and StrikeOut annotations. They carry
 // one quad per marked line (`quads`, relative to the annotation box); a
 // highlight drawn freely over a scan has none and marks its whole box.
@@ -734,7 +739,7 @@ function ShortcutsDialog({ onClose }) {
 // berg:work: the live readout next to the pointer while a frame is resized or rotated or a shape is drawn (Figma,
 // PowerPoint): width × height in pt, or the angle. It reads the handles of the frame being dragged, so it follows
 // every object type without hooks into each gesture.
-const READOUT_DRAW_TOOLS = new Set(['rect', 'ellipse', 'arrow', 'redact']);
+const READOUT_DRAW_TOOLS = new Set(['rect', 'ellipse', 'arrow', 'line', 'redact']);
 function frameFromHandles(frame) {
   const centre = corner => {
     const node = frame?.querySelector?.(`:scope > .oo-pdf-resize.${corner}, .oo-pdf-resize.${corner}`);
@@ -775,7 +780,7 @@ function GestureReadout({ zoom, tool }) {
         const w = Math.abs(event.clientX - gesture.x) / scale;
         const h = Math.abs(event.clientY - gesture.y) / scale;
         if (w < 2 && h < 2) return;
-        text = toolRef.current === 'arrow'
+        text = ['arrow', 'line'].includes(toolRef.current)
           ? `${Math.round(Math.hypot(w, h))} pt · ${Math.round((Math.atan2(gesture.y - event.clientY, event.clientX - gesture.x) * 180 / Math.PI + 360) % 360)}°`
           : `${Math.round(w)} × ${Math.round(h)} pt`;
       } else {
@@ -2067,8 +2072,9 @@ function editableDocSnapshot(doc = {}) {
     bookmarks: Array.isArray(doc.bookmarks) ? normalizeBookmarks(doc.bookmarks, doc.pages) : undefined,
     ocrLayers: clonePlain(doc.ocrLayers, []),
     pageStamps: clonePlain(doc.pageStamps, []),
-    // berg:work: measurements and page scales read from the PDF; Undo restores them with the snapshot.
-    measurements: clonePlain(doc.measurements, null),
+    // berg:work: measurements, page scales and pdf-lib-written markups read from the PDF; Undo restores them with
+    // the snapshot.
+    pageMarkup: clonePlain(doc.pageMarkup, null),
   };
 }
 
@@ -13482,9 +13488,10 @@ async function importPdfCommentAnnotations(pdf, pages) {
   return comments;
 }
 
-// berg:work: measurements of a PDF as document state, keyed by page id:
-// { items: [{ id, pageId, kind, points, scale, value, ... }], viewports: { [pageId]: [{ bbox, scale }] } }.
-function measureStateFromData(data, pages = []) {
+// berg:work: measurements, page scales and pdf-lib-written markups of a PDF as document state, keyed by page id:
+// { items: [{ id, pageId, kind, points, scale, value, ... }], viewports: { [pageId]: [{ bbox, scale }] },
+//   markups: [{ id, pageId, kind: 'polygon' | 'polyline' | 'cloud' | 'stamp', points, rect, ... }] }.
+function pageMarkupStateFromData(data, pages = []) {
   const pageBySource = new Map(pages.map(page => [page.sourceIndex, page]));
   const items = [];
   const viewports = {};
@@ -13496,20 +13503,24 @@ function measureStateFromData(data, pages = []) {
       items.push({ ...clonePlain(item, {}), id: `measure:${item.objectNumber ?? `${entry.pageIndex}-${item.annotationIndex}`}`, pageId: page.id });
     }
   }
-  return { items, viewports };
+  const markups = (data?.markups || []).flatMap(item => {
+    const page = pageBySource.get(item.pageIndex);
+    return page ? [{ ...clonePlain(item, {}), id: `markup:${item.objectNumber}`, pageId: page.id }] : [];
+  });
+  return { items, viewports, markups };
 }
 
 // Read at open only when the raw file names /Measure or /VP, or hides names in object streams (always up to 30 MB,
 // above only with Line annotations); other files are read when a measure tool is first used (pdf-lib parses the
 // whole file, which large books should not pay for at open).
-async function measureDataForDoc(bytes, pages, hasMeasureSubtypes = false) {
+async function pageMarkupForDoc(bytes, pages, hasMeasureSubtypes = false) {
   try {
     const view = asUint8Array(bytes);
     // PolyLine and Polygon do not show up in the worker's annotation list, so files up to 30 MB with object streams
     // are parsed anyway (about 0.3 s for a 5 MB, 117-page book).
     const objectStreams = hasMeasureSubtypes || view?.byteLength <= 30 * 1024 * 1024;
     if (!PDFLib?.PDFDocument || !view?.byteLength || !bytesMayHaveMeasurements(view, { objectStreams })) return null;
-    return measureStateFromData(await readMeasureData(PDFLib, view), pages);
+    return pageMarkupStateFromData(await readPageMarkup(PDFLib, view), pages);
   } catch {
     return null;
   }
@@ -18133,10 +18144,10 @@ function App({ shell = null }) {
       // imported as editable arrows, the measure layer owns them.
       const subtypesSeen = new Set();
       importPdfCommentAnnotationsWithPdfium(target.bytes, target.pages, subtypesSeen)
-        .then(async importedAll => [importedAll, await measureDataForDoc(target.bytes, target.pages,
+        .then(async importedAll => [importedAll, await pageMarkupForDoc(target.bytes, target.pages,
           ['line', 'polyline', 'polygon'].some(subtype => subtypesSeen.has(subtype)))])
-        .then(([importedAll, measurements]) => {
-          const measureObjects = new Set((measurements?.items || []).map(item => item.objectNumber));
+        .then(([importedAll, pageMarkup]) => {
+          const measureObjects = new Set((pageMarkup?.items || []).map(item => item.objectNumber));
           const imported = (importedAll || []).filter(annotation => !measureObjects.has(annotation.annotationObjectNumber));
           const runtime = livePdfRuntimeRef.current;
           if (runtime?.documentId === target.id) {
@@ -18151,7 +18162,7 @@ function App({ shell = null }) {
             return {
               ...doc,
               annotations: additions.length ? [...(doc.annotations || []), ...additions] : (doc.annotations || []),
-              ...(measurements ? { measurements } : {}),
+              ...(pageMarkup ? { pageMarkup } : {}),
               annotationImportStatus: 'done',
             };
           }));
@@ -26423,20 +26434,28 @@ function App({ shell = null }) {
       }
       const before = await checkpointToPdfSnapshotResource(runtime.engine);
       const edited = await edit(before.bytes, latestDoc);
+      const editedData = edited.data?.markups ? edited.data : await readPageMarkup(PDFLib, edited.bytes);
       const maps = edited.annotationIndexMaps || null;
       const after = await pdfSnapshotResourceFromBytes(edited.bytes, maps ? remapFormSnapshotBindings(before.bindings, maps) : before.bindings);
       await runtime.kernel.registerResource(before);
       await runtime.kernel.registerResource(after);
       await persistLiveUiBaseline(runtime, latestDoc);
-      const measurements = measureStateFromData(edited.data, latestDoc.pages);
+      const pageMarkup = pageMarkupStateFromData(editedData, latestDoc.pages);
+      // A callout is a FreeText: the shell's own importer gives it the shape every FreeText path expects.
+      const importedNew = edited.importNewFreeText && Number.isSafeInteger(edited.objectNumber)
+        ? (await importPdfCommentAnnotationsWithPdfium(edited.bytes, latestDoc.pages))
+          .filter(annotation => annotation.annotationObjectNumber === edited.objectNumber)
+          .map(annotation => ({ ...annotation, id: `${annotation.id}:${uid()}` }))
+        : [];
+      for (const annotation of importedNew) runtime.liveAnnotationIds.add(annotation.id);
       const project = doc => ({
         ...doc,
-        measurements,
+        pageMarkup,
         annotations: maps ? (doc.annotations || []).map(annotation => {
           const ownerPage = doc.pages.find(item => item.id === annotation.pageId);
           const nextIndex = maps[ownerPage?.sourceIndex]?.[annotation.annotationIndex];
           return Number.isInteger(nextIndex) && nextIndex >= 0 ? { ...annotation, annotationIndex: nextIndex } : annotation;
-        }) : doc.annotations,
+        }).concat(importedNew) : [...(doc.annotations || []), ...importedNew],
       });
       const projected = project(latestDoc);
       const prefix = `measure-${uid()}`;
@@ -26482,8 +26501,9 @@ function App({ shell = null }) {
     const pageIndexOf = (doc, pageId) => doc.pages.find(page => page.id === pageId)?.sourceIndex;
     measureStore.set({
       docId: activeDoc?.id || '',
-      items: activeDoc?.measurements?.items || [],
-      viewports: activeDoc?.measurements?.viewports || {},
+      items: activeDoc?.pageMarkup?.items || [],
+      markups: activeDoc?.pageMarkup?.markups || [],
+      viewports: activeDoc?.pageMarkup?.viewports || {},
       activePageId: activeMeasurePage?.id || '',
       ready: Boolean(activeDoc && livePdfRuntime?.kernel && livePdfRuntime.documentId === activeDoc.id),
       actions: {
@@ -26499,8 +26519,49 @@ function App({ shell = null }) {
         })),
         remove: item => {
           measureStore.set({ selectedId: '' });
-          return commitMeasureChange(`Delete ${item.kind} measurement`, (bytes, doc) => removeMeasurement(PDFLib, bytes, {
-            pageIndex: pageIndexOf(doc, item.pageId), objectNumber: item.objectNumber,
+          const measurement = ['distance', 'perimeter', 'area'].includes(item.kind);
+          return commitMeasureChange(measurement ? `Delete ${item.kind} measurement` : `Delete ${item.kind}`,
+            (bytes, doc) => (measurement ? removeMeasurement : removeAnnotationObject)(PDFLib, bytes, {
+              pageIndex: pageIndexOf(doc, item.pageId), objectNumber: item.objectNumber,
+            }));
+        },
+        // Comment markups (Markup › Comment) the worker cannot write; see engine/markup-annotations.js.
+        commitShape: ({ pageId, kind, points }) => {
+          const comment = commentToolStore.get();
+          return commitMeasureChange(`Add ${kind}`, (bytes, doc) => writeShapeAnnotation(PDFLib, bytes, {
+            pageIndex: pageIndexOf(doc, pageId), kind, points, author: comment.author,
+            style: { color: comment.shapeColor, width: comment.shapeWidth },
+          }));
+        },
+        updateShape: (item, points) => commitMeasureChange(`Edit ${item.kind}`, (bytes, doc) => writeShapeAnnotation(PDFLib, bytes, {
+          pageIndex: pageIndexOf(doc, item.pageId), kind: item.kind, points, objectNumber: item.objectNumber,
+          style: { color: item.color, width: item.width },
+        })),
+        translate: (item, dx, dy) => commitMeasureChange(`Move ${item.kind}`, (bytes, doc) => translateMarkupAnnotation(PDFLib, bytes, {
+          pageIndex: pageIndexOf(doc, item.pageId), objectNumber: item.objectNumber, dx, dy,
+        })),
+        commitStamp: ({ pageId, center }) => {
+          const comment = commentToolStore.get();
+          const preset = STAMP_PRESETS.find(item => item.id === comment.stamp) || STAMP_PRESETS[0];
+          const image = comment.stamp === 'image' ? comment.stampImage : null;
+          if (comment.stamp === 'image' && !image) {
+            showToast('Choose an image for the stamp first.', 'info');
+            return Promise.resolve(null);
+          }
+          const detail = stampDetail({ withDate: comment.stampWithDate, withName: comment.stampWithName,
+            author: comment.author, locale: navigator.language });
+          return commitMeasureChange('Add stamp', (bytes, doc) => writeStampAnnotation(PDFLib, bytes, {
+            pageIndex: pageIndexOf(doc, pageId), center, preset, image, detail, author: comment.author,
+          }));
+        },
+        commitCallout: ({ pageId, tip, anchor, value }) => {
+          const comment = commentToolStore.get();
+          return commitMeasureChange('Add callout', async (bytes, doc) => ({
+            ...(await writeCalloutAnnotation(PDFLib, bytes, {
+              pageIndex: pageIndexOf(doc, pageId), tip, anchor, value, author: comment.author,
+              style: { fontSize: comment.fontSize, textColor: comment.textColor, borderColor: comment.borderColor },
+            })),
+            importNewFreeText: true,
           }));
         },
         calibrate: ({ pageId, points, length, unit }) => {
@@ -26517,7 +26578,7 @@ function App({ shell = null }) {
         },
         exportCsv: () => {
           const doc = workspaceSnapshotRef.current.docs.find(item => item.id === activeDoc?.id) || activeDoc;
-          const items = doc?.measurements?.items || [];
+          const items = doc?.pageMarkup?.items || [];
           if (!items.length) return;
           const pageNumber = new Map(doc.pages.map((page, index) => [page.id, index + 1]));
           const csv = measurementsToCsv([...items].sort((a, b) => (pageNumber.get(a.pageId) || 0) - (pageNumber.get(b.pageId) || 0)),
@@ -26530,14 +26591,14 @@ function App({ shell = null }) {
   // Files whose measurements sit in compressed object streams are scanned when a measure tool is first used.
   useEffect(() => {
     const runtime = livePdfRuntimeRef.current;
-    if (!MEASURE_TOOL_SET.has(tool) || !activeDoc || activeDoc.measurements || measureScanRef.current.has(activeDoc.id) ||
+    if (!(MEASURE_TOOL_SET.has(tool) || COMMENT_TOOL_SET.has(tool)) || !activeDoc || activeDoc.pageMarkup || measureScanRef.current.has(activeDoc.id) ||
         !runtime?.engine || runtime.documentId !== activeDoc.id || !PDFLib?.PDFDocument) return;
     measureScanRef.current.add(activeDoc.id);
     const docId = activeDoc.id;
     void checkpointToPdfSnapshotResource(runtime.engine)
-      .then(snapshot => readMeasureData(PDFLib, snapshot.bytes))
-      .then(data => setDocs(prev => prev.map(doc => (doc.id === docId && !doc.measurements
-        ? { ...doc, measurements: measureStateFromData(data, doc.pages) } : doc))))
+      .then(snapshot => readPageMarkup(PDFLib, snapshot.bytes))
+      .then(data => setDocs(prev => prev.map(doc => (doc.id === docId && !doc.pageMarkup
+        ? { ...doc, pageMarkup: pageMarkupStateFromData(data, doc.pages) } : doc))))
       .catch(() => {});
   }, [activeDoc, tool]);
 
@@ -28361,6 +28422,7 @@ function App({ shell = null }) {
           const item = toolbarTool(toolId);
           // berg:work: the measure tools get their own heading inside Markup.
           return <React.Fragment key={toolId}>
+            {toolId === COMMENT_TOOL_IDS[0] && <div className="oo-pdf-chrome-popover-title oo-pdf-menu-section">Comment</div>}
             {toolId === MEASURE_TOOL_IDS[0] && <div className="oo-pdf-chrome-popover-title oo-pdf-menu-section">Measure</div>}
             <ChromeMenuItem label={item.label} title={withShortcut(item.label, toolId)} iconName={item.icon} pressed={tool === toolId}
               disabled={toolDisabled(toolId)} onClick={() => chooseTool(toolId)} />
@@ -28410,7 +28472,7 @@ function App({ shell = null }) {
           </div>
         </ChromePopoverButton>
         {toolGroupButton('add', 'Insert', ADD_TOOL_IDS, 'plus', 'Insert text, images, shapes, comments or a signature')}
-        {toolGroupButton('markup', 'Markup', [...MARKUP_TOOL_IDS, ...MEASURE_TOOL_IDS], 'highlighter', 'Highlight, underline, strike through, redact or measure')}
+        {toolGroupButton('markup', 'Markup', [...MARKUP_TOOL_IDS, ...COMMENT_TOOL_IDS, ...MEASURE_TOOL_IDS], 'highlighter', 'Highlight, underline, strike through, redact, comment or measure')}
         {!narrowPhone && (
           <ChromePopoverButton id="guides" label="Guides" title="Guides, rulers and snapping" iconName="ruler"
             text={phoneLayout ? '' : 'Guides'} on={guidesVisible || rulersVisible /* berg:work: snap is on by default */} placement={toolMenuPlacement} {...chromeMenuProps('guides')}
@@ -33859,9 +33921,9 @@ function PdfPageContent({
         type: 'arrow',
         pageId: page.id,
         ...arrowGeometryForEndpoints({ strokeWidth: shapeStyle.strokeWidth }, start, end),
-        arrowTip: 'filled',
+        arrowTip: drag.plainLine ? 'none' : 'filled',
         arrowTipStart: 'none',
-        arrowTipEnd: 'filled',
+        arrowTipEnd: drag.plainLine ? 'none' : 'filled',
         stroke: shapeStyle.stroke,
         strokeEnabled: true,
         strokeWidth: shapeStyle.strokeWidth,
@@ -34471,11 +34533,20 @@ function PdfPageContent({
       }, { editImmediately: true });
       return;
     }
-    if (['rect', 'ellipse', 'highlight', 'redact', 'draw', 'arrow'].includes(tool)) {
+    // berg:work: Text box and Typewriter place a FreeText annotation (a callout is drawn by the measure layer).
+    if (tool === 'textbox' && commentToolStore.get().textboxStyle !== 'callout') {
+      event.preventDefault();
+      startInlineTypeAhead();
+      onAppendAnnotation(page.id, textboxAnnotationAt(pos), { editImmediately: true });
+      return;
+    }
+    if (['rect', 'ellipse', 'highlight', 'redact', 'draw', 'arrow', 'line'].includes(tool)) {
       if (event.pointerType === 'touch') event.preventDefault();
       event.currentTarget.setPointerCapture?.(event.pointerId);
       dragRef.current = {
-        kind: tool,
+        // berg:work: Line is the Arrow annotation without tips.
+        kind: tool === 'line' ? 'arrow' : tool,
+        plainLine: tool === 'line',
         id: event.pointerId,
         start: pos,
         current: pos,
@@ -41166,12 +41237,15 @@ function ToolOptionsBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signaturePadRequest]);
   const active = TOOLBAR_TOOLS.find(item => item.id === tool);
+  // berg:work: Line (Markup › Comment) has the Arrow's options.
+  if (tool === 'line') tool = 'arrow';
   const isShapeTool = ['rect', 'ellipse', 'draw', 'arrow', 'redact'].includes(tool);
   const isMarkupTool = TEXT_MARKUP_TYPES.has(tool);
   // Tools without settings get no bar; the toolbar already shows the tool.
   if (!active || tool === 'select' || tool === 'pan' || tool === 'comment') return null;
   // berg:work: the measure tools' bar: page scale, ratio, colour, CSV.
   if (MEASURE_TOOL_SET.has(tool)) return <MeasureOptionsBar tool={tool} onToolChange={onToolChange} />;
+  if (COMMENT_TOOL_SET.has(tool) && tool !== 'line') return <CommentOptionsBar tool={tool} />;
 
   const patchShape = (patch) => onShapeStyle(current => ({ ...current, ...patch }));
   const patchSignature = (patch) => onSignature(current => ({ ...current, ...patch }));
