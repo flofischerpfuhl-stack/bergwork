@@ -883,7 +883,7 @@ function PdfContextMenu({ x, y, items, onClose }) {
       if (event.key !== 'Escape') return;
       event.stopImmediatePropagation();
       event.preventDefault();
-      onClose();
+      onCloseRef.current?.('escape');
     };
     window.addEventListener('pointerdown', close, true);
     window.addEventListener('keydown', key, true);
@@ -28319,7 +28319,12 @@ function App({ shell = null }) {
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
       {activeDoc && <GestureReadout zoom={zoom} tool={tool} />}
       {contextMenu && (
-        <PdfContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)} items={[
+        <PdfContextMenu x={contextMenu.x} y={contextMenu.y} onClose={how => {
+          setContextMenu(null);
+          // berg:work: Escape stops at the menu, so the toolbar that opened with it closes here too. (An outside click
+          // reaches the toolbar's own handler.)
+          if (how === 'escape') setMiniToolbar(current => (current?.reason === 'context' ? null : current));
+        }} items={[
           ...(selected && selected.type !== 'multi' && contextMenu.objectKind === 'text' ? [{
             label: 'Edit text', icon: 'pencil', shortcut: 'Dbl-click',
             run: () => contextMenu.objectElement?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })),
@@ -33403,7 +33408,8 @@ function PdfPageContent({
       setHitCycleHint(null);
       // berg:work: a second click on selected text with nothing below it edits the text there (PowerPoint, Canva),
       // through the same path as a double-click.
-      if (options.cycleSelected && !additive && fallback?.type === 'text' && selectionIncludes(selected, fallback)) {
+      if (options.cycleSelected && !additive && fallback?.type === 'text' && selectionIncludes(selected, fallback) &&
+          (pointerEvent.button ?? 0) === 0 && !document.querySelector('.oo-pdf-context-menu')) {
         const box = document.elementsFromPoint(pointerEvent.clientX, pointerEvent.clientY)
           .map(node => node.closest?.('.oo-pdf-textbox')).find(node => node && pageRef.current?.contains(node));
         if (box) {
