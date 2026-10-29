@@ -27545,22 +27545,68 @@ function App({ shell = null }) {
   // Handed to every form widget of every page.
   const stableUpdateFormValue = useStableCallback(updateFormValue);
   const externalFileDrag = event => Array.from(event.dataTransfer?.types || []).includes('Files');
+  // berg:work: images dropped on a page are placed there (Canva, PowerPoint, Figma); the page under the pointer is
+  // outlined instead of the "open" overlay. PDFs, projects and drops beside the pages still open as documents.
+  const imageDropSheet = event => {
+    const runtime = livePdfRuntimeRef.current;
+    if (!activeDoc || !runtime?.ready || runtime.readOnly) return null;
+    const items = Array.from(event.dataTransfer?.items || []).filter(item => item.kind === 'file');
+    if (!items.length || !items.every(item => /^image\//u.test(item.type))) return null;
+    return document.elementsFromPoint(event.clientX, event.clientY)
+      .map(node => node.closest?.('.oo-pdf-sheet[data-page-id]')).find(Boolean) || null;
+  };
+  const markImageDropSheet = sheet => {
+    for (const node of document.querySelectorAll('.oo-pdf-sheet.is-image-drop-target')) {
+      if (node !== sheet) node.classList.remove('is-image-drop-target');
+    }
+    sheet?.classList.add('is-image-drop-target');
+  };
   const handleDocumentDragOver = event => {
     if (!externalFileDrag(event) || documentLoadProgress) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
-    setDocumentDropActive(true);
+    const sheet = imageDropSheet(event);
+    markImageDropSheet(sheet);
+    setDocumentDropActive(!sheet);
   };
   const handleDocumentDragLeave = event => {
     if (event.currentTarget.contains(event.relatedTarget)) return;
+    markImageDropSheet(null);
     setDocumentDropActive(false);
   };
   const handleDocumentDrop = event => {
     if (!externalFileDrag(event) || documentLoadProgress) return;
     event.preventDefault();
     event.stopPropagation();
+    const sheet = imageDropSheet(event);
+    markImageDropSheet(null);
     setDocumentDropActive(false);
     const files = fileList(event.dataTransfer?.files);
+    const page = sheet && activeDoc.pages.find(item => item.id === sheet.dataset.pageId);
+    if (page && files.length && files.every(acceptsImage)) {
+      const rect = (sheet.querySelector('.oo-pdf-page-surface') || sheet).getBoundingClientRect();
+      const scale = zoomRef.current || 1;
+      const dims = pageDimensions(page);
+      const at = { x: (event.clientX - rect.left) / scale, y: (event.clientY - rect.top) / scale };
+      void (async () => {
+        for (const [index, file] of files.entries()) {
+          try {
+            const image = await normalizeImageFile(file);
+            const w = Math.min(dims.width * 0.5, Math.max(80, image.width));
+            const h = w * (image.height / Math.max(1, image.width));
+            appendAnnotation(page.id, {
+              type: 'image', x: at.x - w / 2 + index * 16, y: at.y - h / 2 + index * 16, w, h,
+              dataUrl: image.dataUrl, mime: image.mime, name: file.name || 'image',
+              assetWidth: image.width, assetHeight: image.height, width: image.width, height: image.height,
+              keepAspectRatio: true, opacity: 1,
+            });
+          } catch (error) {
+            showToast(userFacingError(error, 'Image could not be loaded.'), 'error');
+          }
+        }
+      })();
+      return;
+    }
     if (files.length) void openFiles(files);
   };
 

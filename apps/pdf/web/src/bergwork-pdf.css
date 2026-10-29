@@ -707,3 +707,9 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
 /* Number fields: drag the label sideways to change the value (see GeometryNumber in the fork). */
 .oo-pdf-shell .oo-pdf-scrub-label { cursor: ew-resize; user-select: none; touch-action: none; }
 .oo-pdf-shell .oo-pdf-scrub-label input { cursor: text; user-select: text; touch-action: auto; }
+
+/* An image dragged over a page: that page is the drop target (the image lands at the pointer). */
+.oo-pdf-shell .oo-pdf-sheet.is-image-drop-target {
+  outline: 2px dashed var(--pdf-accent-strong, var(--bw-fg));
+  outline-offset: 4px;
+}
