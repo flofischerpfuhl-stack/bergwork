@@ -132,6 +132,48 @@ Forms:
 - [ ] **PDF/A save** (fonts embedded, XMP, OutputIntent; check with veraPDF). 5–10 PD.
 - [ ] **OCR:** more languages on demand, deskew, OCR of a region. 5–8 PD.
 
+## Measuring and comments compared with PDF-XChange (Fernwork TODO part B, items 1 and 2)
+
+Branch `feat/pdf-measure-comments`. Everything is in the fork's own files (`pdf-editor/model/pdf-measure.js`,
+`pdf-editor/engine/measure-annotations.js`, `markup-annotations.js`, `comment-index.js`, `xfdf.js`,
+`pdf-editor/interaction/measure-layer.jsx`, `comment-tools.jsx`, `comment-list.jsx`) plus small `berg:work:` hunks in
+the shell. The pinned worker cannot write `/Measure`, `/Vertices`, `/VP`, `/IRT`, `/CL` or stamps, so these changes
+are written into a checkpoint with pdf-lib and committed as one snapshot transaction (as page stamps do). Node tests:
+`npm run test:unit -w @bergwork/pdf`. **Needs OK** for the whole UI (Markup › Comment / Measure, the options bars,
+the chip over a selected measurement, the Comments panel); screenshots in
+`AgentWork/bergwork-pdf-analyse/audit/measure-comments/`.
+
+- [x] **Distance, perimeter, area** as standard measurement annotations (Line /LineDimension, PolyLine
+  /PolyLineDimension, Polygon /PolygonDimension, `/Measure` Subtype RL, own appearance with caption); value at the
+  pointer while drawing; snapping to corners and line ends of PDF paths and other measurements, Shift 45°, Alt free.
+- [x] **Scale per page:** calibrate with two points and a known length (m, cm, mm, km, ft, in) or type a ratio;
+  stored as a page viewport (`/VP`); CAD viewports are read, the last one containing the point wins; without a
+  scale it measures 1:1 in mm and says so.
+- [x] **Edit measurements** in Edit PDF: drag a corner or the whole measurement, Delete; Undo is exact.
+- [x] **CSV** of all measurements (semicolon and decimal comma where the locale uses them).
+- [x] **Text box and typewriter** (native FreeText through the worker), **callout** (FreeText /FreeTextCallout with
+  `/CL`), **line** (Arrow without tips), **polyline, polygon, cloud** (`/BE` cloudy), **stamps** (Approved, Draft,
+  Confidential, Reviewed, Rejected with date and name, or an own image).
+- [x] **Comments panel** (Document tools › Comments): type, author and status filters, replies, review status
+  (Acrobat's `/IRT` replies and `/State` … `/StateModel /Review`), jump to the comment; author name for new comments.
+- [x] **XFDF export and import** with geometry, replies, states, measurements, cloudy borders and callout lines;
+  imported annotations get appearances.
+- [ ] **Each measure or markup change takes about 1.3 s** (checkpoint, pdf-lib, snapshot restore; 1-page plan,
+  headless on the laptop), more on big books. Native worker commands would make it instant (see the Fernwork part of
+  the report on `feat/pdf-measure-comments`). 3–5 PD in Fernwork.
+- [ ] **Callout text cannot be edited in place**: its appearance is berg:work's own, so the shell treats it as a
+  custom FreeText (text changes need "replace appearance", which drops the leader line). Needs the worker to draw
+  `/CL` when it regenerates a FreeText appearance. 2 PD in Fernwork.
+- [ ] **Created FreeText has `/F 0`** (worker): not printed by other viewers. The worker should set the Print flag.
+  0.5 PD in Fernwork.
+- [ ] **Polygons, polylines and stamps are not in Layers** and have no Properties (colour, width): the worker's
+  annotation list leaves out subtypes 7, 8 and 13. 1–2 PD (worker + shell).
+- [ ] **Measure captions on rotated pages** follow the page's user space, not the screen. 0.5 PD.
+- [ ] **Further measure tools:** angle, count, radius, area in ha, caption styles, measurements in Layers. 3–5 PD.
+- [ ] **Stamps:** resize, stamp appearance in XFDF export (Acrobat embeds it), more presets, a stamp library. 2 PD.
+- [ ] **Comments:** print a comment summary, sort, edit and delete replies, mark as read (`/StateModel /Marked`).
+  2–3 PD.
+
 ## Desktop apps (`apps/pdf/src-tauri`, `packages/host-tauri`)
 
 Today: the Linux release build works (5:50 min, 72 MB binary with embedded assets), opens a PDF passed on the command
