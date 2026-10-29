@@ -15003,9 +15003,30 @@ function nativeObjectItemId(page, object) {
   return `${page.id}:object:${object.objectId || object.objectIndex}`;
 }
 
+// berg:work: names people read (Layers, tooltips, the Properties header) instead of PDF internals: a thin path
+// is a line, other paths are shapes, and object numbers are left out ("Path #1064" → "Line").
 function nativeObjectLabel(object = {}) {
-  const name = PDF_NATIVE_OBJECT_TYPES[object.typeName] || object.typeName || 'PDF object';
-  return `${name} ${Number.isInteger(object.objectIndex) ? `#${object.objectIndex}` : ''}`.trim();
+  if (object.typeName === 'path') {
+    const box = object.bbox || object.rect || object;
+    const w = Math.abs(Number(box?.w ?? box?.width ?? 0));
+    const h = Math.abs(Number(box?.h ?? box?.height ?? 0));
+    return (w || h) && Math.min(w, h) <= 2 ? 'Line' : 'Shape';
+  }
+  return PDF_NATIVE_OBJECT_TYPES[object.typeName] || object.typeName || 'PDF object';
+}
+
+// berg:work: "AAAAAA+Arial-BoldMT" → "Arial Bold": no subset tag, no PostScript suffixes, words spaced.
+function readablePdfFontName(name) {
+  const base = String(name || '').replace(/^[A-Z]{6}\+/u, '').replace(/(PSMT|MT|PS)$/u, '').replace(/,/gu, ' ');
+  return base.split(/[-_\s]+/u).filter(Boolean)
+    .map(part => part.replace(/([a-z])([A-Z])/gu, '$1 $2').replace(/(MT|PS)$/u, ''))
+    .join(' ').replace(/\s+/gu, ' ').trim() || String(name || '');
+}
+
+// berg:work: generated image resource names (Im1, img_p0_6, native-image-1066, X3) say nothing; show "Image".
+function readableImageName(name) {
+  const text = String(name || '');
+  return !text || /^(?:im|img|image|x|native-image|pdf-image)[\w-]*\d*$/iu.test(text) ? '' : text;
 }
 
 function pathPointEditingBlockReason(object = {}) {
@@ -15798,8 +15819,8 @@ function selectionDisplayLabel(item = {}) {
   if (item.type === 'text') return `Text: ${item.item?.str || item.edit?.text || 'text object'}`;
   if (item.type === 'imageRegion') {
     const image = item.item || item.edit || {};
-    const objectNumber = Number.isInteger(Number(image.objectIndex)) ? ` #${Number(image.objectIndex)}` : '';
-    return `Image${objectNumber}: ${image.name || 'image object'}`;
+    const name = readableImageName(image.name);
+    return name ? `Image: ${name}` : 'Image';
   }
   if (item.type === 'nativeObject') return nativeObjectLabel(item.item || item.edit || {});
   return 'PDF object';
@@ -16871,7 +16892,7 @@ function makeOriginalPdfObjectLayers(doc, pageId) {
       type: 'imageRegion',
       pageId,
       item,
-      label: `Image: ${region.name || 'PDF image'}`,
+      label: readableImageName(region.name) ? `Image: ${readableImageName(region.name)}` : 'Image',
       opacity: edit?.deleted ? 0.35 : nativeImageOpacityControlValue(edit, region),
       original: true,
       deleted: !!edit?.deleted,
@@ -38129,12 +38150,12 @@ function ImageEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, s
       tabIndex={0}
       role="button"
       aria-pressed={selected}
-      aria-label={`PDF image${Number.isInteger(Number(current.objectIndex)) ? ` #${current.objectIndex}` : ''}: ${current.name || 'image object'}`}
+      aria-label={readableImageName(current.name) ? `Image: ${readableImageName(current.name)}` : 'Image'}
       style={style}
       onFocus={(event) => {
         if (!event.currentTarget.matches(':active')) onSelect(selectionPayload(current.pageId));
       }}
-      title={current.name || 'PDF image'}
+      title={readableImageName(current.name) || 'Image'}
       onPointerDown={(event) => start(event)}
       onPointerMove={move}
       onPointerUp={stop}
@@ -42910,7 +42931,7 @@ function FontSelect({ value, onChange, uploadedFonts = [], sourceFontLabel = '',
         value,
         label: customHash
           ? `Embedded frame font · ${sourceFontLabel || 'verified custom font'}`
-          : sourceFontLabel ? `Original PDF font · ${sourceFontLabel}` : 'Original PDF font (this text only)',
+          : sourceFontLabel ? `${readablePdfFontName(sourceFontLabel)} (from the PDF)` : 'Original PDF font (this text only)',
       }] : []),
       ...uploadedFonts.map(font => ({
         value: uploadedFontOptionValue(font.hash),
@@ -44968,11 +44989,11 @@ function Inspector({
                           'text-color-style',
                         )} /></label>
                       </div>
+                      {/* berg:work: the font picker already names the PDF's font; the explanation moved to this button. */}
                       {layer.item.embeddedFontFamily && !layer.item.fontResourceHashes?.length && (
-                        <div className="oo-pdf-mini-stat oo-pdf-caption" title="Existing glyphs are preserved where safe; subset and Type 3 fonts cannot be reused for arbitrary new characters. Upload the licensed font file to use it elsewhere.">Original PDF font: {layer.item.embeddedFontFamily}</div>
-                      )}
-                      {layer.item.embeddedFontFamily && !layer.item.fontResourceHashes?.length && (
-                        <button type="button" className="oo-pdf-font-action" onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item).catch(error => showToast(userFacingError(error, 'PDF font import failed.'), 'error'))}>Import embedded PDF font for reuse</button>
+                        <button type="button" className="oo-pdf-font-action"
+                          title="Existing glyphs are preserved where safe; subset and Type 3 fonts cannot be reused for arbitrary new characters. Upload the licensed font file to use it elsewhere."
+                          onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item).catch(error => showToast(userFacingError(error, 'PDF font import failed.'), 'error'))}>Import embedded PDF font for reuse</button>
                       )}
                       {layer.item.usedFontResourceHashes?.length > 0 && (
                         <div className="oo-pdf-mini-stat">Actual rendered font: {layer.item.usedFontResourceHashes.map((hash, index) => {
