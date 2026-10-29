@@ -34190,6 +34190,13 @@ function PdfPageContent({
       } else {
         onAppendAnnotation(page.id, draft);
       }
+    } else if (['rect', 'ellipse', 'arrow'].includes(drag.kind)) {
+      // berg:work: a click without dragging places the shape at a default size centred on the click (Figma, Canva).
+      const dims = pageDimensions(page);
+      const half = drag.kind === 'arrow' ? { x: 60, y: 0 } : { x: 50, y: 50 };
+      const center = { x: clamp(drag.start.x, half.x, dims.width - half.x), y: clamp(drag.start.y, Math.max(half.y, 1), dims.height - Math.max(half.y, 1)) };
+      const placed = draftFromDrag({ ...drag, start: { x: center.x - half.x, y: center.y - half.y }, current: { x: center.x + half.x, y: center.y + half.y } });
+      if (placed) onAppendAnnotation(page.id, placed);
     }
     dragRef.current = null;
     setDraftAnnotation(null);
