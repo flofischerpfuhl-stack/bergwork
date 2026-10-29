@@ -778,12 +778,26 @@ function GestureReadout({ zoom, tool }) {
       setReadout({ text, x: event.clientX + 16, y: event.clientY + 18 });
     };
     const up = () => { gesture = null; setReadout(null); };
+    // berg:work: a resize handle's cursor follows the frame's rotation (the arrow points the way the edge moves).
+    const HANDLE_BASE = { n: 0, ne: 45, e: 90, se: 135, s: 180, sw: 225, w: 270, nw: 315 };
+    const CURSORS = ['ns-resize', 'nesw-resize', 'ew-resize', 'nwse-resize'];
+    const over = event => {
+      const handle = event.target?.closest?.('.oo-pdf-resize');
+      if (!handle || gesture) return;
+      const corner = [...handle.classList].find(name => name in HANDLE_BASE);
+      const box = frameFromHandles(handle.parentElement);
+      if (!corner || !box) return;
+      const step = Math.round(((HANDLE_BASE[corner] + box.angle) % 360 + 360) % 360 / 45) % 4;
+      handle.style.cursor = Math.abs(box.angle) < 1 ? '' : CURSORS[step];
+    };
+    window.addEventListener('pointerover', over, true);
     window.addEventListener('pointerdown', down, true);
     window.addEventListener('pointermove', move, true);
     window.addEventListener('pointerup', up, true);
     window.addEventListener('pointercancel', up, true);
     window.addEventListener('blur', up);
     return () => {
+      window.removeEventListener('pointerover', over, true);
       window.removeEventListener('pointerdown', down, true);
       window.removeEventListener('pointermove', move, true);
       window.removeEventListener('pointerup', up, true);
