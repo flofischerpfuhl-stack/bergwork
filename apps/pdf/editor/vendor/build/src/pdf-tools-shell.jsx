@@ -28908,6 +28908,7 @@ function PdfViewport(props) {
   const pointersRef = useRef(new Map());
   const pinchRef = useRef(null);
   const viewportTapRef = useRef(null);
+  const touchDownRef = useRef(null);
   const virtualFrameRef = useRef(0);
   const verticalScrollRef = useRef(null);
   const pdfiumSession = usePdfiumSessionRuntime(doc, activePage, getLatestDocument);
@@ -29106,6 +29107,9 @@ function PdfViewport(props) {
 
   const onPointerDown = (event) => {
     const interactive = event.target?.closest?.('.oo-pdf-object, .oo-pdf-native-object, .oo-pdf-textbox, .oo-pdf-imagebox, .oo-pdf-reading-text, .oo-pdf-selection-menu, textarea, input, select, button');
+    // berg:work: a click on the empty canvas beside the pages deselects, as in Figma and Canva (touch: on the tap).
+    if (event.pointerType !== 'touch' && event.button === 0 && !interactive && !event.shiftKey && selected &&
+        !editingText && !event.target?.closest?.('.oo-pdf-sheet, [data-selection-key]')) onSelect?.(null);
     if (event.pointerType === 'touch') return;
     if (effectiveTool === 'pan' && !interactive) beginPan(event);
   };
@@ -29114,6 +29118,7 @@ function PdfViewport(props) {
     onDeferZoomInteractionSettle?.();
     if (event.pointerType !== 'touch') return;
     pointersRef.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+    touchDownRef.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
     if (pointersRef.current.size === 2) {
       window.dispatchEvent(new Event(PDF_INTERACTION_CANCEL_EVENT));
       beginPinch();
@@ -29183,6 +29188,11 @@ function PdfViewport(props) {
         viewportTapRef.current = null;
       } else if (sheet) {
         viewportTapRef.current = { at: now, x: event.clientX, y: event.clientY };
+      } else if (selected && !editingText && touchDownRef.current?.id === event.pointerId &&
+          Math.hypot(event.clientX - touchDownRef.current.x, event.clientY - touchDownRef.current.y) < 10 &&
+          !event.target?.closest?.('[data-selection-key]')) {
+        // berg:work: a tap on the canvas beside the pages deselects.
+        onSelect?.(null);
       }
     }
     pointersRef.current.delete(event.pointerId);
