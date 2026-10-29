@@ -24374,6 +24374,16 @@ function App({ shell = null }) {
       });
     };
     const paste = event => {
+      // berg:work: pasted image files (a screenshot, a copied picture) become images on the page, like a drop.
+      const pastedImages = fileList(event.clipboardData?.files).filter(acceptsImage);
+      if (relevant(event) && pastedImages.length && livePdfRuntimeRef.current?.ready && !livePdfRuntimeRef.current?.readOnly) {
+        const placement = placementInView();
+        if (placement) {
+          event.preventDefault();
+          placeImageFiles(placement.page, placement.at, pastedImages);
+          return;
+        }
+      }
       if (!relevant(event) || !event.clipboardData || event.clipboardData.files?.length) return;
       const token = event.clipboardData.getData(mime);
       const owned = clipboardTokenRef.current;
@@ -24392,16 +24402,19 @@ function App({ shell = null }) {
         showToast('Paste up to 100,000 characters at a time. The clipboard was not truncated.', 'warning');
         return;
       }
-      const page = activeDoc.pages?.[activePage];
+      // berg:work: the text lands where the user looks: at the pointer over a page, else in the middle of the
+      // visible part of the page in view (it used to go to the page centre, often off screen).
+      const placement = placementInView();
+      const page = placement?.page || activeDoc.pages?.[activePage];
       if (!page) return;
       const dims = pageDimensions(page);
       const w = Math.max(24, Math.min(360, dims.width - 48));
       const h = Math.max(24, Math.min(dims.height - 48, 24 * Math.max(1, text.split('\n').length)));
-      appendAnnotation(page.id, { type: 'text', text, x: Math.max(0, (dims.width - w) / 2),
-        y: Math.max(0, (dims.height - h) / 2), w, h, fontSize: 18,
+      const at = placement?.at || { x: dims.width / 2, y: dims.height / 2 };
+      appendAnnotation(page.id, { type: 'text', text, x: clamp(at.x - w / 2, 0, Math.max(0, dims.width - w)),
+        y: clamp(at.y - h / 2, 0, Math.max(0, dims.height - h)), w, h, fontSize: 18,
         fontKey: 'helvetica', fontWeight: '400', fontStyle: 'normal', color: '#111111', opacity: 1,
         textBlock: true, textOverflow: 'visible', textAlign: 'left', lineHeight: 1.2 });
-      showToast('Pasted as editable text. Source rich-text formatting is not imported.', 'info');
     };
     const duplicate = event => {
       if (relevant(event) && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd' && selected) {
@@ -27468,6 +27481,27 @@ function App({ shell = null }) {
         || ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.code === 'Digit0');
       const actualSize = (event.shiftKey && !event.ctrlKey && !event.metaKey && event.code === 'Digit0')
         || ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.code === 'Digit1');
+      // berg:work: Shift+2 zooms to the selection (Figma).
+      const fitSelection = event.shiftKey && !event.ctrlKey && !event.metaKey && event.code === 'Digit2';
+      if (fitSelection && activeDoc && !event.defaultPrevented && !event.altKey &&
+          !event.target?.closest?.('input, textarea, select, [contenteditable="true"]')) {
+        const viewport = viewportRef.current;
+        const node = viewport?.querySelector('.is-selected');
+        const box = node?.getBoundingClientRect();
+        if (!viewport || !box?.width || !box?.height) return;
+        event.preventDefault();
+        const view = viewport.getBoundingClientRect();
+        const factor = Math.min(view.width * 0.6 / box.width, view.height * 0.6 / box.height);
+        zoomAt(zoomRef.current * factor, box.left + box.width / 2, box.top + box.height / 2);
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const next = viewport.querySelector('.is-selected')?.getBoundingClientRect();
+          const nextView = viewport.getBoundingClientRect();
+          if (!next) return;
+          viewport.scrollLeft += (next.left + next.width / 2) - (nextView.left + nextView.width / 2);
+          viewport.scrollTop += (next.top + next.height / 2) - (nextView.top + nextView.height / 2);
+        }));
+        return;
+      }
       if ((fitPage || actualSize) && activeDoc && !event.defaultPrevented && !event.altKey &&
           !event.target?.closest?.('input, textarea, select, [contenteditable="true"]')) {
         event.preventDefault();
@@ -27650,6 +27684,58 @@ function App({ shell = null }) {
   const stableMoveSelectionItems = useStableCallback(moveSelectionItemsAtomically);
   // Handed to every form widget of every page.
   const stableUpdateFormValue = useStableCallback(updateFormValue);
+  // berg:work: where pasted or dropped things land. The pointer over a page wins; otherwise the middle of the part
+  // of the page that is in view. Page coordinates are display points (as the page surface's clicks use).
+  const lastPointerClientRef = useRef(null);
+  useEffect(() => {
+    const track = event => { lastPointerClientRef.current = { x: event.clientX, y: event.clientY }; };
+    window.addEventListener('pointermove', track, { passive: true, capture: true });
+    return () => window.removeEventListener('pointermove', track, { capture: true });
+  }, []);
+  const sheetPointAt = (clientX, clientY) => {
+    const sheet = document.elementsFromPoint(clientX, clientY)
+      .map(node => node.closest?.('.oo-pdf-sheet[data-page-id]')).find(Boolean);
+    const page = sheet && activeDoc?.pages.find(item => item.id === sheet.dataset.pageId);
+    if (!page) return null;
+    const rect = (sheet.querySelector('.oo-pdf-page-surface') || sheet).getBoundingClientRect();
+    const scale = zoomRef.current || 1;
+    return { page, sheet, rect, at: { x: (clientX - rect.left) / scale, y: (clientY - rect.top) / scale } };
+  };
+  const placementInView = () => {
+    const pointer = lastPointerClientRef.current;
+    const underPointer = pointer && sheetPointAt(pointer.x, pointer.y);
+    if (underPointer) return underPointer;
+    const viewport = viewportRef.current?.getBoundingClientRect();
+    if (!viewport) return null;
+    const centre = sheetPointAt(viewport.left + viewport.width / 2, viewport.top + viewport.height / 2);
+    if (!centre) return null;
+    // Middle of the visible part of that page.
+    const top = Math.max(centre.rect.top, viewport.top);
+    const bottom = Math.min(centre.rect.bottom, viewport.bottom);
+    const left = Math.max(centre.rect.left, viewport.left);
+    const right = Math.min(centre.rect.right, viewport.right);
+    return sheetPointAt((left + right) / 2, (top + bottom) / 2) || centre;
+  };
+  const placeImageFiles = (page, at, files) => {
+    const dims = pageDimensions(page);
+    void (async () => {
+      for (const [index, file] of files.entries()) {
+        try {
+          const image = await normalizeImageFile(file);
+          const w = Math.min(dims.width * 0.5, Math.max(80, image.width));
+          const h = w * (image.height / Math.max(1, image.width));
+          appendAnnotation(page.id, {
+            type: 'image', x: at.x - w / 2 + index * 16, y: at.y - h / 2 + index * 16, w, h,
+            dataUrl: image.dataUrl, mime: image.mime, name: file.name || 'image',
+            assetWidth: image.width, assetHeight: image.height, width: image.width, height: image.height,
+            keepAspectRatio: true, opacity: 1,
+          });
+        } catch (error) {
+          showToast(userFacingError(error, 'Image could not be loaded.'), 'error');
+        }
+      }
+    })();
+  };
   const externalFileDrag = event => Array.from(event.dataTransfer?.types || []).includes('Files');
   // berg:work: images dropped on a page are placed there (Canva, PowerPoint, Figma); the page under the pointer is
   // outlined instead of the "open" overlay. PDFs, projects and drops beside the pages still open as documents.
@@ -27690,27 +27776,7 @@ function App({ shell = null }) {
     const files = fileList(event.dataTransfer?.files);
     const page = sheet && activeDoc.pages.find(item => item.id === sheet.dataset.pageId);
     if (page && files.length && files.every(acceptsImage)) {
-      const rect = (sheet.querySelector('.oo-pdf-page-surface') || sheet).getBoundingClientRect();
-      const scale = zoomRef.current || 1;
-      const dims = pageDimensions(page);
-      const at = { x: (event.clientX - rect.left) / scale, y: (event.clientY - rect.top) / scale };
-      void (async () => {
-        for (const [index, file] of files.entries()) {
-          try {
-            const image = await normalizeImageFile(file);
-            const w = Math.min(dims.width * 0.5, Math.max(80, image.width));
-            const h = w * (image.height / Math.max(1, image.width));
-            appendAnnotation(page.id, {
-              type: 'image', x: at.x - w / 2 + index * 16, y: at.y - h / 2 + index * 16, w, h,
-              dataUrl: image.dataUrl, mime: image.mime, name: file.name || 'image',
-              assetWidth: image.width, assetHeight: image.height, width: image.width, height: image.height,
-              keepAspectRatio: true, opacity: 1,
-            });
-          } catch (error) {
-            showToast(userFacingError(error, 'Image could not be loaded.'), 'error');
-          }
-        }
-      })();
+      placeImageFiles(page, sheetPointAt(event.clientX, event.clientY)?.at || { x: 0, y: 0 }, files);
       return;
     }
     if (files.length) void openFiles(files);
