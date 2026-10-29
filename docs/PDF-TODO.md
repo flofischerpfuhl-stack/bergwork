@@ -108,5 +108,12 @@ in a headless page. That is the basis.
   - Play: target API 36, 16 KB page size for the native libraries.
 
   10–20 PD, plus the touch work in the Fernwork TODO.
-- [ ] **Phone apps** (iOS, Android phones): not planned. The market is full and free (Adobe, Xodo, PDFgear), and
-  bergwork.app already works in phone browsers. Reconsider only on demand.
+- [ ] **Store presence on phones.** Free mobile apps view and annotate. Editing existing content is paywalled
+  (Adobe, Xodo, Foxit, PDF Expert) or limited (PDFgear: text and images, free status unclear). Editing vector paths
+  is offered nowhere we know of. The store listing is what makes that lead visible.
+  - **Android: Trusted Web Activity** (Bubblewrap). The PWA runs in Chrome, not in the WebView, so it keeps
+    cross-origin isolation and WASM threads, and it can be listed on Play. 3–5 PD.
+  - **iOS: WKWebView wrapper.** Check SharedArrayBuffer and memory (WebContent is killed at about 2 GB) on a device
+    first. 10–20 PD.
+  - **Order:** ship only after the touch pass in the Fernwork TODO (taps hit the page background, results lag after
+    release). Otherwise store reviews judge the rough edges, not the lead.
