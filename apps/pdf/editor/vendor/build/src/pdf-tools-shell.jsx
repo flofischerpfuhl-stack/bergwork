@@ -791,6 +791,30 @@ function GestureReadout({ zoom, tool }) {
       handle.style.cursor = Math.abs(box.angle) < 1 ? '' : CURSORS[step];
     };
     window.addEventListener('pointerover', over, true);
+    // berg:work: while text is typed on the page its frame (and handles) grows with the editor, not only after the
+    // commit; the frame's own size comes back when editing ends.
+    const grow = event => {
+      const editor = event.target;
+      if (!(editor instanceof HTMLTextAreaElement)) return;
+      const box = editor.closest('.oo-pdf-textbox, .oo-pdf-object');
+      if (!box) return;
+      const frame = box.getBoundingClientRect();
+      const field = editor.getBoundingClientRect();
+      const width = Math.max(field.right, frame.right) - frame.left;
+      const height = Math.max(field.bottom, frame.bottom) - frame.top;
+      if (width > frame.width + 0.5) box.style.minWidth = `${Math.ceil(width)}px`;
+      if (height > frame.height + 0.5) box.style.minHeight = `${Math.ceil(height)}px`;
+      box.dataset.typingGrown = 'true';
+    };
+    const shrink = event => {
+      const box = event.target?.closest?.('[data-typing-grown]');
+      if (!box) return;
+      box.style.minWidth = '';
+      box.style.minHeight = '';
+      delete box.dataset.typingGrown;
+    };
+    window.addEventListener('input', grow, true);
+    window.addEventListener('focusout', shrink, true);
     window.addEventListener('pointerdown', down, true);
     window.addEventListener('pointermove', move, true);
     window.addEventListener('pointerup', up, true);
@@ -798,6 +822,8 @@ function GestureReadout({ zoom, tool }) {
     window.addEventListener('blur', up);
     return () => {
       window.removeEventListener('pointerover', over, true);
+      window.removeEventListener('input', grow, true);
+      window.removeEventListener('focusout', shrink, true);
       window.removeEventListener('pointerdown', down, true);
       window.removeEventListener('pointermove', move, true);
       window.removeEventListener('pointerup', up, true);
