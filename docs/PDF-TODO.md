@@ -94,7 +94,9 @@ Feedback and discovery:
 - [x] **Command palette (Ctrl+K)** (approved): file, edit, tools, panels, view and page actions by name, recently used
   first, group and shortcut per row.
 - [x] **Toast with Undo after deleting pages** (all pages of a multi-delete come back, selected).
-- [ ] **Toasts with Undo** after the other destructive actions (delete object, flatten). 0.5 PD.
+- [x] ~~Toasts with Undo after the other destructive actions~~ — not needed: deleting an object is undone in place with
+  Ctrl+Z and the toolbar (Figma and Canva show no toast there either; one per delete would be noise), and flatten
+  only applies to an exported copy, never to the open document.
 - [x] **Undo back to the saved state clears the unsaved dot** (also back to the opened state; one more step sets it
   again). Compared by a fingerprint of the editable state, taken at the first edit after opening or saving.
 - [ ] **"Saved" / "Unsaved changes" as text** by the file name instead of only the dot. Optional, **needs OK** (more
