@@ -810,3 +810,6 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
   justify-content: center;
   opacity: 1;
 }
+
+/* Equal-spacing markers while moving (pink, as Figma): the gap itself is drawn, not only its end caps. */
+.oo-pdf-snap-distance.is-spacing { background: currentColor; color: #db2777; }

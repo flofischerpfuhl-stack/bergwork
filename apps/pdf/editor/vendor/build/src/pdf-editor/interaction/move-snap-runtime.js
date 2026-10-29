@@ -79,8 +79,40 @@ export class MoveSnapRuntime {
     const visibleAxes = new Set(result.guides.map(guide => guide.axis));
     const visibleDistances = new Set();
     for (const [axis, node] of draft.guides) if (!visibleAxes.has(axis)) node.remove();
+    // berg:work: equal-spacing markers: every equal gap as a pink measure with its length.
+    for (const entry of result.spacing || []) {
+      entry.gaps.forEach((gap, index) => {
+        const key = `spacing:${entry.axis}:${index}`;
+        const horizontal = entry.axis === 'x';
+        let measure = draft.distances.get(key);
+        if (!measure) {
+          measure = draft.surface.ownerDocument.createElement('div');
+          measure.className = 'oo-pdf-snap-distance is-spacing';
+          measure.dataset.pdfSnapDistance = horizontal ? 'y' : 'x';
+          measure.setAttribute('aria-hidden', 'true');
+          const label = draft.surface.ownerDocument.createElement('span');
+          label.className = 'oo-pdf-snap-distance-label';
+          measure.append(label);
+          draft.distances.set(key, measure);
+        }
+        measure.dataset.distancePt = String(gap.length);
+        measure.firstChild.textContent = gap.length * zoom >= 32 ? snapDistanceLabel(gap.length) : '';
+        measure.firstChild.style.display = measure.firstChild.textContent ? '' : 'none';
+        Object.assign(measure.firstChild.style, horizontal
+          ? { left: `${gap.length * zoom / 2}px`, top: '0px' }
+          : { left: '0px', top: `${gap.length * zoom / 2}px` });
+        Object.assign(measure.style, {
+          left: `${(horizontal ? gap.start : gap.position) * zoom}px`,
+          top: `${(horizontal ? gap.position : gap.start) * zoom}px`,
+          width: horizontal ? `${gap.length * zoom}px` : '1px',
+          height: horizontal ? '1px' : `${gap.length * zoom}px`,
+        });
+        if (measure.parentNode !== draft.surface) draft.surface.append(measure);
+        visibleDistances.add(key);
+      });
+    }
     if (!result.guides.length) {
-      for (const node of draft.distances.values()) node.remove();
+      for (const [key, node] of draft.distances) if (!visibleDistances.has(key)) node.remove();
       return;
     }
     const moving = { ...draft.rect, x: draft.rect.x + result.dx, y: draft.rect.y + result.dy };

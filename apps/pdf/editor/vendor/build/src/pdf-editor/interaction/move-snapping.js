@@ -40,6 +40,8 @@ export function createMoveSnapIndex(pageRect, targets = [], excludedIds = [], ma
       anchor: 0, priority: -1, position: guide.position }));
   }
   const boundedTargets = Array.isArray(targets) && targets.length <= MAX_SNAP_TARGETS;
+  // berg:work: the object rectangles themselves, for equal-spacing snaps.
+  const objects = [];
   // Huge pages retain page-edge/center snapping instead of building an
   // unbounded object index in a pointer gesture. Never choose an arbitrary
   // first subset of objects, which would make snapping depend on layer order.
@@ -48,12 +50,66 @@ export function createMoveSnapIndex(pageRect, targets = [], excludedIds = [], ma
     const id = String(item.id);
     if (!id || excluded.has(id)) continue;
     add(id, item.rect, 'object');
+    if (validRect(item.rect) && item.rect.w > 0 && item.rect.h > 0) {
+      objects.push(Object.freeze({ id, x: item.rect.x, y: item.rect.y, w: item.rect.w, h: item.rect.h }));
+    }
   }
   return Object.freeze({
     x: Object.freeze(axes.x.sort(compareAnchor)),
     y: Object.freeze(axes.y.sort(compareAnchor)),
+    objects: Object.freeze(objects),
     objectLimitExceeded: !boundedTargets,
   });
+}
+
+// berg:work: equal spacing (Figma's pink gap markers). Along one axis, among the objects that share the moving
+// rectangle's row (or column), offer the position that makes the gap to both neighbours equal, or that repeats the
+// gap between a neighbour and the next object beyond it. Returns the correction and the gaps to mark.
+function closestSpacing(objects, moving, axis, threshold) {
+  if (!Array.isArray(objects) || objects.length < 2) return null;
+  const across = axis === 'x' ? 'y' : 'x';
+  const size = axis === 'x' ? 'w' : 'h';
+  const acrossSize = axis === 'x' ? 'h' : 'w';
+  const overlaps = rect => Math.min(rect[across] + rect[acrossSize], moving[across] + moving[acrossSize]) -
+    Math.max(rect[across], moving[across]) > 0;
+  const row = objects.filter(overlaps);
+  const start = moving[axis];
+  const end = start + moving[size];
+  const before = row.filter(rect => rect[axis] + rect[size] <= start + threshold).sort((a, b) => (b[axis] + b[size]) - (a[axis] + a[size]));
+  const after = row.filter(rect => rect[axis] >= end - threshold).sort((a, b) => a[axis] - b[axis]);
+  const candidates = [];
+  const lead = before[0];
+  const trail = after[0];
+  if (lead && trail) {
+    const position = (lead[axis] + lead[size] + trail[axis] - moving[size]) / 2;
+    const gap = position - (lead[axis] + lead[size]);
+    if (gap > 0) candidates.push({ position, gaps: [[lead[axis] + lead[size], position], [position + moving[size], trail[axis]]], anchors: [lead, trail] });
+  }
+  if (lead && before[1]) {
+    const gap = lead[axis] - (before[1][axis] + before[1][size]);
+    if (gap > 0) candidates.push({ position: lead[axis] + lead[size] + gap,
+      gaps: [[before[1][axis] + before[1][size], lead[axis]], [lead[axis] + lead[size], lead[axis] + lead[size] + gap]], anchors: [before[1], lead] });
+  }
+  if (trail && after[1]) {
+    const gap = after[1][axis] - (trail[axis] + trail[size]);
+    if (gap > 0) candidates.push({ position: trail[axis] - gap - moving[size],
+      gaps: [[trail[axis] - gap, trail[axis]], [trail[axis] + trail[size], after[1][axis]]], anchors: [trail, after[1]] });
+  }
+  let winner = null;
+  for (const candidate of candidates) {
+    const correction = candidate.position - start;
+    const distance = Math.abs(correction);
+    if (distance > threshold || (winner && distance >= winner.distance)) continue;
+    winner = { ...candidate, correction, distance };
+  }
+  if (!winner) return null;
+  // Markers sit across the middle of the shared band of the moving rectangle and its neighbours.
+  const band = [moving, ...winner.anchors];
+  const lo = Math.max(...band.map(rect => rect[across]));
+  const hi = Math.min(...band.map(rect => rect[across] + rect[acrossSize]));
+  const across0 = lo < hi ? (lo + hi) / 2 : moving[across] + moving[acrossSize] / 2;
+  return { correction: winner.correction, distance: winner.distance,
+    gaps: winner.gaps.map(([a, b]) => ({ start: a, end: b, length: b - a, position: across0 })) };
 }
 
 function lowerBound(entries, value) {
@@ -92,7 +148,7 @@ function closestAlignment(entries, origin, length, threshold) {
 /** Pure move constraint: no document writes, scaling, layout, or worker calls. */
 export function resolveMoveSnap(index, rect, rawDx, rawDy, options = {}) {
   const constrained = constrainMoveDelta(rawDx, rawDy, options.shiftKey === true);
-  const result = { ...constrained, guides: [] };
+  const result = { ...constrained, guides: [], spacing: [] };
   const zoom = Number(options.zoom ?? 1);
   const thresholdPx = Number(options.thresholdPx ?? 6);
   if (options.enabled === false || options.altKey === true || !validRect(rect) ||
@@ -106,8 +162,20 @@ export function resolveMoveSnap(index, rect, rawDx, rawDy, options = {}) {
     const deltaKey = axis === 'x' ? 'dx' : 'dy';
     const sizeKey = axis === 'x' ? 'w' : 'h';
     const match = closestAlignment(index[axis], rect[axis] + constrained[deltaKey], rect[sizeKey], thresholdPx / zoom);
+    // berg:work: an equal-spacing position wins when it is closer than the nearest alignment.
+    const moving = { ...rect, x: rect.x + constrained.dx, y: rect.y + constrained.dy };
+    const spacing = closestSpacing(index.objects, moving, axis, thresholdPx / zoom);
+    if (spacing && (!match || spacing.distance <= match.distance)) {
+      result[deltaKey] += spacing.correction;
+      result.spacing.push({ axis, gaps: spacing.gaps });
+      continue;
+    }
     if (!match) continue;
     result[deltaKey] += match.correction;
+    // The aligned position may also space evenly; then both are shown.
+    const aligned = { ...moving, [axis]: moving[axis] + match.correction };
+    const evenToo = closestSpacing(index.objects, aligned, axis, 0.5);
+    if (evenToo) result.spacing.push({ axis, gaps: evenToo.gaps });
     result.guides.push({ axis, position: match.target.position, targetId: match.target.id,
       targetRect: match.target.rect, source: match.target.source,
       targetAnchor: match.target.anchor, movingAnchor: match.anchor });
