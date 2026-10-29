@@ -39,6 +39,17 @@ export async function qpdfEncrypted(file) {
   return result.code === 0;
 }
 
+/** Permission lines of `qpdf --show-encryption` ("print high resolution" → true/false), or null when unreadable. */
+export async function qpdfPermissions(file, password = '') {
+  const result = await run('qpdf', [...passwordArgs(password), '--show-encryption', file], 15_000);
+  if (result.code !== 0) return null;
+  const permissions = {};
+  for (const match of result.stdout.matchAll(/^((?:extract|print|modify)[^:]*): (allowed|not allowed)$/gmu)) {
+    permissions[match[1]] = match[2] === 'allowed';
+  }
+  return permissions;
+}
+
 /** Words poppler extracts inside the given PDF-space rectangles of one page (only for unrotated pages). */
 export async function popplerWordsInRects(file, pageNumber, rects) {
   const info = await run('pdfinfo', ['-box', '-f', String(pageNumber), '-l', String(pageNumber), file], 15_000);

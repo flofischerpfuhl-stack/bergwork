@@ -744,7 +744,7 @@ const DOC_OPS = {
   },
   async 'doc.encrypt'(ctx) {
     const owner = `own-${ctx.tag}`; const user = `usr-${ctx.tag}`;
-    const bytes = await Shell.restrictPdfBytes(ctx.bytes, { print: true, copy: false, modify: false, annotate: true }, owner, user);
+    const bytes = await Shell.restrictPdfBytes(ctx.bytes, { noPrint: false, noCopy: true, noEdit: true, noAnnotate: false }, owner, user);
     const checks = [];
     // Wrong password must fail, the user password must open it with PDFium.
     let wrongOpened = false;

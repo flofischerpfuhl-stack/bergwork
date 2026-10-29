@@ -232,8 +232,9 @@ in a headless page. That is the basis.
 - [ ] **CLI open items:** a packaged binary next to the app (today `npm run cli` / `node`), merge of PDFs with forms
   or tags (the engine refuses), several OCR languages per run, about 1–2 s Chromium start per call (the MCP server
   keeps its page).
-- [ ] **Harness check:** `doc.encrypt` in the harness passes `{print, copy, …}`, the shell expects
-  `noPrint`/`noCopy`/…, so the corpus probably never tests restrictions.
+- [x] **Harness check:** `doc.encrypt` passed `{print, copy, …}` while the shell reads `noPrint`/`noCopy`/…, so no
+  restriction was ever set. Fixed, and the corpus now checks the saved permissions with `qpdf --show-encryption`
+  (`qpdf.permissions`).
 - [ ] **URL scheme / deep link.** Open file X at page Y, from scripts and other apps. 1–2 PD.
 
 ## Printing to berg:work PDF

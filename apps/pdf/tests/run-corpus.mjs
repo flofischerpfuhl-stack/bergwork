@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { buildHarness, outDir as harnessDir } from './harness/build-harness.mjs';
 import { startHost } from '../headless/host.mjs';
 import { TIERS, selectFiles, planFor, donorPool, workWeights, fileBudgetMs, stepLimits } from './lib/plan.mjs';
-import { detectTools, qpdfCheck, qpdfPages, qpdfEncrypted, popplerWordsInRects } from './lib/oracles.mjs';
+import { detectTools, qpdfCheck, qpdfPages, qpdfEncrypted, qpdfPermissions, popplerWordsInRects } from './lib/oracles.mjs';
 import { writeReports } from './lib/report.mjs';
 
 const testsDir = path.dirname(fileURLToPath(import.meta.url));
@@ -99,7 +99,14 @@ async function nodeOracles(file, job, result) {
       add(`qpdf.check.${output.kind}`, check.status !== 'errors' || sourceBroken, `${check.status}${check.message ? `: ${check.message}` : ''}`);
       const pages = await qpdfPages(target, output.password);
       if (output.expectPages != null) add(`qpdf.pages.${output.kind}`, pages === output.expectPages, `${pages}/${output.expectPages}`);
-      if (output.kind === 'doc.encrypt') add('qpdf.encrypted', await qpdfEncrypted(target), output.name);
+      if (output.kind === 'doc.encrypt') {
+        add('qpdf.encrypted', await qpdfEncrypted(target), output.name);
+        // The harness allows printing and notes and forbids copying and editing; the saved permissions must match.
+        const permissions = await qpdfPermissions(target, output.password);
+        const expected = { 'print high resolution': true, 'modify annotations': true, 'extract for any purpose': false, 'modify other': false };
+        const wrong = permissions ? Object.entries(expected).filter(([name, allowed]) => permissions[name] !== allowed).map(([name]) => name) : ['unreadable'];
+        add('qpdf.permissions', !wrong.length, wrong.length ? `differs: ${wrong.join(', ')}` : 'print, notes allowed; copy, edit forbidden');
+      }
       // Observation only: whether saving an encrypted input keeps its encryption.
       if (output.kind === 'edited' && file.facts?.encrypted) checks.push({ name: 'info.savedStillEncrypted', ok: true, info: true, detail: String(await qpdfEncrypted(target)), oracle: 'node' });
     }
