@@ -107,12 +107,17 @@ import { useThumbTouchDrag } from './pdf-editor/interaction/bergwork-thumb-touch
 import { applyPageBoxes, inkMarginsFromRaster, marginsFromFractions, PAGE_TOOL_UNITS, pagesInsertedAt,
   splitAtBookmarks, splitBySize, splitEveryN, splitPartFileNames } from './pdf-editor/model/bergwork-page-tools.js';
 import { PageBoxPreview, UnitNumberInput } from './pdf-editor/interaction/bergwork-page-box-preview.jsx';
+// berg:work: an image file dropped onto an image replaces it.
+import { annotationFrameQuad, fillImageForFrame, imageFrameAspect, pointInAnnotationFrame, pointInQuad,
+  topmostImageHit } from './pdf-editor/interaction/bergwork-image-drop-replace.js';
 // berg:work: two fingers on the selected object scale and turn it.
 import { beginTwoFingerTransform, finishTwoFingerTransform, TWO_FINGER_READOUT_EVENT, updateTwoFingerTransform,
   useTwoFingerTarget } from './pdf-editor/interaction/bergwork-two-finger-transform.js';
 // berg:work: Alt shows the selection's distances (Figma).
 import { installAltDistances } from './pdf-editor/interaction/bergwork-alt-distances.js';
 import { GeometryNumber, GeometryProperties } from './pdf-editor/interaction/geometry-properties.jsx';
+// berg:work: shared fields of a multi-selection (Mixed).
+import { SharedSelectionFields } from './pdf-editor/interaction/bergwork-shared-fields.jsx';
 import { InspectorSelect, PropSection, SimpleInspectorSelect } from './pdf-editor/interaction/inspector-controls.jsx';
 import { RichTextInspectorEditor } from './pdf-editor/interaction/rich-text-inspector-editor.jsx';
 import { richTextDocumentForVerifiedFrame, richTextInspectorPropertyItem, verifiedTextFrameLayoutProperties } from './pdf-editor/model/rich-text-frame-projection.js';
@@ -22443,6 +22448,17 @@ function App({ shell = null }) {
           const previousResource = await imageDataUrlToRgbaResource(previousDataUrl);
           await runtime.kernel.registerResource(previousResource);
           inversePayload = { resourceHash: previousResource.hash };
+        } else if (!wholeDocumentInverse) {
+          // berg:work: the PDF's own image has no RGBA copy on this side (drop-to-replace). The exact pre-edit
+          // document is the inverse, so Undo brings back the original image stream unchanged.
+          const snapshotResource = await checkpointToPdfSnapshotResource(runtime.engine, { retain: true });
+          await runtime.kernel.registerResource(snapshotResource);
+          wholeDocumentInverse = createPdfCommand({
+            commandId: `${prefix}:inverse-image-snapshot`,
+            type: CommandType.DOCUMENT_RESTORE_SNAPSHOT,
+            targetId: stableId,
+            payload: { resourceHash: snapshotResource.hash },
+          });
         }
         addCommand(
           CommandType.IMAGE_REPLACE,
@@ -29048,6 +29064,99 @@ function App({ shell = null }) {
   };
   // berg:work: the Pages panel's thumbnails take dropped files themselves (inserted at the drop position).
   const thumbGridDrop = event => Boolean(event.target?.closest?.('.oo-pdf-thumb-grid'));
+  // berg:work: one image file dropped onto an image replaces it (Canva frames): the picture is cut to the frame's
+  // proportions and takes its place; position, size and turn stay, one undo step. The target comes from the PDFium
+  // inspection (native images, also unselected and in Pan) and the inserted image annotations, not from the DOM.
+  const imageReplaceCandidatesRef = useRef({ inspection: null, page: null, imageEdits: null, annotations: null, items: [] });
+  const imageReplaceTargetAt = (clientX, clientY) => {
+    const point = sheetPointAt(clientX, clientY);
+    if (!point || !activeDoc) return null;
+    const { page, at } = point;
+    const presentation = activeDoc.layerPresentation;
+    const usable = key => {
+      const state = layerPresentationFor(presentation, key);
+      return !state.hidden && !state.locked;
+    };
+    const annotationHits = activeDoc.annotations
+      .filter(ann => ann.pageId === page.id && ann.type === 'image' && ann.purpose !== 'signature' && ann.dataUrl &&
+        usable(annotationLayerKey(ann.id)) && pointInAnnotationFrame(at, ann))
+      .map(ann => ({
+        kind: 'annotation', id: ann.id, page, point, quad: annotationFrameQuad(ann),
+        aspect: imageFrameAspect({ w: ann.w, h: ann.h }),
+      }));
+    const inspection = livePdfRuntimeRef.current?.pageInspections?.get(page.id);
+    // dragover fires many times a second: bind the page's images once per inspection.
+    const cache = imageReplaceCandidatesRef.current;
+    if (cache.inspection !== inspection || cache.page !== page || cache.imageEdits !== activeDoc.imageEdits ||
+        cache.annotations !== activeDoc.annotations) {
+      const ownStableIds = new Set(activeDoc.annotations.map(ann => ann.liveStableId).filter(Boolean));
+      const objects = inspection
+        ? (sessionInspectionToScenePage(page, inspection).objects || []).filter(object => !ownStableIds.has(object.stableId))
+        : [];
+      imageReplaceCandidatesRef.current = {
+        inspection, page, imageEdits: activeDoc.imageEdits, annotations: activeDoc.annotations,
+        items: bindPdfImageItemsToNativeObjects(page, [], objects, activeDoc.imageEdits),
+      };
+    }
+    const nativeHits = imageReplaceCandidatesRef.current.items
+      .filter(item => !item.nestedEditBlockedReason)
+      .map(item => ({ item, sourceId: imageItemId(page, item) }))
+      .filter(({ item, sourceId }) => !activeDoc.imageEdits?.[sourceId]?.deleted && usable(imageLayerKey(sourceId)) && (
+        Array.isArray(item.quad) && item.quad.length === 4
+          ? pointInQuad(at, item.quad)
+          : at.x >= item.x && at.x <= item.x + item.w && at.y >= item.y && at.y <= item.y + item.h))
+      .map(({ item, sourceId }) => ({
+        kind: 'image', id: sourceId, item, page, point, objectIndex: item.objectIndex,
+        quad: Array.isArray(item.quad) && item.quad.length === 4 ? item.quad : [
+          { x: item.x, y: item.y }, { x: item.x + item.w, y: item.y },
+          { x: item.x + item.w, y: item.y + item.h }, { x: item.x, y: item.y + item.h },
+        ],
+        aspect: imageFrameAspect({ matrix: item.pageMatrix || item.matrix, w: item.w, h: item.h }),
+      }));
+    return topmostImageHit(annotationHits, nativeHits);
+  };
+  const imageReplaceOutlineRef = useRef(null);
+  const markImageReplaceTarget = target => {
+    let outline = imageReplaceOutlineRef.current;
+    if (!target) {
+      outline?.remove();
+      return;
+    }
+    const surface = target.point.sheet.querySelector('.oo-pdf-page-surface') || target.point.sheet;
+    if (!outline) {
+      outline = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      outline.setAttribute('class', 'oo-pdf-image-replace-target');
+      outline.setAttribute('aria-hidden', 'true');
+      outline.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'polygon'));
+      imageReplaceOutlineRef.current = outline;
+    }
+    const scale = zoomRef.current || 1;
+    outline.setAttribute('viewBox', `0 0 ${target.point.rect.width / scale} ${target.point.rect.height / scale}`);
+    outline.firstChild.setAttribute('points', target.quad.map(corner => `${corner.x},${corner.y}`).join(' '));
+    if (outline.parentNode !== surface) surface.appendChild(outline);
+  };
+  const replaceImageFromFile = (target, file) => {
+    void (async () => {
+      try {
+        const image = await normalizeImageFile(file);
+        const fitted = await fillImageForFrame(await loadImageElement(image.dataUrl), target.aspect);
+        const patch = {
+          dataUrl: fitted.dataUrl, assetWidth: fitted.width, assetHeight: fitted.height,
+        };
+        if (target.kind === 'annotation') {
+          updateAnnotation(target.id, { ...patch, mime: 'image/png', width: fitted.width, height: fitted.height,
+            name: file.name || 'image' }, { commitGesture: true, gestureReason: 'image-replace' });
+        } else {
+          const previous = activeDoc.imageEdits?.[target.id] || initialPdfImageEdit(target.page, target.item, target.id);
+          updateImageEdit(target.id, { ...previous, ...patch }, {
+            commitGesture: true, gestureReason: 'image-replace', previousForCommit: previous,
+          });
+        }
+      } catch (error) {
+        showToast(userFacingError(error, 'The image could not be replaced.'), 'error');
+      }
+    })();
+  };
   const handleDocumentDragOver = event => {
     if (thumbGridDrop(event)) {
       markImageDropSheet(null);
@@ -29058,12 +29167,17 @@ function App({ shell = null }) {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
     const sheet = imageDropSheet(event);
-    markImageDropSheet(sheet);
+    // berg:work: over an image (one file) the image is the target, not the page.
+    const replaceTarget = sheet && event.dataTransfer.items.length === 1
+      ? imageReplaceTargetAt(event.clientX, event.clientY) : null;
+    markImageReplaceTarget(replaceTarget);
+    markImageDropSheet(replaceTarget ? null : sheet);
     setDocumentDropActive(!sheet);
   };
   const handleDocumentDragLeave = event => {
     if (event.currentTarget.contains(event.relatedTarget)) return;
     markImageDropSheet(null);
+    markImageReplaceTarget(null);
     setDocumentDropActive(false);
   };
   const handleDocumentDrop = event => {
@@ -29073,10 +29187,16 @@ function App({ shell = null }) {
     event.stopPropagation();
     const sheet = imageDropSheet(event);
     markImageDropSheet(null);
+    markImageReplaceTarget(null);
     setDocumentDropActive(false);
     const files = fileList(event.dataTransfer?.files);
     const page = sheet && activeDoc.pages.find(item => item.id === sheet.dataset.pageId);
     if (page && files.length && files.every(acceptsImage)) {
+      const replaceTarget = files.length === 1 ? imageReplaceTargetAt(event.clientX, event.clientY) : null;
+      if (replaceTarget) {
+        replaceImageFromFile(replaceTarget, files[0]);
+        return;
+      }
       placeImageFiles(page, sheetPointAt(event.clientX, event.clientY)?.at || { x: 0, y: 0 }, files);
       return;
     }
@@ -33282,10 +33402,62 @@ function PdfPageContent({
   const createdNativeStableIds = useMemo(() => new Set(
     [...createdNativeBindings.values()].map(object => object.stableId),
   ), [createdNativeBindings]);
+  // berg:work: font preview while the font list is hovered (Figma): the selected PDF text is left out of the page
+  // raster (as a hidden layer would be) and drawn in the hovered font above it. Nothing is committed.
+  const [fontHoverFamily, setFontHoverFamily] = useState('');
+  const fontHoverHoldRef = useRef(null);
+  const fontHoverRevisionRef = useRef(pdfiumRevision);
+  fontHoverRevisionRef.current = pdfiumRevision;
+  useEffect(() => {
+    if (fontHoverHoldRef.current == null || fontHoverHoldRef.current === pdfiumRevision) return;
+    fontHoverHoldRef.current = null;
+    setFontHoverFamily('');
+  }, [pdfiumRevision]);
+  useEffect(() => {
+    // Ending the preview waits a moment, so passing over an entry without a preview does not re-render the page.
+    // A chosen font (`hold`) stays until the page raster has the committed change, at most a few seconds.
+    let clearTimer = 0;
+    const hover = event => {
+      window.clearTimeout(clearTimer);
+      const family = String(event.detail?.family || '');
+      fontHoverHoldRef.current = event.detail?.hold === true ? fontHoverRevisionRef.current : null;
+      if (family) setFontHoverFamily(family);
+      if (!family || event.detail?.hold === true) {
+        clearTimer = window.setTimeout(() => setFontHoverFamily(''),
+          event.detail?.hold === true ? 4000 : event.detail?.now ? 0 : 160);
+      }
+    };
+    window.addEventListener('bergwork:font-hover', hover);
+    return () => {
+      window.clearTimeout(clearTimer);
+      window.removeEventListener('bergwork:font-hover', hover);
+    };
+  }, []);
+  const fontPreviewSourceId = fontHoverFamily && selected?.type === 'text' && selected.pageId === page.id &&
+    !editingText ? selected.sourceId : '';
+  // berg:work: the hovered font drawn over the selected text (see fontHoverFamily). Upright text only.
+  const fontPreviewBox = useMemo(() => {
+    if (!fontPreviewSourceId) return null;
+    const item = sourceTextItems.find(entry => textItemId(page, entry) === fontPreviewSourceId);
+    const current = { ...(item || {}), ...(doc.textEdits?.[fontPreviewSourceId] || {}) };
+    const text = String(current.currentText ?? current.text ?? '');
+    const angle = Number(current.orientationDegrees || 0) % 360;
+    if (!text.trim() || !(current.w > 0) || Math.min(Math.abs(angle), 360 - Math.abs(angle)) > 0.5) return null;
+    return {
+      text, x: current.x || 0, y: current.y || 0, w: current.w, h: current.h || 0,
+      fontSize: Number(current.fontSize) || 12, lineHeight: Number(current.lineHeight) || 1.2,
+      color: String(current.color || '#111111').slice(0, 7), align: current.textAlign || 'left',
+      weight: current.fontWeight || '400', style: current.fontStyle || 'normal',
+      wrap: current.textBlock === true || current.textFrame === true || /\n/u.test(text),
+    };
+  }, [doc.textEdits, fontPreviewSourceId, page, sourceTextItems]);
+  const hiddenPresentation = useMemo(() => fontPreviewBox
+    ? patchLayerPresentation(doc.layerPresentation, textLayerKey(fontPreviewSourceId), { hidden: true })
+    : doc.layerPresentation, [doc.layerPresentation, fontPreviewBox, fontPreviewSourceId]);
   const hiddenNativeStableIds = useMemo(() => {
     // Nothing hidden -> nothing to compute. Building the full layer list of a
     // plan page (thousands of rows) after every commit cost ~300 ms otherwise.
-    if (!layerPresentationHasHidden(doc.layerPresentation)) return EMPTY_HIDDEN_TARGETS;
+    if (!layerPresentationHasHidden(hiddenPresentation)) return EMPTY_HIDDEN_TARGETS;
     const layers = layersWithCreatedPageContentBindings([
       ...makeOriginalPdfObjectLayers(doc, page.id),
       ...makePageLayers(doc, page.id),
@@ -33295,15 +33467,15 @@ function PdfPageContent({
         : layer
     ));
     const exactLayerTargets = layerVisibilityRenderTargets(
-      doc.layerPresentation, layers, doc.annotations, page.id,
+      hiddenPresentation, layers, doc.annotations, page.id,
     ).hiddenNativeStableIds;
     const nativeObjectTargets = sceneNativeObjects.flatMap(object => {
       const sourceId = nativeObjectItemId(page, object);
-      return layerPresentationFor(doc.layerPresentation, objectLayerKey(sourceId)).hidden && object.stableId
+      return layerPresentationFor(hiddenPresentation, objectLayerKey(sourceId)).hidden && object.stableId
         ? [object.stableId] : [];
     });
     return [...new Set([...exactLayerTargets, ...nativeObjectTargets])];
-  }, [createdNativeBindings, doc, page, sceneNativeObjects]);
+  }, [createdNativeBindings, doc, hiddenPresentation, page, sceneNativeObjects]);
   const hiddenAnnotationObjectNumbers = useMemo(() => layerPresentationHasHidden(doc.layerPresentation)
     ? layerVisibilityRenderTargets(doc.layerPresentation, [], doc.annotations, page.id).hiddenAnnotationObjectNumbers
     : EMPTY_HIDDEN_TARGETS, [doc.annotations, doc.layerPresentation, page.id]);
@@ -35441,16 +35613,19 @@ function PdfPageContent({
   }, [page]);
 
   const moveSelectionItems = useCallback((items, dx, dy, options = {}) => {
-    const groupTransform = options.groupTransform || null;
-    if (!doc || !items?.length || (!dx && !dy && !options.offsets?.size && !groupTransform)) return;
-    const groupBounds = groupTransform ? selectionBounds(items) : null;
-    if (groupTransform && (!groupBounds || items.some(entry =>
+    // berg:work: `perItemTransforms` (selection key → { kind, scaleX, scaleY | degrees }) scales or turns each object
+    // about its own frame, all in one transaction: the multi-selection's shared Width, Height and Angle fields.
+    const perItemTransforms = options.perItemTransforms?.size ? options.perItemTransforms : null;
+    const sharedTransform = perItemTransforms ? null : options.groupTransform || null;
+    if (!doc || !items?.length || (!dx && !dy && !options.offsets?.size && !sharedTransform && !perItemTransforms)) return;
+    const sharedBounds = sharedTransform ? selectionBounds(items) : null;
+    if ((sharedTransform || perItemTransforms) && ((sharedTransform && !sharedBounds) || items.some(entry =>
       entry.item?.nested || (Array.isArray(entry.item?.formPath) && entry.item.formPath.length) ||
       (entry.type === 'nativeObject' && (!entry.item?.typeName || entry.item.typeName === 'unknown')) ||
       !['text', 'imageRegion', 'nativeObject', 'annotation'].includes(entry.type)))) {
       return false;
     }
-    const transformRect = rect => {
+    const transformRectWith = (groupTransform, groupBounds, rect) => {
       if (!groupTransform || !groupBounds) return rect;
       if (groupTransform.kind === 'resize') {
         return {
@@ -35477,9 +35652,10 @@ function PdfPageContent({
       const target = targetSourceRectForPatch(page, value, value);
       return { ...value, targetSourceX: target.x, targetSourceY: target.y, targetSourceW: target.w, targetSourceH: target.h };
     };
-    const groupAnchorPdf = groupBounds ? pdfPointForDisplayPoint(page, groupTransform?.kind === 'rotate'
+    const anchorPdfFor = (groupTransform, groupBounds) => groupBounds ? pdfPointForDisplayPoint(page, groupTransform?.kind === 'rotate'
       ? { x: groupBounds.x + groupBounds.w / 2, y: groupBounds.y + groupBounds.h / 2 }
       : { x: groupBounds.x, y: groupBounds.y }) : null;
+    const sharedAnchorPdf = anchorPdfFor(sharedTransform, sharedBounds);
     const previousMoveState = (next, existing, dx, dy) => {
       const previous = { ...next, ...(existing || {}), x: next.x - dx, y: next.y - dy };
       const target = targetSourceRectForPatch(page, next, {
@@ -35495,6 +35671,11 @@ function PdfPageContent({
       };
     };
     const operations = items.map(entry => {
+      const groupTransform = perItemTransforms ? perItemTransforms.get(selectionItemKey(entry)) || null : sharedTransform;
+      if (perItemTransforms && !groupTransform) return null;
+      const groupBounds = perItemTransforms ? entry.rect : sharedBounds;
+      const transformRect = rect => transformRectWith(groupTransform, groupBounds, rect);
+      const groupAnchorPdf = perItemTransforms ? anchorPdfFor(groupTransform, groupBounds) : sharedAnchorPdf;
       const delta = options.offsets?.get(selectionItemKey(entry));
       const itemDx = options.offsets ? delta?.dx || 0 : dx;
       const itemDy = options.offsets ? delta?.dy || 0 : dy;
@@ -35564,13 +35745,39 @@ function PdfPageContent({
       return null;
     }).filter(Boolean);
     if (!operations.length) return;
+    const labelKind = operations[0].transformKind;
 
     return onMoveSelectionItems?.(operations, {
       commitGesture: options.commitGesture === true,
       mergeKey: `selection:${page.id}`,
-      label: groupTransform?.kind === 'resize' ? 'Resize' : groupTransform?.kind === 'rotate' ? 'Rotate' : 'Move',
+      label: labelKind === 'resize' ? 'Resize' : labelKind === 'rotate' ? 'Rotate' : 'Move',
     });
   }, [doc, imageEditForSelectionMove, nativeObjectEditForSelectionMove, onMoveSelectionItems, page.id, textEditForSelectionMove]);
+  // berg:work: the shared fields of a multi-selection (Properties) change every selected object of this page in one
+  // transaction: per-object offsets for X/Y, per-object scales or turns for Width/Height/Angle. Keys are layer keys.
+  const sharedFieldsRef = useRef(null);
+  sharedFieldsRef.current = { doc, items: selectedPageItems, move: moveSelectionItems };
+  useEffect(() => {
+    const apply = event => {
+      const { documentId, pageId, offsets, positions, transforms } = event.detail || {};
+      const { doc: currentDoc, items, move } = sharedFieldsRef.current || {};
+      if (!currentDoc || documentId !== currentDoc.id || pageId !== page.id || !items?.length) return;
+      const byLayerKey = new Map(items.map(entry => [selectionLayerKey(entry), entry]));
+      const keyed = (list, map = (entry, value) => value) => new Map((list || [])
+        .map(([layerKey, value]) => [byLayerKey.get(layerKey), value])
+        .filter(([entry]) => entry).map(([entry, value]) => [selectionItemKey(entry), map(entry, value)]));
+      if (offsets?.length) {
+        move(items, 0, 0, { commitGesture: true, offsets: keyed(offsets) });
+      } else if (positions?.length) {
+        move(items, 0, 0, { commitGesture: true, offsets: keyed(positions, (entry, target) => ({
+          dx: Number.isFinite(target.x) ? target.x - Number(entry.rect?.x || 0) : 0,
+          dy: Number.isFinite(target.y) ? target.y - Number(entry.rect?.y || 0) : 0,
+        })) });
+      } else if (transforms?.length) move(items, 0, 0, { commitGesture: true, perItemTransforms: keyed(transforms) });
+    };
+    window.addEventListener('bergwork:selection-shared-fields', apply);
+    return () => window.removeEventListener('bergwork:selection-shared-fields', apply);
+  }, [page.id]);
 
   const keyDown = (event) => {
     if (event.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
@@ -36427,6 +36634,18 @@ function PdfPageContent({
               zoom={zoom}
               zIndex={9998}
             />
+          )}
+          {fontPreviewBox && (
+            <div className="oo-pdf-font-hover-preview" aria-hidden="true" style={{
+              left: fontPreviewBox.x * zoom, top: fontPreviewBox.y * zoom,
+              width: fontPreviewBox.wrap ? fontPreviewBox.w * zoom : undefined,
+              minWidth: fontPreviewBox.wrap ? undefined : fontPreviewBox.w * zoom,
+              minHeight: fontPreviewBox.h * zoom,
+              fontFamily: `${fontHoverFamily}, sans-serif`, fontSize: fontPreviewBox.fontSize * zoom,
+              lineHeight: fontPreviewBox.lineHeight, color: fontPreviewBox.color, textAlign: fontPreviewBox.align,
+              fontWeight: fontPreviewBox.weight, fontStyle: fontPreviewBox.style,
+              whiteSpace: fontPreviewBox.wrap ? 'pre-wrap' : 'pre',
+            }}>{fontPreviewBox.text}</div>
           )}
           {/* berg:work: measuring (Markup › Measure); in Edit PDF its measurements are selectable here. */}
           <MeasureLayer page={page} zoom={zoom} tool={tool} snapObjects={sceneNativeObjects}
@@ -45723,6 +45942,8 @@ function Inspector({
   const suppressLayerClickRef = useRef(false);
   const propertyGestureRef = useRef(new Map());
   const cancelledPropertyGesturesRef = useRef(new Set());
+  // berg:work: the shared fields' last complete values, kept while a commit briefly re-keys a selected layer.
+  const sharedEntriesRef = useRef({ key: '', entries: [] });
   const selectedKey = selectionLayerKey(selected);
   const selectedEntries = selectionEntries(selected);
   const selectedKeys = new Set(selectedEntries.map(entry => selectionLayerKey(entry)).filter(Boolean));
@@ -46137,6 +46358,74 @@ function Inspector({
     }
     return Number.isFinite(layer.item.angle) ? layer.item.angle * 180 / Math.PI : undefined;
   };
+  // berg:work: the multi-selection's shared fields. Every selected object on the page changes in one transaction
+  // (the page applies it, see moveSelectionItems' perItemTransforms); a change that reaches one object only takes
+  // that object's own path.
+  const sharedFieldLayers = multiSelection
+    ? listedLayers.map(({ layer }) => layer).filter(layer => selectedKeys.has(layer.key) && !layer.deleted &&
+      layer.item?.w > 0 && layer.item?.h > 0)
+    : [];
+  // The values each object's own Position & size shows (text: its verified native frame and local size).
+  const sharedGeometryOf = layer => {
+    let item = layer.item;
+    if (layer.type === 'text' && item?.sourceId) {
+      const capability = pdfiumRuntime?.semanticTextCapabilityDescriptors?.get(item.sourceId);
+      const inspection = capability?.pageId === layer.pageId ? pdfiumRuntime?.pageInspections?.get(layer.pageId) : null;
+      if (capability && Number(capability.pageEpoch) === Number(inspection?.pageEpoch) &&
+          Number(capability.revision) === Number(inspection?.revision)) {
+        item = { ...item, ...capability.descriptor, sourceId: item.sourceId };
+      }
+      const confirmed = doc.textEdits?.[item.sourceId];
+      if (confirmed && confirmed.pageId === layer.pageId) item = richTextInspectorPropertyItem(item, confirmed);
+    }
+    return layer.type === 'text' || (layer.type === 'annotation' && item.type === 'text' && item.imported !== true)
+      ? textGeometryDimensions(item) : item;
+  };
+  const sharedEntries = (() => {
+    if (!multiSelection) return [];
+    const entries = sharedFieldLayers.map(layer => {
+      const geometry = sharedGeometryOf(layer);
+      return { key: layer.key, x: geometry.x, y: geometry.y, w: geometry.w, h: geometry.h,
+        angle: layerOrientationDegrees(layer) };
+    });
+    if (entries.length === selectedKeys.size) sharedEntriesRef.current = { key: selectedKey, entries };
+    return entries.length < selectedKeys.size && sharedEntriesRef.current.key === selectedKey
+      ? sharedEntriesRef.current.entries : entries;
+  })();
+  const commitSharedField = (field, resolve) => {
+    const normalizedAngle = degrees => ((degrees % 360) + 360) % 360;
+    const changes = sharedFieldLayers.map(layer => {
+      const current = field === 'angle' ? normalizedAngle(layerOrientationDegrees(layer)) : Number(sharedGeometryOf(layer)[field]);
+      return { layer, current, next: resolve(current) };
+    }).filter(change => Number.isFinite(change.current) && Number.isFinite(change.next) &&
+      Math.abs(change.next - change.current) > 0.0005);
+    if (!changes.length) return;
+    const angleDelta = change => ((normalizedAngle(change.next) - change.current + 540) % 360) - 180;
+    // The one-transaction turn does not yet refresh a PDF text's own frame afterwards (its hit area stays
+    // upright), so a selection with text turns object by object.
+    if (changes.length === 1 || (field === 'angle' && changes.some(({ layer }) => layer.type === 'text'))) {
+      for (const change of changes) {
+        if (field === 'angle') rotateLayer(change.layer, angleDelta(change));
+        else commitGeometry(change.layer, field, change.next, false);
+      }
+      return;
+    }
+    const detail = { documentId: doc.id, pageId: selected?.pageId || pageId };
+    if ((field === 'x' || field === 'y') && resolve.relative) {
+      detail.offsets = changes.map(({ layer, current, next }) => [layer.key,
+        { dx: field === 'x' ? next - current : 0, dy: field === 'y' ? next - current : 0 }]);
+    } else if (field === 'x' || field === 'y') {
+      // A value for all: the page measures it from each object's own frame, as a typed X/Y does.
+      detail.positions = changes.map(({ layer, next }) => [layer.key, { [field]: next }]);
+    } else if (field === 'w' || field === 'h') {
+      detail.transforms = changes.map(({ layer, current, next }) => [layer.key, {
+        kind: 'resize', scaleX: field === 'w' ? next / current : 1, scaleY: field === 'h' ? next / current : 1,
+      }]);
+    } else {
+      detail.transforms = changes.map(change => [change.layer.key, { kind: 'rotate', degrees: angleDelta(change) }]);
+    }
+    window.dispatchEvent(new CustomEvent('bergwork:selection-shared-fields', { detail }));
+  };
   const deleteLayer = (layer) => onDelete(layerPayload(layer));
   const navigateLayer = layer => {
     if (!layer) return;
@@ -46463,6 +46752,10 @@ function Inspector({
       )}
       {propertiesTab && multiSelection && (
         <div className="oo-pdf-mini-stat">{selectedKeys.size} objects selected</div>
+      )}
+      {/* berg:work: fields shared by the selected objects (Mixed where they differ), above the list of objects. */}
+      {propertiesTab && multiSelection && sharedEntries.length > 1 && (
+        <SharedSelectionFields entries={sharedEntries} onCommit={commitSharedField} />
       )}
       {!propertiesTab && <input className="oo-pdf-layer-search" type="search" aria-label="Find a layer" placeholder="Find a layer…"
         value={layerQuery} onChange={event => { setEditingLayerKey(''); setLayerQuery(event.target.value); }} />}
