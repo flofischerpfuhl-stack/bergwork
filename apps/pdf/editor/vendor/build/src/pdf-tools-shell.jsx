@@ -43315,11 +43315,13 @@ function FileDrop({ id, inputRef, accept, label, ariaLabel, icon = 'file', file,
 }
 
 function PanelEmpty({ icon, title, children }) {
+  // berg:work: the empty state shows its title; the explanation goes into the panel's (i) like a PanelHint.
+  const infoTarget = React.useContext(PanelInfoTargetContext);
   return (
     <div className="oo-pdf-panel-empty">
       <span className="oo-pdf-panel-empty-icon"><Icon name={icon} /></span>
       <b>{title}</b>
-      {children && <span>{children}</span>}
+      {children && (infoTarget ? createPortal(<p className="oo-pdf-info-note">{children}</p>, infoTarget) : <span>{children}</span>)}
     </div>
   );
 }
