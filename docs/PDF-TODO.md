@@ -14,21 +14,82 @@ Status: `[ ]` open · `[~]` in progress · `[x]` done and checked on screen. Eff
 
 ## Fork UI (berg:work additions in `apps/pdf/editor/`)
 
-- [ ] **Floating bars avoid what they float over.** One positioning rule for the mini toolbar, colour bars and status
-  line: bound to the anchor, moved aside on collision, following the object. 3–5 PD.
-  - The text mini toolbar covers the rotate handle and the line above the selection.
-  - After an image is moved, its opacity bar stays where the image was.
-  - A comment's colour bar lies over the neighbouring image.
-- [ ] **Status line is unreadable.** “Applying change – you can keep editing” is drawn under the labels of the top
-  right island (Document tools, Properties). 0.5 PD.
-- [ ] **Zoom popover is clipped.** The popover of the bottom left zoom island is cut off at the left window edge
-  (− and “Mouse wheel” half outside). 0.5 PD.
-- [ ] **Shortcut overview misses the tool keys.** `ShortcutsDialog` (`?`) lists no tool keys, although H, V, T, I,
-  R, E, A, D, C and M are bound (`TOOL_SHORTCUTS` in the shell). Add them, and the Fernwork additions such as
-  fit/100 % once they exist. 0.5 PD.
+berg:work's UI is ahead of Fernwork's (islands, mini toolbar, shortcut overview), so interaction and UI work lands in
+the fork, kept to small `berg:work:` hunks; Fernwork gets engine and worker fixes. Work branch:
+`feat/pdf-native-feel`.
+
+- [x] **Floating bars avoid what they float over** (in part). The object's mini toolbar follows its object after a
+  move, undo, nudge or Properties change and clears the top islands instead of a fixed 64 px. Still open: the
+  comment colour bar can lie over a neighbouring object; a shared collision rule for all floating bars. 2–3 PD.
+- [x] **Status line is readable.** The applying-change pill sits under the top right island.
+- [x] **Zoom popover is not clipped.** It opens from the bottom-left island's edge.
+- [x] **Shortcut overview lists everything.** View keys (fit, 100 %, Space-drag) and the one-letter tools.
+- [x] **The context menu closes** on an outside click and on Escape. It used to miss the click whenever the mini
+  toolbar was open (it re-subscribed during that very pointerdown).
 - [ ] **Edit as paragraph is not on `main`.** It lives on `feat/pdf-paragraph-edit` (`9a0124f`), but the sync skill
   describes it as present. Either finish and merge it, or hand it to Fernwork (the Fernwork TODO asks for semantic
   lines and paragraphs, which would replace it). Then correct the skill.
+
+## Direct manipulation compared with Figma, Canva and PowerPoint (second review, 2026-10-29)
+
+A 40-point checklist driven against the app, next to a catalogue of the three products' micro-interactions from
+their help pages. **Needs OK** marks changes that alter the UI visibly; they wait for Florian.
+
+Selection and transform:
+- [x] **Snapping on by default** (remembered; Alt moves freely). The Guides button lights up only for visible guides
+  or rulers.
+- [x] **Live size and angle at the pointer** while resizing, rotating and drawing (W × H pt, degrees).
+- [x] **Click beside the pages deselects** (mouse and touch).
+- [x] **A second click on selected text edits it at the click** (PowerPoint, Canva); overlapping objects still cycle.
+- [x] **Shape tools:** a click places a 100 × 100 pt shape (arrow 120 pt); drawing tools show a crosshair.
+- [ ] **Alt-drag duplicates; Ctrl+D repeats the last offset** (Figma, Canva). Today Alt-drag moves the original.
+  1–2 PD.
+- [ ] **Undo brings back the selection** and scrolls to the changed object. Today undo leaves nothing selected. 2–3 PD.
+- [ ] **Rotate from just outside a corner** instead of the round handle above the frame (Figma). **Needs OK.** 1–2 PD.
+- [ ] **Resize cursors follow the frame's rotation.** 0.5 PD.
+- [ ] **Equal-spacing guides** (pink markers between three or more objects) and Alt-hover distance measuring. 3–5 PD.
+- [ ] **"Select layer ▸" under the pointer** in the context menu, for stacked objects (Figma). **Needs OK.** 1 PD.
+- [ ] **Context menu additions:** Group, Lock, Bring forward / Send backward one step, Copy / paste style, Paste here.
+  **Needs OK** (more items). 2–3 PD.
+
+Text:
+- [x] **Readable font names** in the picker: "Arial (from the PDF)" instead of "Original PDF font · AAAAAA+ArialMT";
+  the duplicate caption under the picker is gone.
+- [ ] **Font preview on hover** in the font list, on the selected text (Figma). 2–3 PD.
+- [ ] **The selection frame grows while typing**, not only after the commit. 1–2 PD (with Fernwork's text editor).
+
+Panels and fields:
+- [x] **Number fields scrub on their label and take arithmetic** (210/2, 72+12, decimal comma).
+- [x] **Properties without duplicates:** one Keep proportions (next to Width/Height), Rotate by only where there is
+  no Angle field.
+- [x] **Readable layer names:** Line, Shape, Image instead of "Path #1064", "img_p0_6".
+- [ ] **Hovering a layer row outlines the object on the page**; drag rows to reorder; double-click to rename. 2–3 PD.
+- [ ] **Recent and document colours, eyedropper** in the colour wells. 2 PD.
+- [ ] **"Mixed" in fields of a multi-selection** and edits that apply to each object (Figma's Mixed+10). 2–3 PD.
+
+Clipboard and drop:
+- [x] **Images dropped on a page are placed at the pointer**; the page is outlined while dragging.
+- [ ] **Paste lands where you look:** at the pointer or the centre of the visible part of the page (today: the page
+  centre, which can be off screen). 1 PD.
+- [ ] **Drop an image onto an image to replace it** (Canva frames). 2 PD.
+
+Navigation:
+- [x] **Space-drag hand** (Space no longer pages down), **Shift+1 / Ctrl+0 fit, Shift+0 / Ctrl+1 100 %**, a gentler
+  wheel step (1.2× per notch instead of 1.43×).
+- [ ] **Shift+2 zooms to the selection.** 0.5 PD.
+- [ ] **Arrow keys pan when nothing is selected.** 0.5 PD.
+
+Feedback and discovery:
+- [ ] **Command palette (Ctrl+K)** over every action, with recently used. **Needs OK.** 3–5 PD.
+- [ ] **Toasts with Undo** after destructive actions (delete page, delete object, flatten). 1 PD.
+- [ ] **Saved state visible** ("Saved" / "Unsaved changes" by the file name) instead of only a dot; the dot stays
+  after undoing back to the saved state. 1 PD.
+
+Touch:
+- [ ] **Bottom context bar on phones** instead of the floating mini toolbar, which covers two thirds of the visible
+  text on a 390 px screen (Canva's model). **Needs OK.** 3–5 PD.
+- [ ] **Larger touch targets for handles** (≥ 44 px hit area, drawn smaller). 1 PD.
+- [ ] **Pages: reorder by touch, Shift-range selection, the selection follows a moved page.** 2–3 PD.
 
 ## Desktop apps (`apps/pdf/src-tauri`, `packages/host-tauri`)
 
@@ -75,13 +136,18 @@ lines of file I/O. `packages/host-tauri` is still empty.
 The corpus harness (`apps/pdf/tests/harness`, `run-corpus.mjs`) already drives the editor's engine without the UI
 in a headless page. That is the basis.
 
-- [ ] **CLI** (`bergwork-pdf-cli`, a separate binary because Tauri's GUI subsystem cannot write to the console).
-  Same engine headless. 5–10 PD.
-  - Commands: open/info, render a page, extract text, OCR, search-and-redact, replace text, fill a form, page
-    operations (rotate, delete, reorder, merge, split, export a range), optimize, protect, save.
-  - JSON output, exit codes.
-- [ ] **MCP server** (`bergwork-pdf-cli mcp`, stdio). The CLI's operations as tools, local only, no upload.
-  3–6 PD.
+- [x] **CLI** `bergwork-pdf-cli` (`apps/pdf/cli/`, branch `feat/pdf-agent-cli`): info, text, form-fields,
+  metadata, render, ocr, redact (term/regex, verified after saving), replace-text (only runs the engine reports as
+  safe), fill-form (optional flatten), pages rotate/delete/move/extract/split, merge, optimize, protect, unlock.
+  `--json`, exit codes 0–5; the shared headless engine page lives in `apps/pdf/headless/`. 14 tests pass; the
+  corpus quick run is unchanged (36 files, 888 checks, 0 failed).
+- [x] **MCP server** `bergwork-pdf-cli mcp` (stdio, `@modelcontextprotocol/sdk` 1.32.1): the same operations as
+  `pdf_*` tools, local paths only.
+- [ ] **CLI open items:** a packaged binary next to the app (today `npm run cli` / `node`), merge of PDFs with forms
+  or tags (the engine refuses), several OCR languages per run, about 1–2 s Chromium start per call (the MCP server
+  keeps its page).
+- [ ] **Harness check:** `doc.encrypt` in the harness passes `{print, copy, …}`, the shell expects
+  `noPrint`/`noCopy`/…, so the corpus probably never tests restrictions.
 - [ ] **URL scheme / deep link.** Open file X at page Y, from scripts and other apps. 1–2 PD.
 
 ## Printing to berg:work PDF
