@@ -737,3 +737,55 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
   outline: 2px solid var(--pdf-accent-strong, var(--bw-fg));
   outline-offset: 1px;
 }
+
+/* Measuring (Markup › Measure, measure-layer.jsx): the layer paints only drafts, hit areas and handles; PDFium
+   paints the measurement annotations themselves. */
+.oo-pdf-shell .oo-pdf-page-surface:is(.tool-measure-distance, .tool-measure-perimeter, .tool-measure-area, .tool-measure-calibrate) { cursor: crosshair; }
+.oo-pdf-measure-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 10001;
+  overflow: visible;
+  pointer-events: none;
+}
+.oo-pdf-measure-layer.is-drawing { pointer-events: auto; cursor: crosshair; touch-action: none; }
+.oo-pdf-measure-capture { fill: transparent; }
+.oo-pdf-measure-draft { fill: none; stroke: #e03131; stroke-width: 1.5px; stroke-linecap: round; stroke-linejoin: round; }
+.oo-pdf-measure-draft.is-pending { stroke-dasharray: 4 3; opacity: 0.7; }
+.oo-pdf-measure-draft.is-calibration { stroke: var(--pdf-accent-strong, #44403c); stroke-dasharray: 6 3; }
+.oo-pdf-measure-fill { opacity: 0.12; stroke: none; }
+.oo-pdf-measure-vertex { fill: #fff; stroke: #e03131; stroke-width: 1.5px; }
+.oo-pdf-measure-snap { fill: none; stroke: #0b7285; stroke-width: 2px; }
+.oo-pdf-measure-hit { fill: none; stroke: transparent; stroke-width: 12px; pointer-events: stroke; cursor: pointer; }
+.oo-pdf-measure-item:hover .oo-pdf-measure-hit { stroke: rgb(11 114 133 / 0.18); }
+.oo-pdf-measure-outline { fill: none; stroke: var(--pdf-accent-strong, #44403c); stroke-width: 1px; stroke-dasharray: 4 3; pointer-events: none; }
+.oo-pdf-measure-handle { fill: #fff; stroke: var(--pdf-accent-strong, #44403c); stroke-width: 1.5px; pointer-events: all; cursor: move; }
+.oo-pdf-measure-chip,
+.oo-pdf-measure-calibrate {
+  position: fixed;
+  z-index: 10085;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 10px;
+  border: 1px solid var(--bw-border, #d6d3d1);
+  border-radius: var(--bw-radius-island, 10px);
+  background: var(--pdf-floating, #fff);
+  color: var(--bw-fg, #222);
+  font: 400 var(--bw-text-small, 12px) / 1.4 var(--bw-font-ui, system-ui);
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--bw-shadow-popover, 0 4px 16px rgb(0 0 0 / 0.16));
+}
+.oo-pdf-measure-chip-kind, .oo-pdf-measure-chip-scale, .oo-pdf-measure-hint { color: var(--bw-fg-muted, #78716c); }
+.oo-pdf-measure-calibrate { flex-direction: column; align-items: stretch; width: 300px; padding: 10px 12px; }
+.oo-pdf-measure-calibrate { gap: 6px; }
+.oo-pdf-measure-calibrate-row { display: flex; gap: 6px; align-items: center; }
+.oo-pdf-measure-calibrate-row input { flex: 1 1 auto; width: 80px; min-width: 0; }
+.oo-pdf-measure-calibrate-row select { flex: 0 0 auto; width: auto; }
+.oo-pdf-measure-calibrate-row button { flex: 0 0 auto; white-space: nowrap; }
+.oo-pdf-measure-error { color: #c92a2a; }
+.oo-pdf-measure-options .oo-pdf-measure-ratio { display: inline-flex; align-items: center; gap: 4px; }
+.oo-pdf-measure-options .oo-pdf-measure-ratio input { width: 64px; }
+.oo-pdf-measure-options .oo-pdf-measure-scale { white-space: nowrap; }
+.oo-pdf-chrome-popover-title.oo-pdf-menu-section { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--bw-border, #e7e5e4); }

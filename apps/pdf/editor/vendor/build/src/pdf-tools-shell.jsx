@@ -144,6 +144,10 @@ import { typedSignatureFrame } from './pdf-editor/model/typed-signature-frame.js
 import { PAGE_STAMP_KINDS, pageStampTextEncodable, stampPdfPages } from './pdf-editor/model/page-stamps.js';
 import { pdfBytesMayHaveRedactedWidgets, removeRedactedFormFieldsFromPdf } from './pdf-editor/model/redacted-form-fields.js';
 import { compactSparsePdfObjectNumbers } from './pdf-editor/model/object-numbering.js';
+// berg:work: measuring with a scale (Markup › Measure), as PDF /Measure annotations.
+import { bytesMayHaveMeasurements, readMeasureData, removeMeasurement, writeMeasurement, writePageScale } from './pdf-editor/engine/measure-annotations.js';
+import { measurementsToCsv, scaleFromCalibration, scaleFromRatio } from './pdf-editor/model/pdf-measure.js';
+import { MEASURE_TOOL_IDS, MEASURE_TOOL_SET, MEASURE_TOOLBAR_TOOLS, MeasureLayer, MeasureOptionsBar, measureStore } from './pdf-editor/interaction/measure-layer.jsx';
 import { findGlyphTextMatches, glyphsFromTextGlyphResult, redactionRemovedGlyphs, replaceQueryInText, snapRedactionRect, textContainsQuery } from './pdf-editor/model/redaction-geometry.js';
 import { addPiecesToMarkup, applyTextMarkupPlan, isTextLineMarkup, isTextMarkupAnnotation, markupTouchesLines, markupWithAbsoluteQuads, planTextMarkupFollowRuns, removeLinesFromMarkup, textMarkupBoundToBox, textMarkupPlanIds, textMarkupSelectionState, unmarkedLinePieces } from './pdf-editor/model/text-markup-binding.js';
 import { buildPageTextDiffReport } from './pdf-editor/model/compare-text-report.js';
@@ -432,6 +436,8 @@ const TOOLBAR_TOOLS = [
   { id: 'comment', label: 'Comment', icon: 'sticky-note' },
   { id: 'redact', label: 'Redact', icon: 'scissors' },
   { id: 'sign', label: 'Visual signature', icon: 'stamp' },
+  // berg:work: measure tools, listed under Markup › Measure.
+  ...MEASURE_TOOLBAR_TOOLS,
 ];
 
 // Canvas toolbar groups: tools that add a new object, and text markup.
@@ -683,6 +689,11 @@ const SHORTCUT_GROUPS = [
   ['Tools', [
     ['Pan / Edit PDF', 'H / V'], ['Text / Image', 'T / I'], ['Rectangle / Ellipse / Arrow', 'R / E / A'],
     ['Draw / Comment / Highlight', 'D / C / M'],
+  ]],
+  // berg:work: Markup › Measure.
+  ['Measure', [
+    ['Finish a perimeter or area', 'Enter / double-click'], ['Take back the last corner', 'Backspace'],
+    ['Steps of 45°', 'Shift'], ['Without snapping', 'Alt'], ['Cancel the measurement', 'Esc'],
   ]],
 ];
 
@@ -2056,6 +2067,8 @@ function editableDocSnapshot(doc = {}) {
     bookmarks: Array.isArray(doc.bookmarks) ? normalizeBookmarks(doc.bookmarks, doc.pages) : undefined,
     ocrLayers: clonePlain(doc.ocrLayers, []),
     pageStamps: clonePlain(doc.pageStamps, []),
+    // berg:work: measurements and page scales read from the PDF; Undo restores them with the snapshot.
+    measurements: clonePlain(doc.measurements, null),
   };
 }
 
@@ -13469,7 +13482,40 @@ async function importPdfCommentAnnotations(pdf, pages) {
   return comments;
 }
 
-async function importPdfCommentAnnotationsWithPdfium(bytes, pages) {
+// berg:work: measurements of a PDF as document state, keyed by page id:
+// { items: [{ id, pageId, kind, points, scale, value, ... }], viewports: { [pageId]: [{ bbox, scale }] } }.
+function measureStateFromData(data, pages = []) {
+  const pageBySource = new Map(pages.map(page => [page.sourceIndex, page]));
+  const items = [];
+  const viewports = {};
+  for (const entry of data?.pages || []) {
+    const page = pageBySource.get(entry.pageIndex);
+    if (!page) continue;
+    if (entry.viewports?.length) viewports[page.id] = clonePlain(entry.viewports, []);
+    for (const item of entry.items || []) {
+      items.push({ ...clonePlain(item, {}), id: `measure:${item.objectNumber ?? `${entry.pageIndex}-${item.annotationIndex}`}`, pageId: page.id });
+    }
+  }
+  return { items, viewports };
+}
+
+// Read at open only when the raw file names /Measure or /VP, or hides names in object streams (always up to 30 MB,
+// above only with Line annotations); other files are read when a measure tool is first used (pdf-lib parses the
+// whole file, which large books should not pay for at open).
+async function measureDataForDoc(bytes, pages, hasMeasureSubtypes = false) {
+  try {
+    const view = asUint8Array(bytes);
+    // PolyLine and Polygon do not show up in the worker's annotation list, so files up to 30 MB with object streams
+    // are parsed anyway (about 0.3 s for a 5 MB, 117-page book).
+    const objectStreams = hasMeasureSubtypes || view?.byteLength <= 30 * 1024 * 1024;
+    if (!PDFLib?.PDFDocument || !view?.byteLength || !bytesMayHaveMeasurements(view, { objectStreams })) return null;
+    return measureStateFromData(await readMeasureData(PDFLib, view), pages);
+  } catch {
+    return null;
+  }
+}
+
+async function importPdfCommentAnnotationsWithPdfium(bytes, pages, subtypesSeen = null) {
   const pageByIndex = new Map((pages || []).map(page => [page.sourceIndex, page]));
   let annotations = [];
   try {
@@ -13480,6 +13526,8 @@ async function importPdfCommentAnnotationsWithPdfium(bytes, pages) {
   } catch {
     return [];
   }
+  // berg:work: which subtypes the file has (a measurement needs Line, PolyLine or Polygon).
+  for (const annotation of annotations || []) subtypesSeen?.add(String(annotation.subtypeName || '').toLowerCase());
   return (annotations || []).map((annotation, index) => {
     const page = pageByIndex.get(annotation.pageIndex);
     if (!page) return null;
@@ -18081,8 +18129,15 @@ function App({ shell = null }) {
           ? { ...doc, annotationImportStatus: 'loading' }
           : doc
       )));
-      importPdfCommentAnnotationsWithPdfium(target.bytes, target.pages)
-        .then(imported => {
+      // berg:work: measurements (/Measure lines and polygons) and page scales come from pdf-lib; their lines are not
+      // imported as editable arrows, the measure layer owns them.
+      const subtypesSeen = new Set();
+      importPdfCommentAnnotationsWithPdfium(target.bytes, target.pages, subtypesSeen)
+        .then(async importedAll => [importedAll, await measureDataForDoc(target.bytes, target.pages,
+          ['line', 'polyline', 'polygon'].some(subtype => subtypesSeen.has(subtype)))])
+        .then(([importedAll, measurements]) => {
+          const measureObjects = new Set((measurements?.items || []).map(item => item.objectNumber));
+          const imported = (importedAll || []).filter(annotation => !measureObjects.has(annotation.annotationObjectNumber));
           const runtime = livePdfRuntimeRef.current;
           if (runtime?.documentId === target.id) {
             for (const annotation of imported || []) {
@@ -18096,6 +18151,7 @@ function App({ shell = null }) {
             return {
               ...doc,
               annotations: additions.length ? [...(doc.annotations || []), ...additions] : (doc.annotations || []),
+              ...(measurements ? { measurements } : {}),
               annotationImportStatus: 'done',
             };
           }));
@@ -26338,6 +26394,153 @@ function App({ shell = null }) {
     });
   }, [activeDoc, refreshLivePageSceneAfterCommit, setOperationNotice, updateDoc]);
 
+  // berg:work: a measurement or a page scale is written into a checkpoint with pdf-lib (the pinned worker cannot
+  // write /Measure, /Vertices or /VP) and the session switches to it in one snapshot transaction, as page stamps
+  // do; Undo restores the exact previous snapshot and the measurement list with it. `edit(bytes, doc)` returns
+  // { bytes, data, annotationIndexMaps? } from engine/measure-annotations.js.
+  const commitMeasureChange = useCallback((label, edit) => {
+    const fail = message => {
+      showToast(message, 'error');
+      return Promise.reject(new Error(message));
+    };
+    if (!activeDoc) return fail('Open a PDF first.');
+    const runtime = livePdfRuntimeRef.current;
+    const workingDoc = workspaceSnapshotRef.current.docs.find(doc => doc.id === activeDoc.id) || activeDoc;
+    const safety = liveRuntimeSafetyState(runtime, workingDoc.id);
+    if (!runtime?.kernel || !runtime.ready || runtime.readOnly || runtime.documentId !== workingDoc.id || safety.mutationBlocked) {
+      return fail(safety.reason || 'Open a writable PDF editing session before measuring.');
+    }
+    if (!sourceForLivePdfiumSession(workingDoc)) {
+      return fail('Export or reopen the PDF after changing its page structure, then measure again.');
+    }
+    if (!PDFLib?.PDFDocument) return fail('The local PDF object writer is unavailable.');
+    setLiveCommitCount(count => count + 1);
+    return enqueueLiveNativeCommit(runtime, async () => {
+      const latestDoc = workspaceSnapshotRef.current.docs.find(doc => doc.id === workingDoc.id);
+      if (!latestDoc || livePdfRuntimeRef.current !== runtime || !runtime.ready || runtime.readOnly ||
+          liveRuntimeSafetyState(runtime, workingDoc.id).mutationBlocked) {
+        throw new Error('The editing session changed. Try again on the current document.');
+      }
+      const before = await checkpointToPdfSnapshotResource(runtime.engine);
+      const edited = await edit(before.bytes, latestDoc);
+      const maps = edited.annotationIndexMaps || null;
+      const after = await pdfSnapshotResourceFromBytes(edited.bytes, maps ? remapFormSnapshotBindings(before.bindings, maps) : before.bindings);
+      await runtime.kernel.registerResource(before);
+      await runtime.kernel.registerResource(after);
+      await persistLiveUiBaseline(runtime, latestDoc);
+      const measurements = measureStateFromData(edited.data, latestDoc.pages);
+      const project = doc => ({
+        ...doc,
+        measurements,
+        annotations: maps ? (doc.annotations || []).map(annotation => {
+          const ownerPage = doc.pages.find(item => item.id === annotation.pageId);
+          const nextIndex = maps[ownerPage?.sourceIndex]?.[annotation.annotationIndex];
+          return Number.isInteger(nextIndex) && nextIndex >= 0 ? { ...annotation, annotationIndex: nextIndex } : annotation;
+        }) : doc.annotations,
+      });
+      const projected = project(latestDoc);
+      const prefix = `measure-${uid()}`;
+      const result = await runtime.kernel.execute({
+        commands: [createPdfCommand({ commandId: `${prefix}:edit`, type: CommandType.DOCUMENT_RESTORE_SNAPSHOT,
+          targetId: latestDoc.id, payload: { resourceHash: after.hash } })],
+        inverseCommands: [createPdfCommand({ commandId: `${prefix}:undo`, type: CommandType.DOCUMENT_RESTORE_SNAPSHOT,
+          targetId: latestDoc.id, payload: { resourceHash: before.hash } })],
+        label,
+        uiTransition: kernelUiTransition(runtime, latestDoc, projected),
+      });
+      updateDoc(latestDoc.id, project, { resetMerge: true, kernelBacked: true });
+      window.__fernworkLastLivePdfTransaction = {
+        transactionId: result.transactionId, committedRevision: result.committedRevision,
+        effectDigest: result.effectDigest, dirtyPages: result.dirtyPages, normalEditPath: 'semantic-kernel-session',
+      };
+      const { immediate, deferred } = planHistoryInspections({
+        dirtyPageIds: new Set(result.dirtyPages || latestDoc.pages.map(page => page.id)),
+        restoredSnapshot: true,
+        inspectedPageIds: [...runtime.pageInspections.keys()],
+        priorityPageIds: historyPriorityPageIds({ doc: latestDoc, selection: null, transition: null, viewport: viewportRef.current }),
+      });
+      if (deferred.size) runtime.forgetPageInspections?.(deferred);
+      for (const page of latestDoc.pages.filter(item => immediate.has(item.id))) {
+        await refreshLivePageSceneAfterCommit(runtime, latestDoc, page, result);
+      }
+      return edited;
+    }, null, { independent: true }).catch(error => {
+      window.__fernworkLastLivePdfError = describeLivePdfError(error);
+      showToast(userFacingError(error, `${label} failed. The document was not changed.`), 'error');
+      throw error;
+    }).finally(() => {
+      setLiveCommitCount(count => Math.max(0, count - 1));
+    });
+  }, [activeDoc, refreshLivePageSceneAfterCommit, updateDoc]);
+
+  // berg:work: the measure layer and options bar read the document's measurements and these actions from
+  // measureStore (see measure-layer.jsx).
+  const measureScanRef = useRef(new Set());
+  const activeMeasurePage = activeDoc?.pages?.[activePage] || null;
+  useEffect(() => {
+    const settings = () => measureStore.get().settings;
+    const pageIndexOf = (doc, pageId) => doc.pages.find(page => page.id === pageId)?.sourceIndex;
+    measureStore.set({
+      docId: activeDoc?.id || '',
+      items: activeDoc?.measurements?.items || [],
+      viewports: activeDoc?.measurements?.viewports || {},
+      activePageId: activeMeasurePage?.id || '',
+      ready: Boolean(activeDoc && livePdfRuntime?.kernel && livePdfRuntime.documentId === activeDoc.id),
+      actions: {
+        select: () => setSelected(null),
+        commit: ({ pageId, kind, points, scale }) => commitMeasureChange(`Measure ${kind}`, (bytes, doc) => writeMeasurement(PDFLib, bytes, {
+          pageIndex: pageIndexOf(doc, pageId), kind, points, scale, locale: navigator.language,
+          style: { color: settings().color, width: settings().width, fontSize: settings().fontSize },
+          author: doc.measureAuthor || '',
+        })),
+        update: (item, points) => commitMeasureChange(`Edit ${item.kind} measurement`, (bytes, doc) => writeMeasurement(PDFLib, bytes, {
+          pageIndex: pageIndexOf(doc, item.pageId), kind: item.kind, points, scale: item.scale, locale: navigator.language,
+          objectNumber: item.objectNumber, style: { color: item.color, width: item.width, fontSize: settings().fontSize },
+        })),
+        remove: item => {
+          measureStore.set({ selectedId: '' });
+          return commitMeasureChange(`Delete ${item.kind} measurement`, (bytes, doc) => removeMeasurement(PDFLib, bytes, {
+            pageIndex: pageIndexOf(doc, item.pageId), objectNumber: item.objectNumber,
+          }));
+        },
+        calibrate: ({ pageId, points, length, unit }) => {
+          const scale = scaleFromCalibration(Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y), length, unit);
+          return commitMeasureChange('Calibrate scale', (bytes, doc) => writePageScale(PDFLib, bytes, {
+            pageIndex: pageIndexOf(doc, pageId), scale, at: points[0],
+          })).then(() => showToast(`Scale ${scale.label} set for this page.`, 'success'));
+        },
+        setRatio: ({ pageId, ratio, unit }) => {
+          const scale = scaleFromRatio(ratio, unit);
+          return commitMeasureChange('Set scale', (bytes, doc) => writePageScale(PDFLib, bytes, {
+            pageIndex: pageIndexOf(doc, pageId), scale,
+          })).then(() => showToast(`Scale ${scale.label} set for this page.`, 'success'));
+        },
+        exportCsv: () => {
+          const doc = workspaceSnapshotRef.current.docs.find(item => item.id === activeDoc?.id) || activeDoc;
+          const items = doc?.measurements?.items || [];
+          if (!items.length) return;
+          const pageNumber = new Map(doc.pages.map((page, index) => [page.id, index + 1]));
+          const csv = measurementsToCsv([...items].sort((a, b) => (pageNumber.get(a.pageId) || 0) - (pageNumber.get(b.pageId) || 0)),
+            { locale: navigator.language, pageLabel: item => pageNumber.get(item.pageId) || '' });
+          downloadBlob(new Blob(['﻿', csv], { type: 'text/csv;charset=utf-8' }), `${stripExt(doc.name)}-measurements.csv`);
+        },
+      },
+    });
+  }, [activeDoc, activeMeasurePage, commitMeasureChange, livePdfRuntime]);
+  // Files whose measurements sit in compressed object streams are scanned when a measure tool is first used.
+  useEffect(() => {
+    const runtime = livePdfRuntimeRef.current;
+    if (!MEASURE_TOOL_SET.has(tool) || !activeDoc || activeDoc.measurements || measureScanRef.current.has(activeDoc.id) ||
+        !runtime?.engine || runtime.documentId !== activeDoc.id || !PDFLib?.PDFDocument) return;
+    measureScanRef.current.add(activeDoc.id);
+    const docId = activeDoc.id;
+    void checkpointToPdfSnapshotResource(runtime.engine)
+      .then(snapshot => readMeasureData(PDFLib, snapshot.bytes))
+      .then(data => setDocs(prev => prev.map(doc => (doc.id === docId && !doc.measurements
+        ? { ...doc, measurements: measureStateFromData(data, doc.pages) } : doc))))
+      .catch(() => {});
+  }, [activeDoc, tool]);
+
   const addPageNumbers = useCallback(() => commitPageStamp('pageNumbers', 'Add page numbers', {
     kind: PAGE_STAMP_KINDS.pageNumber,
     // Reapplying numbering replaces the earlier numbers instead of stacking.
@@ -28156,8 +28359,12 @@ function App({ shell = null }) {
         disabled={Boolean(!activeDoc || applyingEdits || normalizingRotation || documentLoadProgress)} className={`oo-pdf-tool-group-${id}`}>
         {toolIds.map(toolId => {
           const item = toolbarTool(toolId);
-          return <ChromeMenuItem key={toolId} label={item.label} title={withShortcut(item.label, toolId)} iconName={item.icon} pressed={tool === toolId}
-            disabled={toolDisabled(toolId)} onClick={() => chooseTool(toolId)} />;
+          // berg:work: the measure tools get their own heading inside Markup.
+          return <React.Fragment key={toolId}>
+            {toolId === MEASURE_TOOL_IDS[0] && <div className="oo-pdf-chrome-popover-title oo-pdf-menu-section">Measure</div>}
+            <ChromeMenuItem label={item.label} title={withShortcut(item.label, toolId)} iconName={item.icon} pressed={tool === toolId}
+              disabled={toolDisabled(toolId)} onClick={() => chooseTool(toolId)} />
+          </React.Fragment>;
         })}
       </ChromePopoverButton>
     );
@@ -28203,7 +28410,7 @@ function App({ shell = null }) {
           </div>
         </ChromePopoverButton>
         {toolGroupButton('add', 'Insert', ADD_TOOL_IDS, 'plus', 'Insert text, images, shapes, comments or a signature')}
-        {toolGroupButton('markup', 'Markup', MARKUP_TOOL_IDS, 'highlighter', 'Highlight, underline, strike through or redact')}
+        {toolGroupButton('markup', 'Markup', [...MARKUP_TOOL_IDS, ...MEASURE_TOOL_IDS], 'highlighter', 'Highlight, underline, strike through, redact or measure')}
         {!narrowPhone && (
           <ChromePopoverButton id="guides" label="Guides" title="Guides, rulers and snapping" iconName="ruler"
             text={phoneLayout ? '' : 'Guides'} on={guidesVisible || rulersVisible /* berg:work: snap is on by default */} placement={toolMenuPlacement} {...chromeMenuProps('guides')}
@@ -28769,6 +28976,7 @@ function App({ shell = null }) {
         onUseSavedSignature={useSavedSignature}
         onFindRedactions={activeDoc ? findRedactionMatches : null}
         onMarkRedactions={markRedactionMatches}
+        onToolChange={selectTool}
       />
 
       {formFieldNav && (
@@ -34827,6 +35035,9 @@ function PdfPageContent({
               zIndex={9998}
             />
           )}
+          {/* berg:work: measuring (Markup › Measure); in Edit PDF its measurements are selectable here. */}
+          <MeasureLayer page={page} zoom={zoom} tool={tool} snapObjects={sceneNativeObjects}
+            selectable={showMarkupHandles && !pathIsolation} />
         </div>
         {hitCycleHint && (
           <div
@@ -40945,6 +41156,7 @@ function ToolOptionsBar({
   onFindRedactions,
   onMarkRedactions,
   signaturePadRequest = 0,
+  onToolChange,
 }) {
   const [signaturePadOpen, setSignaturePadOpen] = useState(false);
   const [redactSearchOpen, setRedactSearchOpen] = useState(false);
@@ -40958,6 +41170,8 @@ function ToolOptionsBar({
   const isMarkupTool = TEXT_MARKUP_TYPES.has(tool);
   // Tools without settings get no bar; the toolbar already shows the tool.
   if (!active || tool === 'select' || tool === 'pan' || tool === 'comment') return null;
+  // berg:work: the measure tools' bar: page scale, ratio, colour, CSV.
+  if (MEASURE_TOOL_SET.has(tool)) return <MeasureOptionsBar tool={tool} onToolChange={onToolChange} />;
 
   const patchShape = (patch) => onShapeStyle(current => ({ ...current, ...patch }));
   const patchSignature = (patch) => onSignature(current => ({ ...current, ...patch }));
