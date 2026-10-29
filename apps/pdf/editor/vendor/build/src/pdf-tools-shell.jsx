@@ -126,6 +126,9 @@ import { createAdvanceMeasurer, subsetTrueTypeFont } from './pdf-editor/ocr/true
 import { arrangeSelection } from './pdf-editor/interaction/arrange-selection.js';
 import { PdfDraftWriterLease } from './pdf-editor/persistence/writer-lease.js';
 import { DocumentSaveCoordinator } from './pdf-editor/persistence/document-save-coordinator.js';
+// berg:work: Save as PDF/A.
+import { convertPdfBytesToPdfA, PdfAConversionError } from './pdf-editor/persistence/bergwork-pdfa.js';
+import { BUNDLED_FONT_BASE } from './pdf-editor/interaction/bundled-font-library.js';
 import { RasterCache } from './pdf-editor/rendering/raster-cache.js';
 import { RenderPriority, RenderScheduler } from './pdf-editor/rendering/render-scheduler.js';
 import { subscribeQueueFullRetry } from './pdf-editor/rendering/queue-full-retry.js';
@@ -11643,6 +11646,32 @@ async function packExportPdfBytes(bytes) {
     '$in0',
     '$out',
   ]));
+}
+
+// berg:work: PDF/A-2b (-3b with attachments) from finished export bytes. qpdf
+// packs the result like every export and writes an end-of-line before each
+// endstream, which PDF/A requires (6.1.7.1).
+async function pdfABytesFromExport(bytes) {
+  const source = asUint8Array(bytes);
+  if (pdfBytesHaveIntactSignature(source)) {
+    throw new PdfAConversionError(['It is digitally signed, and converting it would break the signature.']);
+  }
+  const result = await convertPdfBytesToPdfA(PDFLib, source, {
+    loadFont: async file => {
+      const response = await fetch(`${BUNDLED_FONT_BASE}${file}`);
+      if (!response.ok) throw new Error(`The font ${file} could not be loaded.`);
+      return new Uint8Array(await response.arrayBuffer());
+    },
+  });
+  const toolkit = await getPdfToolkit();
+  const packed = asUint8Array(await toolkit.raw([result.bytes], [
+    '--compress-streams=y',
+    '--object-streams=generate',
+    '--newline-before-endstream',
+    '$in0',
+    '$out',
+  ]));
+  return { ...result, bytes: packed };
 }
 
 let pdfDiffPromise = null;
@@ -26345,9 +26374,10 @@ function App({ shell = null }) {
     if (!activeDoc) return;
     const requestedOptions = options?.nativeEvent ? {} : options;
     const documentId = activeDoc.id;
-    const nativeSaveKey = `${documentId}:pdf`;
+    // berg:work: Save as PDF/A asks where to save, with its own name.
+    const nativeSaveKey = requestedOptions.pdfa ? `${documentId}:pdfa` : `${documentId}:pdf`;
     const nativeSaveEligible = !requestedOptions.pages && !requestedOptions.flatten &&
-      !requestedOptions.suffix && nativeSavePickerAvailable();
+      (!requestedOptions.suffix || requestedOptions.pdfa) && nativeSavePickerAvailable();
     let nativeSaveHandle = null;
     try {
       // Validate synchronously while the initiating click/shortcut still owns
@@ -26362,7 +26392,7 @@ function App({ shell = null }) {
           nativeSaveHandle = await chooseNativeSaveHandle(
             nativeSaveHandlesRef.current.get(nativeSaveKey),
             {
-              suggestedName: `${stripExt(activeDoc.name)}.pdf`,
+              suggestedName: requestedOptions.pdfa ? `${stripExt(activeDoc.name)}-PDFA.pdf` : `${stripExt(activeDoc.name)}.pdf`,
               types: [{
                 description: 'PDF document',
                 accept: { 'application/pdf': ['.pdf'] },
@@ -26504,9 +26534,12 @@ function App({ shell = null }) {
       const postprocessedBytes = exported
         ? await postprocessPdfiumExportBytes(appearanceRepairedBytes, exportDoc, safeOptions)
         : appearanceRepairedBytes;
-      const bytes = safeOptions.flatten
+      const finishedBytes = safeOptions.flatten
         ? await finalizeFlattenedPdfBytes(postprocessedBytes)
         : postprocessedBytes;
+      // berg:work: Save as PDF/A converts the finished bytes.
+      const pdfa = safeOptions.pdfa ? await pdfABytesFromExport(finishedBytes) : null;
+      const bytes = pdfa ? pdfa.bytes : finishedBytes;
       const exportVersion = Number(exportDoc.editVersion || 0);
       if (report && hasFormValueChanges(exportDoc) && await documentHasXfaForm(exportDoc)) {
         report.summary.xfaRemoved = true;
@@ -26523,7 +26556,11 @@ function App({ shell = null }) {
         downloadBlob(blob, `${stripExt(exportDoc.name)}-${suffix}.pdf`);
         downloaded = true;
       }
-      if (report?.summary?.appearanceFallbacks || report?.summary?.regionRasterFallbacks || report?.summary?.unsupported) {
+      if (pdfa) {
+        const fonts = pdfa.report.fontsEmbedded.length;
+        showToast(`${saved ? 'Saved' : 'Downloaded'} as PDF/A-${pdfa.part}b${pdfa.part === 3 ? ' (it has attachments)' : ''}.` +
+          `${fonts ? ` ${fonts} missing ${fonts === 1 ? 'font was' : 'fonts were'} embedded.` : ''}`, 'success');
+      } else if (report?.summary?.appearanceFallbacks || report?.summary?.regionRasterFallbacks || report?.summary?.unsupported) {
         showToast(saved
           ? 'PDF saved with fidelity warnings. Check the export report for details.'
           : 'Download started with fidelity warnings. Check the export report for details.', 'info');
@@ -26533,7 +26570,7 @@ function App({ shell = null }) {
       } else {
         showToast(saved ? 'PDF saved.' : 'Download started.', 'success');
       }
-      if (!requestedOptions.pages && !requestedOptions.flatten) {
+      if (!requestedOptions.pages && !requestedOptions.flatten && !requestedOptions.pdfa) {
         // The document now carries the name of the file it was saved to. berg:work: the saved-state fingerprint is
         // taken afresh on the next edit.
         const savedName = saved && typeof nativeSaveHandle?.name === 'string' && nativeSaveHandle.name ? nativeSaveHandle.name : '';
@@ -26886,6 +26923,11 @@ function App({ shell = null }) {
   const savePdfAs = useCallback(() => {
     if (activeDoc) nativeSaveHandlesRef.current.delete(`${activeDoc.id}:pdf`);
     return exportPdf();
+  }, [activeDoc, exportPdf]);
+  // berg:work: a PDF/A copy; the picker opens every time, the document keeps its file.
+  const savePdfAsPdfA = useCallback(() => {
+    if (activeDoc) nativeSaveHandlesRef.current.delete(`${activeDoc.id}:pdfa`);
+    return exportPdf({ suffix: 'PDFA', pdfa: true });
   }, [activeDoc, exportPdf]);
 
   // Registered once (stable callback) so Ctrl+S/O/P is never lost to a
@@ -29716,6 +29758,9 @@ function App({ shell = null }) {
       }}>
       <ChromeMenuItem label="Save as…" iconName="save-as" title="Save the PDF under a new name or in another folder (Ctrl/⌘+Shift+S)"
         disabled={fileActionsDisabled('pdf')} onClick={() => { closeChromeMenu(); void savePdfAs(); }} />
+      {/* berg:work: archival copy (PDF/A-2b, fonts embedded, sRGB, XMP). */}
+      <ChromeMenuItem label="Save as PDF/A…" iconName="library" title="Save an archival copy (PDF/A-2b): fonts embedded, colour profile and metadata added"
+        disabled={fileActionsDisabled('pdf')} onClick={() => { closeChromeMenu(); void savePdfAsPdfA(); }} />
     </ChromePopoverButton>
   );
   // berg:work: the command palette's commands (see CommandPalette).
@@ -29727,6 +29772,7 @@ function App({ shell = null }) {
     { id: 'open', label: 'Open PDF or project…', group: 'File', shortcut: `${SHORTCUT_MOD}+O`, run: () => fileInputRef.current?.click() },
     { id: 'save', label: 'Save', group: 'File', shortcut: `${SHORTCUT_MOD}+S`, disabled: fileActionsDisabled('pdf'), run: () => void exportPdf() },
     { id: 'save-as', label: 'Save as…', group: 'File', shortcut: `${SHORTCUT_MOD}+Shift+S`, disabled: fileActionsDisabled('pdf'), run: () => void savePdfAs() },
+    { id: 'save-pdfa', label: 'Save as PDF/A…', group: 'File', keywords: 'archive pdfa archival', disabled: fileActionsDisabled('pdf'), run: () => void savePdfAsPdfA() },
     { id: 'print', label: 'Print', group: 'File', shortcut: `${SHORTCUT_MOD}+P`, disabled: activeSessionOpening || activeSafety.exportBlocked, run: () => printPdf() },
     { id: 'undo', label: 'Undo', group: 'Edit', shortcut: `${SHORTCUT_MOD}+Z`, run: () => undoDoc() },
     { id: 'redo', label: 'Redo', group: 'Edit', shortcut: `${SHORTCUT_MOD}+Shift+Z`, run: () => redoDoc() },
