@@ -27975,6 +27975,82 @@ function App({ shell = null }) {
     viewport.addEventListener('pointerdown', remember, true);
     return () => viewport.removeEventListener('pointerdown', remember, true);
   }, [tool, activeDocId]);
+  // berg:work: copy and paste style (Figma/Canva/Office: Ctrl/⌘+Alt+C / V). Fill, stroke, stroke width, opacity and,
+  // between text boxes, the type settings; shapes drawn here and PDF paths take each other's colours.
+  const styleClipboardRef = useRef(null);
+  const selectedStyleLayer = () => {
+    const current = selectedRef.current;
+    if (!current || current.type === 'multi' || !current.pageId || !activeDoc) return null;
+    const key = selectionLayerKey(current);
+    return inspectorLayers(activeDoc, current.pageId, 'edits', null, livePdfRuntimeRef.current)
+      .find(layer => layer.key === key) || null;
+  };
+  const STYLE_TEXT_KEYS = ['color', 'fontKey', 'fontSize', 'fontWeight', 'fontStyle', 'textAlign', 'lineHeight',
+    'fontResourceHash', 'fontResourceHashes'];
+  const copyStyle = () => {
+    const layer = selectedStyleLayer();
+    const item = layer?.item;
+    if (!item) return false;
+    let style = null;
+    if (layer.type === 'annotation') {
+      style = { kind: 'annotation', subtype: item.type, opacity: item.opacity,
+        fill: item.fillEnabled === false ? null : item.fill ?? undefined,
+        stroke: item.strokeEnabled === false ? null : item.stroke ?? undefined,
+        strokeWidth: item.strokeWidth, text: Object.fromEntries(STYLE_TEXT_KEYS.filter(key => item[key] !== undefined).map(key => [key, item[key]])) };
+    } else if (layer.type === 'nativeObject' && item.typeName === 'path') {
+      const fillOn = item.fillEnabled ?? (Number(item.drawMode?.fillMode || 0) !== 0);
+      const strokeOn = item.strokeEnabled ?? item.drawMode?.stroke !== false;
+      style = { kind: 'path', opacity: item.opacity, strokeWidth: item.strokeWidth,
+        fill: fillOn ? pdfiumColorToHex(item.fillColor, '#000000') : null,
+        stroke: strokeOn ? pdfiumColorToHex(item.strokeColor, '#000000') : null };
+    }
+    if (!style) { showToast('This object has no style to copy yet (text from the PDF: use the toolbar).', 'info'); return false; }
+    styleClipboardRef.current = style;
+    showToast('Style copied.', 'success', 1600);
+    return true;
+  };
+  const pasteStyle = () => {
+    const style = styleClipboardRef.current;
+    const layer = selectedStyleLayer();
+    const item = layer?.item;
+    if (!style || !item) return false;
+    if (layer.type === 'annotation') {
+      const patch = {};
+      if (style.fill !== undefined && 'fill' in item) Object.assign(patch, style.fill ? { fill: style.fill, fillEnabled: true } : { fillEnabled: false });
+      if (style.stroke !== undefined && 'stroke' in item) Object.assign(patch, style.stroke ? { stroke: style.stroke, strokeEnabled: true } : { strokeEnabled: false });
+      if (Number.isFinite(Number(style.strokeWidth)) && 'strokeWidth' in item) patch.strokeWidth = Number(style.strokeWidth);
+      if (Number.isFinite(Number(style.opacity))) patch.opacity = Number(style.opacity);
+      if (style.text && item.type === 'text') Object.assign(patch, style.text);
+      if (!Object.keys(patch).length) return false;
+      updateAnnotation(item.id, patch, { commitGesture: true, gestureReason: 'paste-style',
+        mergeKey: `annotation:${item.id}:paste-style`, previousForCommit: clonePlain(item, {}) });
+      return true;
+    }
+    if (layer.type === 'nativeObject' && item.typeName === 'path') {
+      const patch = {};
+      if (style.fill !== undefined) Object.assign(patch, style.fill ? { fillColor: style.fill, fillEnabled: true } : { fillEnabled: false });
+      if (style.stroke !== undefined) Object.assign(patch, style.stroke ? { strokeColor: style.stroke, strokeEnabled: true } : { strokeEnabled: false });
+      if (Number.isFinite(Number(style.strokeWidth))) patch.strokeWidth = Number(style.strokeWidth);
+      if (Number.isFinite(Number(style.opacity))) patch.opacity = Number(style.opacity);
+      if (!Object.keys(patch).length) return false;
+      updateObjectEdit(item.sourceId, { ...item, ...patch }, { commitGesture: true, gestureReason: 'paste-style',
+        gestureKind: GestureKind.STYLE, mergeKey: `object:${item.sourceId}:paste-style`, previousForCommit: clonePlain(item, {}) });
+      return true;
+    }
+    showToast('Paste style works on shapes, lines and text boxes.', 'info');
+    return false;
+  };
+  useEffect(() => {
+    const keys = event => {
+      if (!(event.ctrlKey || event.metaKey) || !event.altKey || event.shiftKey || editingText) return;
+      if (event.code !== 'KeyC' && event.code !== 'KeyV') return;
+      if (event.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      event.preventDefault();
+      if (event.code === 'KeyC') copyStyle(); else pasteStyle();
+    };
+    window.addEventListener('keydown', keys);
+    return () => window.removeEventListener('keydown', keys);
+  });
   // berg:work: Ctrl/⌘+] and [ move the selected object one step forward or back, with Shift to the front or back.
   useEffect(() => {
     const arrange = event => {
@@ -28621,6 +28697,10 @@ function App({ shell = null }) {
           ...(!selected ? ['separator', { label: 'Keyboard shortcuts', icon: 'keyboard', shortcut: '?', run: () => setShortcutsOpen(true) }] : []),
           ...(selected ? [
             { label: 'Duplicate', icon: 'copy', shortcut: 'Ctrl+D', run: () => duplicateSelection() },
+            ...(selected.type !== 'multi' && contextMenu.objectKind !== 'text' ? [
+              { label: 'Copy style', icon: 'pipette', shortcut: `${SHORTCUT_MOD}+Alt+C`, run: () => copyStyle() },
+              ...(styleClipboardRef.current ? [{ label: 'Paste style', icon: 'palette', shortcut: `${SHORTCUT_MOD}+Alt+V`, run: () => pasteStyle() }] : []),
+            ] : []),
             // berg:work: the menu is grouped: clipboard, arrange, properties, delete.
             'separator',
             ...(selected.type !== 'multi' && selected.pageId && selectionLayerKey(selected) ? [
