@@ -125,8 +125,10 @@ Forms:
 
 ## Features compared with PDF-XChange (Fernwork TODO part B, built in the fork)
 
-- [ ] **Measure tools with scale** (distance, area, perimeter, calibration, CSV). Branch `feat/pdf-measure-comments`.
-- [ ] **Comment workflow** (text box, callout, line, polygon, cloud, stamps, comment list, XFDF). Same branch.
+- [x] **Measure tools with scale** (distance, area, perimeter, calibration, CSV), merged from
+  `feat/pdf-measure-comments`. **Needs OK** (Markup menu sections Comment and Measure, option bars, Comments panel).
+- [x] **Comment workflow** (text box, callout, line, polygon, cloud, stamps, comment list, XFDF), same branch. Open
+  details in the section "Measuring and comments" below.
 - [x] **Headers, footers and Bates numbers** in the Page numbers panel: text with {page}, {pages}, {date}, {file},
   start number, zero-padded digits, six positions picked on the preview page; header and footer coexist.
   **Needs OK** (panel grew by a text field, two number fields and the position picker).
