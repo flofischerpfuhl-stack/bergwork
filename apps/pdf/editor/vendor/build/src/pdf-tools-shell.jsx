@@ -746,10 +746,10 @@ function GestureReadout({ zoom, tool }) {
     const down = event => {
       if (event.button !== 0 || (event.pointerType === 'touch' && !event.isPrimary)) return;
       const target = event.target;
-      const handle = target?.closest?.('.oo-pdf-resize, .oo-pdf-rotate-handle');
+      const handle = target?.closest?.('.oo-pdf-resize, .oo-pdf-rotate-handle, .oo-pdf-rotate-zone');
       if (handle) {
         const frame = handle.parentElement?.closest?.('[data-selection-key], .oo-pdf-selection-frame, .is-selected') || handle.parentElement;
-        gesture = { kind: handle.classList.contains('oo-pdf-rotate-handle') ? 'angle' : 'size', frame };
+        gesture = { kind: handle.classList.contains('oo-pdf-resize') ? 'size' : 'angle', frame };
         return;
       }
       if (READOUT_DRAW_TOOLS.has(toolRef.current) && target?.closest?.('.oo-pdf-page-surface')) {
@@ -36311,27 +36311,37 @@ function ObjectRotationHandle({ onRotate, label = 'Rotate object', className = '
     const direction = event.key === 'ArrowLeft' ? -1 : 1;
     onRotate(direction * (event.shiftKey ? 15 : 1));
   };
+  const lostCapture = event => {
+    const gesture = gestureRef.current;
+    if (gesture && gesture.pointerId === event.pointerId && !event.currentTarget.hasPointerCapture?.(event.pointerId)) cancel();
+  };
   return (
-    <button
-      ref={handleRef}
-      type="button"
-      className={`oo-pdf-rotate-handle ${className}`}
-      aria-label={label}
-      disabled={disabled}
-      style={pageCorrection ? { ...style, ...pageCorrection } : style}
-      title={`${label}. Drag; hold Shift for 15 degree steps. Arrow keys rotate precisely.`}
-      onPointerDown={start}
-      onPointerMove={move}
-      onPointerUp={finish}
-      onPointerCancel={cancel}
-      onLostPointerCapture={event => {
-        const gesture = gestureRef.current;
-        if (gesture && gesture.pointerId === event.pointerId && !event.currentTarget.hasPointerCapture?.(event.pointerId)) cancel();
-      }}
-      onKeyDown={keyDown}
-    >
-      <Icon name="rotate-cw" />
-    </button>
+    <>
+      <button
+        ref={handleRef}
+        type="button"
+        className={`oo-pdf-rotate-handle ${className}`}
+        aria-label={label}
+        disabled={disabled}
+        style={pageCorrection ? { ...style, ...pageCorrection } : style}
+        title={`${label}. Drag; hold Shift for 15 degree steps. Arrow keys rotate precisely.`}
+        onPointerDown={start}
+        onPointerMove={move}
+        onPointerUp={finish}
+        onPointerCancel={cancel}
+        onLostPointerCapture={lostCapture}
+        onKeyDown={keyDown}
+      >
+        <Icon name="rotate-cw" />
+      </button>
+      {/* berg:work: with a mouse the frame rotates from just outside its corners (Figma); the round handle stays for
+          touch and the keyboard. The zones share the handle's gesture. */}
+      {!disabled && ['nw', 'ne', 'se', 'sw'].map(corner => (
+        <span key={corner} className={`oo-pdf-rotate-zone ${corner}`} aria-hidden="true" title="Drag to rotate; Shift for 15° steps"
+          onPointerDown={start} onPointerMove={move} onPointerUp={finish} onPointerCancel={cancel}
+          onLostPointerCapture={lostCapture} />
+      ))}
+    </>
   );
 }
 

@@ -737,3 +737,25 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
   outline: 2px solid var(--pdf-accent-strong, var(--bw-fg));
   outline-offset: 1px;
 }
+
+/* Rotate from just outside a frame's corners with a mouse (Figma); the round handle above the frame is for touch and
+   stays reachable with the keyboard (it shows when focused). */
+.oo-pdf-shell .oo-pdf-rotate-zone {
+  position: absolute;
+  z-index: 5;
+  width: 18px;
+  height: 18px;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M18 7a8 8 0 1 0 2 6' fill='none' stroke='white' stroke-width='4' stroke-linecap='round'/%3E%3Cpath d='M18 7a8 8 0 1 0 2 6' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'/%3E%3Cpath d='M21 3v5h-5' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M21 3v5h-5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") 12 12, grab;
+  touch-action: none;
+  pointer-events: auto;
+}
+.oo-pdf-shell .oo-pdf-rotate-zone.nw { left: -24px; top: -24px; }
+.oo-pdf-shell .oo-pdf-rotate-zone.ne { right: -24px; top: -24px; }
+.oo-pdf-shell .oo-pdf-rotate-zone.se { right: -24px; bottom: -24px; }
+.oo-pdf-shell .oo-pdf-rotate-zone.sw { left: -24px; bottom: -24px; }
+@media (hover: hover) and (pointer: fine) {
+  .oo-pdf-shell .oo-pdf-rotate-handle:not(.is-multi-action):not(:focus-visible) { opacity: 0; pointer-events: none; }
+}
+@media (pointer: coarse) {
+  .oo-pdf-shell .oo-pdf-rotate-zone { display: none; }
+}
