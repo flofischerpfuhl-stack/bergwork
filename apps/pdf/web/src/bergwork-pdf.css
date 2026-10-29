@@ -738,6 +738,16 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
   outline-offset: 1px;
 }
 
+/* Touch: a resize handle is drawn as small as before but takes a tap within 48 x 48 px (Apple and Material ask for
+   at least 44). The rotate handle already is 44 px on touch. The mouse keeps the exact small targets. */
+@media (pointer: coarse) {
+  .oo-pdf-shell .oo-pdf-resize::before {
+    content: "";
+    position: absolute;
+    inset: -19px;
+  }
+}
+
 /* Pages panel: selected pages carry the current page's ring. Shift-/Ctrl-click and a long press on touch select or
    lift pages, never the labels' text, and no system callout opens on a long press. */
 .oo-pdf-shell .oo-pdf-drawer .oo-pdf-thumb.is-selected canvas {
