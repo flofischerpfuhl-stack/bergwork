@@ -856,3 +856,38 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
   cursor: pointer;
 }
 .oo-pdf-shell .oo-pdf-swatch-eyedropper svg { width: 13px; height: 13px; }
+/* Touch: a resize handle is drawn as small as before but takes a tap within 48 x 48 px (Apple and Material ask for
+   at least 44). The rotate handle already is 44 px on touch. The mouse keeps the exact small targets. */
+@media (pointer: coarse) {
+  .oo-pdf-shell .oo-pdf-resize::before {
+    content: "";
+    position: absolute;
+    inset: -19px;
+  }
+}
+
+/* Two fingers scaling and turning an object: its handles would scale and turn with the preview, so they wait for
+   the committed frame (Canva hides them the same way). */
+.oo-pdf-shell .is-two-finger-gesture > :is(.oo-pdf-resize, .oo-pdf-rotate-handle, .oo-pdf-arrow-endpoint) { visibility: hidden; }
+
+/* Pages panel: selected pages carry the current page's ring. Shift-/Ctrl-click and a long press on touch select or
+   lift pages, never the labels' text, and no system callout opens on a long press. */
+.oo-pdf-shell .oo-pdf-drawer .oo-pdf-thumb.is-selected canvas {
+  box-shadow: 0 0 0 2px var(--pdf-accent), 0 1px 3px var(--pdf-shadow);
+}
+.oo-pdf-shell .oo-pdf-drawer .oo-pdf-thumb.is-selected .oo-pdf-thumb-label {
+  color: var(--pdf-accent-strong, var(--pdf-accent));
+}
+.oo-pdf-shell .oo-pdf-thumb {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+/* A page lifted by touch: the grid no longer scrolls under the finger, the lifted pages shrink a little. */
+.oo-pdf-shell .oo-pdf-thumb-grid.is-touch-dragging { touch-action: none; }
+.oo-pdf-shell .oo-pdf-thumb-grid.is-touch-dragging .oo-pdf-thumb.is-dragging {
+  opacity: 0.4;
+  transform: scale(0.94);
+}
+.oo-pdf-shell .oo-pdf-thumb-grid.is-touch-dragging .oo-pdf-thumb.is-over-before::before,
+.oo-pdf-shell .oo-pdf-thumb-grid.is-touch-dragging .oo-pdf-thumb.is-over-after::after { width: 4px; }
