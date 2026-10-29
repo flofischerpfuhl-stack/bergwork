@@ -682,3 +682,7 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
 .oo-pdf-shortcuts-groups dt { font-size: var(--bw-text-small); }
 .oo-pdf-shortcuts-groups dd { margin: 0; text-align: right; }
 .oo-pdf-shortcuts-groups kbd { font: 500 var(--bw-text-small) / 1.4 var(--bw-font-ui); color: var(--bw-fg-muted); white-space: nowrap; }
+
+/* Space held over the document: the hand (see the Space-drag handler in the fork). */
+.is-space-panning, .is-space-panning * { cursor: grab !important; }
+.is-space-panning:active, .is-space-panning:active * { cursor: grabbing !important; }

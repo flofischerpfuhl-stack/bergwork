@@ -664,17 +664,25 @@ const SHORTCUT_MOD = /Mac|iPhone|iPad/u.test(globalThis.navigator?.platform || '
 const SHORTCUT_GROUPS = [
   ['Document', [
     ['Open', `${SHORTCUT_MOD}+O`], ['Save', `${SHORTCUT_MOD}+S`], ['Save as', `${SHORTCUT_MOD}+Shift+S`], ['Print', `${SHORTCUT_MOD}+P`],
-    ['Find text', `${SHORTCUT_MOD}+F`], ['Undo', `${SHORTCUT_MOD}+Z`], ['Redo', `${SHORTCUT_MOD}+Shift+Z`],
-    ['Zoom in / out', `${SHORTCUT_MOD}++ / ${SHORTCUT_MOD}+−`], ['Zoom with the wheel', `${SHORTCUT_MOD}+scroll`], ['This overview', '?'],
+    ['Find text', `${SHORTCUT_MOD}+F`], ['Undo', `${SHORTCUT_MOD}+Z`], ['Redo', `${SHORTCUT_MOD}+Shift+Z`], ['This overview', '?'],
   ]],
   ['Objects', [
     ['Format and actions', 'Right-click'], ['Add to the selection', 'Shift+click'], ['Select all on the page', `${SHORTCUT_MOD}+A`],
     ['Nudge', 'Arrow keys'], ['Nudge further', 'Shift+arrow keys'], ['Duplicate', `${SHORTCUT_MOD}+D`],
     ['Cut / copy / paste', `${SHORTCUT_MOD}+X / C / V`], ['Delete', 'Del'], ['Deselect', 'Esc'],
   ]],
+  ['View', [
+    ['Zoom in / out', `${SHORTCUT_MOD}++ / ${SHORTCUT_MOD}+−`], ['Zoom with the wheel', `${SHORTCUT_MOD}+scroll`],
+    ['Fit the page', `Shift+1 / ${SHORTCUT_MOD}+0`], ['Actual size (100 %)', `Shift+0 / ${SHORTCUT_MOD}+1`],
+    ['Move the view', 'Space+drag / middle button'],
+  ]],
   ['Text', [
     ['Edit text', 'Double-click / F2'], ['Bold, italic, underline', `${SHORTCUT_MOD}+B / I / U`],
     ['Format a selection', 'Select text'], ['Finish editing', 'Esc'],
+  ]],
+  ['Tools', [
+    ['Pan / Edit PDF', 'H / V'], ['Text / Image', 'T / I'], ['Rectangle / Ellipse / Arrow', 'R / E / A'],
+    ['Draw / Comment / Highlight', 'D / C / M'],
   ]],
 ];
 
@@ -13882,6 +13890,18 @@ function fitWidthZoomForViewport(viewport, page) {
   return clamp(Math.max(1, viewportWidth - horizontalPadding) / dims.width, MIN_ZOOM, MAX_ZOOM);
 }
 
+// berg:work: the zoom that shows the whole page (Shift+1, Ctrl/⌘+0): the smaller of width and height fit.
+function fitPageZoomForViewport(viewport, page) {
+  const dims = page ? pageDimensions(page) : null;
+  if (!dims?.height) return fitWidthZoomForViewport(viewport, page);
+  const stack = viewport?.querySelector?.('.oo-pdf-page-stack');
+  const style = stack ? getComputedStyle(stack) : null;
+  const verticalPadding = Number.parseFloat(style?.paddingTop || '0') + Number.parseFloat(style?.paddingBottom || '0');
+  const viewportHeight = Number(viewport?.clientHeight || window.visualViewport?.height || window.innerHeight || 0);
+  const heightFit = clamp(Math.max(1, viewportHeight - verticalPadding) / dims.height, MIN_ZOOM, MAX_ZOOM);
+  return Math.min(fitWidthZoomForViewport(viewport, page), heightFit);
+}
+
 function retargetPatchToPage(sourcePage, targetPage, latest, snap) {
   const target = targetPage || sourcePage;
   if (!target || !snap) return null;
@@ -17211,7 +17231,13 @@ function App({ shell = null }) {
       window.removeEventListener('blur', disarm);
     };
   }, []);
-  const [snapEnabled, setSnapEnabled] = useState(false);
+  // berg:work: snapping is on unless turned off (as in Figma and PowerPoint); the choice is remembered.
+  const [snapEnabled, setSnapEnabled] = useState(() => {
+    try { return localStorage.getItem('oo-pdf-snap') !== 'off'; } catch { return true; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('oo-pdf-snap', snapEnabled ? 'on' : 'off'); } catch { /* ignore */ }
+  }, [snapEnabled]);
   const [rulersVisible, setRulersVisible] = useState(false);
   const [guidesVisible, setGuidesVisible] = useState(false);
   const [guideUnit, setGuideUnit] = useState('pt');
@@ -27296,7 +27322,9 @@ function App({ shell = null }) {
       event.preventDefault();
       // Line- and page-based wheels (Firefox) report small deltas.
       const deltaY = event.deltaMode === 1 ? event.deltaY * 33 : event.deltaMode === 2 ? event.deltaY * 400 : event.deltaY;
-      const next = zoomRef.current * Math.pow(ZOOM_WHEEL_FACTOR, -deltaY);
+      // berg:work: a mouse-wheel notch (±100) zooms by about 1.2× instead of 1.43×; pinches send small deltas
+      // and keep their speed.
+      const next = zoomRef.current * Math.pow(ZOOM_WHEEL_FACTOR, -clamp(deltaY, -50, 50));
       zoomAt(next, event.clientX, event.clientY);
       return;
     }
@@ -27312,6 +27340,19 @@ function App({ shell = null }) {
 
   useEffect(() => {
     const handleKeyboardZoom = (event) => {
+      // berg:work: Shift+1 / Ctrl+0 fit the page, Shift+0 / Ctrl+1 show 100 % (Figma and Acrobat keys).
+      const fitPage = (event.shiftKey && !event.ctrlKey && !event.metaKey && event.code === 'Digit1')
+        || ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.code === 'Digit0');
+      const actualSize = (event.shiftKey && !event.ctrlKey && !event.metaKey && event.code === 'Digit0')
+        || ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.code === 'Digit1');
+      if ((fitPage || actualSize) && activeDoc && !event.defaultPrevented && !event.altKey &&
+          !event.target?.closest?.('input, textarea, select, [contenteditable="true"]')) {
+        event.preventDefault();
+        const page = activeDoc.pages?.[activePage];
+        zoomAt(actualSize ? 1 : fitPageZoomForViewport(viewportRef.current, page));
+        if (fitPage) requestAnimationFrame(() => goToPage(activePage));
+        return;
+      }
       if (!activeDoc || event.defaultPrevented || event.altKey || !(event.ctrlKey || event.metaKey)) return;
       const zoomIn = event.key === '+' || event.key === '=';
       const zoomOut = event.key === '-' || event.key === '_';
@@ -27321,7 +27362,7 @@ function App({ shell = null }) {
     };
     window.addEventListener('keydown', handleKeyboardZoom, true);
     return () => window.removeEventListener('keydown', handleKeyboardZoom, true);
-  }, [activeDoc, zoomAt]);
+  }, [activeDoc, activePage, goToPage, zoomAt]);
 
   const selectInspectorLayer = useCallback(payload => {
     selectionOriginRef.current = 'layers';
@@ -27598,9 +27639,27 @@ function App({ shell = null }) {
     const viewport = viewportRef.current;
     if (!viewport) return undefined;
     let drag = null;
-    const down = event => {
-      if (event.button !== 1) return;
+    // berg:work: holding Space turns the left button into the hand (Figma, Canva, Acrobat); Space no longer
+    // pages down while it is held over the document.
+    let spaceHeld = false;
+    const typing = target => target?.closest?.('input, textarea, select, button, [contenteditable="true"], [role="dialog"]');
+    const spaceDown = event => {
+      if (event.code !== 'Space' || event.ctrlKey || event.metaKey || event.altKey || typing(event.target)) return;
       event.preventDefault();
+      if (!spaceHeld) { spaceHeld = true; viewport.classList.add('is-space-panning'); }
+    };
+    const spaceUp = event => {
+      if (event.code !== 'Space' && event.type !== 'blur') return;
+      spaceHeld = false;
+      if (!drag) viewport.classList.remove('is-space-panning');
+    };
+    window.addEventListener('keydown', spaceDown);
+    window.addEventListener('keyup', spaceUp);
+    window.addEventListener('blur', spaceUp);
+    const down = event => {
+      if (event.button !== 1 && !(spaceHeld && event.button === 0)) return;
+      event.preventDefault();
+      event.stopPropagation();
       drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
       try { viewport.setPointerCapture(event.pointerId); } catch { /* synthetic */ }
     };
@@ -27612,9 +27671,14 @@ function App({ shell = null }) {
     const up = event => {
       if (!drag || event.pointerId !== drag.id) return;
       drag = null;
+      if (!spaceHeld) viewport.classList.remove('is-space-panning');
       try { viewport.releasePointerCapture(event.pointerId); } catch { /* ended */ }
     };
-    const noAutoscroll = event => { if (event.button === 1) event.preventDefault(); };
+    const noAutoscroll = event => {
+      if (event.button === 1) event.preventDefault();
+      // berg:work: a Space-drag must not reach the objects under the pointer.
+      if (spaceHeld && event.button === 0) { event.preventDefault(); event.stopPropagation(); }
+    };
     viewport.addEventListener('pointerdown', down, true);
     viewport.addEventListener('pointermove', move);
     viewport.addEventListener('pointerup', up);
@@ -27626,6 +27690,10 @@ function App({ shell = null }) {
       viewport.removeEventListener('pointerup', up);
       viewport.removeEventListener('pointercancel', up);
       viewport.removeEventListener('mousedown', noAutoscroll, true);
+      window.removeEventListener('keydown', spaceDown);
+      window.removeEventListener('keyup', spaceUp);
+      window.removeEventListener('blur', spaceUp);
+      viewport.classList.remove('is-space-panning');
     };
   }, [activeDocId]);
 
