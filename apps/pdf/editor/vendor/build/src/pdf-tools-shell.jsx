@@ -24165,7 +24165,7 @@ function App({ shell = null }) {
     return pending;
   }, [activeDoc, bindSemanticTextTarget, selected]);
 
-  const pasteSelectionSnapshot = useCallback(async (clip, destinationPageId) => {
+  const pasteSelectionSnapshot = useCallback(async (clip, destinationPageId, at = null) => {
     const runtime = livePdfRuntimeRef.current;
     const doc = activeDoc;
     const page = doc?.pages.find(item => item.id === destinationPageId);
@@ -24181,7 +24181,11 @@ function App({ shell = null }) {
         const commands = [];
         const annotations = [];
         const nativeIds = [];
-        const offset = clipboardPlacementOffset(clip.items.map(item => item.rect), pageDimensions(page));
+        const clipRects = clip.items.map(item => item.rect || item.source)
+          .map(rect => ({ x: Number(rect?.x), y: Number(rect?.y) })).filter(rect => Number.isFinite(rect.x) && Number.isFinite(rect.y));
+        const offset = at && clipRects.length
+          ? { x: at.x - Math.min(...clipRects.map(rect => rect.x)), y: at.y - Math.min(...clipRects.map(rect => rect.y)) }
+          : clipboardPlacementOffset(clip.items.map(item => item.rect), pageDimensions(page));
         let projectedDoc = { ...latestDoc, fontCatalog: [
           ...(latestDoc.fontCatalog || []), ...(clip.fontCatalog || []).filter(entry =>
             !(latestDoc.fontCatalog || []).some(current => current.hash === entry.hash)),
@@ -24270,11 +24274,13 @@ function App({ shell = null }) {
     }
   }, [activeDoc, refreshLivePageSceneAfterCommit, updateDoc]);
 
-  const pasteClipboard = useCallback(async (payload = null) => {
+  // berg:work: `placement` ({ page, at }) pastes with the copied objects' top left corner at a page point
+  // (the context menu's "Paste here").
+  const pasteClipboard = useCallback(async (payload = null, placement = null) => {
     if (!activeDoc) return null;
     const clip = await (payload || clipboardRef.current);
     if (clip?.kind !== 'selection-snapshot') return null;
-    return pasteSelectionSnapshot(clip, activeDoc.pages?.[activePage]?.id);
+    return pasteSelectionSnapshot(clip, placement?.page?.id || activeDoc.pages?.[activePage]?.id, placement?.at || null);
   }, [activeDoc, activePage, pasteSelectionSnapshot]);
 
   const duplicateNestedSelection = useCallback(async target => {
@@ -27883,6 +27889,21 @@ function App({ shell = null }) {
     viewport.addEventListener('pointerdown', remember, true);
     return () => viewport.removeEventListener('pointerdown', remember, true);
   }, [tool, activeDocId]);
+  // berg:work: Ctrl/⌘+] and [ move the selected object one step forward or back, with Shift to the front or back.
+  useEffect(() => {
+    const arrange = event => {
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.altKey || editingText) return;
+      if (event.code !== 'BracketRight' && event.code !== 'BracketLeft') return;
+      const current = selectedRef.current;
+      const key = current && current.type !== 'multi' ? selectionLayerKey(current) : '';
+      if (!key || !current.pageId || event.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      event.preventDefault();
+      const forward = event.code === 'BracketRight';
+      moveLayer(current.pageId, key, event.shiftKey ? (forward ? 'front' : 'back') : (forward ? -1 : 1));
+    };
+    window.addEventListener('keydown', arrange);
+    return () => window.removeEventListener('keydown', arrange);
+  }, [editingText, moveLayer]);
   // berg:work: with nothing selected the arrow keys move the view (Figma): 40 px, Shift 200 px. Selected objects keep
   // nudging (their handlers take the key first).
   useEffect(() => {
@@ -28455,15 +28476,26 @@ function App({ shell = null }) {
             { label: 'Copy', icon: 'copy', shortcut: 'Ctrl+C', run: () => document.execCommand('copy') },
           ] : []),
           { label: 'Paste', icon: 'clipboard', shortcut: 'Ctrl+V', disabled: !clipboardRef.current, run: () => void pasteClipboard() },
+          // berg:work: paste with the copied objects' top left at the point that was right-clicked (Figma).
+          ...(clipboardRef.current && sheetPointAt(contextMenu.x, contextMenu.y) ? [{
+            label: 'Paste here', icon: 'clipboard',
+            run: () => void pasteClipboard(null, sheetPointAt(contextMenu.x, contextMenu.y)),
+          }] : []),
           ...(!selected ? ['separator', { label: 'Keyboard shortcuts', icon: 'keyboard', shortcut: '?', run: () => setShortcutsOpen(true) }] : []),
           ...(selected ? [
             { label: 'Duplicate', icon: 'copy', shortcut: 'Ctrl+D', run: () => duplicateSelection() },
-            // Opens the Layers drawer; the current selection is already the
-            // highlighted layer there, so the object's properties come up.
-            { label: 'Show properties', icon: 'layers', run: () => { setInspectorTab('properties'); setDrawerOpen(false); setInspectorOpen(true); } },
+            // berg:work: the menu is grouped: clipboard, arrange, properties, delete.
+            'separator',
             ...(selected.type !== 'multi' && selected.pageId && selectionLayerKey(selected) ? [
-              { label: 'Bring to front', icon: 'arrow-up', run: () => moveLayer(selected.pageId, selectionLayerKey(selected), 'front') },
-              { label: 'Send to back', icon: 'arrow-down', run: () => moveLayer(selected.pageId, selectionLayerKey(selected), 'back') },
+              // berg:work: one step at a time as well (Figma ⌘] / ⌘[, PowerPoint).
+              { label: 'Bring forward', icon: 'arrow-up', shortcut: `${SHORTCUT_MOD}+]`, run: () => moveLayer(selected.pageId, selectionLayerKey(selected), -1) },
+              { label: 'Send backward', icon: 'arrow-down', shortcut: `${SHORTCUT_MOD}+[`, run: () => moveLayer(selected.pageId, selectionLayerKey(selected), 1) },
+              { label: 'Bring to front', icon: 'arrow-up', shortcut: `${SHORTCUT_MOD}+Shift+]`, run: () => moveLayer(selected.pageId, selectionLayerKey(selected), 'front') },
+              { label: 'Send to back', icon: 'arrow-down', shortcut: `${SHORTCUT_MOD}+Shift+[`, run: () => moveLayer(selected.pageId, selectionLayerKey(selected), 'back') },
+              // berg:work: lock in place (the object stays selectable from Layers and this menu, as in Figma).
+              ...(activeDoc ? [layerPresentationFor(activeDoc.layerPresentation, selectionLayerKey(selected)).locked
+                ? { label: 'Unlock', icon: 'unlock', run: () => void updateLayerPresentation(selectionLayerKey(selected), { locked: false }) }
+                : { label: 'Lock', icon: 'lock', run: () => void updateLayerPresentation(selectionLayerKey(selected), { locked: true }) }] : []),
             ] : []),
             // Stacked/identical objects: reach the one underneath the pointer.
             ...(selected.type !== 'multi' && selectionNodesUnderPoint(contextMenu.x, contextMenu.y).length > 1 ? [{
@@ -28478,6 +28510,9 @@ function App({ shell = null }) {
               },
             }] : []),
             'separator',
+            // Opens the Layers drawer; the current selection is already the
+            // highlighted layer there, so the object's properties come up.
+            { label: 'Show properties', icon: 'layers', run: () => { setInspectorTab('properties'); setDrawerOpen(false); setInspectorOpen(true); } },
             { label: 'Delete', icon: 'trash-2', shortcut: 'Del', danger: true, run: () => deleteSelection() },
           ] : []),
         ]} />
