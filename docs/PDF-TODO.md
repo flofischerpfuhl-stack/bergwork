@@ -45,12 +45,16 @@ Selection and transform:
 - [ ] **Alt-drag duplicates; Ctrl+D repeats the last offset** (Figma, Canva). Today Alt-drag moves the original.
   1–2 PD.
 - [ ] **Undo brings back the selection** and scrolls to the changed object. Today undo leaves nothing selected. 2–3 PD.
-- [ ] **Rotate from just outside a corner** instead of the round handle above the frame (Figma). **Needs OK.** 1–2 PD.
+- [x] **Rotate from just outside a corner** (approved): four rotate zones with a rotate cursor; the round handle is
+  hidden for mice (still in the tab order) and stays on touch. Touch: two-finger rotate and scale on the selected
+  object (approved, branch `feat/pdf-pages-touch`).
 - [ ] **Resize cursors follow the frame's rotation.** 0.5 PD.
 - [ ] **Equal-spacing guides** (pink markers between three or more objects) and Alt-hover distance measuring. 3–5 PD.
-- [ ] **"Select layer ▸" under the pointer** in the context menu, for stacked objects (Figma). **Needs OK.** 1 PD.
-- [ ] **Context menu additions:** Group, Lock, Bring forward / Send backward one step, Copy / paste style, Paste here.
-  **Needs OK** (more items). 2–3 PD.
+- [x] **Select the object below** was already in the context menu when objects are stacked.
+- [x] **Context menu** (approved): Paste here (at the right-clicked point), Bring forward / Send backward one step
+  (Ctrl+] / [, with Shift to front/back), Lock / Unlock; grouped into clipboard, arrange, properties/delete. Group
+  stays in the multi-selection bar (a right-click selects one object, by design).
+- [ ] **Copy / paste style** (Ctrl+Alt+C / V; menu entries). 2 PD.
 
 Text:
 - [x] **Readable font names** in the picker: "Arial (from the PDF)" instead of "Original PDF font · AAAAAA+ArialMT";
@@ -63,31 +67,33 @@ Panels and fields:
 - [x] **Properties without duplicates:** one Keep proportions (next to Width/Height), Rotate by only where there is
   no Angle field.
 - [x] **Readable layer names:** Line, Shape, Image instead of "Path #1064", "img_p0_6".
-- [ ] **Hovering a layer row outlines the object on the page**; drag rows to reorder; double-click to rename. 2–3 PD.
+- [x] **Hovering a layer row outlines the object on the page.**
+- [ ] **Layers: drag rows to reorder; double-click to rename** (renaming exists in Properties). 2 PD.
 - [ ] **Recent and document colours, eyedropper** in the colour wells. 2 PD.
 - [ ] **"Mixed" in fields of a multi-selection** and edits that apply to each object (Figma's Mixed+10). 2–3 PD.
 
 Clipboard and drop:
 - [x] **Images dropped on a page are placed at the pointer**; the page is outlined while dragging.
-- [ ] **Paste lands where you look:** at the pointer or the centre of the visible part of the page (today: the page
-  centre, which can be off screen). 1 PD.
+- [x] **Paste lands where you look:** pasted text at the pointer over a page, else the middle of the visible part of
+  the page; pasted image files (screenshots) become images there.
 - [ ] **Drop an image onto an image to replace it** (Canva frames). 2 PD.
 
 Navigation:
 - [x] **Space-drag hand** (Space no longer pages down), **Shift+1 / Ctrl+0 fit, Shift+0 / Ctrl+1 100 %**, a gentler
   wheel step (1.2× per notch instead of 1.43×).
-- [ ] **Shift+2 zooms to the selection.** 0.5 PD.
-- [ ] **Arrow keys pan when nothing is selected.** 0.5 PD.
+- [x] **Shift+2 zooms to the selection.**
+- [x] **Arrow keys pan when nothing is selected** (40 px, Shift 200 px).
 
 Feedback and discovery:
-- [ ] **Command palette (Ctrl+K)** over every action, with recently used. **Needs OK.** 3–5 PD.
+- [x] **Command palette (Ctrl+K)** (approved): file, edit, tools, panels, view and page actions by name, recently used
+  first, group and shortcut per row.
 - [ ] **Toasts with Undo** after destructive actions (delete page, delete object, flatten). 1 PD.
 - [ ] **Saved state visible** ("Saved" / "Unsaved changes" by the file name) instead of only a dot; the dot stays
   after undoing back to the saved state. 1 PD.
 
 Touch:
-- [ ] **Bottom context bar on phones** instead of the floating mini toolbar, which covers two thirds of the visible
-  text on a 390 px screen (Canva's model). **Needs OK.** 3–5 PD.
+- [x] **Bottom context bar on phones** (approved): the mini toolbar docks above the bottom bar (above the keyboard
+  when it is open) instead of covering the text.
 - [ ] **Larger touch targets for handles** (≥ 44 px hit area, drawn smaller). 1 PD.
 - [ ] **Pages: reorder by touch, Shift-range selection, the selection follows a moved page.** 2–3 PD.
 
