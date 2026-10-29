@@ -748,6 +748,10 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
   }
 }
 
+/* Two fingers scaling and turning an object: its handles would scale and turn with the preview, so they wait for
+   the committed frame (Canva hides them the same way). */
+.oo-pdf-shell .is-two-finger-gesture > :is(.oo-pdf-resize, .oo-pdf-rotate-handle, .oo-pdf-arrow-endpoint) { visibility: hidden; }
+
 /* Pages panel: selected pages carry the current page's ring. Shift-/Ctrl-click and a long press on touch select or
    lift pages, never the labels' text, and no system callout opens on a long press. */
 .oo-pdf-shell .oo-pdf-drawer .oo-pdf-thumb.is-selected canvas {

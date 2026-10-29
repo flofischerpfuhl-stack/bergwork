@@ -98,9 +98,12 @@ import { anyLayerPresentationLocked, layerPresentationFor, layerPresentationHasH
 import { projectNativeObjectHierarchyLayers } from './pdf-editor/model/native-object-hierarchy.js';
 import { clipboardPlacementOffset } from './pdf-editor/interaction/clipboard-placement.js';
 // berg:work: several pages selected in the Pages panel; touch reordering there.
-import { effectivePageSelection, pageBlockMoves, pageDropGap, pageMoveDestination, pageNeighbourMoves,
+import { effectivePageSelection, pageBlockMoves, pageMoveDestination, pageNeighbourMoves,
   pageRangeText, pageSelectionAfterClick } from './pdf-editor/interaction/bergwork-page-selection.js';
 import { useThumbTouchDrag } from './pdf-editor/interaction/bergwork-thumb-touch-drag.js';
+// berg:work: two fingers on the selected object scale and turn it.
+import { beginTwoFingerTransform, finishTwoFingerTransform, TWO_FINGER_READOUT_EVENT, updateTwoFingerTransform,
+  useTwoFingerTarget } from './pdf-editor/interaction/bergwork-two-finger-transform.js';
 import { GeometryNumber, GeometryProperties } from './pdf-editor/interaction/geometry-properties.jsx';
 import { InspectorSelect, PropSection, SimpleInspectorSelect } from './pdf-editor/interaction/inspector-controls.jsx';
 import { RichTextInspectorEditor } from './pdf-editor/interaction/rich-text-inspector-editor.jsx';
@@ -781,12 +784,16 @@ function GestureReadout({ zoom, tool }) {
       setReadout({ text, x: event.clientX + 16, y: event.clientY + 18 });
     };
     const up = () => { gesture = null; setReadout(null); };
+    // A two-finger scale/turn of an object reports its own readout (bergwork-two-finger-transform.js).
+    const twoFinger = event => setReadout(event.detail || null);
+    window.addEventListener(TWO_FINGER_READOUT_EVENT, twoFinger);
     window.addEventListener('pointerdown', down, true);
     window.addEventListener('pointermove', move, true);
     window.addEventListener('pointerup', up, true);
     window.addEventListener('pointercancel', up, true);
     window.addEventListener('blur', up);
     return () => {
+      window.removeEventListener(TWO_FINGER_READOUT_EVENT, twoFinger);
       window.removeEventListener('pointerdown', down, true);
       window.removeEventListener('pointermove', move, true);
       window.removeEventListener('pointerup', up, true);
@@ -14884,6 +14891,27 @@ function arrowGeometryForEndpoints(ann, start, end) {
     angle: 0,
     pendingRotationDegrees: undefined,
   };
+}
+
+// berg:work: a two-finger gesture on an annotation: its box (and drawn points, arrow ends) scaled about the centre,
+// then turned as its rotate handle turns it. One patch, one Undo step.
+function twoFingerAnnotationPatch(ann, scale, degrees) {
+  let next = { ...ann };
+  if (scale !== 1) {
+    const x = Number(ann.x || 0);
+    const y = Number(ann.y || 0);
+    const w = Number(ann.w || 0);
+    const h = Number(ann.h || 0);
+    const cx = x + w / 2;
+    const cy = y + h / 2;
+    next = { ...next, x: cx - (w * scale) / 2, y: cy - (h * scale) / 2, w: w * scale, h: h * scale };
+    if (Array.isArray(ann.points)) {
+      next.points = ann.points.map(point => ({ ...point, x: cx + (point.x - cx) * scale, y: cy + (point.y - cy) * scale }));
+    }
+    // Arrow ends are relative to the box's top-left corner, which moves with the scale.
+    for (const key of ['x1', 'y1', 'x2', 'y2']) if (Number.isFinite(Number(ann[key]))) next[key] = Number(ann[key]) * scale;
+  }
+  return degrees ? { ...next, ...annotationRotationPatch(next, degrees) } : next;
 }
 
 function annotationRotationPatch(ann, degrees) {
@@ -29374,6 +29402,10 @@ function PdfViewport(props) {
   const pinchRef = useRef(null);
   const viewportTapRef = useRef(null);
   const touchDownRef = useRef(null);
+  // berg:work: where the first finger of a touch went down, and a two-finger gesture on the selected object
+  // (which then neither zooms nor counts as a tap until every finger is up).
+  const firstTouchRef = useRef(null);
+  const twoFingerRef = useRef(null);
   const virtualFrameRef = useRef(0);
   const verticalScrollRef = useRef(null);
   const pdfiumSession = usePdfiumSessionRuntime(doc, activePage, getLatestDocument);
@@ -29584,8 +29616,20 @@ function PdfViewport(props) {
     if (event.pointerType !== 'touch') return;
     pointersRef.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
     touchDownRef.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    if (pointersRef.current.size === 1) firstTouchRef.current = { x: event.clientX, y: event.clientY };
     if (pointersRef.current.size === 2) {
       window.dispatchEvent(new Event(PDF_INTERACTION_CANCEL_EVENT));
+      // berg:work: the first finger on the selected object (or within reach of its frame): scale and turn it.
+      const [a, b] = [...pointersRef.current.values()];
+      const objectGesture = !editingText && firstTouchRef.current
+        ? beginTwoFingerTransform(viewportRef.current, firstTouchRef.current, a, b) : null;
+      if (objectGesture) {
+        twoFingerRef.current = { ...objectGesture, pointerIds: [...pointersRef.current.keys()] };
+        pinchRef.current = null;
+        panRef.current = null;
+        event.preventDefault();
+        return;
+      }
       beginPinch();
     }
   };
@@ -29593,6 +29637,17 @@ function PdfViewport(props) {
   const trackTouchPointerMove = (event) => {
     if (event.pointerType !== 'touch' || !pointersRef.current.has(event.pointerId)) return;
     pointersRef.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+    const objectGesture = twoFingerRef.current;
+    if (objectGesture) {
+      // berg:work: the two fingers of an object gesture preview its scale and turn.
+      if (!objectGesture.ended && objectGesture.pointerIds.includes(event.pointerId)) {
+        const [a, b] = objectGesture.pointerIds.map(id => pointersRef.current.get(id));
+        if (a && b) updateTwoFingerTransform(objectGesture, a, b, zoom);
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (!pinchRef.current || pointersRef.current.size < 2) return;
     const [a, b] = [...pointersRef.current.values()];
     const distance = Math.max(1, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY));
@@ -29631,6 +29686,24 @@ function PdfViewport(props) {
           ctrlKey: event.ctrlKey, metaKey: event.metaKey,
         }));
       }
+    }
+    // berg:work: lifting a finger ends an object gesture (a cancelled touch restores the object); the remaining
+    // finger's release is no tap.
+    const objectGesture = twoFingerRef.current;
+    if (objectGesture && event.pointerType === 'touch' && pointersRef.current.has(event.pointerId)) {
+      if (!objectGesture.ended && objectGesture.pointerIds.includes(event.pointerId)) {
+        objectGesture.ended = true;
+        try {
+          finishTwoFingerTransform(objectGesture, { commit: event.type === 'pointerup' });
+        } catch (error) {
+          console.warn('[pdf-two-finger] commit failed', error);
+        }
+      }
+      event.stopPropagation();
+      pointersRef.current.delete(event.pointerId);
+      if (!pointersRef.current.size) twoFingerRef.current = null;
+      pinchRef.current = null;
+      return;
     }
     const wasPinching = Boolean(pinchRef.current);
     if (
@@ -36988,6 +37061,12 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
   const sourceCoverNode = sourceCoverDataUrl
     ? <img className="oo-pdf-text-cover" data-source-id={itemId} data-cover-kind="text-source" src={sourceCoverDataUrl} alt="" draggable="false" style={sourceCoverStyle} />
     : <div className="oo-pdf-text-cover" data-source-id={itemId} data-cover-kind="text-source" style={sourceCoverStyle} />;
+  // berg:work: two fingers on the selected text turn it (its resize reflows the frame, so a pinch does not scale).
+  useTwoFingerTarget(selected && !editing && !locked && !edit?.deleted, selectionItemKey({ type: 'text', sourceId: itemId }),
+    (_scale, degrees) => (degrees ? onMove(itemId, { ...current, pendingRotationDegrees: degrees }, {
+      commitGesture: true, gestureReason: 'text-rotate-handle', gestureKind: GestureKind.ROTATE,
+      previousForCommit: clonePlain(current, {}),
+    }) : null), { scales: false });
   if (edit?.deleted || (edit && current.pageId !== page.id)) return null;
 
   const startDrag = (event) => {
@@ -37644,6 +37723,12 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
     }
   }, [editing, editingDraftText, edit.text]);
   const caretPointRef = useCaretAtDoubleClickPoint(textareaRef, editing, draft);
+  // berg:work: two fingers on the selected text turn it (see TextItem).
+  useTwoFingerTarget(selected && !editing && !locked && !edit?.deleted, selectionItemKey({ type: 'text', sourceId }),
+    (_scale, degrees) => (degrees ? onMove(sourceId, { ...edit, pendingRotationDegrees: degrees }, {
+      commitGesture: true, gestureReason: 'text-rotate-handle', gestureKind: GestureKind.ROTATE,
+      previousForCommit: clonePlain(edit, {}),
+    }) : null), { scales: false });
 
   const selectionPayload = (pageId = edit.pageId, itemPatch = edit) => ({
     type: 'text',
@@ -38014,6 +38099,22 @@ function ImageRegion({ page, pages = [page], item, itemId, edit, preferences, zo
     height: Math.max(8, current.h * zoom),
     zIndex,
   };
+  // berg:work: two fingers on the selected image scale and turn it, as one edit.
+  useTwoFingerTarget(selected && !locked && !edit?.deleted, selectionItemKey({ type: 'imageRegion', sourceId: itemId }),
+    (scale, degrees) => {
+      let next = current;
+      let pending = null;
+      if (scale !== 1) {
+        next = twoFingerScaledImageEdit(page, current, scale);
+        pending = onMove(itemId, next, { commitGesture: true, gestureReason: 'image-resize', gestureKind: GestureKind.RESIZE,
+          previousForCommit: clonePlain(current, {}) });
+      }
+      if (degrees) {
+        pending = onMove(itemId, { ...next, pendingRotationDegrees: degrees }, { commitGesture: true,
+          gestureReason: 'image-rotate-handle', gestureKind: GestureKind.ROTATE, previousForCommit: clonePlain(next, {}) });
+      }
+      return pending;
+    });
   if (edit?.deleted || (edit && current.pageId !== page.id)) {
     return null;
   }
@@ -38299,6 +38400,22 @@ function ImageEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, s
     rect: { x: itemPatch.x ?? current.x, y: itemPatch.y ?? current.y, w: itemPatch.w ?? current.w, h: itemPatch.h ?? current.h },
     edit: { ...current, ...itemPatch },
   });
+  // berg:work: two fingers on the selected image scale and turn it, as one edit.
+  useTwoFingerTarget(selected && !locked && !edit?.deleted, selectionItemKey({ type: 'imageRegion', sourceId }),
+    (scale, degrees) => {
+      let next = edit;
+      let pending = null;
+      if (scale !== 1) {
+        next = twoFingerScaledImageEdit(page, current, scale);
+        pending = onMove(sourceId, next, { commitGesture: true, gestureReason: 'image-resize', gestureKind: GestureKind.RESIZE,
+          previousForCommit: clonePlain(current, {}) });
+      }
+      if (degrees) {
+        pending = onMove(sourceId, { ...next, pendingRotationDegrees: degrees }, { commitGesture: true,
+          gestureReason: 'image-rotate-handle', gestureKind: GestureKind.ROTATE, previousForCommit: clonePlain(next, {}) });
+      }
+      return pending;
+    });
 
   const start = (event, handle = null) => {
     if (event.pointerType === 'touch' && !event.isPrimary) return;
@@ -38660,6 +38777,24 @@ function NativePdfObject({
   useEffect(() => {
     setDraftEdit(null);
   }, [sourceId, edit?.pageId, edit?.x, edit?.y, edit?.w, edit?.h, edit?.deleted]);
+  // berg:work: two fingers on the selected object scale and turn it, as one edit (turning only where its rotate
+  // handle shows; `editBase` is defined below and read only when a gesture ends).
+  useTwoFingerTarget(selected && !locked && !pathIsolated && !edit?.deleted, selectionItemKey({ type: 'nativeObject', sourceId }),
+    (scale, degrees) => {
+      const turns = base.nested !== true && !(Array.isArray(base.formPath) && base.formPath.length);
+      let next = current;
+      let pending = null;
+      if (scale !== 1) {
+        next = editBase(twoFingerScalePatch(page, current, scale), current);
+        pending = onMove(sourceId, next, { commitGesture: true, gestureReason: 'native-object-resize',
+          gestureKind: GestureKind.RESIZE, previousForCommit: clonePlain(current, {}) });
+      }
+      if (degrees && turns) {
+        pending = onMove(sourceId, { ...next, pendingRotationDegrees: degrees }, { commitGesture: true,
+          gestureReason: 'native-object-rotate-handle', gestureKind: GestureKind.ROTATE, previousForCommit: clonePlain(next, {}) });
+      }
+      return pending;
+    });
 
   if (edit?.deleted) return null;
 
@@ -39610,6 +39745,15 @@ function AnnotationObject({ page, ann, zoom, zIndex, selected, editing, pageCont
   const cancelAnnotationInteraction = () => cancelActivePdfDrag(dragRef);
   usePdfInteractionCancel(cancelAnnotationInteraction);
   useCancelDependentPdfDrag(dragRef, cancelAnnotationInteraction);
+  // berg:work: two fingers on the selected annotation scale and turn it (a text box only turns: its resize reflows).
+  useTwoFingerTarget(selected && !editing && !locked && ann.type !== 'comment' && !ann.imported,
+    selectionItemKey({ type: 'annotation', id: ann.id }),
+    (scale, degrees) => onUpdate(ann.id, twoFingerAnnotationPatch(ann, scale, degrees), {
+      commitGesture: true,
+      gestureReason: degrees ? 'annotation-rotate-handle' : 'annotation-resize',
+      ...(degrees ? { gestureKind: GestureKind.ROTATE } : {}),
+      previousForCommit: clonePlain(ann, {}),
+    }), { scales: ann.type !== 'text' });
   const isTextLike = ann.type === 'text' || ann.type === 'signature';
   const importedCustomFreeText = ann.imported && ann.sourceSubtype === 'freetext' && ann.appearanceReconstructible === false;
   const importedCustomFreeTextTextEditable = importedCustomFreeText && ann.appearanceTextPreservable === true;
@@ -41003,6 +41147,42 @@ function resizeMatrixMetadata(page, edit, patch, handle) {
     resizeAnchorDisplay: anchorDisplay,
     resizeAnchorPdf: pdfPointForDisplayPoint(page, anchorDisplay),
   };
+}
+
+// berg:work: a two-finger pinch as a resize: the box scaled by `scale` about its centre, with the metadata a
+// proportional corner resize carries (uniform scale at the centre; a turned object's quad scales along).
+function twoFingerScalePatch(page, edit, scale) {
+  const x = Number(edit.x || 0);
+  const y = Number(edit.y || 0);
+  const w = Number(edit.w || 0);
+  const h = Number(edit.h || 0);
+  const centre = { x: x + w / 2, y: y + h / 2 };
+  const quad = Array.isArray(edit.quad) && edit.quad.length === 4
+    ? { quad: edit.quad.map(point => ({
+        x: centre.x + (Number(point.x) - centre.x) * scale,
+        y: centre.y + (Number(point.y) - centre.y) * scale,
+      })) }
+    : {};
+  return {
+    x: centre.x - (w * scale) / 2,
+    y: centre.y - (h * scale) / 2,
+    w: w * scale,
+    h: h * scale,
+    ...quad,
+    resizeHandle: 'se',
+    resizeScale: scale,
+    resizeScaleX: scale,
+    resizeScaleY: scale,
+    resizeAnchorDisplay: centre,
+    resizeAnchorPdf: pdfPointForDisplayPoint(page, centre),
+  };
+}
+
+// berg:work: the same for an image edit, which also carries its target source rectangle.
+function twoFingerScaledImageEdit(page, edit, scale) {
+  const patch = twoFingerScalePatch(page, edit, scale);
+  const source = targetSourceRectForPatch(page, edit, patch);
+  return { ...edit, ...patch, targetSourceX: source.x, targetSourceY: source.y, targetSourceW: source.w, targetSourceH: source.h };
 }
 
 // Search-and-redact: find every occurrence in the page text, review the list
