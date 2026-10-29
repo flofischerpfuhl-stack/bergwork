@@ -813,3 +813,30 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
 
 /* Equal-spacing markers while moving (pink, as Figma): the gap itself is drawn, not only its end caps. */
 .oo-pdf-snap-distance.is-spacing { background: currentColor; color: #db2777; }
+
+/* Page numbers, headers and footers: the six spots of the preview page pick the position. */
+.oo-pdf-shell .oo-pdf-stamp-spot {
+  position: absolute;
+  min-width: 18px;
+  height: 14px;
+  padding: 0 3px;
+  border: 1px dashed transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: #111;
+  font: 600 8px / 12px var(--bw-font-ui);
+  white-space: nowrap;
+  overflow: hidden;
+  max-width: 70px;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.oo-pdf-shell .oo-pdf-stamp-spot:not(.is-active):hover,
+.oo-pdf-shell .oo-pdf-stamp-spot:focus-visible { border-color: #94a3b8; }
+.oo-pdf-shell .oo-pdf-stamp-spot:not(.is-active)::after { content: ''; display: block; width: 6px; height: 2px; margin: 5px auto 0; background: #cbd5e1; border-radius: 1px; }
+.oo-pdf-shell .oo-pdf-stamp-spot.is-top-left { top: 3px; left: 4px; }
+.oo-pdf-shell .oo-pdf-stamp-spot.is-top-center { top: 3px; left: 50%; transform: translateX(-50%); }
+.oo-pdf-shell .oo-pdf-stamp-spot.is-top-right { top: 3px; right: 4px; }
+.oo-pdf-shell .oo-pdf-stamp-spot.is-bottom-left { bottom: 3px; left: 4px; }
+.oo-pdf-shell .oo-pdf-stamp-spot.is-bottom-center { bottom: 3px; left: 50%; transform: translateX(-50%); }
+.oo-pdf-shell .oo-pdf-stamp-spot.is-bottom-right { bottom: 3px; right: 4px; }

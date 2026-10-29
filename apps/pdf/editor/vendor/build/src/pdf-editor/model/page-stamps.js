@@ -9,7 +9,13 @@
 export const PAGE_STAMP_KINDS = Object.freeze({
   watermark: 'Watermark',
   pageNumber: 'PageNumber',
+  // berg:work: a running header at the top of the page (page numbers and footers stay 'PageNumber'), so a header
+  // and a footer can exist side by side and each replaces only itself.
+  pageHeader: 'PageHeader',
 });
+
+// berg:work: running text kinds (numbers, footers, headers, Bates numbers): one line of text per page.
+const RUNNING_TEXT_KINDS = new Set([PAGE_STAMP_KINDS.pageNumber, PAGE_STAMP_KINDS.pageHeader]);
 
 // Stream dictionary key identifying the streams a stamp added (its leading
 // "q" stream and its trailing stamp stream), so a stamp kind can be replaced.
@@ -193,9 +199,17 @@ function watermarkTextPlacement(font, text, frame, requestedSize) {
   return { size, x: (frame.width - width) / 2, y: (frame.height - capHeight) / 2 };
 }
 
-function pageNumberPlacement(font, text, frame, size) {
+// berg:work: `position` is "<top|bottom>-<left|center|right>" (default: bottom-center, as before); the margin to the
+// page edge stays the 22 pt numbers always had, the same at the sides.
+function pageNumberPlacement(font, text, frame, size, position = 'bottom-center') {
   const width = font.widthOfTextAtSize(text, size);
-  return { size, x: (frame.width - width) / 2, y: Math.min(22, frame.height / 4) };
+  const [vertical, horizontal] = String(position || 'bottom-center').split('-');
+  const margin = Math.min(22, frame.height / 4, frame.width / 6);
+  const x = horizontal === 'left' ? margin
+    : horizontal === 'right' ? frame.width - margin - width
+      : (frame.width - width) / 2;
+  const y = vertical === 'top' ? frame.height - margin - font.heightAtSize(size, { descender: false }) : margin;
+  return { size, x, y };
 }
 
 function imagePlacement(image, frame) {
@@ -273,7 +287,9 @@ export async function stampPdfPages(PDFLib, bytes, stamp) {
   }));
   const artifact = kind === PAGE_STAMP_KINDS.watermark
     ? '/Artifact <</Type /Pagination /Subtype /Watermark>> BDC'
-    : '/Artifact <</Type /Pagination /Subtype /Footer>> BDC';
+    : kind === PAGE_STAMP_KINDS.pageHeader
+      ? '/Artifact <</Type /Pagination /Subtype /Header>> BDC'
+      : '/Artifact <</Type /Pagination /Subtype /Footer>> BDC';
   const resourcePrefix = `Fw${kind}`;
   const failed = [];
   const results = [];
@@ -310,7 +326,7 @@ export async function stampPdfPages(PDFLib, bytes, stamp) {
         const place = imagePlacement(image, frame);
         body = `${formatNumber(place.width)} 0 0 ${formatNumber(place.height)} ${formatNumber(place.x)} ${formatNumber(place.y)} cm /${imageName} Do`;
       } else {
-        text = kind === PAGE_STAMP_KINDS.pageNumber
+        text = RUNNING_TEXT_KINDS.has(kind)
           ? String(stamp.pageText ? stamp.pageText(pageIndex, pageCount) : pageIndex + 1)
           : String(stamp.text || '').trim();
         if (!text) throw new Error('The stamp text is empty.');
@@ -319,8 +335,8 @@ export async function stampPdfPages(PDFLib, bytes, stamp) {
         const fonts = subDict('Font');
         const fontName = uniqueResourceName(fonts, PDFLib, `${resourcePrefix}F`);
         fonts.set(PDFName.of(fontName), font.ref);
-        const place = kind === PAGE_STAMP_KINDS.pageNumber
-          ? pageNumberPlacement(font, text, frame, Number(stamp.fontSize) > 0 ? Number(stamp.fontSize) : 12)
+        const place = RUNNING_TEXT_KINDS.has(kind)
+          ? pageNumberPlacement(font, text, frame, Number(stamp.fontSize) > 0 ? Number(stamp.fontSize) : 12, stamp.position)
           : watermarkTextPlacement(font, text, frame, Number(stamp.fontSize));
         body = `BT /${fontName} ${formatNumber(place.size)} Tf ${colorOperands(stamp.color)} rg ` +
           `${formatNumber(place.x)} ${formatNumber(place.y)} Td ${encoded} Tj ET`;

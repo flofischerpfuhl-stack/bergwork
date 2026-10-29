@@ -26482,7 +26482,7 @@ function App({ shell = null }) {
     }, null, { independent: true }).then(outcome => {
       const pagesText = `${outcome.applied} of ${outcome.total} page${outcome.total === 1 ? '' : 's'}`;
       setOperationNotice(panelId, { tone: 'success', title: `${label}: done`, message: `Applied to ${pagesText}.` });
-      showToast(stamp.kind === PAGE_STAMP_KINDS.pageNumber ? 'Page numbers added.' : 'Watermark added.', 'success');
+      showToast(stamp.kind === PAGE_STAMP_KINDS.watermark ? 'Watermark added.' : 'Page numbers added.', 'success');
       return outcome;
     }).catch(error => {
       window.__fernworkLastLivePdfError = describeLivePdfError(error);
@@ -26494,15 +26494,37 @@ function App({ shell = null }) {
     });
   }, [activeDoc, refreshLivePageSceneAfterCommit, setOperationNotice, updateDoc]);
 
-  const addPageNumbers = useCallback(() => commitPageStamp('pageNumbers', 'Add page numbers', {
-    kind: PAGE_STAMP_KINDS.pageNumber,
-    // Reapplying numbering replaces the earlier numbers instead of stacking.
-    replace: true,
-    pageText: pageIndex => `${pageIndex + 1}`,
-    fontSize: 12,
-    color: '#111111',
-    opacity: 0.9,
-  }), [commitPageStamp]);
+  // berg:work: page numbers grew into running headers and footers with Bates numbering: a text with {page},
+  // {pages}, {date} and {file}, a start number, zero-padded digits and one of six positions. Headers (top) and
+  // footers (bottom) are separate stamp kinds, so one of each can coexist; each run replaces its own kind.
+  const addPageNumbers = useCallback(async (options = {}) => {
+    const template = String(options.text || '{page}');
+    const start = Number.isInteger(Number(options.start)) ? Number(options.start) : 1;
+    const digits = Math.max(0, Math.min(12, Number(options.digits) || 0));
+    const position = /^(top|bottom)-(left|center|right)$/u.test(options.position || '') ? options.position : 'bottom-center';
+    const date = new Date().toISOString().slice(0, 10);
+    const file = String(activeDoc?.name || '').replace(/\.[^.]+$/u, '');
+    const pageText = (pageIndex, pageCount) => template
+      .replace(/\{page\}/gu, String(start + pageIndex).padStart(digits, '0'))
+      .replace(/\{pages\}/gu, String(pageCount))
+      .replace(/\{date\}/gu, date)
+      .replace(/\{file\}/gu, file);
+    if (!await pageStampTextEncodable(PDFLib, pageText(0, activeDoc?.pages?.length || 1))) {
+      setOperationNotice('pageNumbers', { tone: 'error', title: 'Add page numbers failed',
+        message: 'The text uses characters the built-in font cannot write (Latin letters, digits and common punctuation work).' });
+      return undefined;
+    }
+    return commitPageStamp('pageNumbers', 'Add page numbers', {
+      kind: position.startsWith('top') ? PAGE_STAMP_KINDS.pageHeader : PAGE_STAMP_KINDS.pageNumber,
+      // Reapplying numbering replaces the earlier numbers instead of stacking.
+      replace: true,
+      pageText,
+      position,
+      fontSize: Number(options.fontSize) > 0 ? Number(options.fontSize) : 12,
+      color: '#111111',
+      opacity: 0.9,
+    });
+  }, [activeDoc, commitPageStamp, setOperationNotice]);
 
   const addWatermark = useCallback(async (input) => {
     if (!activeDoc) return undefined;
@@ -41705,6 +41727,11 @@ function ToolDrawer(props) {
   const watermarkImageInputRef = useRef(null);
   const [watermarkMode, setWatermarkMode] = useState('text');
   const [watermarkText, setWatermarkText] = useState('');
+  // berg:work: page numbers, headers and footers (see addPageNumbers).
+  const [numberText, setNumberText] = useState('{page}');
+  const [numberPosition, setNumberPosition] = useState('bottom-center');
+  const [numberStart, setNumberStart] = useState('1');
+  const [numberDigits, setNumberDigits] = useState('0');
   const [watermarkImage, setWatermarkImage] = useState(null);
   const [watermarkOpacity, setWatermarkOpacity] = useState(0.18);
   const [watermarkTintEnabled, setWatermarkTintEnabled] = useState(false);
@@ -42292,15 +42319,35 @@ function ToolDrawer(props) {
     subtitle = doc ? `All ${pagesLabel}` : 'No document open';
     body = (
       <PanelSection>
-        <figure className="oo-pdf-stamp-preview" aria-hidden="true">
-          <span className="oo-pdf-stamp-page"><i /><i /><i /><i /><i /><i /><i /><i /><b className="oo-pdf-stamp-number">1</b></span>
-          <figcaption>Centred at the bottom of every page · 12 pt</figcaption>
+        {/* berg:work: the preview page is the position picker: one spot per corner and edge middle. */}
+        <figure className="oo-pdf-stamp-preview">
+          <span className="oo-pdf-stamp-page" role="radiogroup" aria-label="Position">
+            <i /><i /><i /><i /><i /><i /><i /><i />
+            {['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'].map(spot => (
+              <button key={spot} type="button" role="radio" aria-checked={numberPosition === spot}
+                aria-label={spot.replace('-', ' ')} title={spot.replace('-', ' ')}
+                className={`oo-pdf-stamp-spot is-${spot} ${numberPosition === spot ? 'is-active' : ''}`}
+                onClick={() => setNumberPosition(spot)}>
+                {numberPosition === spot ? (numberText || '{page}').replace(/\{page\}/gu, String(Number(numberStart) || 1).padStart(Number(numberDigits) || 0, '0')).replace(/\{pages\}/gu, String(doc?.pages?.length || 1)).replace(/\{date\}/gu, 'date').replace(/\{file\}/gu, 'file') : ''}
+              </button>
+            ))}
+          </span>
+          <figcaption>{numberPosition.startsWith('top') ? 'Header' : 'Footer'} on every page · 12 pt</figcaption>
         </figure>
-        <PanelHint>Running it again replaces the earlier numbers instead of adding a second set.</PanelHint>
+        <PanelField label="Text"><input value={numberText} placeholder="{page}" spellCheck={false}
+          onChange={(e) => setNumberText(e.target.value)} /></PanelField>
+        <PanelHint>{'{page}'} number · {'{pages}'} count · {'{date}'} · {'{file}'}. For Bates numbers: e.g. ACME-{'{page}'} with 6 digits.</PanelHint>
+        <div className="oo-pdf-panel-row is-even">
+          <PanelField label="Start at"><input inputMode="numeric" value={numberStart} onChange={(e) => setNumberStart(e.target.value.replace(/[^\d]/gu, ''))} /></PanelField>
+          <PanelField label="Digits"><input inputMode="numeric" value={numberDigits} onChange={(e) => setNumberDigits(e.target.value.replace(/[^\d]/gu, '').slice(0, 2))} /></PanelField>
+        </div>
+        <PanelHint>Running it again replaces the earlier {numberPosition.startsWith('top') ? 'header' : 'numbers or footer'} instead of adding a second set.</PanelHint>
         <OperationNotice notice={operationNotices.pageNumbers} onDismiss={() => onDismissOperationNotice?.('pageNumbers')} />
       </PanelSection>
     );
-    footer = <button type="button" className="oo-pdf-primary" disabled={!doc || structureBusy} onClick={() => { void onAddPageNumbers(); }}>Add page numbers</button>;
+    footer = <button type="button" className="oo-pdf-primary" disabled={!doc || structureBusy || !numberText.trim()}
+      onClick={() => { void onAddPageNumbers({ text: numberText, position: numberPosition, start: numberStart || 1, digits: numberDigits }); }}>
+      {numberText.trim() === '{page}' ? 'Add page numbers' : `Add ${numberPosition.startsWith('top') ? 'header' : 'footer'}`}</button>;
   } else if (panel === 'watermark') {
     subtitle = doc ? `All ${pagesLabel}` : 'No document open';
     tabs = <SegmentedChoice label="Watermark type" name="oo-watermark-mode" value={watermarkMode} onChange={setWatermarkMode}
