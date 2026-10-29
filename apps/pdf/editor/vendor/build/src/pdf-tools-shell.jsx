@@ -130,7 +130,7 @@ import { lineOverflowIntoNeighbours, MIN_FIT_SCALE } from './pdf-editor/text/lin
 import { positionedEditorGlyphs, runNeedsPositionedEditor, wordRangeAt } from './pdf-editor/interaction/positioned-text-editor.js';
 import { canPrintPdfNatively, printPdfAsImages, printPdfBytesNatively } from './pdf-editor/rendering/print-document.js';
 import {
-  FORM_CHECKED, FORM_UNCHECKED, formFieldLabel, formValueFor, formValuesWithChange, formWidgetFontSize,
+  FORM_CHECKED, FORM_UNCHECKED, formFieldLabel, readableFieldName, formValueFor, formValuesWithChange, formWidgetFontSize,
   formValuesWithQueue, formWidgetFromAnnotation, hasFormValueChanges, nearbyLabelForWidget, nonFillableFormField,
   nonFillableFormFieldDescription, normalizeFormValueQueue, normalizeFormValues, queueFormValue, sortWidgetsForTabOrder,
 } from './pdf-editor/model/form-fields.js';
@@ -42331,7 +42331,16 @@ function ToolDrawer(props) {
           <div id="forms-field-list" className="oo-pdf-form-list">
             {listed.map((field, index) => {
               const startsPage = index === 0 || listed[index - 1].pageIndex !== field.pageIndex;
-              const label = formFieldLabel(field);
+              // berg:work: fields that read the same ("Last Name" twice, when a caption above was taken for the field
+              // below) use their own field name where it says something, else a number, so they can be told apart.
+              const sameLabel = listed.filter(other => formFieldLabel(other) === formFieldLabel(field));
+              const ownName = readableFieldName(field.name);
+              const meaningful = name => name && !/^(?:text|field|check ?box|button)?\s*\d*$/iu.test(name);
+              const label = sameLabel.length < 2 || ownName.toLowerCase() === formFieldLabel(field).toLowerCase()
+                ? formFieldLabel(field)
+                : meaningful(ownName) && !sameLabel.some(other => other !== field && readableFieldName(other.name) === ownName)
+                  ? ownName
+                  : `${formFieldLabel(field)} (${sameLabel.indexOf(field) + 1})`;
               if (field.nonFillable) {
                 return (
                   <React.Fragment key={`not-fillable:${field.name}`}>

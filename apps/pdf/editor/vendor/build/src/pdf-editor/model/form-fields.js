@@ -20,6 +20,12 @@ export function readableFieldName(fieldName = '') {
 
 export function formFieldLabel(widget = {}) {
   const tooltip = String(widget.alternativeText || '').replace(/\s+/gu, ' ').trim();
+  // berg:work: a radio group's nearby caption is its first option ("Female"); the group is better named by its
+  // field name ("Gender") unless that is a generated one ("Option Button 1", "Group2").
+  if (widget.kind === 'radio' && !tooltip) {
+    const name = readableFieldName(widget.name);
+    if (name && !/^(?:option|radio|group|button|optionbutton|option button)\s*\d*$/iu.test(name) && !/^\d+$/u.test(name)) return name;
+  }
   return tooltip || String(widget.nearbyLabel || '') || readableFieldName(widget.name) || 'Form field';
 }
 
