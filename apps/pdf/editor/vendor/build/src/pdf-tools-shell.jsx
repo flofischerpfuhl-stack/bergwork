@@ -103,6 +103,10 @@ import { clipboardPlacementOffset } from './pdf-editor/interaction/clipboard-pla
 import { effectivePageSelection, pageBlockMoves, pageMoveDestination, pageNeighbourMoves,
   pageRangeText, pageSelectionAfterClick } from './pdf-editor/interaction/bergwork-page-selection.js';
 import { useThumbTouchDrag } from './pdf-editor/interaction/bergwork-thumb-touch-drag.js';
+// berg:work: page tools – insert at a position, crop and resize pages, split into several files.
+import { applyPageBoxes, inkMarginsFromRaster, marginsFromFractions, PAGE_TOOL_UNITS, pagesInsertedAt,
+  splitAtBookmarks, splitBySize, splitEveryN, splitPartFileNames } from './pdf-editor/model/bergwork-page-tools.js';
+import { PageBoxPreview, UnitNumberInput } from './pdf-editor/interaction/bergwork-page-box-preview.jsx';
 // berg:work: two fingers on the selected object scale and turn it.
 import { beginTwoFingerTransform, finishTwoFingerTransform, TWO_FINGER_READOUT_EVENT, updateTwoFingerTransform,
   useTwoFingerTarget } from './pdf-editor/interaction/bergwork-two-finger-transform.js';
@@ -539,6 +543,8 @@ const DRAWER_TOOLS = [
   { id: 'outline', label: 'Bookmarks', icon: 'bookmark', group: 'pages' },
   { id: 'pageNumbers', label: 'Page numbers', icon: 'list-ordered', group: 'pages' },
   { id: 'watermark', label: 'Watermark', icon: 'stamp', group: 'pages' },
+  // berg:work: CropBox / MediaBox of the current, selected or all pages.
+  { id: 'pageBoxes', label: 'Crop & resize pages', icon: 'crop', group: 'pages' },
   { id: 'forms', label: 'Forms', icon: 'form-input', group: 'content' },
   // berg:work: every comment with replies, review status and XFDF (comment-list.jsx).
   { id: 'comments', label: 'Comments', icon: 'message-square', group: 'content' },
@@ -590,6 +596,9 @@ const PANEL_ALIASES = {
   guides: 'guides',
   rulers: 'guides',
   placement: 'guides',
+  // berg:work
+  crop: 'pageBoxes',
+  resize: 'pageBoxes',
 };
 
 const CERTIFICATE_PANEL_HASHES = new Set(['certificate-signature', 'certificates', 'certificate']);
@@ -1029,7 +1038,7 @@ function MiniToolbarHost({ toolbar, onHost }) {
   );
 }
 
-function PdfContextMenu({ x, y, items, onClose }) {
+function PdfContextMenu({ x, y, items, onClose, label = 'Object actions', scrollCloses = null }) {
   const menuRef = useRef(null);
   const [position, setPosition] = useState({ left: x, top: y });
   useLayoutEffect(() => {
@@ -1044,8 +1053,12 @@ function PdfContextMenu({ x, y, items, onClose }) {
   // pointerdown; re-subscribing on that render dropped this listener for exactly that click, so the menu stayed open.
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  // berg:work: the page menu stays when the page view scrolls to the right-clicked page.
+  const scrollClosesRef = useRef(scrollCloses);
+  scrollClosesRef.current = scrollCloses;
   useEffect(() => {
     const onClose = () => onCloseRef.current?.();
+    const scrolled = event => { if (!scrollClosesRef.current || scrollClosesRef.current(event)) onClose(); };
     const close = event => { if (!menuRef.current?.contains(event.target)) onClose(); };
     const key = event => {
       if (event.key !== 'Escape') return;
@@ -1055,13 +1068,13 @@ function PdfContextMenu({ x, y, items, onClose }) {
     };
     window.addEventListener('pointerdown', close, true);
     window.addEventListener('keydown', key, true);
-    window.addEventListener('scroll', onClose, true);
+    window.addEventListener('scroll', scrolled, true);
     window.addEventListener('resize', onClose);
     window.addEventListener('blur', onClose);
     return () => {
       window.removeEventListener('pointerdown', close, true);
       window.removeEventListener('keydown', key, true);
-      window.removeEventListener('scroll', onClose, true);
+      window.removeEventListener('scroll', scrolled, true);
       window.removeEventListener('resize', onClose);
       window.removeEventListener('blur', onClose);
     };
@@ -1070,7 +1083,7 @@ function PdfContextMenu({ x, y, items, onClose }) {
     menuRef.current?.querySelector('button:not(:disabled)')?.focus({ preventScroll: true });
   }, []);
   return createPortal((
-    <div ref={menuRef} className="oo-pdf-context-menu" role="menu" aria-label="Object actions" style={position}
+    <div ref={menuRef} className="oo-pdf-context-menu" role="menu" aria-label={label /* berg:work */} style={position}
       onContextMenu={event => event.preventDefault()}
       onKeyDown={event => {
         if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
@@ -17615,6 +17628,8 @@ function App({ shell = null }) {
   const [activePage, setActivePage] = useState(0);
   // berg:work: the pages selected in the Pages panel (IDs; see effectivePageSelection) and the Shift-click anchor.
   const [pageSelectionIds, setPageSelectionIds] = useState([]);
+  // berg:work: the command palette's "Split PDF…" opens Pages with the export row on Split.
+  const [pagesExportRequest, setPagesExportRequest] = useState(null);
   const pageSelectionAnchorRef = useRef('');
   const [selected, setSelected] = useState(null);
   // Inspector selection deliberately trails canvas selection by one painted
@@ -17755,6 +17770,8 @@ function App({ shell = null }) {
   const rootRef = useRef(null);
   const fileInputRef = useRef(null);
   const appendInputRef = useRef(null);
+  // berg:work: where the pages chosen in the append file picker go (null: at the end).
+  const appendInsertAtRef = useRef(null);
   const imageInputRef = useRef(null);
   const signatureInputRef = useRef(null);
   const searchInputRef = useRef(null);
@@ -19122,9 +19139,16 @@ function App({ shell = null }) {
       const targetPageIds = (targetDoc.pages || []).map(page => page.id);
       const restoresDifferentPageTopology = currentPageIds.length !== targetPageIds.length ||
         currentPageIds.some((pageId, pageIndex) => pageId !== targetPageIds[pageIndex]);
+      // berg:work: a page crop or resize (commitPageBoxes) keeps the pages but changes their size: its Undo/Redo
+      // re-reads the page list and source like a topology change.
+      const restoresDifferentPageGeometry = !restoresDifferentPageTopology && (currentDoc.pages || []).some((page, pageIndex) => {
+        const target = targetDoc.pages?.[pageIndex];
+        return target && (page.width !== target.width || page.height !== target.height ||
+          String(page.viewBox || '') !== String(target.viewBox || ''));
+      });
       const topologyHistory = Boolean(result?.effects?.some(effect =>
         ['page.move', 'page.delete', 'page.duplicate'].includes(effect?.action) ||
-        (effect?.action === 'document.restore-snapshot' && restoresDifferentPageTopology)));
+        (effect?.action === 'document.restore-snapshot' && (restoresDifferentPageTopology || restoresDifferentPageGeometry))));
       const inspectedPageIdsBeforeHistory = [...new Set([
         ...(runtime?.pageInspections?.keys?.() || []),
         ...Object.keys(currentDoc.scene?.pdfiumObjectIndex?.pages || {}),
@@ -20326,7 +20350,9 @@ function App({ shell = null }) {
     }
   }, []);
 
-  const appendFiles = useCallback(async (files) => {
+  // berg:work: `at` inserts the pages there (a drop between thumbnails, Add pages before/after the current page);
+  // without it they are appended. Several files are merged first, so they arrive as one step (one Undo).
+  const appendFiles = useCallback(async (files, { at } = {}) => {
     const incoming = fileList(files).filter(file => acceptsPdf(file) || acceptsImage(file));
     if (!incoming.length) return;
     const requestId = documentLoadRequestRef.current + 1;
@@ -20371,29 +20397,43 @@ function App({ shell = null }) {
       }
       let nativeResult = false;
       let nativeFallbackRisks = [];
-      if (loaded.length === 1 && sourceForLivePdfiumSession(activeDoc)) {
-        const incoming = loaded[0];
+      const insertAt = doc => (Number.isSafeInteger(at) ? clamp(at, 0, doc.pages.length) : doc.pages.length);
+      const firstNewIndex = insertAt(activeDoc);
+      let insertedPageIds = [];
+      let single = loaded.length === 1 ? loaded[0] : null;
+      if (!single && sourceForLivePdfiumSession(activeDoc) &&
+          loaded.every(doc => doc.sources?.length === 1 && doc.sources[0]?.bytes?.byteLength)) {
+        try {
+          const toolkit = await getPdfToolkit();
+          const combined = asUint8Array(await toolkit.merge(loaded.map(doc => asUint8Array(doc.sources[0].bytes))));
+          single = await loadPdfFromBytes(`${loaded.length} files.pdf`, combined, combined.byteLength);
+        } catch (error) {
+          console.warn('[pdf-insert] merging the dropped files failed; inserting them separately', error);
+          single = null;
+        }
+      }
+      if (single && sourceForLivePdfiumSession(activeDoc)) {
+        const incoming = single;
         const source = incoming.sources?.[0];
         if (source?.bytes?.byteLength) {
           const pageIds = incoming.pages.map(() => uid());
+          insertedPageIds = pageIds;
           const resource = await pdfSnapshotResourceFromBytes(source.bytes, [], incoming.pages.map(page => page.id));
           nativeResult = await executeNativePageTopology(activeDoc.id, {
             type: CommandType.PAGE_IMPORT,
             targetId: activeDoc.id,
             payload: doc => ({
-              pageIndex: doc.pages.length,
+              pageIndex: insertAt(doc),
               resourceHash: resource.hash,
               sourcePageIndices: incoming.pages.map(page => page.sourceIndex),
               pageIds,
             }),
             resources: [resource],
-            label: 'Append pages',
-            project: doc => {
+            label: Number.isSafeInteger(at) ? 'Insert pages' : 'Append pages',
+            project: (doc, payload) => {
               const merged = mergeDocuments(doc, [incoming]);
-              return { ...merged, pages: [
-                ...merged.pages.slice(0, doc.pages.length),
-                ...merged.pages.slice(doc.pages.length).map((page, index) => ({ ...page, id: pageIds[index] })),
-              ] };
+              const added = merged.pages.slice(doc.pages.length).map((page, index) => ({ ...page, id: pageIds[index] }));
+              return { ...merged, pages: pagesInsertedAt(doc.pages, added, payload?.pageIndex ?? insertAt(doc)) };
             },
           }).catch(error => {
             if (nativeTopologyFallbackAllowed(error)) {
@@ -20405,8 +20445,14 @@ function App({ shell = null }) {
         }
       }
       if (!nativeResult) {
+        insertedPageIds = [];
         await enqueuePageStructureChange(activeDoc.id, () => {
-          updateDoc(activeDoc.id, doc => mergeDocuments(doc, loaded), {
+          updateDoc(activeDoc.id, doc => {
+            const merged = mergeDocuments(doc, loaded);
+            const added = merged.pages.slice(doc.pages.length);
+            insertedPageIds = added.map(page => page.id);
+            return { ...merged, pages: pagesInsertedAt(doc.pages, added, insertAt(doc)) };
+          }, {
             resetMerge: true,
             kernelBacked: false,
             internal: true,
@@ -20421,10 +20467,18 @@ function App({ shell = null }) {
           });
         }
       }
+      const verb = Number.isSafeInteger(at) ? 'Inserted' : 'Appended';
+      if (Number.isSafeInteger(at) && insertedPageIds.length) {
+        // The inserted pages become the selection, the first of them current.
+        setPageSelectionIds(insertedPageIds.length > 1 ? insertedPageIds : []);
+        pageSelectionAnchorRef.current = insertedPageIds[0];
+        setActivePage(firstNewIndex);
+        scrollSheetIntoViewSoon(viewportRef.current, firstNewIndex);
+      }
       if (loaded.some(doc => doc.damageRecovery)) {
-        showToast(`Appended ${pageTotal} page${pageTotal === 1 ? '' : 's'} recovered from a damaged PDF. Check them before relying on them.`, 'warning');
+        showToast(`${verb} ${pageTotal} page${pageTotal === 1 ? '' : 's'} recovered from a damaged PDF. Check them before relying on them.`, 'warning');
       } else {
-        showToast(`Appended ${pageTotal} page${pageTotal === 1 ? '' : 's'}.`, 'success');
+        showToast(`${verb} ${pageTotal} page${pageTotal === 1 ? '' : 's'}${loaded.length > 1 ? ` from ${loaded.length} files` : ''}${Number.isSafeInteger(at) ? ` as page${pageTotal === 1 ? '' : 's'} ${firstNewIndex + 1}${pageTotal > 1 ? `–${firstNewIndex + pageTotal}` : ''}` : ''}.`, 'success');
       }
     } catch (error) {
       reportOpenError(friendlyPdfOpenError(error));
@@ -20523,17 +20577,20 @@ function App({ shell = null }) {
     }
   }, [activeDoc, enqueuePageStructureChange, executeNativePageTopology, protectedPdfPrompt, reportOpenError, updateDoc]);
 
-  const appendBlankPage = useCallback(async ({ width, height }) => {
+  // berg:work: `index` places the page (before or after the current one: Add pages dialog, a thumbnail's menu, the
+  // command palette); without it the page is appended as before.
+  const appendBlankPage = useCallback(async ({ width, height, index }) => {
     if (!activeDoc) return;
+    const insertAt = doc => (Number.isSafeInteger(index) ? clamp(index, 0, doc.pages.length) : doc.pages.length);
     try {
-      let nextIndex = activeDoc.pages.length;
+      let nextIndex = insertAt(activeDoc);
       const pageId = uid();
       const nativeResult = await executeNativePageTopology(activeDoc.id, {
         type: CommandType.PAGE_NEW,
         targetId: pageId,
-        payload: doc => ({ pageIndex: doc.pages.length, width, height }),
+        payload: doc => ({ pageIndex: insertAt(doc), width, height }),
         label: 'Insert blank page',
-        project: doc => ({ ...doc, pages: [...doc.pages, {
+        project: (doc, payload) => ({ ...doc, pages: pagesInsertedAt(doc.pages, [{
           id: pageId,
           sourceId: doc.nativeSessionSourceId || doc.pages[0]?.sourceId,
           sourceIndex: doc.pages.length,
@@ -20544,14 +20601,17 @@ function App({ shell = null }) {
           viewBox: [0, 0, width, height],
           rotation: 0,
           sourceRotation: 0,
-        }] }),
+        }], payload?.pageIndex ?? insertAt(doc)) }),
       });
       if (!nativeResult) {
         const bytes = await blankPdfPageBytes(width, height);
         const blankDoc = await loadPdfFromBytes('blank-page.pdf', bytes, bytes.byteLength);
         await enqueuePageStructureChange(activeDoc.id, latestDoc => {
-          nextIndex = latestDoc.pages.length;
-          updateDoc(activeDoc.id, doc => mergeDocuments(doc, [blankDoc]), {
+          nextIndex = insertAt(latestDoc);
+          updateDoc(activeDoc.id, doc => {
+            const merged = mergeDocuments(doc, [blankDoc]);
+            return { ...merged, pages: pagesInsertedAt(doc.pages, merged.pages.slice(doc.pages.length), insertAt(doc)) };
+          }, {
             resetMerge: true,
             kernelBacked: false,
             internal: true,
@@ -20561,18 +20621,36 @@ function App({ shell = null }) {
       }
       setActivePage(nextIndex);
       setSelected(null);
+      setPageSelectionIds([]);
       setAddPageDialogOpen(false);
-      showToast('Blank page appended.', 'success');
+      if (Number.isSafeInteger(index)) scrollSheetIntoViewSoon(viewportRef.current, nextIndex);
+      showToast(Number.isSafeInteger(index) ? `Blank page inserted as page ${nextIndex + 1}.` : 'Blank page appended.', 'success');
     } catch (error) {
-      showToast(userFacingError(error, 'Blank page could not be appended.'), 'error');
+      showToast(userFacingError(error, 'Blank page could not be inserted.'), 'error');
     }
   }, [activeDoc, enqueuePageStructureChange, executeNativePageTopology, updateDoc]);
 
   const handleAppendInput = useCallback((event) => {
     const files = fileList(event.target.files);
     event.target.value = '';
-    void appendFiles(files);
+    const at = appendInsertAtRef.current;
+    appendInsertAtRef.current = null;
+    void appendFiles(files, { at: Number.isSafeInteger(at) ? at : undefined });
   }, [appendFiles]);
+
+  // berg:work: the Add pages dialog with a placement ('after' / 'before' the current page, 'end'), and a blank
+  // page the size of a neighbour (`referenceIndex`, default: the current page) at `index`.
+  const openInsertPagesDialog = useCallback((placement = 'after') => {
+    setEditingText(null);
+    setFontActionWarning(null);
+    setAddPageDialogOpen(['after', 'before', 'end'].includes(placement) ? placement : 'after');
+  }, []);
+  const insertBlankPageAt = useCallback((index, referenceIndex = activePage) => {
+    const reference = activeDoc?.pages?.[clamp(referenceIndex, 0, Math.max(0, (activeDoc?.pages?.length || 1) - 1))];
+    if (!reference) return;
+    const { width, height } = pageDimensions(reference);
+    void appendBlankPage({ width, height, index });
+  }, [activeDoc, activePage, appendBlankPage]);
 
   const handleSignatureInput = useCallback(async (event) => {
     const file = event.target.files?.[0];
@@ -27427,6 +27505,178 @@ function App({ shell = null }) {
       }), '', 'watermark');
   }, [activeDoc, commitGeneratedAnnotations, commitPageStamp]);
 
+  // berg:work: crop pages (CropBox) or give them a new size (MediaBox and CropBox, content scaled to fit or kept
+  // centred) – the current, the selected or all pages, in one snapshot transaction like the page stamps above, so
+  // Undo restores the exact previous document. The page sizes change, so the page list and PDF.js source are
+  // re-read from the committed document as after a page move (and on Undo, see runDocHistoryAction).
+  const commitPageBoxes = useCallback(({ pageIds, crop = null, cropByPageId = null, resize = null }) => {
+    const panelId = 'pageBoxes';
+    const label = resize ? 'Resize pages' : 'Crop pages';
+    const failure = (message) => {
+      setOperationNotice(panelId, { tone: 'error', title: `${label} failed`, message });
+      return { ok: false, message };
+    };
+    if (!activeDoc) return Promise.resolve(failure('Open a PDF first.'));
+    const runtime = livePdfRuntimeRef.current;
+    const workingDoc = workspaceSnapshotRef.current.docs.find(doc => doc.id === activeDoc.id) || activeDoc;
+    const safety = liveRuntimeSafetyState(runtime, workingDoc.id);
+    if (!runtime?.kernel || !runtime.ready || runtime.readOnly || runtime.documentId !== workingDoc.id || safety.mutationBlocked) {
+      return Promise.resolve(failure(safety.reason || 'Open a writable PDF editing session before changing page sizes.'));
+    }
+    if (!sourceForLivePdfiumSession(workingDoc)) {
+      return Promise.resolve(failure('Export or reopen the PDF after changing its page structure, then try again.'));
+    }
+    setOperationNotice(panelId, null);
+    setLiveCommitCount(count => count + 1);
+    return enqueueLiveNativeCommit(runtime, async () => {
+      const latestDoc = workspaceSnapshotRef.current.docs.find(doc => doc.id === workingDoc.id);
+      if (!latestDoc || livePdfRuntimeRef.current !== runtime || !runtime.ready || runtime.readOnly ||
+          !sourceForLivePdfiumSession(latestDoc) || liveRuntimeSafetyState(runtime, workingDoc.id).mutationBlocked) {
+        throw new Error('The editing session changed. Try again on the current document.');
+      }
+      // The session's page order is the document's page order (sourceForLivePdfiumSession).
+      const pageIndices = pageIds.map(id => latestDoc.pages.findIndex(page => page.id === id)).filter(index => index >= 0);
+      if (!pageIndices.length) throw new Error('The pages changed. Choose them again.');
+      const before = await checkpointToPdfSnapshotResource(runtime.engine);
+      const cropByIndex = cropByPageId ? Object.fromEntries(latestDoc.pages
+        .map((page, index) => [index, cropByPageId[page.id]]).filter(([, margins]) => margins)) : null;
+      const boxed = await applyPageBoxes(PDFLib, before.bytes, { pageIndices, crop, cropByIndex, resize });
+      if (!boxed.bytes) throw new Error('That would leave the page too small. Nothing was changed.');
+      // Existing page objects keep their indexes: only the page boxes (and, for a scaled resize, a wrapping
+      // transform) change.
+      const after = await pdfSnapshotResourceFromBytes(boxed.bytes, before.bindings);
+      const pdfjs = await openPdfJsDocument(boxed.bytes);
+      const geometry = new Map();
+      try {
+        for (const index of boxed.changed) {
+          const viewport = (await pdfjs.getPage(index + 1)).getViewport({ scale: 1, rotation: 0 });
+          geometry.set(latestDoc.pages[index].id, { width: viewport.width, height: viewport.height,
+            viewBox: Array.from(viewport.viewBox || [0, 0, viewport.width, viewport.height]) });
+        }
+      } finally {
+        await pdfjs.destroy?.();
+      }
+      const project = doc => ({ ...doc, pages: doc.pages.map(page => (geometry.has(page.id)
+        ? { ...page, ...geometry.get(page.id) } : page)) });
+      const projected = project(latestDoc);
+      await runtime.kernel.registerResource(before);
+      await runtime.kernel.registerResource(after);
+      await persistLiveUiBaseline(runtime, latestDoc);
+      const prefix = `page-boxes-${uid()}`;
+      const result = await runtime.kernel.execute({
+        commands: [createPdfCommand({ commandId: `${prefix}:boxes`, type: CommandType.DOCUMENT_RESTORE_SNAPSHOT,
+          targetId: latestDoc.id, payload: { resourceHash: after.hash } })],
+        inverseCommands: [createPdfCommand({ commandId: `${prefix}:restore-document`, type: CommandType.DOCUMENT_RESTORE_SNAPSHOT,
+          targetId: latestDoc.id, payload: { resourceHash: before.hash } })],
+        label,
+        uiTransition: kernelUiTransition(runtime, latestDoc, projected),
+      });
+      let refreshed = null;
+      try {
+        refreshed = await refreshNativeTopologyDocumentSource(projected, runtime);
+      } catch (refreshError) {
+        console.warn('[pdf-page-boxes] committed source refresh failed', refreshError);
+      }
+      updateDoc(latestDoc.id, current => (refreshed ? adoptNativeTopologyDocumentSource(project(current), refreshed) : project(current)),
+        { resetMerge: true, kernelBacked: true });
+      window.__fernworkLastLivePdfTransaction = {
+        transactionId: result.transactionId,
+        committedRevision: result.committedRevision,
+        effectDigest: result.effectDigest,
+        dirtyPages: result.dirtyPages,
+        normalEditPath: 'semantic-kernel-session',
+      };
+      // Every object moved in page coordinates: forget what was inspected, refresh what can be seen.
+      forgetScenePageIdentities(new Set(latestDoc.pages.map(page => page.id)));
+      const { immediate, deferred } = planHistoryInspections({
+        dirtyPageIds: new Set(result.dirtyPages || latestDoc.pages.map(page => page.id)),
+        restoredSnapshot: true,
+        inspectedPageIds: [...runtime.pageInspections.keys()],
+        priorityPageIds: historyPriorityPageIds({ doc: latestDoc, selection: null, transition: null, viewport: viewportRef.current }),
+      });
+      if (deferred.size) runtime.forgetPageInspections?.(deferred);
+      const refreshedDoc = workspaceSnapshotRef.current.docs.find(doc => doc.id === latestDoc.id) || projected;
+      for (const page of refreshedDoc.pages.filter(item => immediate.has(item.id))) {
+        await refreshLivePageSceneAfterCommit(runtime, refreshedDoc, page, result);
+      }
+      return { ok: true, applied: boxed.changed.length, skipped: boxed.skipped.length };
+    }, null, { independent: true }).then(outcome => {
+      const pagesText = `${outcome.applied} page${outcome.applied === 1 ? '' : 's'}`;
+      setOperationNotice(panelId, {
+        tone: outcome.skipped ? 'warning' : 'success',
+        title: `${label}: done`,
+        message: `Changed ${pagesText}.${outcome.skipped ? ` ${outcome.skipped} would have been too small and stayed as they were.` : ''}`,
+      });
+      showToast(resize ? `Resized ${pagesText}.` : `Cropped ${pagesText}.`, 'success');
+      return outcome;
+    }).catch(error => {
+      window.__fernworkLastLivePdfError = describeLivePdfError(error);
+      const message = error?.message || `${label} failed.`;
+      return failure(/(Nothing|not) (was )?changed|was preserved/iu.test(message) ? message : `${message} The document was not changed.`);
+    }).finally(() => {
+      setLiveCommitCount(count => Math.max(0, count - 1));
+    });
+  }, [activeDoc, refreshLivePageSceneAfterCommit, setOperationNotice, updateDoc]);
+
+  // berg:work: split the PDF into several files – every N pages, at the top-level bookmarks or by file size – from
+  // one export of the current state, saved as one zip (in the app through the save dialog). Changes nothing.
+  const splitPdf = useCallback(async ({ mode, value }) => {
+    if (!activeDoc) return;
+    const doc = activeDoc;
+    const pageCount = doc.pages.length;
+    try {
+      setUtilityStatus('Preparing the split…');
+      let parts = [];
+      if (mode === 'count') {
+        parts = splitEveryN(pageCount, Number(value));
+        if (!parts.length) { showToast('Enter how many pages each file gets.', 'info'); return; }
+      } else if (mode === 'bookmarks') {
+        const outline = Array.isArray(doc.bookmarks)
+          ? normalizeBookmarks(doc.bookmarks, doc.pages).map(item => ({ ...item,
+            pageIndex: doc.pages.findIndex(page => page.id === item.pageId) }))
+          : await buildPdfOutlineItems(doc);
+        parts = splitAtBookmarks(pageCount, outline);
+        if (!parts.length) { showToast('This PDF has no bookmarks to split at.', 'info'); return; }
+      }
+      const bytes = asUint8Array(await materializeDocForUtility(doc));
+      const toolkit = await getPdfToolkit();
+      const extracted = new Map();
+      const extract = async (from, to) => {
+        const key = `${from}-${to}`;
+        if (!extracted.has(key)) {
+          extracted.set(key, asUint8Array(from === 0 && to === pageCount - 1
+            ? bytes : await toolkit.extractPages(bytes, { pages: `${from + 1}-${to + 1}` })));
+        }
+        return extracted.get(key);
+      };
+      if (mode === 'size') {
+        const maxBytes = Number(value) * 1024 * 1024;
+        if (!(maxBytes > 0)) { showToast('Enter the largest file size in MB.', 'info'); return; }
+        setUtilityStatus('Measuring the parts…');
+        parts = await splitBySize(pageCount, maxBytes, async (from, to) => (await extract(from, to)).byteLength);
+      }
+      if (parts.length < 2) {
+        showToast(mode === 'size' ? 'The whole PDF already fits that size.' : 'That gives only one file. Nothing to split.', 'info');
+        return;
+      }
+      const names = splitPartFileNames(doc.name, parts);
+      const JSZip = await getPdfZipConstructor();
+      const zip = new JSZip();
+      for (const [index, part] of parts.entries()) {
+        setUtilityStatus(`Writing file ${index + 1} of ${parts.length}…`);
+        zip.file(names[index], await extract(part.from, part.to));
+      }
+      const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+      downloadBlob(blob, `${stripExt(doc.name)} - split.zip`);
+      const oversize = parts.filter(part => part.oversize).length;
+      showToast(`Split into ${parts.length} PDFs (one zip).${oversize ? ` ${oversize} single page${oversize === 1 ? ' is' : 's are'} larger than the limit.` : ''}`, oversize ? 'warning' : 'success');
+    } catch (error) {
+      showToast(userFacingError(error, 'The PDF could not be split.'), 'error');
+    } finally {
+      setUtilityStatus('');
+    }
+  }, [activeDoc, materializeDocForUtility]);
+
   // Search-and-redact reads the live PDFium text of every page so the marks
   // cover exactly the glyphs PDFium's redaction removes on export.
   const findRedactionMatches = useCallback(async (query, options = {}) => {
@@ -28796,7 +29046,14 @@ function App({ shell = null }) {
     }
     sheet?.classList.add('is-image-drop-target');
   };
+  // berg:work: the Pages panel's thumbnails take dropped files themselves (inserted at the drop position).
+  const thumbGridDrop = event => Boolean(event.target?.closest?.('.oo-pdf-thumb-grid'));
   const handleDocumentDragOver = event => {
+    if (thumbGridDrop(event)) {
+      markImageDropSheet(null);
+      setDocumentDropActive(false);
+      return;
+    }
     if (!externalFileDrag(event) || documentLoadProgress) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
@@ -28810,6 +29067,7 @@ function App({ shell = null }) {
     setDocumentDropActive(false);
   };
   const handleDocumentDrop = event => {
+    if (thumbGridDrop(event)) return;
     if (!externalFileDrag(event) || documentLoadProgress) return;
     event.preventDefault();
     event.stopPropagation();
@@ -29497,6 +29755,11 @@ function App({ shell = null }) {
     { id: 'rotate-left', label: 'Rotate page left', group: 'Pages', disabled: pageStructureBusy, run: () => rotateActivePage(-90) },
     { id: 'rotate-right', label: 'Rotate page right', group: 'Pages', disabled: pageStructureBusy, run: () => rotateActivePage(90) },
     { id: 'duplicate-page', label: 'Duplicate page', group: 'Pages', disabled: pageStructureBusy, run: () => duplicateActivePage() },
+    // berg:work: page tools (Crop & resize pages comes with the document tools below).
+    { id: 'insert-blank-after', label: 'Insert blank page after this one', group: 'Pages', keywords: 'add new empty', disabled: pageStructureBusy, run: () => insertBlankPageAt(activePage + 1) },
+    { id: 'insert-blank-before', label: 'Insert blank page before this one', group: 'Pages', keywords: 'add new empty', disabled: pageStructureBusy, run: () => insertBlankPageAt(activePage) },
+    { id: 'insert-pages', label: 'Insert pages from a file…', group: 'Pages', keywords: 'merge combine append import add pdf image', disabled: pageStructureBusy, run: () => openInsertPagesDialog('after') },
+    { id: 'split-pdf', label: 'Split PDF into files…', group: 'Pages', keywords: 'split separate extract bookmarks size zip', run: () => { setPagesExportRequest({ mode: 'count', at: Date.now() }); openDrawerPanel('document'); } },
     { id: 'shortcuts', label: 'Keyboard shortcuts', group: 'Help', shortcut: '?', run: () => setShortcutsOpen(true) },
   ];
   useEffect(() => {
@@ -30000,6 +30263,14 @@ function App({ shell = null }) {
         onMovePagesTo={movePagesToGap}
         onDeletePage={deleteSelectedPages}
         onDuplicatePage={duplicateSelectedPages}
+        // berg:work: page tools.
+        onInsertPages={openInsertPagesDialog}
+        onInsertFilesAt={(files, index) => { void appendFiles(files, { at: index }); }}
+        onInsertBlankAt={insertBlankPageAt}
+        onExportPageIndices={indices => { void exportPdf({ pages: indices.map(index => activeDoc?.pages?.[index]).filter(Boolean), suffix: 'pages' }); }}
+        onCommitPageBoxes={commitPageBoxes}
+        onSplit={splitPdf}
+        exportModeRequest={pagesExportRequest}
         onMovePage={moveSelectedPages}
         onGoToPage={goToPage}
         onUpdateBookmarks={updateBookmarks}
@@ -30088,12 +30359,15 @@ function App({ shell = null }) {
       />
 
       <AddPageDialog
-        open={addPageDialogOpen}
+        open={Boolean(addPageDialogOpen)}
+        // berg:work: true from the Add pages tile (at the end), 'after' from the Pages panel and the palette.
+        placement={typeof addPageDialogOpen === 'string' ? addPageDialogOpen : 'end'}
         doc={activeDoc}
         activePage={activePage}
         onClose={() => setAddPageDialogOpen(false)}
-        onOpenFiles={() => {
+        onOpenFiles={(insertIndex) => {
           setAddPageDialogOpen(false);
+          appendInsertAtRef.current = Number.isSafeInteger(insertIndex) ? insertIndex : null;
           appendInputRef.current?.click();
         }}
         onAppendBlank={appendBlankPage}
@@ -30299,8 +30573,13 @@ function ProtectedPdfDialog({ prompt, busy, onClose, onSubmit }) {
   );
 }
 
-function AddPageDialog({ open, doc, activePage, onClose, onOpenFiles, onAppendBlank }) {
+function AddPageDialog({ open, doc, activePage, placement: requestedPlacement = 'end', onClose, onOpenFiles, onAppendBlank }) {
   const dialogRef = useDialogFocusTrap(open, onClose);
+  // berg:work: where the new pages go – after or before the current page, or at the end.
+  const [placement, setPlacement] = useState(requestedPlacement);
+  useEffect(() => { if (open) setPlacement(requestedPlacement); }, [open, requestedPlacement]);
+  const currentIndex = clamp(activePage || 0, 0, Math.max(0, (doc?.pages?.length || 1) - 1));
+  const insertIndex = placement === 'before' ? currentIndex : placement === 'after' ? currentIndex + 1 : undefined;
   const referencePage = doc?.pages?.[clamp(activePage || 0, 0, Math.max(0, (doc?.pages?.length || 1) - 1))] || doc?.pages?.[doc.pages.length - 1] || null;
   const referenceSize = referencePage ? pageDimensions(referencePage) : POPULAR_PAGE_SIZES[0];
   const [sameSize, setSameSize] = useState(true);
@@ -30331,8 +30610,15 @@ function AddPageDialog({ open, doc, activePage, onClose, onOpenFiles, onAppendBl
           <strong>Add pages</strong>
           <button className="oo-pdf-icon-button" type="button" aria-label="Close" onClick={onClose}><Icon name="x" /></button>
         </div>
+        <label className="oo-pdf-add-page-placement">Insert
+          <select value={placement} onChange={(event) => setPlacement(event.target.value)}>
+            <option value="after">After page {currentIndex + 1}</option>
+            <option value="before">Before page {currentIndex + 1}</option>
+            <option value="end">At the end</option>
+          </select>
+        </label>
         <div className="oo-pdf-add-page-actions">
-          <button type="button" className="oo-pdf-primary" onClick={onOpenFiles}>
+          <button type="button" className="oo-pdf-primary" onClick={() => onOpenFiles?.(insertIndex)}>
             <Icon name="folder-open" />
             <span>Open PDF or image</span>
           </button>
@@ -30360,8 +30646,8 @@ function AddPageDialog({ open, doc, activePage, onClose, onOpenFiles, onAppendBl
             </>
           )}
           <div className="oo-pdf-mini-stat">{Math.round(width || 0)} x {Math.round(height || 0)} pt</div>
-          <button type="button" disabled={!doc || !Number.isFinite(width) || !Number.isFinite(height) || width < 24 || height < 24} onClick={() => onAppendBlank?.({ width, height })}>
-            Append blank page
+          <button type="button" disabled={!doc || !Number.isFinite(width) || !Number.isFinite(height) || width < 24 || height < 24} onClick={() => onAppendBlank?.({ width, height, index: insertIndex })}>
+            {insertIndex === undefined ? 'Append blank page' : 'Insert blank page'}
           </button>
         </ControlGroup>
       </section>
@@ -42864,6 +43150,14 @@ function ToolDrawer(props) {
     selectedPages: selectedPagesProp,
     onSelectPage,
     onMovePagesTo,
+    // berg:work: page tools.
+    onInsertPages,
+    onInsertFilesAt,
+    onInsertBlankAt,
+    onExportPageIndices,
+    onCommitPageBoxes,
+    onSplit,
+    exportModeRequest = null,
   } = props;
   const selectedPages = selectedPagesProp?.length ? selectedPagesProp : [activePage];
   const [rangeText, setRangeText] = useState('');
@@ -42879,6 +43173,29 @@ function ToolDrawer(props) {
       autoRangeRef.current = '';
       setRangeText(current => (current === filled ? '' : current));
     }
+  }, [selectedPagesKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // berg:work: Export pages also splits: a range, every N pages, at the top-level bookmarks, or by size.
+  const [exportMode, setExportMode] = useState('range');
+  const [splitCount, setSplitCount] = useState('1');
+  const [splitSize, setSplitSize] = useState('10');
+  const [splitBusy, setSplitBusy] = useState(false);
+  useEffect(() => {
+    if (exportModeRequest?.mode) setExportMode(exportModeRequest.mode);
+  }, [exportModeRequest]);
+  // berg:work: Crop & resize pages.
+  const [boxMode, setBoxMode] = useState('crop');
+  const [boxScope, setBoxScope] = useState('current');
+  const [boxUnit, setBoxUnit] = useState('mm');
+  const [cropMargins, setCropMargins] = useState({ top: 0, right: 0, bottom: 0, left: 0 });
+  const [cropEachPage, setCropEachPage] = useState(false);
+  const [resizeFormat, setResizeFormat] = useState('a4');
+  const [resizeCustom, setResizeCustom] = useState({ width: '210', height: '297' });
+  const [resizeScale, setResizeScale] = useState(true);
+  const [boxBusy, setBoxBusy] = useState(false);
+  const [boxProgress, setBoxProgress] = useState('');
+  const coarsePointer = useMediaQuery('(pointer: coarse)');
+  useEffect(() => {
+    setBoxScope(selectedPages.length > 1 ? 'selected' : 'current');
   }, [selectedPagesKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const watermarkImageInputRef = useRef(null);
   const [watermarkMode, setWatermarkMode] = useState('text');
@@ -43357,8 +43674,7 @@ function ToolDrawer(props) {
             <span className="oo-pdf-panel-toolbar-label" title={several ? `Pages ${pageRangeText(selectedPages)}` : undefined}>{several ? `${selectedPages.length} pages` : `Page ${doc ? activePage + 1 : '–'}`}</span>
             <button type="button" className="oo-pdf-icon-button" aria-label="Move up" title={several ? (firstSelected <= 0 ? 'Page 1 is selected and cannot move further up.' : 'Move the selected pages up') : 'Move page up'} disabled={!doc || structureBusy || firstSelected <= 0} onClick={() => onMovePage(-1)}><Icon name="arrow-up" /></button>
             <button type="button" className="oo-pdf-icon-button" aria-label="Move down" title={several ? (lastSelected >= pageCount - 1 ? 'The last page is selected and cannot move further down.' : 'Move the selected pages down') : 'Move page down'} disabled={!doc || structureBusy || lastSelected >= pageCount - 1} onClick={() => onMovePage(1)}><Icon name="arrow-down" /></button>
-            <button type="button" className="oo-pdf-icon-button" aria-label="Duplicate" title={several ? 'Duplicate the selected pages' : 'Duplicate page'} disabled={!doc || structureBusy} onClick={onDuplicatePage}><Icon name="copy" /></button>
-            <button type="button" className="oo-pdf-icon-button is-danger" aria-label="Delete page" title={keepsNoPage ? 'A PDF must keep at least one page.' : several ? 'Delete the selected pages' : 'Delete page'} disabled={!doc || structureBusy || keepsNoPage} onClick={onDeletePage}><Icon name="trash-2" /></button>
+            <button type="button" className="oo-pdf-icon-button" aria-label="Duplicate" title={several ? 'Duplicate the selected pages' : 'Duplicate page'} disabled={!doc || structureBusy} onClick={onDuplicatePage}><Icon name="copy" /></button>            <button type="button" className="oo-pdf-icon-button is-danger" aria-label="Delete page" title={keepsNoPage ? 'A PDF must keep at least one page.' : several ? 'Delete the selected pages' : 'Delete page'} disabled={!doc || structureBusy || keepsNoPage} onClick={onDeletePage}><Icon name="trash-2" /></button>
             <span className="oo-pdf-panel-toolbar-gap" aria-hidden="true" />
             <span className="oo-pdf-panel-toolbar-label">All</span>
             <button type="button" className="oo-pdf-icon-button" aria-label="Rotate all left" title="Rotate all pages left" disabled={!doc || rotationBusy} onClick={() => onRotateAll(-90)}><Icon name="rotate-ccw" /></button>
@@ -43377,18 +43693,210 @@ function ToolDrawer(props) {
               onReorderPage={onReorderPage}
               onAppend={onAppend}
               structureBusy={structureBusy}
+              onInsertFilesAt={onInsertFilesAt}
+              pageMenuItems={(index) => {
+                // berg:work: right-click on a thumbnail. The page actions act on the selection when the page is
+                // part of it, else on that page.
+                const inSelection = selectedPages.includes(index) && selectedPages.length > 1;
+                const count = inSelection ? selectedPages.length : 1;
+                const indices = inSelection ? selectedPages : [index];
+                const pages = count > 1 ? `${count} pages` : 'page';
+                return [
+                  { label: 'Insert blank page before', icon: 'file-plus', disabled: structureBusy, run: () => onInsertBlankAt?.(index, index) },
+                  { label: 'Insert blank page after', icon: 'file-plus', disabled: structureBusy, run: () => onInsertBlankAt?.(index + 1, index) },
+                  { label: 'Insert pages from file…', icon: 'folder-open', disabled: structureBusy, run: () => onInsertPages?.('after', index) },
+                  'separator',
+                  { label: `Crop or resize ${pages}…`, icon: 'crop', run: () => { setBoxScope(count > 1 ? 'selected' : 'current'); onPanel?.('pageBoxes'); } },
+                  { label: `Export ${pages}`, icon: 'download', disabled: structureBusy, run: () => onExportPageIndices?.(indices) },
+                  { label: `Duplicate ${pages}`, icon: 'copy', disabled: structureBusy, run: onDuplicatePage },
+                  { label: `Delete ${pages}`, icon: 'trash-2', danger: true, disabled: structureBusy || count >= pageCount, run: onDeletePage },
+                ];
+              }}
             />
           )}
-          {pageCount > 1 && <PanelHint>Drag a page to reorder it (on touch, press and hold first). Shift- or {SHORTCUT_MOD}-click selects several.</PanelHint>}
-        </PanelSection>
-        <PanelSection title="Export pages">
-          <div className="oo-pdf-panel-row">
-            <input aria-label="Range" value={rangeText} placeholder="e.g. 1–3, 5" onChange={(e) => setRangeText(e.target.value)} />
-            <button type="button" className="oo-pdf-panel-button" aria-label="Export range" disabled={!doc || structureBusy} onClick={() => onExportRange(rangeText)}><Icon name="download" /><span>Export</span></button>
+          {pageCount > 1 && <PanelHint>Drag a page to reorder it (on touch, press and hold first). Shift- or {SHORTCUT_MOD}-click selects several.
+            {/* berg:work */}{!coarsePointer && ' Right-click a page to insert, crop or export; drop PDFs between pages to insert them there.'}</PanelHint>}        </PanelSection>
+        <PanelSection title="Export or split">
+          {/* berg:work: the same row splits the PDF into several files (saved as one zip). */}
+          <div className="oo-pdf-panel-row oo-pdf-export-pages-row">
+            <select aria-label="Export" value={exportMode} onChange={(e) => setExportMode(e.target.value)}>
+              <option value="range">Pages</option>
+              <option value="count">Every</option>
+              <option value="bookmarks">Bookmarks</option>
+              <option value="size">Size</option>
+            </select>
+            {exportMode === 'range' && <input aria-label="Range" value={rangeText} placeholder="e.g. 1–3, 5" onChange={(e) => setRangeText(e.target.value)} />}
+            {exportMode === 'count' && <span className="oo-pdf-unit-input"><input aria-label="Pages per file" inputMode="numeric" value={splitCount} onChange={(e) => setSplitCount(e.target.value.replace(/[^\d]/gu, '').slice(0, 5))} /><small>pages</small></span>}
+            {exportMode === 'size' && <span className="oo-pdf-unit-input"><input aria-label="Largest file size" inputMode="decimal" value={splitSize} onChange={(e) => setSplitSize(e.target.value.replace(/[^\d.,]/gu, '').replace(',', '.').slice(0, 7))} /><small>MB</small></span>}
+            {exportMode === 'bookmarks' && <span className="oo-pdf-panel-row-spacer" />}
+            {exportMode === 'range'
+              ? <button type="button" className="oo-pdf-panel-button" aria-label="Export range" disabled={!doc || structureBusy} onClick={() => onExportRange(rangeText)}><Icon name="download" /><span>Export</span></button>
+              : <button type="button" className="oo-pdf-panel-button" aria-label="Split" aria-busy={splitBusy} disabled={!doc || structureBusy || splitBusy || pageCount < 2}
+                onClick={async () => {
+                  setSplitBusy(true);
+                  try {
+                    await onSplit?.({ mode: exportMode, value: exportMode === 'count' ? splitCount : exportMode === 'size' ? splitSize : '' });
+                  } finally { setSplitBusy(false); }
+                }}><Icon name="scissors" /><span>{splitBusy ? 'Splitting…' : 'Split'}</span></button>}
           </div>
+          {exportMode !== 'range' && <PanelHint>{exportMode === 'count'
+            ? `Makes ${Math.max(1, Math.ceil(pageCount / Math.max(1, Number(splitCount) || 1)))} PDFs of ${Math.max(1, Number(splitCount) || 1)} page${Number(splitCount) === 1 ? '' : 's'} each, saved as one zip.`
+            : exportMode === 'bookmarks' ? 'One PDF per top-level bookmark, named after it, saved as one zip.'
+              : 'PDFs as large as possible up to that size, saved as one zip.'}</PanelHint>}
         </PanelSection>
       </>
     );
+  } else if (panel === 'pageBoxes') {
+    // berg:work: crop pages (CropBox) or give them a new size; the preview shows the current page.
+    const currentPage = doc?.pages?.[clamp(activePage, 0, Math.max(0, pageCount - 1))] || null;
+    const seen = currentPage ? pageDimensions(currentPage) : { width: 595.28, height: 841.89 };
+    const factor = PAGE_TOOL_UNITS[boxUnit] || 1;
+    const scopeIndices = boxScope === 'all' ? (doc?.pages || []).map((_, index) => index)
+      : boxScope === 'selected' ? selectedPages : [activePage];
+    const scopeCount = scopeIndices.length;
+    const formats = [
+      { id: 'a3', label: 'A3', width: 841.89, height: 1190.55 },
+      { id: 'a4', label: 'A4', width: 595.28, height: 841.89 },
+      { id: 'a5', label: 'A5', width: 419.53, height: 595.28 },
+      { id: 'letter', label: 'Letter', width: 612, height: 792 },
+      { id: 'legal', label: 'Legal', width: 612, height: 1008 },
+    ];
+    const format = formats.find(item => item.id === resizeFormat);
+    const customSize = { width: Number(resizeCustom.width) * factor, height: Number(resizeCustom.height) * factor };
+    const resizeTarget = format
+      ? { width: format.width, height: format.height, matchOrientation: true, scaleContent: resizeScale }
+      : { width: customSize.width, height: customSize.height, matchOrientation: false, scaleContent: resizeScale };
+    // The preview shows the target as the current page would get it.
+    const previewTarget = resizeTarget.matchOrientation && (seen.width > seen.height) !== (resizeTarget.width > resizeTarget.height)
+      ? { ...resizeTarget, width: resizeTarget.height, height: resizeTarget.width } : resizeTarget;
+    const resizeValid = Number.isFinite(resizeTarget.width) && Number.isFinite(resizeTarget.height) &&
+      resizeTarget.width >= 18 && resizeTarget.height >= 18 && resizeTarget.width <= 14400 && resizeTarget.height <= 14400;
+    const cropEmpty = !cropEachPage && ['top', 'right', 'bottom', 'left'].every(side => !(cropMargins[side] > 0.05));
+    const cropTooLarge = !cropEachPage && (cropMargins.left + cropMargins.right > seen.width - 18 || cropMargins.top + cropMargins.bottom > seen.height - 18);
+    const paint = (canvas, cssWidth) => paintDocPagePreview(canvas, { doc, page: currentPage, pdfiumRuntime, cssWidth });
+    const apply = async () => {
+      if (!doc) return;
+      setBoxBusy(true);
+      try {
+        const pageIds = scopeIndices.map(index => doc.pages[index]?.id).filter(Boolean);
+        if (boxMode === 'resize') {
+          await onCommitPageBoxes?.({ pageIds, resize: resizeTarget });
+        } else if (cropEachPage) {
+          // Each page is rendered small (about 2.5 pt per pixel) to find its ink; two at a time.
+          const cropByPageId = {};
+          let done = 0;
+          const queue = [...scopeIndices];
+          const worker = async () => {
+            while (queue.length) {
+              const page = doc.pages[queue.shift()];
+              const margins = page && await detectPageInkMargins({ doc, page, pdfiumRuntime, cssWidth: 240 }).catch(() => null);
+              if (margins) cropByPageId[page.id] = margins;
+              done += 1;
+              if (scopeIndices.length > 3) setBoxProgress(`Finding margins ${done} of ${scopeIndices.length}…`);
+            }
+          };
+          await Promise.all([worker(), worker()]);
+          setBoxProgress('');
+          if (!Object.keys(cropByPageId).length) {
+            onDismissOperationNotice?.('pageBoxes');
+            showToast('No white margins found on those pages.', 'info');
+            return;
+          }
+          await onCommitPageBoxes?.({ pageIds, cropByPageId });
+        } else {
+          // The margins were cut off: the preview starts over on the cropped page.
+          const outcome = await onCommitPageBoxes?.({ pageIds, crop: cropMargins });
+          if (outcome?.ok) setCropMargins({ top: 0, right: 0, bottom: 0, left: 0 });
+        }
+      } finally {
+        setBoxBusy(false);
+        setBoxProgress('');
+      }
+    };
+    subtitle = doc ? (scopeCount > 1 ? `${scopeCount} pages` : `Page ${scopeIndices[0] + 1}`) : 'No document open';
+    tabs = <SegmentedChoice label="Crop or resize" name="oo-pagebox-mode" value={boxMode} onChange={setBoxMode} disabled={boxBusy}
+      options={[{ value: 'crop', label: 'Crop', icon: 'crop' }, { value: 'resize', label: 'Resize', icon: 'maximize' }]} />;
+    body = (
+      <PanelSection>
+        <div className="oo-pdf-panel-row is-even">
+          <PanelField label="Pages">
+            <select value={boxScope} onChange={(event) => setBoxScope(event.target.value)}>
+              <option value="current">Page {activePage + 1}</option>
+              {selectedPages.length > 1 && <option value="selected">Selected ({selectedPages.length})</option>}
+              <option value="all">All pages ({pageCount})</option>
+            </select>
+          </PanelField>
+          <PanelField label="Unit">
+            <select value={boxUnit} onChange={(event) => setBoxUnit(event.target.value)}>
+              <option value="mm">mm</option>
+              <option value="pt">pt</option>
+              <option value="in">in</option>
+            </select>
+          </PanelField>
+        </div>
+        {doc && currentPage && (
+          <PageBoxPreview pageSize={seen} margins={cropEachPage ? { top: 0, right: 0, bottom: 0, left: 0 } : cropMargins}
+            onMargins={cropEachPage ? null : setCropMargins}
+            resize={boxMode === 'resize' && resizeValid ? previewTarget : null}
+            paint={paint} paintKey={`${doc.id}:${currentPage.id}:${pdfiumRevision}:${currentPage.width}x${currentPage.height}`} />
+        )}
+        {boxMode === 'crop' ? (
+          <>
+            {!cropEachPage && (
+              <div className="oo-pdf-pagebox-margins">
+                {['top', 'left', 'right', 'bottom'].map(side => (
+                  <PanelField key={side} label={side[0].toUpperCase() + side.slice(1)}>
+                    <UnitNumberInput aria-label={`${side} margin`} value={cropMargins[side]} factor={factor}
+                      onValue={(points) => setCropMargins(current => ({ ...current, [side]: points }))} />
+                  </PanelField>
+                ))}
+              </div>
+            )}
+            <div className="oo-pdf-panel-row">
+              <button type="button" className="oo-pdf-panel-button" disabled={!doc || cropEachPage}
+                title="Fill the margins in from the white border of this page"
+                onClick={async () => {
+                  const margins = currentPage && await detectPageInkMargins({ doc, page: currentPage, pdfiumRuntime });
+                  if (margins) setCropMargins(margins);
+                  else showToast('This page has no content to fit to.', 'info');
+                }}><Icon name="square-dashed" /><span>Fit to content</span></button>
+              <button type="button" className="oo-pdf-panel-button" disabled={cropEmpty || cropEachPage}
+                onClick={() => setCropMargins({ top: 0, right: 0, bottom: 0, left: 0 })}><Icon name="x" /><span>Clear</span></button>
+            </div>
+            <PanelSwitch label="Remove the white margins of each page" checked={cropEachPage} onChange={setCropEachPage}
+              hint={cropEachPage ? 'Each page is cut to its own content.' : undefined} />
+            <PanelHint>{cropEachPage ? 'Cropping only hides the margins; Undo or a resize brings them back.'
+              : 'Drag an edge in the preview, or drag across the page to draw the area to keep. Cropping hides the rest; nothing is deleted.'}</PanelHint>
+          </>
+        ) : (
+          <>
+            <PanelField label="Size">
+              <select value={resizeFormat} onChange={(event) => setResizeFormat(event.target.value)}>
+                {formats.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+                <option value="custom">Custom</option>
+              </select>
+            </PanelField>
+            {!format && (
+              <div className="oo-pdf-panel-row is-even">
+                <PanelField label={`Width (${boxUnit})`}><input inputMode="decimal" value={resizeCustom.width}
+                  onChange={(event) => setResizeCustom(current => ({ ...current, width: event.target.value.replace(',', '.') }))} /></PanelField>
+                <PanelField label={`Height (${boxUnit})`}><input inputMode="decimal" value={resizeCustom.height}
+                  onChange={(event) => setResizeCustom(current => ({ ...current, height: event.target.value.replace(',', '.') }))} /></PanelField>
+              </div>
+            )}
+            <PanelSwitch label="Scale the content to fit" checked={resizeScale} onChange={setResizeScale} />
+            <PanelHint>{format ? 'Landscape pages stay landscape. ' : ''}{resizeScale
+              ? 'The content shrinks or grows to fit and is centred.'
+              : 'The content keeps its size and stays centred; the page grows or is cut around it.'}</PanelHint>
+          </>
+        )}
+        <OperationNotice notice={operationNotices.pageBoxes} onDismiss={() => onDismissOperationNotice?.('pageBoxes')} />
+      </PanelSection>
+    );
+    footer = <button type="button" className="oo-pdf-primary" aria-busy={boxBusy}
+      disabled={!doc || structureBusy || boxBusy || (boxMode === 'crop' ? (cropEmpty || cropTooLarge) : !resizeValid)}
+      onClick={() => { void apply(); }}>
+      {boxBusy ? (boxProgress || 'Working…') : `${boxMode === 'crop' ? 'Crop' : 'Resize'} ${scopeCount > 1 ? `${scopeCount} pages` : 'page'}`}</button>;
   } else if (panel === 'find') {
     subtitle = 'Ctrl+F opens the same search';
     body = (
@@ -44305,6 +44813,60 @@ function OperationNotice({ notice, onDismiss }) {
   );
 }
 
+// berg:work: one page painted into a canvas `cssWidth` CSS pixels wide (the Crop & resize preview, white-margin
+// detection), from the live PDFium session like the thumbnails, else with PDF.js. Resolves false when nothing was
+// painted.
+async function paintDocPagePreview(canvas, { doc, page, pdfiumRuntime = null, cssWidth = 240, deviceScale = null }) {
+  if (!canvas || !doc || !page) return false;
+  const dimensions = pageDimensions(page);
+  const dpr = deviceScale ?? (window.devicePixelRatio || 1);
+  const scale = cssWidth / Math.max(1, dimensions.width);
+  if (pdfiumRuntime?.ready && pdfiumRuntime.documentId === doc.id) {
+    if (pdfiumRuntime.nativeCommitTail) await Promise.resolve(pdfiumRuntime.nativeCommitTail).catch(() => {});
+    const raster = await requestPdfiumRaster(pdfiumRuntime, {
+      pageId: page.id,
+      pageIndex: page.sourceIndex,
+      scale: scale * dpr,
+      rotation: page.rotation || 0,
+      annotationMode: 'document',
+      priority: RenderPriority.VISIBLE,
+    });
+    return paintPdfiumRaster(canvas, raster);
+  }
+  if (page.nativeBlankPage === true) {
+    canvas.width = Math.max(1, Math.round(dimensions.width * scale * dpr));
+    canvas.height = Math.max(1, Math.round(dimensions.height * scale * dpr));
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    return true;
+  }
+  const source = pageSource(doc, page);
+  const pdfPage = await source.pdf.getPage(pdfSourcePageIndex(page) + 1);
+  const base = pdfPage.getViewport({ scale: 1, rotation: page.rotation });
+  const viewport = pdfPage.getViewport({ scale: (cssWidth / Math.max(1, base.width)) * dpr, rotation: page.rotation });
+  canvas.width = Math.max(1, Math.round(viewport.width));
+  canvas.height = Math.max(1, Math.round(viewport.height));
+  await pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  return true;
+}
+
+// berg:work: bring a page into view once the page list has rendered it (after inserting pages).
+function scrollSheetIntoViewSoon(viewport, index) {
+  requestAnimationFrame(() => requestAnimationFrame(() => viewport
+    ?.querySelector(`.oo-pdf-sheet[data-page-index="${index}"]`)
+    ?.scrollIntoView({ block: 'center', inline: 'nearest' })));
+}
+
+// berg:work: the white margins of a page as crop margins in points (null for an empty page).
+async function detectPageInkMargins({ doc, page, pdfiumRuntime, cssWidth = 400 }) {
+  const canvas = document.createElement('canvas');
+  if (!await paintDocPagePreview(canvas, { doc, page, pdfiumRuntime, cssWidth, deviceScale: 1 })) return null;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  const image = context.getImageData(0, 0, canvas.width, canvas.height);
+  return marginsFromFractions(inkMarginsFromRaster(image.data, image.width, image.height), pageDimensions(page));
+}
+
 function VirtualPageThumbGrid({
   doc,
   pdfiumRuntime = null,
@@ -44318,9 +44880,21 @@ function VirtualPageThumbGrid({
   selectedPages = [activePage],
   onSelectPage = null,
   onMovePagesTo = null,
+  // berg:work: PDFs and images dropped between thumbnails are inserted there; a right-click opens the page menu.
+  onInsertFilesAt = null,
+  pageMenuItems = null,
 }) {
   const scrollerRef = useRef(null);
   const [viewport, setViewport] = useState({ width: 0, height: 300, scrollTop: 0 });
+  const [pageMenu, setPageMenu] = useState(null);
+  const openPageMenu = (index, event) => {
+    if (!pageMenuItems) return;
+    event.preventDefault();
+    // A page outside the selection becomes the selection; inside it, the menu acts on all selected pages.
+    if (!(selectedPages.length > 1 && selectedPages.includes(index))) onSelectPage ? onSelectPage(index, {}) : onGoToPage(index);
+    setPageMenu({ index, x: event.clientX, y: event.clientY });
+  };
+  const fileDrag = event => !draggedThumbPageId && Array.from(event.dataTransfer?.types || []).includes('Files');
   const touchDrag = useThumbTouchDrag({ scrollerRef, doc, structureBusy, onMovePagesTo,
     selectedPageIds: selectedPages.map(index => doc?.pages?.[index]?.id).filter(Boolean) });
   const selectedSet = new Set(selectedPages);
@@ -44385,6 +44959,17 @@ function VirtualPageThumbGrid({
       className={`oo-pdf-thumb-grid oo-pdf-thumb-grid-virtual${touchDrag.drag ? ' is-touch-dragging' : ''}`}
       aria-label="Reorder pages"
       {...touchDrag.handlers}
+      // berg:work: files dropped beside the thumbnails go to the end (a drop on a thumbnail is handled there).
+      onDragOver={(event) => {
+        if (!onInsertFilesAt || !fileDrag(event) || structureBusy) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      }}
+      onDrop={(event) => {
+        if (!onInsertFilesAt || !fileDrag(event) || event.defaultPrevented) return;
+        event.preventDefault();
+        if (!structureBusy) onInsertFilesAt(fileList(event.dataTransfer.files), doc.pages.length);
+      }}
       onScroll={(event) => {
         const node = event.currentTarget;
         setViewport(current => ({ ...current, scrollTop: node.scrollTop || 0 }));
@@ -44403,7 +44988,7 @@ function VirtualPageThumbGrid({
             if (!page) {
               return (
                 <button key="append" type="button" className="oo-pdf-thumb-append" disabled={structureBusy}
-                  onClick={onAppend} aria-label="Append PDF or image" title="Append a PDF or an image as new pages">
+                  onClick={onAppend} aria-label="Append PDF or image" title="Append a PDF or an image as new pages (or drop files here)">
                   <span className="oo-pdf-thumb-preview"><Icon name="plus" /><span>Add pages</span></span>
                 </button>
               );
@@ -44426,12 +45011,18 @@ function VirtualPageThumbGrid({
                 onMoveToGap={onMovePagesTo}
                 touchDragging={Boolean(touchDrag.drag) && touchDrag.drag.movingIds.includes(page.id)}
                 touchDropSide={touchDropMoves && touchDrag.drag.index === itemIndex ? touchDrag.drag.side : ''}
+                onFilesDropped={onInsertFilesAt}
+                onContextMenu={pageMenuItems ? event => openPageMenu(itemIndex, event) : null}
               />
             );
           })}
         </div>
       </div>
       </div>
+      {pageMenu && pageMenuItems && (
+        <PdfContextMenu x={pageMenu.x} y={pageMenu.y} label="Page actions" items={pageMenuItems(pageMenu.index)} onClose={() => setPageMenu(null)}
+          scrollCloses={event => event.target instanceof Element && Boolean(event.target.closest('.oo-pdf-thumb-grid'))} />
+      )}
     </>
   );
 }
@@ -44457,8 +45048,13 @@ function PageThumbnail({
   onMoveToGap = null,
   touchDragging = false,
   touchDropSide = '',
+  // berg:work: files dropped on this thumbnail are inserted on the side the pointer is on; right-click menu.
+  onFilesDropped = null,
+  onContextMenu = null,
 }) {
   const canvasRef = useRef(null);
+  const externalFileDrag = event => Boolean(onFilesDropped) && !draggedThumbPageId &&
+    Array.from(event.dataTransfer?.types || []).includes('Files');
   const [dragOver, setDragOver] = useState('');
   const [dragging, setDragging] = useState(false);
   const moveUp = (event) => {
@@ -44598,8 +45194,16 @@ function PageThumbnail({
         setDragging(false);
         markMovingThumbs(event, false);
       }}
+      onContextMenu={onContextMenu || undefined}
       onDragOver={(event) => {
         if (structureBusy) return;
+        // berg:work: PDFs and images from outside are inserted where the insertion line shows.
+        if (externalFileDrag(event)) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'copy';
+          setDragOver(dropSideAt(event));
+          return;
+        }
         // berg:work: only a page from this grid; files from outside go on to the document drop.
         if (onMoveToGap && !draggedThumbPageId) return;
         event.preventDefault();
@@ -44616,6 +45220,12 @@ function PageThumbnail({
       }}
       onDragLeave={() => setDragOver('')}
       onDrop={(event) => {
+        if (externalFileDrag(event)) {
+          event.preventDefault();
+          setDragOver('');
+          if (!structureBusy) onFilesDropped(fileList(event.dataTransfer.files), index + (dropSideAt(event) === 'after' ? 1 : 0));
+          return;
+        }
         if (onMoveToGap && !draggedThumbPageId) return;
         event.preventDefault();
         setDragOver('');

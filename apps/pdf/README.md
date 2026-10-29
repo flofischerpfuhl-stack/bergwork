@@ -109,6 +109,17 @@ project". The sample is `scripts/fixtures/smoke.pdf`, emitted by Vite into `asse
 `/app/pdf/?sample` opens it once the editor has restored its workspace and drops the parameter. The desktop app keeps
 a plain logo and offers no sample.
 
+Page tools (fork, `pdf-editor/model/bergwork-page-tools.js`, preview in `pdf-editor/interaction/bergwork-page-box-preview.jsx`,
+tests in `tests/page-tools.test.mjs`): a right-click on a thumbnail in Pages inserts a blank page (the size of that
+page) before or after it, inserts pages from a file there, or crops, exports, duplicates or deletes the page (or the
+selected pages). PDFs and images dropped between thumbnails are inserted at the insertion line, several files merged
+into one step; a drop on the page still opens them. Add pages asks where to insert (after or before the current page,
+at the end). *Crop & resize pages* (Document tools) sets the CropBox (margins in mm/pt/in, a draggable area on a
+preview, *Fit to content*, or each page's white margins) or a new page size (MediaBox and CropBox, content scaled to
+fit or kept centred) for the current, selected or all pages; it is one snapshot transaction, so Undo restores the
+previous document. The *Export or split* row of Pages splits into several PDFs (every N pages, at the top-level
+bookmarks, or by size) saved as one zip. The command palette has entries for all of these.
+
 Files (`web/src/native-files.js`, commands in `src-tauri/src/lib.rs`):
 
 - Opening a PDF or `.bwpdf`/`.fwdoc` project from the file manager, or passing it on the command line, opens it

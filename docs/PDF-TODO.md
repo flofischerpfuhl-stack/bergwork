@@ -136,8 +136,22 @@ Forms:
 - [x] **Headers, footers and Bates numbers** in the Page numbers panel: text with {page}, {pages}, {date}, {file},
   start number, zero-padded digits, six positions picked on the preview page; header and footer coexist.
   Approved by Florian 2026-10-29.
-- [ ] **Page tools:** blank page, crop and resize pages, split by count/bookmarks/size, merge several files by
-  drop. 5–10 PD.
+- [x] **Page tools** (branch `feat/pdf-page-tools`), all with Undo where the document changes:
+  - Blank page before/after a page (its size) from the thumbnail menu (right-click) and the palette; Add pages asks
+    where to insert (after/before the current page, at the end).
+  - PDFs and images dropped between thumbnails are inserted at the insertion line; several files are merged by qpdf
+    first, so they are one import and one Undo step.
+  - *Crop & resize pages* (Document tools): CropBox by margins, a draggable area on a preview, *Fit to content* or
+    each page's white margins; new page size (A3–A5, Letter, Legal, custom) with the content scaled to fit or kept
+    centred, annotations and form widgets follow. Current, selected or all pages; rotated pages crop as seen.
+  - *Export or split* in Pages: every N pages, at the top-level bookmarks (named after them) or by size, one zip.
+  - No engine change: crop/resize is a pdf-lib pass committed as a snapshot transaction (like page stamps); GeoTopo
+    (117 pages) crops one page in 2.8 s, white margins of all pages in 15 s, Undo 1–4 s.
+  - **Needs OK:** the thumbnail context menu, the *Crop & resize pages* panel (new Document tools entry), the
+    *Export or split* row (mode select in front of the range field) and the placement select in Add pages.
+  - [ ] Later (Fernwork): a native `page.set-boxes` command (`FPDFPage_SetCropBox`/`SetMediaBox` are in the build)
+    would make a crop instant instead of a full-document snapshot round trip.
+  - [ ] Split: save the parts into a chosen folder (`showDirectoryPicker`, a Tauri command) instead of a zip.
 - [ ] **PDF/A save** (fonts embedded, XMP, OutputIntent; check with veraPDF). 5–10 PD.
 - [ ] **OCR:** more languages on demand, deskew, OCR of a region. 5–8 PD.
 

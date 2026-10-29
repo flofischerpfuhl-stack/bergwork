@@ -9801,3 +9801,115 @@ body.oo-pdf-workbench-route .oo-consent-notice {
   font-style: normal;
   text-decoration: line-through;
 }
+
+/* berg:work: page tools – where Add pages inserts, the export/split row, the Crop & resize preview. */
+.oo-pdf-add-page-placement {
+  display: grid;
+  gap: 5px;
+  color: var(--pdf-muted);
+  font-size: 12px;
+}
+
+.oo-pdf-add-page-placement select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--pdf-border);
+  border-radius: 7px;
+  background: var(--pdf-input-bg);
+  color: var(--pdf-text);
+  padding: 8px;
+}
+
+.oo-pdf-panel-row.oo-pdf-export-pages-row > select {
+  flex: 0 0 auto;
+  width: 112px;
+}
+
+.oo-pdf-unit-input {
+  position: relative;
+  display: block;
+}
+
+.oo-pdf-unit-input > input {
+  width: 100%;
+  padding-right: 44px;
+}
+
+.oo-pdf-unit-input > small {
+  position: absolute;
+  top: 50%;
+  right: 9px;
+  color: var(--pdf-muted);
+  font-size: 11.5px;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.oo-pdf-pagebox-preview {
+  display: flex;
+  justify-content: center;
+  margin: 0;
+  padding: 12px 0;
+  border-radius: 10px;
+  background: var(--pdf-panel-3);
+}
+
+.oo-pdf-pagebox-stage {
+  position: relative;
+  flex: 0 0 auto;
+  touch-action: none;
+  user-select: none;
+}
+
+.oo-pdf-pagebox-stage > canvas,
+.oo-pdf-pagebox-content {
+  display: block;
+  background: #fff;
+  box-shadow: 0 1px 4px var(--pdf-shadow);
+}
+
+.oo-pdf-pagebox-stage.is-crop {
+  overflow: hidden;
+  cursor: crosshair;
+}
+
+.oo-pdf-pagebox-keep {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px solid var(--pdf-accent);
+  /* Everything outside the kept area is dimmed. */
+  box-shadow: 0 0 0 9999px rgb(15 23 42 / 0.45);
+  pointer-events: none;
+}
+
+.oo-pdf-pagebox-keep i {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--pdf-accent);
+  border-radius: 2px;
+  background: #fff;
+}
+
+.oo-pdf-pagebox-keep .is-n { top: -6px; left: calc(50% - 5px); }
+.oo-pdf-pagebox-keep .is-s { bottom: -6px; left: calc(50% - 5px); }
+.oo-pdf-pagebox-keep .is-e { right: -6px; top: calc(50% - 5px); }
+.oo-pdf-pagebox-keep .is-w { left: -6px; top: calc(50% - 5px); }
+
+.oo-pdf-pagebox-content {
+  position: absolute;
+  overflow: hidden;
+}
+
+.oo-pdf-pagebox-target {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px dashed var(--pdf-accent);
+  pointer-events: none;
+}
+
+.oo-pdf-pagebox-margins {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
