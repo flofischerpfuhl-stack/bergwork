@@ -731,3 +731,9 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
   pointer-events: none;
   box-shadow: var(--bw-shadow-popover);
 }
+
+/* Hovering a Layers row outlines its object on the page. */
+.oo-pdf-shell .oo-pdf-viewport .is-layer-hover {
+  outline: 2px solid var(--pdf-accent-strong, var(--bw-fg));
+  outline-offset: 1px;
+}

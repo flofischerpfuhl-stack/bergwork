@@ -15875,6 +15875,20 @@ function useStableCallback(callback) {
   return useCallback((...args) => ref.current?.(...args), []);
 }
 
+// berg:work: hovering a row in Layers outlines its object on the page (Figma), so a name can be matched to a shape.
+function markLayerOnCanvas(layer, on) {
+  if (typeof document === 'undefined') return;
+  for (const node of document.querySelectorAll('.oo-pdf-viewport .is-layer-hover')) node.classList.remove('is-layer-hover');
+  if (!on || !layer?.item) return;
+  const key = layer.type === 'annotation'
+    ? selectionItemKey({ type: 'annotation', id: layer.item.id })
+    : selectionItemKey({ type: layer.type, sourceId: layer.item.sourceId });
+  if (!key) return;
+  for (const node of document.querySelectorAll(`.oo-pdf-viewport [data-selection-key="${CSS.escape(key)}"]`)) {
+    node.classList.add('is-layer-hover');
+  }
+}
+
 function selectionItemKey(item = {}) {
   if (!item) return '';
   if (item.type === 'annotation') return `annotation:${item.id}`;
@@ -27869,6 +27883,22 @@ function App({ shell = null }) {
     viewport.addEventListener('pointerdown', remember, true);
     return () => viewport.removeEventListener('pointerdown', remember, true);
   }, [tool, activeDocId]);
+  // berg:work: with nothing selected the arrow keys move the view (Figma): 40 px, Shift 200 px. Selected objects keep
+  // nudging (their handlers take the key first).
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return undefined;
+    const pan = event => {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || selectedRef.current || editingText) return;
+      const step = event.shiftKey ? 200 : 40;
+      const delta = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
+      if (!delta || event.target?.closest?.('input, textarea, select, button, [contenteditable="true"], [role="dialog"], [role="menu"], [role="listbox"], .oo-pdf-inspector, .oo-pdf-drawer')) return;
+      event.preventDefault();
+      viewport.scrollBy({ left: delta[0], top: delta[1] });
+    };
+    window.addEventListener('keydown', pan);
+    return () => window.removeEventListener('keydown', pan);
+  }, [activeDocId, editingText]);
   // Middle mouse button drags the page with any tool, as in CAD programs.
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -37966,14 +37996,14 @@ function ImageRegion({ page, pages = [page], item, itemId, edit, preferences, zo
         tabIndex={0}
         role="button"
         aria-pressed={selected}
-        aria-label={`PDF image${Number.isInteger(Number(current.objectIndex)) ? ` #${current.objectIndex}` : ''}: ${item.name || 'image object'}`}
+        aria-label={readableImageName(item.name) ? `Image: ${readableImageName(item.name)}` : 'Image'}
         style={style}
       onFocus={(event) => {
         if (!event.currentTarget.matches(':active')) {
           onSelect(selectionPayload(current.pageId || page.id));
         }
       }}
-      title={`PDF image${Number.isInteger(Number(current.objectIndex)) ? ` #${current.objectIndex}` : ''}: ${item.name || 'image object'}`}
+      title={readableImageName(item.name) || 'Image'}
       onPointerDown={(event) => start(event)}
       onPointerMove={move}
       onPointerUp={stop}
@@ -38013,7 +38043,7 @@ function ImageRegion({ page, pages = [page], item, itemId, edit, preferences, zo
             onPointerDown={(event) => start(event, handle)}
           />
         ))}
-        {selected && <ObjectRotationHandle disabled={locked} label="Rotate PDF image"
+        {selected && <ObjectRotationHandle disabled={locked} label="Rotate image"
           style={quadRotateHandleStyle(imageLocalQuad || [], imageCornerIndices, current.w, current.h)}
           onRotate={degrees => onMove(itemId, {
           ...current,
@@ -38261,7 +38291,7 @@ function ImageEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, s
           onPointerDown={(event) => start(event, handle)}
         />
       ))}
-      {selected && <ObjectRotationHandle disabled={locked} label="Rotate PDF image" onRotate={degrees => onMove(sourceId, {
+      {selected && <ObjectRotationHandle disabled={locked} label="Rotate image" onRotate={degrees => onMove(sourceId, {
         ...edit,
         pendingRotationDegrees: degrees,
       }, {
@@ -44871,6 +44901,8 @@ function Inspector({
                 }}><Icon name="chevron-down" /></button>}
               <button className={`oo-pdf-layer-row${repeatedLabel ? ' has-repeated-label' : ''}`} type="button"
                 title={`${layer.label || 'Layer'} · Position from page top left: ${position}`}
+                onMouseEnter={() => markLayerOnCanvas(layer, true)}
+                onMouseLeave={() => markLayerOnCanvas(layer, false)}
                 aria-expanded={isExpanded} aria-pressed={isSelected}
                 aria-label={hierarchy?.depth > 1
                   ? `${presentation.name || layer.label || 'Layer'}, inside ${parentLayer?.label || 'PDF group'}`
