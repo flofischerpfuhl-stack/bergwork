@@ -73,6 +73,16 @@ Edit PDF keeps it on; Pan stops editing. The host supplies `shell.setTitle` (the
 `• name — berg:work PDF` for unsaved changes, and the document in the title bar); the editor shows no fullscreen toggle
 because the shell offers no `setFullscreen`. The editor's `titleBar` slots are not used.
 
+Measuring and comments are berg:work's own files next to the shell: Markup › Measure (distance, perimeter, area,
+calibrate) and Markup › Comment (text box, typewriter, callout, line, polyline, polygon, cloud, stamp) draw on
+`pdf-editor/interaction/measure-layer.jsx` and `comment-tools.jsx`; Document tools › Comments is
+`comment-list.jsx` (filters, replies, review status, XFDF). Text boxes, typewriter text and lines use the worker's
+annotation commands; measurements, page scales (`/VP`), callouts, shapes, stamps, replies and XFDF imports are
+written with pdf-lib (`pdf-editor/engine/measure-annotations.js`, `markup-annotations.js`, `comment-index.js`,
+`xfdf.js`) into a checkpoint and committed as one snapshot transaction (`commitMeasureChange` in the shell), because
+the pinned worker cannot write those keys. The shell publishes the document's measurements and markups
+(`doc.pageMarkup`) and the actions through `measureStore`. Tests: `npm run test:unit -w @bergwork/pdf`.
+
 In the web app (outside Tauri) the mark and wordmark link back to https://bergwork.app/ (`web/src/homeLink.tsx`, a
 link laid over the design base's title bar), and the host passes `shell.sample` (`{ label, open }`, a berg:work
 addition to the fork's `normalizeShellHost`): the empty state then offers "Try a sample PDF" next to "Choose PDF or
