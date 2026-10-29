@@ -16,7 +16,7 @@ A thin UI smoke test (`ui-smoke.mjs`) covers the wiring in between.
 | `lib/plan.mjs` | Tiers, the stratified file selection and the seeded plans. |
 | `lib/oracles.mjs` | qpdf and poppler checks. |
 | `lib/report.mjs` | `report.json`, `summary.md`, `coverage.csv`. |
-| `lib/server.mjs` | Static server: `dist/` at `/`, the harness, the corpus, the upload endpoint for outputs. |
+| `../headless/` | Shared with the agent CLI (`../cli/`): `engine.js` (the in-page engine session, shared PDFium worker, upload), `bundle.mjs` (the esbuild bundling with the shell's internals), `server.mjs` (static server: `dist/` at `/`, the bundle, the corpus, the upload endpoint for outputs), `host.mjs` (Playwright, headless Chromium, page loading). |
 | `ui-smoke.mjs` | Opens PDFs in the real page, rotates, undoes, redoes and saves them, then checks the download. |
 
 ## Prerequisites
@@ -31,7 +31,7 @@ npm run build:web -w @bergwork/pdf         # apps/pdf/dist/
 
 The tests need the following, none of which `npx playwright install` should be run for:
 
-- **Playwright.** It comes from `apps/image`'s dependencies, so `apps/image/node_modules` must be installed. The suite uses the local headless Chromium (WebKit is selectable with `--browser webkit`).
+- **Playwright.** It comes from `apps/image`'s dependencies, so `apps/image/node_modules` must be installed. The suite uses the local headless Chromium (WebKit is selectable with `--browser webkit`). If the Chromium revision that Playwright expects was never downloaded, the newest `chromium_headless_shell-*` in `~/.cache/ms-playwright` is used, or `BERGWORK_PDF_CHROMIUM`.
 - **qpdf and poppler** (`pdfinfo`, `pdftotext`) for the outside checks. If a tool is missing, its checks are skipped.
 
 Rebuild `dist/` after changing the editor fork. The harness itself is rebuilt on every run (`--no-build` skips that); it bundles the fork in its current working-tree state.
@@ -183,4 +183,4 @@ To add an edit operation:
 
 Document operations go into `DOC_OPS` in both files.
 
-Shell helpers that are not exported are listed in `SHELL_INTERNALS` in `harness/build-harness.mjs`. The build appends an `export { … }` list to the fork's shell source in memory, so the editor sources are never edited. If a helper is renamed upstream, the build reports it as missing.
+Shell helpers that are not exported are listed in `SHELL_INTERNALS` in `harness/build-harness.mjs`. The build (`headless/bundle.mjs`) appends an `export { … }` list to the fork's shell source in memory, so the editor sources are never edited. If a helper is renamed upstream, the build reports it as missing. The agent CLI bundles the same list.

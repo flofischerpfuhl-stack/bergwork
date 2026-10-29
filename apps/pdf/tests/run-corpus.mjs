@@ -7,12 +7,11 @@
 //   node apps/pdf/tests/run-corpus.mjs --tier quick|sample|full [--jobs 3] [--seed 1] [--limit N]
 //        [--file <id>[,<id>]] [--ops op1,op2] [--tags a,b] [--source s] [--out dir] [--no-build] [--keep-pdfs]
 import { existsSync, promises as fs, createWriteStream } from 'node:fs';
-import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildHarness, outDir as harnessDir } from './harness/build-harness.mjs';
-import { startServer } from './lib/server.mjs';
+import { startHost } from '../headless/host.mjs';
 import { TIERS, selectFiles, planFor, donorPool, workWeights, fileBudgetMs, stepLimits } from './lib/plan.mjs';
 import { detectTools, qpdfCheck, qpdfPages, qpdfEncrypted, popplerWordsInRects } from './lib/oracles.mjs';
 import { writeReports } from './lib/report.mjs';
@@ -77,28 +76,14 @@ const buildInfo = args.build ? await buildHarness({ quiet: true }) : JSON.parse(
 const tools = await detectTools();
 await fs.mkdir(pdfDir, { recursive: true });
 
-const require = createRequire(path.join(appDir, '..', 'image', 'package.json'));
-const playwright = require('playwright');
-const server = await startServer({ distDir, harnessDir, corpusRoot, outDir: pdfDir });
-const browser = await playwright[args.browser].launch({ headless: true });
-const context = await browser.newContext({ viewport: { width: 1000, height: 800 } });
+const host = await startHost({ distDir, harnessDir, corpusRoot, outDir: pdfDir, browser: args.browser, viewport: { width: 1000, height: 800 } });
 
 console.log(`corpus suite: tier ${args.tier}, ${files.length} files, ${args.jobs} pages, seed ${args.seed}, out ${path.relative(process.cwd(), outDir) || outDir}`);
 const started = Date.now();
 const resultsStream = createWriteStream(path.join(outDir, 'results.jsonl'));
 const results = [];
 
-async function newHarnessPage() {
-  const page = await context.newPage();
-  page.__events = [];
-  page.on('pageerror', (error) => page.__events.push({ type: 'pageerror', message: String(error.message).slice(0, 300) }));
-  page.on('crash', () => page.__events.push({ type: 'crash' }));
-  await page.goto(`${server.url}/__harness/harness.html`);
-  await page.waitForFunction(() => window.BW || window.__harnessError, null, { timeout: 60_000 });
-  const error = await page.evaluate(() => window.__harnessError);
-  if (error) throw new Error(`harness failed to load: ${error}`);
-  return page;
-}
+const newHarnessPage = () => host.newEnginePage('harness.html');
 
 async function nodeOracles(file, job, result) {
   const checks = [];
@@ -212,8 +197,7 @@ async function worker(slot) {
 process.on('SIGINT', () => { queue.length = 0; });
 await Promise.all(Array.from({ length: Math.min(args.jobs, files.length) }, (_, slot) => worker(slot + 1)));
 resultsStream.end();
-await browser.close();
-await server.close();
+await host.close();
 
 const report = await writeReports({ outDir, results, args, tier, files, manifest, buildInfo, tools, wallMs: Date.now() - started });
 console.log(`\n${report.summaryLine}\nreport: ${path.join(outDir, 'summary.md')}`);

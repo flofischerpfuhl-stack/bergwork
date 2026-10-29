@@ -4,42 +4,29 @@
 // projects) directly, without the React UI. One PDFium worker is shared by every document the page runs; the runner
 // (tests/run-corpus.mjs) sends one job per file and receives a JSON result. Exported PDFs are POSTed to /__out/ so the
 // runner can check them with qpdf and poppler.
+// The engine session, the shared worker and the byte helpers live in headless/engine.js (also used by the CLI).
 import * as Shell from 'bergwork-shell-internals';
-import { PdfEngineSessionOrchestrator } from '@editor/pdf-editor/engine/session-orchestrator.js';
-import { PdfEngineWorkerTransport } from '@editor/pdf-editor/engine/worker-transport.js';
-import { CommandType, createPdfCommand } from '@editor/pdf-editor/model/commands.js';
-import { MemoryCommandJournalStore, IndexedDbCommandJournalStore } from '@editor/pdf-editor/model/journal-store.js';
-import { PdfSemanticKernel } from '@editor/pdf-editor/model/semantic-kernel.js';
+import { CommandType } from '@editor/pdf-editor/model/commands.js';
+import { IndexedDbCommandJournalStore } from '@editor/pdf-editor/model/journal-store.js';
 import { PAGE_STAMP_KINDS, stampPdfPages } from '@editor/pdf-editor/model/page-stamps.js';
-import { findGlyphTextMatches, glyphsFromTextGlyphResult } from '@editor/pdf-editor/model/redaction-geometry.js';
+import { findGlyphTextMatches } from '@editor/pdf-editor/model/redaction-geometry.js';
 import { createAdvanceMeasurer, subsetTrueTypeFont } from '@editor/pdf-editor/ocr/truetype-subset.js';
 import * as OcrRuntime from '@editor/pdf-editor/ocr/runtime.js';
 import { ocrTextLayerWords } from '@editor/pdf-editor/ocr/text-layer.js';
+import {
+  VENDOR, config, configure, resetWorker, uid, asBytes, sha256Hex, fnv, errorInfo, withTimeout, upload, Session,
+  command, pageBox,
+} from '../../headless/engine.js';
 
-const VENDOR = '/tools/vendor/';
-const WASM_URL = `${VENDOR}pdf-tools/pdfium.wasm`;
+export { resetWorker };
 
-let transport = null;
-// The editor's own transport timeout (PdfEngineWorkerTransport default).
-let config = { requestTimeoutMs: 45_000, renderScale: 0.2, baselinePages: 3 };
 let notoSans = null;
 
-class SharedTransport {
-  request(request, transfer) { return transport.request(request, transfer); }
-  close() {}
-}
-
 export async function init(options = {}) {
-  config = { ...config, ...options };
+  configure(options);
   if (!globalThis.PDFLib || !globalThis.pdfjsLib) throw new Error('harness.html must load pdf-lib and PDF.js first');
   resetWorker();
   return { missingInternals: Shell.__harnessMissingInternals };
-}
-
-/** Replaces the shared PDFium worker (after a timeout or a crash, and every N files). */
-export function resetWorker() {
-  try { transport?.close(); } catch { /* already gone */ }
-  transport = new PdfEngineWorkerTransport({ timeoutMs: config.requestTimeoutMs });
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -55,25 +42,6 @@ function mulberry32(seed) {
   };
 }
 const pick = (rng, list) => list[Math.floor(rng() * list.length) % list.length];
-let uidCounter = 0;
-const uid = (prefix = 'bw') => `${prefix}-${Date.now().toString(36)}-${(uidCounter += 1).toString(36)}`;
-const asBytes = (value) => (value instanceof Uint8Array ? value : new Uint8Array(value || []));
-async function sha256Hex(bytes) {
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
-}
-function fnv(bytes) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < bytes.length; i += 1) { h ^= bytes[i]; h = Math.imul(h, 0x01000193); }
-  return (h >>> 0).toString(16).padStart(8, '0');
-}
-function errorInfo(error) {
-  return {
-    message: String(error?.message || error).slice(0, 600),
-    code: typeof error?.code === 'string' ? error.code : (error?.name || 'error'),
-    ...(error?.details?.code ? { detailCode: String(error.details.code) } : {}),
-  };
-}
 // Errors after which the shared PDFium worker cannot be trusted: a WebAssembly trap leaves PDFium's memory and
 // stack in an unknown state, and a timed-out request may still be running. The file stops there and the worker is
 // replaced, so the next file starts clean and the failure is attributed to the file that caused it.
@@ -81,13 +49,6 @@ const POISON = /function signature mismatch|memory access out of bounds|unreacha
 const REFUSAL_CODES = new Set(['transaction-rejected', 'unsupported-operation', 'resource-limit', 'font-unavailable', 'page-stamp-unreadable']);
 // Like the editor, which inspects every page progressively after opening, content edits use pages inspected up front.
 let INSPECT_ALL_LIMIT = 40;
-const codePointsText = (codes) => {
-  if (!codes) return '';
-  const values = Array.isArray(codes) ? codes : Object.values(codes);
-  let out = '';
-  for (const code of values) if (Number.isFinite(code) && code > 0 && code < 0x110000) out += String.fromCodePoint(code);
-  return out;
-};
 const normText = (text) => String(text || '').replace(/\s+/g, '');
 function rectsIntersect(a, b, eps = 0.05) {
   return a.left < b.right - eps && a.right > b.left + eps && a.bottom < b.top - eps && a.top > b.bottom + eps;
@@ -132,14 +93,6 @@ function pixelDiff(a, b) {
   }
   return { comparable: true, ratio: differing / Math.max(1, total) };
 }
-async function withTimeout(promise, ms, label) {
-  let timer;
-  try {
-    return await Promise.race([promise, new Promise((_, reject) => {
-      timer = setTimeout(() => reject(Object.assign(new Error(`${label} timed out after ${ms} ms`), { code: 'timeout' })), ms);
-    })]);
-  } finally { clearTimeout(timer); }
-}
 /** BGRA render -> PNG upload, for failed pixel checks. */
 async function uploadRender(name, render) {
   try {
@@ -157,111 +110,6 @@ async function uploadRender(name, render) {
   } catch { return null; }
 }
 
-// Chunked: DevTools reports every request body to the runner (Network.requestWillBeSent postData), and a single
-// 100 MB body exceeds the protocol's maximum message size and kills the runner.
-const UPLOAD_CHUNK = 4 * 1024 * 1024;
-async function upload(name, bytes) {
-  for (let offset = 0; offset === 0 || offset < bytes.byteLength; offset += UPLOAD_CHUNK) {
-    const response = await fetch(`/__out/${encodeURIComponent(name)}?append=${offset > 0 ? 1 : 0}`, {
-      method: 'POST', body: bytes.subarray(offset, offset + UPLOAD_CHUNK),
-    });
-    if (!response.ok) throw new Error(`upload ${name}: ${response.status}`);
-  }
-  return name;
-}
-
-// ---------------------------------------------------------------------------------------------------------------
-// Engine session wrapper
-
-class Session {
-  constructor(engine, kernel, pageIds) {
-    this.engine = engine;
-    this.kernel = kernel;
-    this.pageIds = [...pageIds];
-  }
-
-  static async open(bytes, { password = '', pageIds = null, documentKey = uid('doc'), store = null } = {}) {
-    const engine = new PdfEngineSessionOrchestrator({ transport: new SharedTransport() });
-    const opened = await engine.open(bytes, {
-      ...(pageIds ? { pageIds } : {}),
-      wasmUrl: WASM_URL,
-      warmFidelityBaseline: false,
-      password: String(password || ''),
-    });
-    const kernel = new PdfSemanticKernel({
-      // The editor keeps recovery resources in OPFS (2 GB budget); the memory store's default 256 MB would refuse
-      // edits of the corpus's largest files that the editor accepts.
-      engine, store: store || new MemoryCommandJournalStore({ resourceByteLimit: 2 * 1024 * 1024 * 1024 }), documentKey, checkpointEvery: 0,
-    });
-    const session = new Session(engine, kernel, opened.pageIds);
-    session.opened = opened;
-    session.documentKey = documentKey;
-    return session;
-  }
-
-  pageIndex(pageId) { return this.pageIds.indexOf(pageId); }
-
-  async inspect(pageIndex) {
-    return this.engine.inspectPage({ pageId: this.pageIds[pageIndex], pageIndex });
-  }
-
-  async text(pageIndex) {
-    const result = await this.engine.extractPageText({ pageId: this.pageIds[pageIndex], pageIndex });
-    return codePointsText(result?.codes);
-  }
-
-  async glyphs(pageIndex) {
-    return glyphsFromTextGlyphResult(await this.engine.pageTextGlyphs({ pageIndex }));
-  }
-
-  async render(pageIndex, scale = config.renderScale) {
-    const result = await this.engine.render({
-      pageId: this.pageIds[pageIndex], pageIndex, scale, jobId: uid('render'),
-    });
-    const pixels = asBytes(result.pixels);
-    return { width: result.width, height: result.height, pixels, hash: fnv(pixels) };
-  }
-
-  async snapshot({ retain = true } = {}) {
-    const resource = await Shell.checkpointToPdfSnapshotResource(this.engine, { retain });
-    await this.kernel.registerResource(resource);
-    return resource;
-  }
-
-  restoreCommand(prefix, resource, pageIds = this.pageIds) {
-    return createPdfCommand({
-      commandId: `${prefix}:restore`, type: CommandType.DOCUMENT_RESTORE_SNAPSHOT, targetId: this.documentKey,
-      payload: { resourceHash: resource.hash, pageIds: [...pageIds] },
-    });
-  }
-
-  async execute(label, commands, inverseCommands) {
-    const result = await this.kernel.execute({ commands, inverseCommands, label });
-    this.labels = [...(this.labels || []), label];
-    await this.refresh(result);
-    return result;
-  }
-
-  /** Re-inspects the first pages a commit dirtied (at most 3, like the editor's immediate visible-page refresh after a commit, undo or redo). */
-  async refresh(result) {
-    // A page-structure commit returns the new page order: a duplicated, imported or inserted page is found there,
-    // as the editor does, before the caller syncs its own list.
-    const pageIds = Array.isArray(result?.pageIds) ? result.pageIds : this.pageIds;
-    if (pageIds !== this.pageIds) this.pageIds = [...pageIds];
-    const dirty = this.refreshAll
-      ? pageIds.map((_, index) => index).slice(0, INSPECT_ALL_LIMIT)
-      : (result?.dirtyPages || []).map((id) => pageIds.indexOf(id)).filter((index) => index >= 0).slice(0, 3);
-    for (const index of dirty) {
-      try { await this.inspect(index); } catch { /* a failed inspection surfaces in the next step */ }
-    }
-  }
-
-  async close() {
-    try { await this.engine.close(); } catch { /* the worker may be gone */ }
-  }
-}
-
-const command = (prefix, type, targetId, payload) => createPdfCommand({ commandId: `${prefix}:${type}`, type, targetId, payload });
 
 // ---------------------------------------------------------------------------------------------------------------
 // Operations. Each returns { status: 'ok' | 'n/a', detail } or throws. They update `state.model`:
@@ -269,10 +117,6 @@ const command = (prefix, type, targetId, payload) => createPdfCommand({ commandI
 //   markers: [{ pageId, text, kind }]   text that must be extractable after export
 //   redactions: [{ pageId, rect, words }] areas in which no glyph may survive export
 
-function pageBox(inspection) {
-  const box = inspection?.pageBox || { left: 0, bottom: 0, right: inspection?.unrotatedWidth || 612, top: inspection?.unrotatedHeight || 792 };
-  return { ...box, width: box.right - box.left, height: box.top - box.bottom };
-}
 function placeRect(box, rng, w, h) {
   const width = Math.min(w, box.width * 0.6); const height = Math.min(h, box.height * 0.3);
   const left = box.left + (box.width - width) * (0.1 + 0.8 * rng());
@@ -1030,6 +874,7 @@ export async function runFile(job) {
       });
       state.session = session;
       session.refreshAll = job.refreshAll === true;
+      session.refreshAllLimit = INSPECT_ALL_LIMIT;
       return { detail: { pages: session.pageIds.length } };
     }, { fatal: true, timeoutMs: 45_000 });
     if (!session) throw Object.assign(new Error('no PDFium session'), { fatalStep: steps[steps.length - 1] });

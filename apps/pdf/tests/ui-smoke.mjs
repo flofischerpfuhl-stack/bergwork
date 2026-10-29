@@ -11,7 +11,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startServer } from './lib/server.mjs';
+import { startServer } from '../headless/server.mjs';
 import { qpdfCheck, qpdfPages } from './lib/oracles.mjs';
 
 const testsDir = path.dirname(fileURLToPath(import.meta.url));
