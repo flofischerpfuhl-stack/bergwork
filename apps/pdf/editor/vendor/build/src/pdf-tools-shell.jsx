@@ -147,6 +147,10 @@ import { compactSparsePdfObjectNumbers } from './pdf-editor/model/object-numberi
 // berg:work: measuring with a scale (Markup › Measure), as PDF /Measure annotations.
 import { bytesMayHaveMeasurements, readMeasureData, removeMeasurement, writeMeasurement, writePageScale } from './pdf-editor/engine/measure-annotations.js';
 import { readPageMarkup, removeAnnotationObject, stampDetail, translateMarkupAnnotation, writeCalloutAnnotation, writeShapeAnnotation, writeStampAnnotation } from './pdf-editor/engine/markup-annotations.js';
+// berg:work: the Comments panel (replies, review status, XFDF).
+import { readComments, writeCommentReply } from './pdf-editor/engine/comment-index.js';
+import { exportXfdf, importXfdf } from './pdf-editor/engine/xfdf.js';
+import { CommentListPanel } from './pdf-editor/interaction/comment-list.jsx';
 import { measurementsToCsv, scaleFromCalibration, scaleFromRatio } from './pdf-editor/model/pdf-measure.js';
 import { MEASURE_TOOL_IDS, MEASURE_TOOL_SET, MEASURE_TOOLBAR_TOOLS, MeasureLayer, MeasureOptionsBar, measureStore } from './pdf-editor/interaction/measure-layer.jsx';
 // berg:work: comment tools (Markup › Comment): text box, typewriter, callout, line, shapes, stamps.
@@ -522,6 +526,8 @@ const DRAWER_TOOLS = [
   { id: 'pageNumbers', label: 'Page numbers', icon: 'list-ordered', group: 'pages' },
   { id: 'watermark', label: 'Watermark', icon: 'stamp', group: 'pages' },
   { id: 'forms', label: 'Forms', icon: 'form-input', group: 'content' },
+  // berg:work: every comment with replies, review status and XFDF (comment-list.jsx).
+  { id: 'comments', label: 'Comments', icon: 'message-square', group: 'content' },
   // One "Sign" entry: visual signature (draw/type/image) and the
   // cryptographic certificate signature live in the same panel.
   { id: 'certificateSignature', label: 'Sign', icon: 'pen-tool', group: 'content' },
@@ -26441,10 +26447,13 @@ function App({ shell = null }) {
       await runtime.kernel.registerResource(after);
       await persistLiveUiBaseline(runtime, latestDoc);
       const pageMarkup = pageMarkupStateFromData(editedData, latestDoc.pages);
-      // A callout is a FreeText: the shell's own importer gives it the shape every FreeText path expects.
-      const importedNew = edited.importNewFreeText && Number.isSafeInteger(edited.objectNumber)
+      // Annotations the shell owns (a callout is a FreeText; XFDF brings notes, shapes, ink, text markup): the shell's
+      // own importer gives them the shape every one of its annotation paths expects.
+      const newObjects = new Set(edited.importNewAnnotations || []);
+      const importedNew = newObjects.size
         ? (await importPdfCommentAnnotationsWithPdfium(edited.bytes, latestDoc.pages))
-          .filter(annotation => annotation.annotationObjectNumber === edited.objectNumber)
+          .filter(annotation => newObjects.has(annotation.annotationObjectNumber) &&
+            !(pageMarkup.items || []).some(item => item.objectNumber === annotation.annotationObjectNumber))
           .map(annotation => ({ ...annotation, id: `${annotation.id}:${uid()}` }))
         : [];
       for (const annotation of importedNew) runtime.liveAnnotationIds.add(annotation.id);
@@ -26556,13 +26565,10 @@ function App({ shell = null }) {
         },
         commitCallout: ({ pageId, tip, anchor, value }) => {
           const comment = commentToolStore.get();
-          return commitMeasureChange('Add callout', async (bytes, doc) => ({
-            ...(await writeCalloutAnnotation(PDFLib, bytes, {
-              pageIndex: pageIndexOf(doc, pageId), tip, anchor, value, author: comment.author,
-              style: { fontSize: comment.fontSize, textColor: comment.textColor, borderColor: comment.borderColor },
-            })),
-            importNewFreeText: true,
-          }));
+          return commitMeasureChange('Add callout', (bytes, doc) => writeCalloutAnnotation(PDFLib, bytes, {
+            pageIndex: pageIndexOf(doc, pageId), tip, anchor, value, author: comment.author,
+            style: { fontSize: comment.fontSize, textColor: comment.textColor, borderColor: comment.borderColor },
+          }).then(result => ({ ...result, importNewAnnotations: [result.objectNumber] })));
         },
         calibrate: ({ pageId, points, length, unit }) => {
           const scale = scaleFromCalibration(Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y), length, unit);
@@ -26576,6 +26582,59 @@ function App({ shell = null }) {
             pageIndex: pageIndexOf(doc, pageId), scale,
           })).then(() => showToast(`Scale ${scale.label} set for this page.`, 'success'));
         },
+        // Comments panel.
+        loadComments: async () => {
+          const runtime = livePdfRuntimeRef.current;
+          const doc = workspaceSnapshotRef.current.docs.find(item => item.id === activeDoc?.id) || activeDoc;
+          if (!doc || !runtime?.engine || runtime.documentId !== doc.id) return [];
+          const snapshot = await checkpointToPdfSnapshotResource(runtime.engine);
+          const pageNumber = new Map(doc.pages.map((page, index) => [page.sourceIndex, index + 1]));
+          return (await readComments(PDFLib, snapshot.bytes))
+            .filter(comment => pageNumber.has(comment.pageIndex))
+            .map(comment => ({ ...comment, pageNumber: pageNumber.get(comment.pageIndex) }))
+            .sort((a, b) => a.pageNumber - b.pageNumber);
+        },
+        reply: (comment, value, author) => commitMeasureChange('Reply to comment', bytes => writeCommentReply(PDFLib, bytes, {
+          pageIndex: comment.pageIndex, parentObjectNumber: comment.objectNumber, value, author,
+        })),
+        setStatus: (comment, state, author) => commitMeasureChange(`Set status ${state}`, bytes => writeCommentReply(PDFLib, bytes, {
+          pageIndex: comment.pageIndex, parentObjectNumber: comment.objectNumber, state, author,
+        })),
+        reveal: comment => {
+          const doc = workspaceSnapshotRef.current.docs.find(item => item.id === activeDoc?.id) || activeDoc;
+          const index = doc?.pages.findIndex(page => page.sourceIndex === comment.pageIndex) ?? -1;
+          if (index < 0) return;
+          const page = doc.pages[index];
+          setDrawerOpen(false);
+          goToPage(index);
+          const annotation = (doc.annotations || []).find(item => item.pageId === page.id && item.annotationObjectNumber === comment.objectNumber);
+          const markup = [...(doc.pageMarkup?.items || []), ...(doc.pageMarkup?.markups || [])]
+            .find(item => item.pageId === page.id && item.objectNumber === comment.objectNumber);
+          if (!annotation && !markup) return;
+          selectTool('select');
+          window.setTimeout(() => {
+            if (annotation) setSelected({ type: 'annotation', id: annotation.id, pageId: page.id });
+            else measureStore.set({ selectedId: markup.id });
+            requestAnimationFrame(() => {
+              const node = viewportRef.current?.querySelector(markup
+                ? `[data-measure-id="${CSS.escape(markup.id)}"]` : `[data-selection-key*="${CSS.escape(annotation.id)}"]`);
+              if (node) scrollPdfViewportToElement(viewportRef.current, node);
+            });
+          }, 120);
+        },
+        exportXfdf: async () => {
+          const runtime = livePdfRuntimeRef.current;
+          const doc = workspaceSnapshotRef.current.docs.find(item => item.id === activeDoc?.id) || activeDoc;
+          if (!doc || !runtime?.engine || runtime.documentId !== doc.id) return;
+          const snapshot = await checkpointToPdfSnapshotResource(runtime.engine);
+          const xfdf = await exportXfdf(PDFLib, snapshot.bytes, { fileName: doc.name });
+          downloadBlob(new Blob([xfdf], { type: 'application/vnd.adobe.xfdf' }), `${stripExt(doc.name)}.xfdf`);
+        },
+        importXfdf: content => commitMeasureChange('Import comments', bytes => importXfdf(PDFLib, bytes, content)
+          .then(result => {
+            if (!result.added) throw new Error(result.skipped ? 'Every comment of this file is already in the PDF or on a page it does not have.' : 'The file has no comments.');
+            return { ...result, importNewAnnotations: result.objectNumbers };
+          })),
         exportCsv: () => {
           const doc = workspaceSnapshotRef.current.docs.find(item => item.id === activeDoc?.id) || activeDoc;
           const items = doc?.pageMarkup?.items || [];
@@ -26587,7 +26646,7 @@ function App({ shell = null }) {
         },
       },
     });
-  }, [activeDoc, activeMeasurePage, commitMeasureChange, livePdfRuntime]);
+  }, [activeDoc, activeMeasurePage, commitMeasureChange, goToPage, livePdfRuntime, selectTool]);
   // Files whose measurements sit in compressed object streams are scanned when a measure tool is first used.
   useEffect(() => {
     const runtime = livePdfRuntimeRef.current;
@@ -34527,7 +34586,8 @@ function PdfPageContent({
         w: 24,
         h: 24,
         text: '',
-        title: '',
+        // berg:work: the author name of the comment tools and the Comments panel.
+        title: commentToolStore.get().author || '',
         color: '#facc15',
         opacity: 1,
       }, { editImmediately: true });
@@ -42115,7 +42175,11 @@ function ToolDrawer(props) {
   let footer = null;
   let headExtra = null;
 
-  if (panel === 'guides') {
+  if (panel === 'comments') {
+    // berg:work: the document's comments (comment-list.jsx); actions come from the shell through measureStore.
+    subtitle = 'Filter, reply, set a status, exchange as XFDF';
+    body = doc ? <CommentListPanel docId={doc.id} revision={Number(doc.editVersion || 0)} /> : <PanelHint>Open a PDF to see its comments.</PanelHint>;
+  } else if (panel === 'guides') {
     subtitle = 'Ruler units and exact guide positions';
     body = placementPanel || <PanelHint>Open a PDF to set up rulers and guides.</PanelHint>;
   } else if (panel === 'document') {
