@@ -133,6 +133,8 @@ import { ocrTextLayerWords } from './pdf-editor/ocr/text-layer.js';
 import { createAdvanceMeasurer, subsetTrueTypeFont } from './pdf-editor/ocr/truetype-subset.js';
 import { arrangeSelection } from './pdf-editor/interaction/arrange-selection.js';
 import { PdfDraftWriterLease } from './pdf-editor/persistence/writer-lease.js';
+// berg:work: the desktop app's windows.
+import { claimOrphanWorkspaces, deleteWorkspace, moveWorkspaceDocument, useDesktopWindow } from './pdf-editor/persistence/bergwork-windows.js';
 import { DocumentSaveCoordinator } from './pdf-editor/persistence/document-save-coordinator.js';
 // berg:work: Save as PDF/A.
 import { convertPdfBytesToPdfA } from './pdf-editor/persistence/bergwork-pdfa.js';
@@ -382,7 +384,8 @@ const HISTORY_MERGE_MS = 700;
 const PDF_WORKSPACE_DB = 'oo-pdf-workbench';
 const PDF_WORKSPACE_DB_VERSION = 1;
 const PDF_WORKSPACE_STORE = 'workspaces';
-const PDF_WORKSPACE_ID = 'default';
+// berg:work: the desktop app gives each window its own record (see persistence/bergwork-windows.js).
+let PDF_WORKSPACE_ID = 'default';
 const retiringPdfRuntimeClosures = new Map();
 const PDF_TRUE_EDIT_PLAN_VERSION = 1;
 const PDF_EDIT_ENGINE_INTERFACE_VERSION = 1;
@@ -3221,6 +3224,38 @@ function savePdfDocumentWorkspace(snapshot, document, unsafeDocumentIds = new Se
   return run;
 }
 
+// berg:work: a document's move to a new desktop window; in the queue with the other workspace writes.
+function movePdfDocumentToWorkspace({ document, targetId, activeDocId, page, zoom }) {
+  const run = pdfWorkspaceSaveTail.then(async () => moveWorkspaceDocument(await openPdfWorkspaceDb(), PDF_WORKSPACE_STORE, {
+    sourceId: PDF_WORKSPACE_ID,
+    documentId: document.id,
+    nextActiveDocId: activeDocId,
+    target: {
+      id: targetId,
+      docs: [serializePdfWorkspaceDoc(document)],
+      activeDocId: document.id,
+      activePage: page || 0,
+      zoom: zoom || 1,
+      savedAt: Date.now(),
+    },
+  }));
+  pdfWorkspaceSaveTail = run.then(() => true, () => false);
+  return run;
+}
+
+// berg:work: a closed desktop window's record goes with it; the main window keeps its (empty) one.
+function forgetPdfWorkspace() {
+  if (PDF_WORKSPACE_ID === 'default') return Promise.resolve();
+  const run = pdfWorkspaceSaveTail.then(async () => deleteWorkspace(await openPdfWorkspaceDb(), PDF_WORKSPACE_STORE, PDF_WORKSPACE_ID));
+  pdfWorkspaceSaveTail = run.then(() => true, () => false);
+  return run;
+}
+
+// berg:work: at the start of a run, see claimOrphanWorkspaces.
+export async function claimDesktopWorkspaces() {
+  return claimOrphanWorkspaces(await openPdfWorkspaceDb(), PDF_WORKSPACE_STORE, PDF_WORKSPACE_ID);
+}
+
 function hasUnsavedPdfChanges(doc) {
   return Number(doc?.editVersion || 0) !== Number(doc?.savedEditVersion || 0) ||
     normalizeFormValueQueue(doc?.pendingFormValues).length > 0;
@@ -3337,7 +3372,8 @@ function projectSourceRecord(source) {
 }
 
 function serializePdfProjectDoc(doc, nativeState = null) {
-  const record = serializePdfDoc(doc);
+  // berg:work: a project file does not carry the document's path on this computer.
+  const { nativeFile, ...record } = serializePdfDoc(doc);
   return {
     ...record,
     projectKind: 'pdf-patch-project',
@@ -18311,6 +18347,11 @@ function App({ shell = null }) {
         setActiveDocId(restored.activeDocId);
         setActivePage(restored.activePage || 0);
         setZoom(clamp(restored.zoom || 1, MIN_ZOOM, MAX_ZOOM));
+        // berg:work: back at the page itself: the view starts at the top and would take the number back to 1.
+        if (restored.activePage > 0) {
+          openAtPageRef.current = { page: restored.activePage + 1, frames: 0 };
+          setOpenAtPageTick(tick => tick + 1);
+        }
       }
       setWorkspaceReady(true);
     })();
@@ -19426,7 +19467,12 @@ function App({ shell = null }) {
             continue;
           }
           try {
-            loaded.push(await loadPdfFile(file, reportFileProgress));
+            // berg:work: a document from the desktop app keeps its file, so Save writes there. Not when opening changed
+            // what the file is (damage repaired, protection removed): that must not replace the original unasked.
+            const opened = await loadPdfFile(file, reportFileProgress);
+            const nativeFile = shell?.desktop?.nativeFileOf?.(file);
+            if (nativeFile && !opened.damageRecovery && !opened.protectionRemoved) opened.nativeFile = nativeFile;
+            loaded.push(opened);
           } catch (error) {
             if (isPdfPasswordError(error)) {
               setProtectedPdfPrompt({ file, mode: 'open', error: '' });
@@ -19550,6 +19596,7 @@ function App({ shell = null }) {
       if (file) void openFiles([file], { showOpenCopy: true }).then(() => {
         if (Number.isInteger(page) && page > 0) openAtPageRef.current = { page, frames: 0 };
         setOpenAtPageTick(tick => tick + 1);
+        event.detail?.opened?.();
       });
     };
     document.addEventListener('oo-open-file-pdf', onOpenFile);
@@ -26407,7 +26454,9 @@ function App({ shell = null }) {
       if (nativeSaveEligible) {
         try {
           nativeSaveHandle = await chooseNativeSaveHandle(
-            nativeSaveHandlesRef.current.get(nativeSaveKey),
+            // berg:work: in the desktop app a document writes to the file it came from, unless Save as asks.
+            nativeSaveHandlesRef.current.get(nativeSaveKey) || (requestedOptions.pdfa || requestedOptions.chooseTarget
+              ? null : shell?.desktop?.saveHandle?.(activeDoc.nativeFile)),
             {
               suggestedName: requestedOptions.pdfa ? `${stripExt(activeDoc.name)}-PDFA.pdf` : `${stripExt(activeDoc.name)}.pdf`,
               types: [{
@@ -26593,7 +26642,8 @@ function App({ shell = null }) {
         const savedName = saved && typeof nativeSaveHandle?.name === 'string' && nativeSaveHandle.name ? nativeSaveHandle.name : '';
         setDocs(current => current.map(doc => doc.id === documentId
           ? saved
-            ? { ...doc, savedEditVersion: exportVersion, savedStateKey: undefined, ...(savedName ? { name: savedName } : {}) }
+            ? { ...doc, savedEditVersion: exportVersion, savedStateKey: undefined, ...(savedName ? { name: savedName } : {}),
+              ...(nativeSaveHandle?.nativeFile ? { nativeFile: nativeSaveHandle.nativeFile } : {}) }
             : { ...doc, lastDownloadedEditVersion: exportVersion }
           : doc));
       }
@@ -26939,13 +26989,25 @@ function App({ shell = null }) {
   }, [onSaveWorkspaceRequest]);
   const savePdfAs = useCallback(() => {
     if (activeDoc) nativeSaveHandlesRef.current.delete(`${activeDoc.id}:pdf`);
-    return exportPdf();
+    return exportPdf({ chooseTarget: true });
   }, [activeDoc, exportPdf]);
   // berg:work: a PDF/A copy; the picker opens every time, the document keeps its file.
   const savePdfAsPdfA = useCallback(() => {
     if (activeDoc) nativeSaveHandlesRef.current.delete(`${activeDoc.id}:pdfa`);
     return exportPdf({ suffix: 'PDFA', pdfa: true });
   }, [activeDoc, exportPdf]);
+
+  // berg:work: the desktop app's windows (see persistence/bergwork-windows.js).
+  const desktopExportRef = useRef(null);
+  desktopExportRef.current = { documentId: activeDoc?.id ?? null, exportPdf };
+  const desktopWindow = useDesktopWindow(shell?.desktop, {
+    docs, workspaceSnapshotRef, livePdfRuntimeRef, pageStructureTailRef, documentSaveCoordinator, retiringPdfRuntimeClosures,
+    settleQueuedFormValues, waitForLiveRuntimeCommits, liveRuntimeSafetyState, hasUnsavedPdfChanges, savePdfWorkspace,
+    moveDocumentToWorkspace: movePdfDocumentToWorkspace, forgetWorkspace: forgetPdfWorkspace, loadPdfFile, showToast,
+    exportRef: desktopExportRef, setDocs, setActiveDocId, setActivePage, setZoom, setSelected, closeDoc, discardAndCloseDoc,
+    toggleFullscreen: togglePdfFullscreen,
+    requestPage: page => { openAtPageRef.current = { page, frames: 0 }; setOpenAtPageTick(tick => tick + 1); },
+  });
 
   // Registered once (stable callback) so Ctrl+S/O/P is never lost to a
   // listener swap during a state update.
@@ -29898,7 +29960,11 @@ function App({ shell = null }) {
   const documentMenu = (
     <DocumentMenu docs={docs} activeDocId={activeDocId} onSelect={setActiveDocId} onClose={closeDoc}
       onOpenAnother={documentLoadProgress ? null : () => fileInputRef.current?.click()}
-      isUnsaved={hasUnsavedPdfChanges} {...chromeMenuProps('doc')} />
+      isUnsaved={hasUnsavedPdfChanges} {...chromeMenuProps('doc')}
+      // berg:work: the desktop app moves a document to its own window and offers the recent files.
+      onDetach={shell?.desktop ? id => void shell.desktop.detach(id) : null}
+      recent={desktopWindow.recent} onRefreshRecent={desktopWindow.refreshRecent}
+      onOpenRecent={shell?.desktop ? path => void shell.desktop.openRecent(path) : null} />
   );
   const saveControl = phoneLayout ? (
     <button className="oo-pdf-chrome-button oo-pdf-topbar-save" type="button" aria-label="Save PDF"
@@ -29926,6 +29992,11 @@ function App({ shell = null }) {
   );
   // berg:work: the command palette's commands (see CommandPalette).
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  // berg:work: the desktop app's window commands.
+  const desktopCommands = shell?.desktop ? [
+    { id: 'new-window', label: 'New window', group: 'File', shortcut: `${SHORTCUT_MOD}+Shift+N`, run: () => void shell.desktop.newWindow() },
+    ...(activeDoc ? [{ id: 'detach', label: 'Open document in new window', group: 'File', run: () => void shell.desktop.detach(activeDoc.id) }] : []),
+  ] : [];
   const paletteCommands = !activeDoc ? [
     { id: 'open', label: 'Open PDF or project…', group: 'File', shortcut: `${SHORTCUT_MOD}+O`, run: () => fileInputRef.current?.click() },
     { id: 'shortcuts', label: 'Keyboard shortcuts', group: 'Help', shortcut: '?', run: () => setShortcutsOpen(true) },
@@ -30130,7 +30201,7 @@ function App({ shell = null }) {
       {miniToolbar && <MiniToolbarHost toolbar={miniToolbar} onHost={setMiniToolbarHost} />}
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
       {activeDoc && <GestureReadout zoom={zoom} tool={tool} />}
-      {commandPaletteOpen && <CommandPalette commands={paletteCommands} onClose={() => setCommandPaletteOpen(false)} />}
+      {commandPaletteOpen && <CommandPalette commands={[...desktopCommands, ...paletteCommands]} onClose={() => setCommandPaletteOpen(false)} />}
       {contextMenu && (
         <PdfContextMenu x={contextMenu.x} y={contextMenu.y} onClose={how => {
           setContextMenu(null);
@@ -48594,6 +48665,7 @@ function normalizeShellHost(shell) {
     // berg:work: 'manual' opens Properties only on request; formatting lives in the mini toolbar at the object.
     inspector: shell.inspector === 'manual' ? 'manual' : 'auto',
     // berg:work: a sample document the empty state offers next to "Choose PDF or project" (the web app).
+    desktop: shell.desktop && typeof shell.desktop === 'object' ? shell.desktop : null,
     sample: shell.sample && typeof shell.sample.open === 'function' && shell.sample.label
       ? { label: String(shell.sample.label), open: () => shell.sample.open() } : null,
     titleBar: titleBar ? {
@@ -48608,6 +48680,8 @@ function normalizeShellHost(shell) {
 export function mount(element, options = {}) {
   if (!element) return null;
   const shell = normalizeShellHost(options?.host?.capabilities?.shell);
+  // berg:work: this window's workspace, before anything reads or writes one.
+  if (shell?.desktop?.workspaceId) PDF_WORKSPACE_ID = shell.desktop.workspaceId;
   const root = createRoot(element);
   root.render(<App shell={shell} />);
   return {
