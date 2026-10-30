@@ -23,6 +23,8 @@
     "test:corpus": "node tests/run-corpus.mjs --tier sample",
     "test:corpus:full": "node tests/run-corpus.mjs --tier full",
     "test:corpus:ui": "node tests/ui-smoke.mjs",
+    "test:ui-matrix": "node tests/ui-matrix/run-matrix.mjs --tier quick",
+    "test:ui-matrix:full": "node tests/ui-matrix/run-matrix.mjs --tier full",
     "test:unit": "node --test tests/unit/",
     "cli": "node cli/bin/bergwork-pdf-cli.mjs",
     "test:cli": "node --test --test-concurrency=1 cli/test/"

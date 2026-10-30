@@ -266,8 +266,8 @@ export function planParagraphMerge({ pageId, sourceId, blocks, layers, nativeTex
   const best = Object.entries(spreads).reduce((winner, entry) => entry[1] < winner[1] - 0.5 ? entry : winner);
   const align = spreads.left <= tolerance || best[1] > tolerance ? 'left' : best[0];
   // Justified lines carry stretched word spaces; the frame takes its first line's spacing for every line, so it gets
-  // natural spacing instead (the caller sets it). The pinned worker lays frames out left, centred or right only, so
-  // justified text becomes left-aligned.
+  // natural spacing instead (the caller sets it). A worker that lays out justified frames gets `justified` as its
+  // alignment from the caller; `align` stays left for one that does not.
   const justified = align === 'left' && rects.length > 2 &&
     spread(rects.slice(0, -1).map(rect => rect.right)) <= Math.min(tolerance, 1.5);
   // A left-aligned frame starts where the body lines start; the first line's indent cannot be kept (the worker has no

@@ -13,6 +13,7 @@ import React, {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
@@ -1664,9 +1665,10 @@ function bundledLibraryStyleFace(fontCatalog = [], textLike = {}, patch = {}) {
 
 async function registerBundledLibrarySiblingFaces(onUploadTextFont, sourceId, entry, selectedFace, sourceSeed = {}) {
   if (typeof onUploadTextFont !== 'function' || !entry?.faces?.length) return;
-  for (const face of entry.faces) {
-    if (face.weight === selectedFace?.weight && face.style === selectedFace?.style) continue;
-    const file = await fetchLibraryFontFile(entry, face);
+  // berg:work: the faces load side by side; one after the other made a first Underline wait for four round trips.
+  const faces = entry.faces.filter(face => face.weight !== selectedFace?.weight || face.style !== selectedFace?.style);
+  const files = await Promise.all(faces.map(face => fetchLibraryFontFile(entry, face)));
+  for (const file of files) {
     await onUploadTextFont(sourceId, file, {
       ...sourceSeed,
       richTextUploadOnly:true,
@@ -21652,7 +21654,10 @@ function App({ shell = null }) {
       const modifier = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
       const target = event.target;
-      if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      // berg:work: a checkbox, slider or colour field has no text to undo, so Ctrl+Z there is the document's.
+      const undoFromControl = modifier && (key === 'z' || key === 'y') &&
+        target?.matches?.('input[type=checkbox], input[type=radio], input[type=range], input[type=color]');
+      if (!undoFromControl && target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
       if (modifier && key === 'f') {
         event.preventDefault();
         setSearchOpen(true);
@@ -24010,7 +24015,8 @@ function App({ shell = null }) {
       // The line's derived formatting document describes only that line; the frame gets its own on commit.
       richTextDocument: undefined,
       textBlock: true,
-      textAlign: block.align,
+      // berg:work: a justified paragraph stays justified on a worker that can lay it out.
+      textAlign: block.justified && runtime.engineFeatures?.justifiedTextBlocks ? 'justify' : block.align,
       verticalAlign: 'top',
       textOverflow: 'visible',
       lineHeight: block.lineHeight,
@@ -30462,6 +30468,7 @@ function App({ shell = null }) {
       aria-busy={Boolean(visibleLoadProgress || applyingEdits || normalizingRotation || pageStructureBusy || nativeMutationPending)}
       data-page-structure-busy={pageStructureBusy}
       data-live-commit-count={liveCommitCount}
+      data-history-depth={activeDoc?.historyPast?.length || 0}
       data-pdf-undo-state={historyBlocked?.documentId === activeDocId ? 'blocked' : 'ready'}
       onDragOver={handleDocumentDragOver}
       onDragLeave={handleDocumentDragLeave}
@@ -40121,6 +40128,18 @@ function ImageRegion({ page, pages = [page], item, itemId, edit, preferences, zo
       }
       return pending;
     });
+  // berg:work: a pasted or duplicated image selects itself once it is drawn (the paste only knows its object id).
+  // These hooks stay above the return for a deleted image: behind it, deleting an image took the whole editor down.
+  const selectSelfRef = useRef(null);
+  useEffect(() => {
+    const objectId = current.objectId;
+    if (!objectId) return undefined;
+    const claim = event => {
+      if (event.detail?.pageId === page.id && event.detail?.objectId === objectId) selectSelfRef.current?.();
+    };
+    window.addEventListener(SELECT_IMAGE_OBJECT_EVENT, claim);
+    return () => window.removeEventListener(SELECT_IMAGE_OBJECT_EVENT, claim);
+  }, [current.objectId, page.id]);
   if (edit?.deleted || (edit && current.pageId !== page.id)) {
     return null;
   }
@@ -40133,18 +40152,7 @@ function ImageRegion({ page, pages = [page], item, itemId, edit, preferences, zo
     item: { ...item, sourcePageId: page.id },
     edit: edit ? { ...current, ...itemPatch } : undefined,
   });
-  // berg:work: a pasted or duplicated image selects itself once it is drawn (the paste only knows its PDF object).
-  const selectSelfRef = useRef(null);
   selectSelfRef.current = () => onSelect(selectionPayload());
-  useEffect(() => {
-    const objectId = current.objectId;
-    if (!objectId) return undefined;
-    const claim = event => {
-      if (event.detail?.pageId === page.id && event.detail?.objectId === objectId) selectSelfRef.current?.();
-    };
-    window.addEventListener(SELECT_IMAGE_OBJECT_EVENT, claim);
-    return () => window.removeEventListener(SELECT_IMAGE_OBJECT_EVENT, claim);
-  }, [current.objectId, page.id]);
 
   const start = (event, handle = null) => {
     if (event.pointerType === 'touch' && !event.isPrimary) return;
@@ -42373,6 +42381,17 @@ function MultiSelectionBox({ items, zoom, zIndex, locked = false, onMove, onGrou
     };
   }, [bounds?.x, bounds?.y, bounds?.w, bounds?.h, zoom, items.length, affordanceHost,
     rotateHandleCorrection?.translate, rotateHandleCorrection?.rotate]);
+  // The page surface routes a drag that begins on a selected member object to
+  // this frame (PowerPoint behaviour: dragging any selected object moves the
+  // whole selection). Published through a ref so no forwardRef reshuffle.
+  // berg:work: above the return for an empty selection, as hooks must be.
+  const externalDragHandlersRef = useRef(null);
+  useEffect(() => {
+    const handlers = externalDragHandlersRef.current;
+    if (!externalDragRef || !handlers) return undefined;
+    externalDragRef.current = handlers;
+    return () => { if (externalDragRef.current === handlers) externalDragRef.current = null; };
+  });
   if (!bounds) return null;
   const canMaterializeGroup = items.length > 1 && items.every(item =>
     ['nativeObject', 'text', 'imageRegion'].includes(item.type) &&
@@ -42550,14 +42569,7 @@ function MultiSelectionBox({ items, zoom, zIndex, locked = false, onMove, onGrou
     height: Math.max(8, bounds.h * zoom),
     zIndex,
   };
-  // The page surface routes a drag that begins on a selected member object to
-  // this frame (PowerPoint behaviour: dragging any selected object moves the
-  // whole selection). Published through a ref so no forwardRef reshuffle.
-  useEffect(() => {
-    if (!externalDragRef) return undefined;
-    externalDragRef.current = { start, move, stop, cancel };
-    return () => { if (externalDragRef.current?.start === start) externalDragRef.current = null; };
-  });
+  externalDragHandlersRef.current = { start, move, stop, cancel };
   return (
     <div
       ref={selectionRef}
@@ -46384,6 +46396,21 @@ function CustomFreeTextConversion({ onReplace, disabled = false }) {
     </div>
   );
 }
+const styleConversions = { count: 0, listeners: new Set() };
+function trackStyleConversion(task) {
+  const change = delta => {
+    styleConversions.count += delta;
+    for (const listener of styleConversions.listeners) listener();
+  };
+  change(1);
+  return Promise.resolve().then(task).finally(() => change(-1));
+}
+function subscribeStyleConversions(listener) {
+  styleConversions.listeners.add(listener);
+  return () => styleConversions.listeners.delete(listener);
+}
+const useStyleConversionBusy = () => useSyncExternalStore(subscribeStyleConversions, () => styleConversions.count > 0);
+
 function Inspector({
   open,
   // berg:work: mounted only to fill the mini toolbar (Properties itself closed): hidden and inert.
@@ -46405,7 +46432,7 @@ function Inspector({
   onGuideUnitChange,
   onUpdatePageGuides,
   readOnly = false,
-  nativeBusy = false,
+  nativeBusy: nativeCommitBusy = false,
   freeTextCapabilityProbePending = '',
   pdfiumRuntime = null,
   pdfiumInspectionVersion = 0,
@@ -46436,6 +46463,24 @@ function Inspector({
   onImportTextFont,
   onSaveSignature,
 }) {
+  // berg:work: a first style change loads fonts before its commit starts. The panel waits as for a commit, or a click in
+  // that second went to the old text and the conversion then overwrote it.
+  const nativeBusy = useStyleConversionBusy() || nativeCommitBusy;
+  // berg:work: the panel waits while a commit lands, about a second. A button or checkbox pressed in that time (it is
+  // disabled, so no click arrives) is pressed once the panel is free again, instead of being lost.
+  const pressedWhileBusyRef = useRef(null);
+  const rememberPressWhileBusy = event => {
+    if (!nativeBusy) return;
+    const target = event.target;
+    pressedWhileBusyRef.current = target?.closest?.('button:disabled, input[type=checkbox]:disabled') ||
+      target?.closest?.('label')?.querySelector?.('input[type=checkbox]:disabled') || null;
+  };
+  useEffect(() => {
+    if (nativeBusy) return;
+    const control = pressedWhileBusyRef.current;
+    pressedWhileBusyRef.current = null;
+    if (control?.isConnected && !control.disabled) control.click();
+  }, [nativeBusy]);
   const [expandedKey, setExpandedKey] = useState('');
   const [renamingKey, setRenamingKey] = useState('');
   const coarsePointer = useCoarsePointer();
@@ -47218,7 +47263,7 @@ function Inspector({
     setDropTargetKey('');
   };
   return (
-    <aside className={`oo-pdf-inspector ${sheet ? `is-sheet is-sheet-${sheet}` : ''} is-tab-${tab} ${headless ? 'is-headless' : ''}`} aria-label="Layers and properties"
+    <aside className={`oo-pdf-inspector ${sheet ? `is-sheet is-sheet-${sheet}` : ''} is-tab-${tab} ${headless ? 'is-headless' : ''}`} data-native-busy={nativeBusy ? 'true' : undefined} onPointerDownCapture={rememberPressWhileBusy} aria-label="Layers and properties"
       aria-hidden={headless || undefined} inert={headless || undefined} onKeyDown={event => {
       if (event.key === 'Escape' && pressRef.current) {
         event.preventDefault();
@@ -47399,7 +47444,7 @@ function Inspector({
               return;
             }
             if (!legacyDecorationSubstitute) return;
-            void (async () => {
+            void trackStyleConversion(async () => {
               await registerBundledLibrarySiblingFaces(onUploadTextFont, layer.item.sourceId,
                 legacyDecorationSubstitute.entry, legacyDecorationSubstitute.face, layer.item);
               const file = await fetchLibraryFontFile(legacyDecorationSubstitute.entry, legacyDecorationSubstitute.face);
@@ -47419,7 +47464,7 @@ function Inspector({
                   sourceLabel:legacyDecorationSubstitute.sourceLabel,
                 },
               });
-            })()
+            })
               .catch(error => showToast(error.message || 'Text decoration conversion failed.', 'error'));
           };
           const commitLegacyFontStyle = patch => {
@@ -47433,7 +47478,7 @@ function Inspector({
             if (libraryVariant || substituteVariant) {
               if (typeof onUploadTextFont !== 'function') return;
               const variant = libraryVariant || substituteVariant;
-              void (async () => {
+              void trackStyleConversion(async () => {
                 await registerBundledLibrarySiblingFaces(onUploadTextFont, layer.item.sourceId,
                   variant.entry, variant.face, layer.item);
                 const file = await fetchLibraryFontFile(variant.entry, variant.face);
@@ -47451,7 +47496,7 @@ function Inspector({
                     sourceLabel:substituteVariant.sourceLabel,
                   },
                 } : {});
-              })()
+              })
                 .catch(error => showToast(userFacingError(error, 'Font embedding failed.'), 'error'));
               return;
             }
@@ -47598,6 +47643,7 @@ function Inspector({
           </> : null;
           const richFontFacts = layer.type === 'text' && richTextDocument && !base14RichEditor ? <>
             {layer.item.embeddedFontFamily && !layer.item.fontResourceHashes?.length &&
+              nativeTextFrameDescriptor?.fontEmbedded !== false &&
               <button type="button" className="oo-pdf-font-action" onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item)
                 .catch(error => showToast(userFacingError(error, 'PDF font import failed.'), 'error'))}>Import embedded PDF font for reuse</button>}
             {layer.item.usedFontResourceHashes?.length > 0 &&
@@ -47795,12 +47841,12 @@ function Inspector({
                             const entry = libraryFontById(libraryId);
                             if (!entry) return;
                             const selectedFace = libraryFace(entry, layer.item.fontWeight, layer.item.fontStyle);
-                            void (async () => {
+                            void trackStyleConversion(async () => {
                                 await registerBundledLibrarySiblingFaces(onUploadTextFont, layer.item.sourceId,
                                   entry, selectedFace, layer.item);
                                 const file = await fetchLibraryFontFile(entry, selectedFace);
                                 await onUploadTextFont?.(layer.item.sourceId, file, layer.item);
-                              })()
+                              })
                               .catch(error => showToast(userFacingError(error, 'Font embedding failed.'), 'error'));
                             return;
                           }
@@ -48141,7 +48187,9 @@ function Inspector({
                         )} /></label>
                       </div>
                       {/* berg:work: the font picker already names the PDF's font; the explanation moved to this button. */}
-                      {layer.item.embeddedFontFamily && !layer.item.fontResourceHashes?.length && (
+                      {/* berg:work: a font the PDF does not embed has nothing to import. */}
+                      {layer.item.embeddedFontFamily && !layer.item.fontResourceHashes?.length &&
+                        nativeTextFrameDescriptor?.fontEmbedded !== false && (
                         <button type="button" className="oo-pdf-font-action"
                           title="Existing glyphs are preserved where safe; subset and Type 3 fonts cannot be reused for arbitrary new characters. Upload the licensed font file to use it elsewhere."
                           onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item).catch(error => showToast(userFacingError(error, 'PDF font import failed.'), 'error'))}>Import embedded PDF font for reuse</button>

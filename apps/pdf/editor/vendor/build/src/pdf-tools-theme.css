@@ -9945,3 +9945,10 @@ body.oo-pdf-workbench-route .oo-consent-notice {
 .oo-pdf-textbox.is-oriented-editing > .oo-pdf-resize {
   pointer-events: auto;
 }
+
+/* berg:work: while a commit lands the controls wait, they are not unavailable: no grey flash through the panel. */
+.oo-pdf-inspector[data-native-busy] :is(button, input, select, textarea, label, [role=combobox]):disabled,
+.oo-pdf-shell:has(.oo-pdf-inspector[data-native-busy]) .oo-pdf-mini-toolbar button:disabled {
+  opacity: 1;
+  cursor: progress;
+}
