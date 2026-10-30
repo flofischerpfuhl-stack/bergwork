@@ -18,7 +18,7 @@ import { loadPlaywright } from '../../headless/host.mjs';
 import { qpdfCheck } from '../lib/oracles.mjs';
 import { MatrixSession, sha } from './lib/session.mjs';
 import { selectFiles } from './lib/select-files.mjs';
-import { OBJECT_TYPES, STATES, applicable, applyState, currentObject, findObject, openEditor, rotatePage, typeAndCommit } from './lib/objects.mjs';
+import { OBJECT_TYPES, STATES, applicable, applyState, currentObject, findObject, openEditor, rotatePage, textLines, typeAndCommit } from './lib/objects.mjs';
 import { discoverControls, operate, skipReason } from './lib/controls.mjs';
 import { writeReport } from './lib/report.mjs';
 
@@ -40,6 +40,7 @@ const TIERS = {
     types: OBJECT_TYPES,
     states: STATES,
     sample: 0.34,
+    sweep: 30,
     first: [
       'word-tagged/text/normal', 'word-tagged/image/normal', 'word-tagged/path/normal', 'word-tagged/shape/normal',
       'word-tagged/annotation/normal', 'word-tagged/text/rotated', 'word-tagged/text/wrapped', 'word-tagged/text/edited',
@@ -47,7 +48,7 @@ const TIERS = {
       'rotated-page/text/normal',
     ],
   },
-  full: { minutes: 600, profiles: null, types: OBJECT_TYPES, states: STATES, sample: 1, first: [] },
+  full: { minutes: 600, profiles: null, types: OBJECT_TYPES, states: STATES, sample: 1, sweep: 200, first: [] },
 };
 
 const tierName = arg('--tier', 'quick');
@@ -238,6 +239,29 @@ const focusObject = (key) => session.page.evaluate(selectionKey => {
   [...document.querySelectorAll('[data-selection-key]')].find(item => item.dataset.selectionKey === selectionKey)?.focus();
 }, key);
 
+// Each line a person might click: "the text cannot be edited" was one line in a table, not the matrix's chosen one.
+async function sweepTextLines(cell) {
+  const lines = (await textLines(session)).slice(0, tier.sweep);
+  let refused = 0;
+  for (const line of lines) {
+    if (Date.now() > deadline) break;
+    await session.page.mouse.dblclick(line.x + Math.min(12, line.w / 2), line.y + line.h / 2);
+    const opened = await session.page.waitForFunction(() => document.activeElement === document.querySelector('.oo-pdf-viewport textarea'), null, { timeout: 3000 }).then(() => true, () => false);
+    if (!opened) {
+      refused += 1;
+      record(cell, { check: 'text-lines', status: 'fail', detail: `no editor on "${line.key}"` });
+      continue;
+    }
+    await typeAndCommit(session, 'q');
+    for (const problem of await session.takeProblems()) {
+      refused += 1;
+      record(cell, { check: 'text-lines', status: 'fail', detail: `${problem.type}: ${problem.text}` });
+    }
+    await session.blur();
+  }
+  record(cell, { check: 'text-lines', status: refused ? 'fail' : 'ok', detail: `${lines.length} lines, ${refused} refused` });
+}
+
 async function runCell(cell) {
   let object = await prepare(cell);
   if (!object) return record(cell, { check: 'object', status: 'n/a', detail: 'no such object or state on this file' });
@@ -322,6 +346,7 @@ async function runCell(cell) {
     if (typeof marker !== 'string') marker = null;
   }
   if (!flag('--no-save')) await checkSave(cell, marker);
+  if (cell.type === 'text' && cell.state === 'normal') await sweepTextLines(cell);
   return null;
 }
 

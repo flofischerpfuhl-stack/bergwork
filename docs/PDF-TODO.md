@@ -31,6 +31,31 @@ the fork, kept to small `berg:work:` hunks; Fernwork gets engine and worker fixe
   in one font become one reflowing box; mixed fonts are refused with a reason. Semantic paragraphs in Fernwork
   (part A2) would later replace it.
 
+## Found by the UI matrix (2026-10-30, `apps/pdf/tests/ui-matrix/`)
+
+Fixed on `fix/pdf-text-edit-matrix` (the worker parts on Fernwork's branch of the same name, live with the next pin):
+Justify, hidden on an older worker; the editor and selection of turned text; rich frames edit on the page; a turned
+shaped frame keeps its angle when retyped; the underline sits below the baseline; the line a Word PDF draws under a text
+moves and turns with it; text on a page rotated in the editor can be edited; a line after a bold run in a Word table can
+be edited; Undo of frame edits, of a first annotation turn and of the Fill and Stroke toggles; the crash when an image was
+deleted; Ctrl+Z with the focus on a checkbox or slider; Fill and Stroke cannot both go off.
+
+Open:
+
+- [ ] **The separate underline follows only on the drop.** While a text is dragged or turned its Word underline stays
+  behind and jumps along at the end. It needs the drag composition overlay to carry a second object. 1 PD.
+- [ ] **Deleting a text leaves its separate underline.** The move and turn commands carry it; a delete would need the
+  snapshot inverse and a decision about a line that two texts share. 0.5 PD.
+- [ ] **Underline does not know the separate line.** Pressing it on a Word heading draws a second line next to the path.
+  The button could read as on and remove the path. 1 PD.
+- [ ] **Fields stay blocked while a commit lands.** Buttons and checkboxes pressed in that second are pressed afterwards;
+  a number typed then is lost. Queueing Inspector gestures like page gestures needs the rich editor's baseline to follow
+  the queue. 2 PD.
+- [ ] **Undo of an angle on a moved image** leaves the anti-aliased edge pixels of the image different (a one-pixel
+  perimeter, the image itself is identical). Partial repaint against full render. 0.5 PD.
+- [ ] **UI matrix: more surfaces.** Context menu, multi-selection and the left tool panels are not driven yet. 2 PD.
+
+
 ## Direct manipulation compared with Figma, Canva and PowerPoint (second review, 2026-10-29)
 
 A 40-point checklist driven against the app, next to a catalogue of the three products' micro-interactions from

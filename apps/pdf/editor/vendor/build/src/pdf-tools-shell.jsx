@@ -8657,6 +8657,10 @@ function rangeFormattedRichDocument(document, range, patch = {}, faces = []) {
     fontResources: formatted.fontResources.filter(item => used.has(item.resourceId)) }) };
 }
 
+function isBase14FontName(name = '') {
+  return /^(?:[A-Z]{6}\+)?(?:Helvetica|Courier|Times-(?:Roman|Bold|Italic|BoldItalic))(?:-|$)/u.test(String(name));
+}
+
 function exactLegacyTextRichSeed(previous = {}, fontCatalog = []) {
   const base14Resource = base14RichResourceForTextLike(previous);
   const resourceId = String(previous.fontResourceHash || previous.fontResourceHashes?.[0] || '');
@@ -22608,8 +22612,7 @@ function App({ shell = null }) {
           currentObject?.nativeTypeName !== 'form';
         // berg:work: the semantic inverse of a frame edit rebuilt the frame from its page rectangle: a line that overflows
         // its frame came back one line lower, over the next one. The document state is exact, and costs a few ms.
-        const replacesTextFrameText = textCommandType === CommandType.TEXT_BLOCK_REPLACE &&
-          currentObject?.textFrame === true && semanticNextText !== uiPreviousText;
+        const replacesTextFrameText = textCommandType === CommandType.TEXT_BLOCK_REPLACE && currentObject?.textFrame === true;
         const needsExactAppearanceInverse = changesFontFamily || changesFontSize ||
           changesTextFrameColor || firstNativeTextFramePromotion || changesRichText ||
           replacesNativeTextRun || rotatedRichTextFrameResize || replacesTextFrameText;
@@ -47428,8 +47431,12 @@ function Inspector({
           const nestedDecorationBlocked = Boolean(layer.item.nestedEditBlockedReason);
           const createdAnnotationRichTextDocument = layer.type === 'annotation'
             ? createdTextRichInspectorDocument(layer.item, doc.fontCatalog || []) : null;
-          const legacyDecorationSeed = layer.type === 'text' && !richTextDocument
+          // berg:work: Times New Roman or Arial without an embedded font is not a Base-14 font, though it maps to one for
+          // display. The worker refuses the Base-14 conversion, so such text takes the library face like any other.
+          const legacyRichSeed = layer.type === 'text' && !richTextDocument
             ? exactLegacyTextRichSeed(legacySourceItem, doc.fontCatalog || []) : null;
+          const legacyDecorationSeed = legacyRichSeed?.defaultCharacterStyle?.resourceId?.startsWith?.('base14:') &&
+            !isBase14FontName(legacySourceItem.pdfFontName || legacySourceItem.sourceFontName) ? null : legacyRichSeed;
           const legacyDecorationSubstitute = layer.type === 'text' && !richTextDocument && !legacyDecorationSeed
             ? legacyTextLibrarySubstitution(legacySourceItem) : null;
           const canToggleLegacyFontVariant = patch =>

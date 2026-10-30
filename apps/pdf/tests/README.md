@@ -172,6 +172,8 @@ rotated page) the runner prepares the state with real gestures and then works ev
 - **For each cell:** the selection of a turned object draws nothing outside the object; the on-page editor opens on a
   double click, turned with its text, in a loaded font; the typed text arrives and the object keeps its angle; the saved
   file passes qpdf, holds the text (pdftotext) and shows the same page when reopened.
+- **Each line:** the normal text cell then edits the text lines in view one by one (30 in the quick tier), because a
+  line that refuses its edit is one line of a page, not the line the cell chose.
 
 The quick tier takes the Word, Skia and rotated-page profiles. The normal state works all controls; the other states work
 a third of them, drawn by `--seed`, which defaults to the date, so successive merges cover all of them. Cells run until

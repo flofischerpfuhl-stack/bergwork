@@ -33,7 +33,9 @@ function candidates(page) {
     for (const node of document.querySelectorAll('[data-selection-key]')) {
       const box = node.getBoundingClientRect();
       if (!view || box.width < 4 || box.height < 3) continue;
-      if (box.left < view.left || box.top < view.top + 70 || box.right > view.right - 380 || box.bottom > view.bottom - 70) continue;
+      // Its middle is clicked: that has to be free of the panel and the bars. A wide line may run on behind them.
+      const middle = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      if (middle.x < view.left || middle.y < view.top + 70 || middle.x > view.right - 380 || middle.y > view.bottom - 70) continue;
       const key = node.dataset.selectionKey;
       const type = key.startsWith('text:') ? 'text' : key.startsWith('imageRegion:') ? 'image'
         : key.startsWith('annotation:') ? 'annotation' : node.classList.contains('type-path') ? 'path' : 'other';
@@ -137,17 +139,17 @@ export async function rotateSelection(session, { key }) {
   await page.mouse.up();
   await session.settled();
   if ((await session.historyDepth()) > depth) return true;
-  // A corner over the page edge or under a toolbar: the handle above the frame does the same.
-  const handle = page.locator('.oo-pdf-rotate-handle').first();
-  const box = (await handle.count()) ? await handle.boundingBox() : null;
-  if (!box) return false;
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  for (let step = 1; step <= 10; step += 1) {
-    await page.mouse.move(box.x + box.width / 2 + step * 9, box.y + box.height / 2 + step * 7);
-    await page.waitForTimeout(12);
+  // A corner over the page edge or under a toolbar: the Angle field turns it just the same.
+  await session.enterSurface('inspector', key);
+  const angle = page.locator('.oo-pdf-inspector:not(.is-headless) label', { hasText: /^Angle/ }).locator('input').first();
+  if (await angle.count()) {
+    await angle.fill('30');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Tab');
+    await session.settled();
   }
-  await page.mouse.up();
+  if ((await session.historyDepth()) > depth) return true;
+  await page.locator('.oo-pdf-inspector:not(.is-headless)').getByRole('button', { name: 'Rotate right' }).first().click({ timeout: 3000 }).catch(() => {});
   await session.settled();
   return (await session.historyDepth()) > depth;
 }
@@ -189,6 +191,11 @@ export async function typeAndCommit(session, suffix) {
   await page.keyboard.type(suffix, { delay: 8 });
   await page.keyboard.press('Escape');
   return session.settled();
+}
+
+/** Every text line in view, top to bottom. */
+export async function textLines(session) {
+  return (await candidates(session.page)).filter(item => item.type === 'text').sort((left, right) => left.y - right.y);
 }
 
 export async function applyState(session, object, state) {
