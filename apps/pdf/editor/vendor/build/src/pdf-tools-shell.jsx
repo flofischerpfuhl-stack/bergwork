@@ -324,8 +324,11 @@ function useCancelPdfDragOnUnmount(dragRef) {
 const ACCEPT_PDF = ['.pdf', 'application/pdf'];
 const ACCEPT_PROJECT = ['.bwpdf', '.fwdoc', '.fernwork-pdf', 'application/vnd.fernwork.pdf-project+json'];
 // berg:work: from Fernwork, HEIC in both lists.
-const ACCEPT_IMAGE = ['image/*', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg', '.heic', '.heif', '.hif'];
+const ACCEPT_IMAGE = ['image/*', '.png', '.jpg', '.jpeg', '.webp', '.avif', '.gif', '.bmp', '.svg', '.heic', '.heif', '.hif'];
 const ACCEPT_APPEND = ['.pdf', 'application/pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg', '.heic', '.heif', '.hif'];
+// berg:work: from Fernwork. The open dialog lists what can be read rather than image/*, which also offers TIFF and
+// camera RAW files.
+const ACCEPT_OPEN = [...ACCEPT_PDF, ...ACCEPT_PROJECT, ...ACCEPT_IMAGE.filter(rule => rule.startsWith('.'))];
 const FERNWORK_PDF_PROJECT_FORMAT = 'fernwork-pdf-project';
 const FERNWORK_PDF_PROJECT_VERSION = 2;
 const FERNWORK_PDF_PROJECT_MIME = 'application/vnd.fernwork.pdf-project+json';
@@ -1965,7 +1968,7 @@ function acceptsProject(file) {
 }
 
 function acceptsImage(file) {
-  return file?.type?.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg|heic|heif|hif)$/i.test(file?.name || '');
+  return file?.type?.startsWith('image/') || /\.(png|jpe?g|webp|avif|gif|bmp|svg|heic|heif|hif)$/i.test(file?.name || '');
 }
 
 // berg:work: from Fernwork.
@@ -30433,7 +30436,7 @@ function App({ shell = null }) {
         ]} />
       )}
       {/* berg:work: from Fernwork, the open dialog takes images. */}
-      <input ref={fileInputRef} className="sr-only" tabIndex={-1} type="file" disabled={Boolean(documentLoadProgress)} accept={[...ACCEPT_PDF, ...ACCEPT_PROJECT, ...ACCEPT_IMAGE].join(',')} multiple onChange={(event) => {
+      <input ref={fileInputRef} className="sr-only" tabIndex={-1} type="file" disabled={Boolean(documentLoadProgress)} accept={ACCEPT_OPEN.join(',')} multiple onChange={(event) => {
         const files = fileList(event.target.files);
         event.target.value = '';
         void openFiles(files);
