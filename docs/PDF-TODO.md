@@ -564,9 +564,15 @@ model, system models on phones) and the cloud-AI question; those entries are dro
 
 - [ ] **Agent panel in the desktop app.** Finds installed harnesses (Claude Code, Codex and others), starts them locally
   with the user's own login and subscription, and shows one conversation with streaming, tool calls and permission
-  questions: T3 Code's model of adapting each harness's event stream to one interface. Check T3 Code's approach and
-  licence before scoping. Desktop only; a web page cannot start local programs, and whether the web app may reach a local
-  bridge is open. Host.
+  questions: T3 Code's model of adapting each harness's event stream to one interface. Reuse what HimmelCAD Assembler
+  already has (`packages/@himmelcad/agent` for discovery and stream normalising, `apps/assembler/electron/assistantHost.ts`,
+  `assembler/AGENT-ASSISTANT.md`): find Claude Code, Codex and OpenCode on `PATH`, spawn without a shell, one run per
+  turn, no credentials stored. Host.
+- [ ] **Agent panel in the web app, through a local bridge,** as Assembler does. The page starts nothing itself: a small
+  bridge on `127.0.0.1`, started by the user or the desktop app, runs the harness (`assistantBridge.ts`: origin allowlist,
+  Host check against DNS rebinding, one-time pairing code, bearer token, loopback only, Private Network Access header).
+  Needs `connect-src http://127.0.0.1:<port>` in the web CSP, changes the "no external requests" gate and `CLAIMS.md`.
+  Safari with HTTPS to loopback is unverified. Fork, host.
 - [ ] **The agent works on the open document.** Today `bergwork-pdf-cli mcp` runs its own headless page on files, not
   on what the user sees. The app needs an MCP endpoint into the running window: read pages, selection and comments,
   apply edits as normal transactions with Undo, show what the agent changes. Prepared: the CLI and MCP tools. Missing:
