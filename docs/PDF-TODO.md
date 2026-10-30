@@ -422,20 +422,180 @@ in a headless page. That is the basis.
   `launchQueue`) and a `share_target` (Android "Share → berg:work PDF": the service worker keeps the files and the
   app opens them from `?shared`); the app page on the site links the manifest and registers the service worker.
   Share flow checked headless. Open: check "Open with" and Share on a real Android phone and desktop Chrome/Edge.
-- [ ] **Android app for Googlebooks** (as planned in `docs/ARCHITECTURE.md`).
-  - The Android WebView has no cross-origin isolation, so no SharedArrayBuffer or WASM threads: PDFium and Tesseract
-    need single-thread builds, or native builds through Rust.
+
+Mobile research with sources, comparison of the technology paths and order: `docs/PDF-MOBILE-VORTEILE.md`. In short: a
+real iOS/iPadOS app on Tauri, iPad first; Android stays a TWA until that app exists; no native PDFium for now. No store
+submission before the legal review in `docs/ARCHITECTURE.md`.
+
+Web first, useful on every platform:
+- [ ] **Ask for persistent storage.** Nothing calls `navigator.storage.persist()`, so drafts and the journal are
+  best-effort in every browser. WebKit grants it by heuristics such as a Home Screen install. Host page. 0.5 PD.
+- [ ] **Pen input.** The editor treats a pen as a mouse: no `pressure`, tilt or coalesced and predicted events, all
+  available in Chrome and Safari 18.2+. Pen draws, finger scrolls; filled pressure strokes. Judge the result on an iPad
+  before starting native ink. 3–5 PD.
+- [ ] **Save on an iOS Home Screen app.** Standalone blob downloads are reported to fail silently and `window.print`
+  to be unreliable. Use `navigator.share` with the file, which the editor does not call yet. Check on a device. 1 PD.
+- [ ] **Add a page from the camera.** `<input capture>` into Add pages; perspective correction is open under OCR.
+  0.5–1 PD.
+- [ ] **Device checks.** Android Chrome: `showSaveFilePicker` (Chrome 132 and MDN say yes, caniuse says no), and
+  `file_handlers` launches in a WebAPK or TWA. iOS: `persist()`, Scribble in the editor's `textarea`. Test PDFgear on
+  both as the free benchmark. 1 PD.
+
+Apps:
+- [ ] **Android: Trusted Web Activity on Play** (Bubblewrap). The PWA runs in Chrome with the unchanged engine. Bubblewrap
+  has `shareTarget` and `fileHandlers` fields; check them on a device, also with Samsung Internet as default browser.
+  New personal Play accounts need a closed test first (12 testers, 14 days). 3–5 PD.
+- [ ] **iOS and iPadOS app on Tauri.** Start with a 3 PD spike (open in place, save, print, a 100-page session in
+  WKWebView); if it fails, use Capacitor with the same web bundle. No SharedArrayBuffer needed. Real limit:
+  WebContent is killed near 2 GB. 25–40 PD in all:
+  - Document types, open in place, security scope and file coordination behind the `showSaveFilePicker` shim, share
+    extension, "Always Open With" (iOS 26).
+  - AirPrint through `PrintHost`, lifecycle flush, keyboard commands, iPadOS menu bar.
+  - Drop Liberation Sans Narrow (GPL-2.0 with font exception) from the iOS bundle or clear it in the legal review.
+- [ ] **Scanner on iOS.** VisionKit camera, `RecognizeDocumentsRequest` for OCR with tables, Tesseract as fallback.
+  3–5 PD.
+- [ ] **Native ink on iPad.** PencilKit overlay during a stroke, then `/Ink` through the engine; double tap, squeeze,
+  hover. Only if web ink falls short. 10–15 PD.
+- [ ] **Android app on Tauri for Googlebooks** (as planned in `docs/ARCHITECTURE.md`), replacing the TWA with the same
+  package name and key.
+  - PDFium, qpdf, HarfBuzz and Tesseract are already single-threaded, so the WebView needs neither cross-origin
+    isolation nor new builds. If that changes: WebView 156 and androidx.webkit 1.18.0 offer
+    `Profile#setCrossOriginIsolatedAllowlist` with `Document-Isolation-Policy`.
   - Intent filters for `application/pdf` with `content://` URIs; save back only with write access, otherwise
     `ACTION_CREATE_DOCUMENT`.
+  - ML Kit document scanner, Jetpack Ink, `PrintManager`, Google's desktop quality list.
   - Play: target API 36, 16 KB page size for the native libraries.
 
-  10–20 PD, plus the touch work in the Fernwork TODO.
-- [ ] **Store presence on phones.** Free mobile apps view and annotate. Editing existing content is paywalled
-  (Adobe, Xodo, Foxit, PDF Expert) or limited (PDFgear: text and images, free status unclear). Editing vector paths
-  is offered nowhere we know of. The store listing is what makes that lead visible.
-  - **Android: Trusted Web Activity** (Bubblewrap). The PWA runs in Chrome, not in the WebView, so it keeps
-    cross-origin isolation and WASM threads, and it can be listed on Play. 3–5 PD.
-  - **iOS: WKWebView wrapper.** Check SharedArrayBuffer and memory (WebContent is killed at about 2 GB) on a device
-    first. 10–20 PD.
+  22–39 PD, plus the touch work in the Fernwork TODO.
+- [ ] **Native PDFium: decide by measurement.** It would not fix commit latency (snapshot round trip, not WASM speed).
+  It would help with files WASM cannot hold (2 GB cap, whole file in memory). Measure on devices after the iOS app,
+  2 PD; a port costs 40–80 PD.
+- [ ] **Store presence on phones.** Free mobile apps view and annotate. Editing existing content is paywalled (Adobe,
+  Xodo, Foxit, PDF Expert). PDFgear is the exception: reported free with text and image editing on mobile, to be tested.
+  Editing vector paths is offered nowhere we know of. The store listing is what makes that lead visible.
   - **Order:** ship only after the touch pass in the Fernwork TODO (taps hit the page background, results lag after
     release). Otherwise store reviews judge the rough edges, not the lead.
+
+## PDFgear parity
+
+Goal (Florian, 2026-10-30): match PDFgear wherever it is ahead. Evidence, table and sources: `PDF-PDFGEAR-PARITY.md`.
+PDFgear was not run, so every entry rests on its documentation or on third parties; the checks below come first where
+it matters.
+
+Each entry gives the benefit, the effort in PD and the owner: **fork** (`apps/pdf/editor`), **host** (`apps/pdf/web`,
+`src-tauri`), **Fernwork** (engine or worker; add it to Fernwork's TODO too). Steps are the order; within a step, top to
+bottom. **[Privacy]** touches the promise that files are not uploaded. New panels and menu entries need Florian's OK as
+usual, and follow the no-help-text rule.
+
+Check first:
+
+- [ ] **Run PDFgear on real devices.** Text quality on hard PDFs, paths, network capture on mobile, timings, Word output,
+  merge with forms, signature format, redaction (`PDF-PDFGEAR-PARITY.md`, section 8). Decides how much of the rest is
+  urgent. Benefit high. 1–2 PD, one online session on the Windows PC and a phone each.
+
+Step 1: small gaps, no decision needed. About 30–50 PD together.
+
+- [~] **Image to PDF, HEIC.** `fix/pdf-image-input`, waits for its Fernwork commit and mirror tag. Benefit high. 0.5 PD. Fork.
+- [ ] **Export pages as PNG or JPEG.** Range, dpi, quality, one zip; the engine renders this already (CLI `render`).
+  Benefit high. 1–2 PD. Fork.
+- [ ] **Extract text** to TXT or the clipboard in Pages or the palette; `extractTextForDoc` exists for Compare. Benefit
+  medium. 0.5 PD. Fork.
+- [ ] **Two-page view** with an optional separate cover, also what PDFgear's iOS users miss. Benefit high. 3–5 PD. Fork.
+- [ ] **Slide show.** Full screen, one page, arrows. Second screen later (`PDF-DESKTOP-VORTEILE.md`). Benefit medium.
+  1–2 PD. Fork.
+- [ ] **Page colours for reading** (night, sepia), view only, never in the file. Benefit medium. 1 PD. Fork.
+- [ ] **Read aloud.** Selection or page through `speechSynthesis`. **[Privacy]** Only voices with `localService`: browsers
+  also offer remote voices, which would send the text out. Benefit medium. 2–3 PD. Fork.
+- [ ] **Several OCR languages in one run** (`deu+eng`; already open under OCR). Benefit high for mixed documents. 1–2 PD. Fork.
+- [ ] **Create and edit links.** To a page or URL, with an outline on the page. Benefit medium. 3–5 PD. Fernwork for
+  native annotation commands, a pdf-lib snapshot in the fork as the first step.
+- [ ] **Attachments.** List, save, add, remove. Benefit medium. 2–3 PD. Fork, pdf-lib snapshot.
+- [ ] **N-up.** Several pages on one sheet as a new PDF, then print. Benefit low to medium. 2–3 PD. Fork.
+- [ ] **Tick and cross marks** for flat forms. Benefit medium. 0.5 PD. Fork.
+- [ ] **Same signature on several pages** (all, odd, even, range). Benefit medium. 1 PD. Fork.
+- [ ] **Stamp library.** Existing entry under measuring and comments. Benefit low to medium. 2 PD. Fork.
+- [ ] **Remove a watermark** added here, after the Undo history is gone: mark stamps in the content stream. Benefit low.
+  2–3 PD. Fork, with a Fernwork check.
+- [ ] **Batch.** Add OCR, page numbers, password, image export; folders in the app (`PDF-DESKTOP-VORTEILE.md`, 3–5 PD).
+  Benefit medium. 3–5 PD. Fork, host.
+- [ ] **Tab strip** instead of the dropdown, as in PDFgear 3.0. Same entry as the tab strip under the desktop audit on
+  `feat/pdf-desktop-windows`. Benefit medium. 6–10 PD with dragging, 2–3 PD without. **Needs OK.** Fork.
+
+Step 2: reach. Existing entries; only the order is new.
+
+- [ ] **German user interface,** then the other nine of PDFgear's languages. Benefit very high in Germany: the strongest
+  gap for the effort. 5–10 PD (existing entry) plus about 1 PD per language. Fernwork catalogue, then fork and host.
+- [ ] **Windows and macOS.** Builds, signing, updates, release CI, default app: the entries under Desktop apps. Benefit
+  very high. About 25–40 PD. Host.
+- [ ] **Touch check on real devices,** then the **Android TWA**, then the **iOS app**: see `PDF-MOBILE-VORTEILE.md`. Touch
+  is built in the fork (two-finger scale and turn, larger handles, long press to reorder pages, toolbar docked at the
+  bottom, tap beside the page deselects) but only tested headless. Fix what a phone and an iPad show; that is smaller
+  than the 10–20 PD estimated before these changes.
+  Benefit very high. 10–20, 3–5 and 25–40 PD. Fernwork, then host. Legal review first (`ARCHITECTURE.md`).
+- [ ] **Scanner.** SANE, WIA, TWAIN in the app, camera scan on phones. Benefit medium to high. 10–20 PD desktop
+  (`PDF-DESKTOP-VORTEILE.md`), 3–5 PD iOS. Host.
+- [ ] **Printing.** Direct print, batch print: existing entries. Benefit medium. 3–6 PD per OS. Host.
+- [ ] **Speed.** Commit latency and parallel workers, already planned in Fernwork. No evidence that PDFgear is faster at
+  edits, so judge it after the check above. Benefit high in any case. 15–30 and 5–10 PD. Fernwork.
+- [ ] **Merge PDFs with forms or tags.** The engine refuses them. Unknown at PDFgear, a weakness regardless. Benefit high.
+  5–10 PD. Fernwork.
+
+Step 3: conversion, on the device only. About 55–85 PD.
+
+- [ ] **PDF to Word, keeping the layout.** Positioned frames from PDFium inspection and block detection, DOCX through JSZip.
+  This is what PDFgear's staff describe as their own method. Corpus check in Word and LibreOffice. Benefit very high.
+  8–12 PD. Fork, new file.
+- [ ] **PDF to Word, flowing.** Paragraphs, headings, lists, tables from rules and alignment, headers and footers. Shares its
+  analysis with semantic paragraphs in Fernwork. Benefit high. 15–25 PD. Fernwork for the analysis, fork for the writer.
+- [ ] **Scanned PDF to Word** from Tesseract's layout. Benefit medium to high. 3–5 PD. Fork.
+- [ ] **PDF to Excel.** Table detection from the step above, one sheet per table or page. Benefit high. 8–12 PD. Fork.
+- [ ] **PDF to PowerPoint.** One slide per page with positioned objects. Benefit low to medium. 4–6 PD. Fork.
+- [ ] **Office to PDF, spike.** Measure a LibreOffice WASM build (ZetaOffice: size, memory, fonts, licence) on the same
+  documents as desktop LibreOffice. Fernwork's Mammoth and html2pdf route is not good enough. Benefit high. 3 PD.
+- [ ] **Office to PDF, desktop** through an installed LibreOffice: the existing entry. It corrects "not feasible in the
+  browser": that holds for this direction only. Benefit high. 3–5 PD. Host.
+- [ ] **Office to PDF, web,** if the spike allows it. Benefit medium to high. 8–15 PD. Fork, loaded on demand.
+- [ ] **Batch conversion** once one converter exists. Benefit medium. 2 PD. Fork.
+
+Step 4: AI, decided by Florian on 2026-10-30. **AI in the app's UI works exclusively like T3 Code: the app uses the agent
+harnesses already installed on the machine.** No model of our own, no cloud service of ours, no API keys in the app, no
+bundled or downloaded local model. This replaces the earlier plan here (Bergamot translation, Chrome built-in AI, a local
+model, system models on phones) and the cloud-AI question; those entries are dropped.
+
+- [ ] **Agent panel in the desktop app.** Finds installed harnesses (Claude Code, Codex and others), starts them locally
+  with the user's own login and subscription, and shows one conversation with streaming, tool calls and permission
+  questions: T3 Code's model of adapting each harness's event stream to one interface. Reuse what HimmelCAD Assembler
+  already has (`packages/@himmelcad/agent` for discovery and stream normalising, `apps/assembler/electron/assistantHost.ts`,
+  `assembler/AGENT-ASSISTANT.md`): find Claude Code, Codex and OpenCode on `PATH`, spawn without a shell, one run per
+  turn, no credentials stored. Host.
+- [ ] **Agent panel in the web app, through a local bridge,** as Assembler does. The page starts nothing itself: a small
+  bridge on `127.0.0.1`, started by the user or the desktop app, runs the harness (`assistantBridge.ts`: origin allowlist,
+  Host check against DNS rebinding, one-time pairing code, bearer token, loopback only, Private Network Access header).
+  Needs `connect-src http://127.0.0.1:<port>` in the web CSP, changes the "no external requests" gate and `CLAIMS.md`.
+  Safari with HTTPS to loopback is unverified. Fork, host.
+- [ ] **The agent works on the open document.** Today `bergwork-pdf-cli mcp` runs its own headless page on files, not
+  on what the user sees. The app needs an MCP endpoint into the running window: read pages, selection and comments,
+  apply edits as normal transactions with Undo, show what the agent changes. Prepared: the CLI and MCP tools. Missing:
+  this connection and all of the UI. Host, fork.
+- [ ] **Features on top,** all through the harness: ask about the PDF, summarise, translate (including a translated
+  copy, which needs semantic paragraphs), review, fill forms.
+- [ ] **[Privacy] Be exact about the promise.** berg:work uploads nothing, but a harness sends what it reads to the
+  user's own model provider. Show that in the panel, start nothing without a user action, and word the privacy page
+  accordingly.
+- [ ] **Palette with arguments** ("delete page 10", "rotate 3–5"). Rules, not AI, and must not be sold as AI. Benefit
+  medium. 2–3 PD. Fork.
+
+Decisions for Florian:
+
+- [ ] **Commercial licence.** PDFgear is free for companies. Above three people berg:work needs a licence that has no price
+  yet, which matters as soon as the apps ship.
+
+Deliberately not matched (reasons in `PDF-PDFGEAR-PARITY.md`, section 7):
+
+- **Upload-based conversion.** **[Privacy]** Cheap and good, and the end of the promise.
+- **Signature requests through a server** (PDFgear's Secure eSign). **[Privacy]** Accounts, mail and document storage are
+  a different product.
+- **A count of 60 formats.** Word, Excel, PowerPoint and images are what people ask for.
+- **Calling conversion "lossless".** It is not, at PDFgear either.
+- **Browser extension.** The PWA covers it.
+- **Own Windows printer driver.** Already rejected above.
