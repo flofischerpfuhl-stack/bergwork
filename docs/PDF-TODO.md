@@ -527,7 +527,10 @@ Step 2: reach. Existing entries; only the order is new.
   gap for the effort. 5–10 PD (existing entry) plus about 1 PD per language. Fernwork catalogue, then fork and host.
 - [ ] **Windows and macOS.** Builds, signing, updates, release CI, default app: the entries under Desktop apps. Benefit
   very high. About 25–40 PD. Host.
-- [ ] **Touch pass** in Fernwork's TODO, then the **Android TWA**, then the **iOS app**: see `PDF-MOBILE-VORTEILE.md`.
+- [ ] **Touch check on real devices,** then the **Android TWA**, then the **iOS app**: see `PDF-MOBILE-VORTEILE.md`. Touch
+  is built in the fork (two-finger scale and turn, larger handles, long press to reorder pages, toolbar docked at the
+  bottom, tap beside the page deselects) but only tested headless. Fix what a phone and an iPad show; that is smaller
+  than the 10–20 PD estimated before these changes.
   Benefit very high. 10–20, 3–5 and 25–40 PD. Fernwork, then host. Legal review first (`ARCHITECTURE.md`).
 - [ ] **Scanner.** SANE, WIA, TWAIN in the app, camera scan on phones. Benefit medium to high. 10–20 PD desktop
   (`PDF-DESKTOP-VORTEILE.md`), 3–5 PD iOS. Host.
@@ -554,26 +557,30 @@ Step 3: conversion, on the device only. About 55–85 PD.
 - [ ] **Office to PDF, web,** if the spike allows it. Benefit medium to high. 8–15 PD. Fork, loaded on demand.
 - [ ] **Batch conversion** once one converter exists. Benefit medium. 2 PD. Fork.
 
-Step 4: AI on the device. Nothing leaves it. About 35–50 PD, in stages.
+Step 4: AI, decided by Florian on 2026-10-30. **AI in the app's UI works exclusively like T3 Code: the app uses the agent
+harnesses already installed on the machine.** No model of our own, no cloud service of ours, no API keys in the app, no
+bundled or downloaded local model. This replaces the earlier plan here (Bergamot translation, Chrome built-in AI, a local
+model, system models on phones) and the cloud-AI question; those entries are dropped.
 
-- [ ] **Translate, panel.** Bergamot in WASM (MPL-2.0), models hosted on our origin because Mozilla's bucket has no CORS
-  headers (third-party statement, verify), downloaded per language. Benefit high. 6–10 PD. Fork.
-- [ ] **Translated copy of the PDF** with reflow and font cover. Benefit medium. 10–15 PD, needs semantic paragraphs.
-  Fork, Fernwork.
-- [ ] **Summarise and ask, Chrome desktop.** Built-in AI where it is present, nothing elsewhere: no bundle cost, no
-  server. Needs 22 GB of free disk and a capable GPU or 16 GB RAM. Benefit medium. 3–5 PD. Fork.
-- [ ] **Local model in the app,** optional download. Benefit medium. 10+ PD (`PDF-DESKTOP-VORTEILE.md`). Host.
-- [ ] **System models on phones** once the apps exist. Benefit low to medium. 2–3 PD each. Host.
+- [ ] **Agent panel in the desktop app.** Finds installed harnesses (Claude Code, Codex and others), starts them locally
+  with the user's own login and subscription, and shows one conversation with streaming, tool calls and permission
+  questions: T3 Code's model of adapting each harness's event stream to one interface. Check T3 Code's approach and
+  licence before scoping. Desktop only; a web page cannot start local programs, and whether the web app may reach a local
+  bridge is open. Host.
+- [ ] **The agent works on the open document.** Today `bergwork-pdf-cli mcp` runs its own headless page on files, not
+  on what the user sees. The app needs an MCP endpoint into the running window: read pages, selection and comments,
+  apply edits as normal transactions with Undo, show what the agent changes. Prepared: the CLI and MCP tools. Missing:
+  this connection and all of the UI. Host, fork.
+- [ ] **Features on top,** all through the harness: ask about the PDF, summarise, translate (including a translated
+  copy, which needs semantic paragraphs), review, fill forms.
+- [ ] **[Privacy] Be exact about the promise.** berg:work uploads nothing, but a harness sends what it reads to the
+  user's own model provider. Show that in the panel, start nothing without a user action, and word the privacy page
+  accordingly.
 - [ ] **Palette with arguments** ("delete page 10", "rotate 3–5"). Rules, not AI, and must not be sold as AI. Benefit
   medium. 2–3 PD. Fork.
 
 Decisions for Florian:
 
-- [ ] **[Privacy] Cloud AI.** Parity on quality needs it; the promise forbids it. Recommendation: no, not in the default
-  product. If wanted: off by default, consent per document, a visible state while text leaves the device, a named
-  processor with a contract, a changed CSP, and the sentence "Files never leave your device" reworded on the site and
-  in the privacy page. A bring-your-own-key variant keeps us out of the data path but changes the promise just the same.
-  An endpoint on `localhost` in the app needs none of this. 5–8 PD, plus the legal part.
 - [ ] **Commercial licence.** PDFgear is free for companies. Above three people berg:work needs a licence that has no price
   yet, which matters as soon as the apps ship.
 
