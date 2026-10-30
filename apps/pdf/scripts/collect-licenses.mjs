@@ -105,6 +105,19 @@ function editorComponents() {
   return components;
 }
 
+/** libheif is pinned next to the editor build and is not part of its manifest. */
+function libheifComponents() {
+  const base = path.join(upstreamVendor, 'libheif-js-1.23.5');
+  if (!existsSync(base)) return [];
+  return [{
+    name: 'libheif WebAssembly build (libheif-js)',
+    version: '1.23.5',
+    licence: 'LGPL-3.0',
+    url: 'https://github.com/catdad-experiments/libheif-js',
+    texts: licenceFiles(base).map((text) => ({ ...text, file: `libheif-js-1.23.5/${text.file}` })),
+  }];
+}
+
 /** npm packages the Vite build of web/ bundles, and the wordmark face from the design base. */
 const HOST_PACKAGES = ['react', 'react-dom', 'scheduler', 'lucide-react', '@fontsource-variable/inter', '@fontsource-variable/jetbrains-mono'];
 function hostComponents() {
@@ -141,7 +154,7 @@ const report = {
     name: 'Fernwork PDF editor',
     licence: 'BUSL-1.1',
     commit: lock.upstreams['fernwork-pdf'].commit,
-    components: editorComponents(),
+    components: [...editorComponents(), ...libheifComponents()],
   },
   host: hostComponents(),
   rust: crates,

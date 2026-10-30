@@ -28,6 +28,8 @@ import {
   uid,
 } from '../../../assets/utils.js';
 import { registerFilePasteTarget } from '../../../assets/file-paste.js';
+// berg:work: from Fernwork. The decoder's worker path follows the host (scripts/build-editor.mjs).
+import { isHeicFile, normalizeHeicFile } from '../../../tools/js/converters/heic-decoder.js';
 import { PdfEngineSessionOrchestrator } from './pdf-editor/engine/session-orchestrator.js';
 import { AtomicGenerationController } from './pdf-editor/interaction/atomic-generation-controller.js';
 import { PdfEngineWorkerTransport } from './pdf-editor/engine/worker-transport.js';
@@ -321,8 +323,9 @@ function useCancelPdfDragOnUnmount(dragRef) {
 
 const ACCEPT_PDF = ['.pdf', 'application/pdf'];
 const ACCEPT_PROJECT = ['.bwpdf', '.fwdoc', '.fernwork-pdf', 'application/vnd.fernwork.pdf-project+json'];
-const ACCEPT_IMAGE = ['image/*', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg'];
-const ACCEPT_APPEND = ['.pdf', 'application/pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg'];
+// berg:work: from Fernwork, HEIC in both lists.
+const ACCEPT_IMAGE = ['image/*', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg', '.heic', '.heif', '.hif'];
+const ACCEPT_APPEND = ['.pdf', 'application/pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg', '.heic', '.heif', '.hif'];
 const FERNWORK_PDF_PROJECT_FORMAT = 'fernwork-pdf-project';
 const FERNWORK_PDF_PROJECT_VERSION = 2;
 const FERNWORK_PDF_PROJECT_MIME = 'application/vnd.fernwork.pdf-project+json';
@@ -333,6 +336,10 @@ const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 12;
 // Phones zoom a focused form field until its text is at least this large.
 const PDF_MOBILE_FORM_MIN_FONT_PX = 16;
+// berg:work: from Fernwork.
+// How long a page change waits for a document's editing session. Large plans take tens of seconds on a slow machine.
+const PDF_SESSION_WAIT_MS = 180_000;
+const PDF_SESSION_FAILED_MESSAGE = 'The PDF editing session could not be opened. Nothing was changed.';
 const PDF_FORM_CONTROL_SELECTOR = '.oo-pdf-form-layer .oo-pdf-form-input, .oo-pdf-form-layer .oo-pdf-form-toggle';
 const ZOOM_BUTTON_FACTOR = 1.12;
 const ZOOM_WHEEL_FACTOR = 1.0018 ** 2;
@@ -1958,7 +1965,13 @@ function acceptsProject(file) {
 }
 
 function acceptsImage(file) {
-  return file?.type?.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file?.name || '');
+  return file?.type?.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg|heic|heif|hif)$/i.test(file?.name || '');
+}
+
+// berg:work: from Fernwork.
+// An iPhone photo without a telling name or type is still an image: its bytes say so.
+async function isImageFile(file) {
+  return acceptsImage(file) || isHeicFile(file);
 }
 
 function mimeFromFile(file) {
@@ -2083,11 +2096,72 @@ async function rasterizeSvgDataUrl(dataUrl, width, height) {
   return dataUrlToBytes(canvas.toDataURL('image/png'));
 }
 
-async function normalizeImageFile(file) {
+// berg:work: from Fernwork (orientation, HEIC, normalizeImageFile).
+// The EXIF orientation of a JPEG (1 to 8), or 1 when it has none. Only the first APP1 segment counts.
+function jpegExifOrientation(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.length < 4 || view.getUint16(0) !== 0xffd8) return 1;
+  let offset = 2;
+  while (offset + 4 <= bytes.length) {
+    const marker = view.getUint16(offset);
+    if ((marker & 0xff00) !== 0xff00 || marker === 0xffda) return 1;
+    const size = view.getUint16(offset + 2);
+    if (marker === 0xffe1 && offset + 10 <= bytes.length && view.getUint32(offset + 4) === 0x45786966) {
+      const tiff = offset + 10;
+      if (tiff + 8 > bytes.length) return 1;
+      const little = view.getUint16(tiff) === 0x4949;
+      const ifd = tiff + view.getUint32(tiff + 4, little);
+      if (ifd + 2 > bytes.length) return 1;
+      const entries = view.getUint16(ifd, little);
+      for (let index = 0; index < entries; index += 1) {
+        const entry = ifd + 2 + index * 12;
+        if (entry + 12 > bytes.length) return 1;
+        if (view.getUint16(entry, little) !== 0x0112) continue;
+        const orientation = view.getUint16(entry + 8, little);
+        return orientation >= 1 && orientation <= 8 ? orientation : 1;
+      }
+      return 1;
+    }
+    offset += 2 + size;
+  }
+  return 1;
+}
+
+// The decoder hands back a PNG. A photo stays a JPEG here, which keeps a PDF near the size of the original where a PNG
+// would be many times larger; only a picture with transparency stays a PNG.
+async function heicToPhotoFile(file) {
+  const png = await normalizeHeicFile(file);
+  const dataUrl = await readFileAsDataURL(png);
+  const img = await loadImageElement(dataUrl);
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.drawImage(img, 0, 0);
+  const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+  for (let index = 3; index < data.length; index += 4) if (data[index] !== 255) return png;
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+  return blob ? new File([blob], `${stripExt(file.name || 'image')}.jpg`, { type: 'image/jpeg' }) : png;
+}
+
+async function normalizeImageFile(input) {
+  // A JPEG or PNG that only carries a HEIC name is the browser's to read.
+  const [first, second] = new Uint8Array(await input.slice(0, 2).arrayBuffer());
+  const jpegOrPng = (first === 0xff && second === 0xd8) || (first === 0x89 && second === 0x50);
+  const file = !jpegOrPng && await isHeicFile(input) ? await heicToPhotoFile(input) : input;
   const dataUrl = await readFileAsDataURL(file);
   const mime = (mimeFromFile(file) || mimeFromDataUrl(dataUrl) || '').toLowerCase();
   if (mime === 'image/png' || mime === 'image/jpeg' || mime === 'image/jpg') {
     const dims = await imageDims(dataUrl);
+    // berg:work: from Fernwork.
+    // A PDF has no EXIF: a camera's turned JPEG goes in as the pixels the browser shows, not as stored.
+    if (mime !== 'image/png' && jpegExifOrientation(new Uint8Array(await file.slice(0, 128 * 1024).arrayBuffer())) > 1) {
+      const canvas = document.createElement('canvas');
+      canvas.width = dims.width;
+      canvas.height = dims.height;
+      canvas.getContext('2d').drawImage(await loadImageElement(dataUrl), 0, 0);
+      return { dataUrl: canvas.toDataURL('image/jpeg', 0.95), mime: 'image/jpeg', ...dims };
+    }
     return { dataUrl, mime: mime === 'image/jpg' ? 'image/jpeg' : mime, ...dims };
   }
   const img = await loadImageElement(dataUrl);
@@ -13116,10 +13190,10 @@ async function pdfBytesWithRebuiltPageTree(bytes, pages) {
   };
 }
 
-async function imageFileToPdfBytes(file) {
+// berg:work: from Fernwork, the page is added to a given document so several images can share one.
+async function addImagePage(pdf, file) {
   const image = await normalizeImageFile(file);
   const bytes = dataUrlToBytes(image.dataUrl);
-  const pdf = await PDFLib.PDFDocument.create();
   const embedded = image.mime === 'image/jpeg'
     ? await pdf.embedJpg(bytes)
     : await pdf.embedPng(bytes);
@@ -13129,7 +13203,48 @@ async function imageFileToPdfBytes(file) {
   const height = Math.max(24, image.height * scale);
   const page = pdf.addPage([width, height]);
   page.drawImage(embedded, { x: 0, y: 0, width, height });
+}
+
+// berg:work: from Fernwork, on top of addImagePage.
+async function imageFileToPdfBytes(file) {
+  const pdf = await PDFLib.PDFDocument.create();
+  await addImagePage(pdf, file);
   return new Uint8Array(await pdf.save());
+}
+
+// berg:work: from Fernwork.
+// One document with a page per image, in the given order and named after the first image that could be read.
+async function loadImagesAsPdf(files, onProgress = null) {
+  const pdf = await PDFLib.PDFDocument.create();
+  const added = [];
+  const unreadable = [];
+  for (const [index, file] of files.entries()) {
+    reportPdfLoadProgress(
+      onProgress, 'reading', 0.2 * index / files.length,
+      files.length > 1 ? `Converting image ${index + 1} of ${files.length}` : 'Converting image to a PDF page',
+    );
+    try {
+      await addImagePage(pdf, file);
+      added.push(file);
+    } catch (error) {
+      if (index === files.length - 1 && !added.length) throw error;
+      unreadable.push(file);
+    }
+  }
+  const bytes = new Uint8Array(await pdf.save());
+  const doc = await loadPdfFromBytes(
+    `${stripExt(added[0].name || 'image')}.pdf`,
+    bytes,
+    bytes.byteLength,
+    progress => reportPdfLoadProgress(
+      onProgress,
+      progress.phase,
+      0.2 + progress.value * 0.8,
+      progress.label,
+      progress,
+    ),
+  );
+  return { doc, unreadable };
 }
 
 async function blankPdfPageBytes(width = 595.28, height = 841.89) {
@@ -13143,7 +13258,7 @@ async function blankPdfPageBytes(width = 595.28, height = 841.89) {
 
 async function loadFileAsPdfSource(file, onProgress = null) {
   if (acceptsPdf(file)) return loadPdfFile(file, onProgress);
-  if (acceptsImage(file)) {
+  if (await isImageFile(file)) { // berg:work: from Fernwork.
     reportPdfLoadProgress(onProgress, 'reading', 0.04, `Reading ${file.name || 'image'}`);
     const bytes = await imageFileToPdfBytes(file);
     reportPdfLoadProgress(onProgress, 'parsing', 0.2, 'Converting image to a PDF page');
@@ -13161,6 +13276,32 @@ async function loadFileAsPdfSource(file, onProgress = null) {
     );
   }
   throw new Error('Only PDFs and images can be appended here.');
+}
+
+// berg:work: from Fernwork.
+// What a selection opens as: each PDF and project on its own, all images together as one document at the place of
+// the first image.
+async function sortFilesToOpen(files) {
+  const entries = [];
+  const unsupported = [];
+  let imageGroup = null;
+  for (const file of files) {
+    if (acceptsPdf(file) || acceptsProject(file)) {
+      entries.push(file);
+    } else if (await isImageFile(file)) {
+      if (!imageGroup) entries.push(imageGroup = { images: [] });
+      imageGroup.images.push(file);
+    } else {
+      unsupported.push(file);
+    }
+  }
+  return { entries, unsupported };
+}
+
+function unsupportedFilesMessage(files, kinds) {
+  return files.length === 1
+    ? `${files[0].name || 'This file'} is not ${kinds}.`
+    : `${files.length} files are not ${kinds}.`;
 }
 
 function mergeDocuments(baseDoc, incomingDocs) {
@@ -17766,6 +17907,9 @@ function App({ shell = null }) {
   const [liveCommitCount, setLiveCommitCount] = useState(0);
   const [historyBlocked, setHistoryBlocked] = useState(null);
   const [documentLoadProgress, setDocumentLoadProgress] = useState(null);
+  // berg:work: from Fernwork.
+  // Shown like documentLoadProgress while a page change waits for the editing session (waitForDocumentSession).
+  const [sessionWaitProgress, setSessionWaitProgress] = useState(null);
   const [protectedPdfPrompt, setProtectedPdfPrompt] = useState(null);
   const [autoApplySourceEditRequest, setAutoApplySourceEditRequest] = useState(null);
   const [normalizingRotation, setNormalizingRotation] = useState(false);
@@ -17877,9 +18021,14 @@ function App({ shell = null }) {
     activeSaveKeys.some(key => key === `${documentId}:${kind}` || (!kind && key.startsWith(`${documentId}:`)))
   ), [activeSaveKeys]);
   const pageStructureTailRef = useRef(Promise.resolve());
+  // berg:work: from Fernwork.
+  const appendTailRef = useRef(Promise.resolve());
+  const livePdfSessionRef = useRef({ status: 'closed', progress: null });
   const topologyHistoryBaseRef = useRef(new Map());
   const documentLoadRequestRef = useRef(0);
   const activeDoc = useMemo(() => docs.find(doc => doc.id === activeDocId) || null, [docs, activeDocId]);
+  // berg:work: from Fernwork.
+  const documentOpen = docs.length > 0;
   useEffect(() => { log.info('ui.tool', { tool }); }, [tool]);
   useEffect(() => { log.debug('ui.zoom', { zoom }); }, [zoom]);
   useEffect(() => { log.debug('ui.page', { pageIndex: activePage }); }, [activePage]);
@@ -18063,10 +18212,12 @@ function App({ shell = null }) {
     }
   }, [activeDocId, zoom]);
 
-  const handlePdfiumRuntimeChange = useCallback((runtime, status = 'closed') => {
+  // berg:work: from Fernwork, the session's progress for waitForDocumentSession.
+  const handlePdfiumRuntimeChange = useCallback((runtime, status = 'closed', progress = null) => {
     const previousRuntime = livePdfRuntimeRef.current;
     if (previousRuntime && previousRuntime !== runtime) previousRuntime.onNativeQueueChanged = null;
     livePdfRuntimeRef.current = runtime;
+    livePdfSessionRef.current = { status, progress }; // berg:work: from Fernwork.
     if (runtime) runtime.onNativeQueueChanged = () => {
       if (livePdfRuntimeRef.current !== runtime) return;
       notifySelectionPrewarmQueueChange(runtime);
@@ -18595,6 +18746,40 @@ function App({ shell = null }) {
     return true;
   }, []);
 
+  // berg:work: from Fernwork.
+  // A document is on screen before its editing session exists: the runtime is published only once the engine holds
+  // the file, and each reopen of the session starts over. A page change arriving in that time waits here, in queue
+  // order, with the session's progress on screen. A read-only or unsafe session ends the wait; the caller reports it.
+  const waitForDocumentSession = useCallback(async (docId) => {
+    const deadline = Date.now() + PDF_SESSION_WAIT_MS;
+    try {
+      for (;;) {
+        const runtime = livePdfRuntimeRef.current;
+        const ownRuntime = runtime?.documentId === docId && !runtime.retiring ? runtime : null;
+        if (ownRuntime?.ready) return;
+        if (livePdfSessionRef.current.status === 'failed') throw new Error(PDF_SESSION_FAILED_MESSAGE);
+        if (ownRuntime?.readOnly || ownRuntime?.exportBlocked) return;
+        const doc = workspaceSnapshotRef.current.docs.find(item => item.id === docId);
+        if (!doc) return;
+        if (workspaceSnapshotRef.current.activeDocId !== docId) {
+          throw new Error('Switch back to this PDF and try again: it has no editing session right now.');
+        }
+        if (Date.now() > deadline) throw new Error('The PDF took too long to open. Nothing was changed; try again.');
+        const { label, value } = livePdfSessionRef.current.progress || {};
+        setSessionWaitProgress(current => current?.label === label && current?.value === value ? current : {
+          label: label || 'Opening the PDF editing session',
+          value: value || 0,
+          fileName: doc.name,
+          fileIndex: 0,
+          fileCount: 1,
+        });
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    } finally {
+      setSessionWaitProgress(null);
+    }
+  }, []);
+
   const enqueuePageStructureChange = useCallback((docId, change, options = {}) => {
     const publishBusy = options.publishBusy !== false;
     if (publishBusy) setPageStructureCount(count => count + 1);
@@ -18606,13 +18791,20 @@ function App({ shell = null }) {
     };
     const predecessor = pageStructureTailRef.current;
     const run = predecessor.then(async () => {
-      const runtime = livePdfRuntimeRef.current;
+      let runtime = livePdfRuntimeRef.current; // berg:work: from Fernwork, read again after the wait.
       let lockedRuntime = null;
       try {
         let latestDoc = workspaceSnapshotRef.current.docs.find(doc => doc.id === docId);
         if (!latestDoc) return false;
         if (sourceForLivePdfiumSession(latestDoc)) {
-          await requireLiveRuntimeReadyForDocument(latestDoc, runtime);
+          // berg:work: from Fernwork.
+          await waitForDocumentSession(docId);
+          runtime = livePdfRuntimeRef.current;
+          latestDoc = workspaceSnapshotRef.current.docs.find(doc => doc.id === docId);
+          if (!latestDoc) return false;
+          if (!await waitForLiveRuntimeReady(runtime, docId)) {
+            throw new Error(liveRuntimeSafetyState(runtime, docId).reason || PDF_SESSION_FAILED_MESSAGE);
+          }
         }
         if (runtime?.documentId === docId) {
           await waitForLiveRuntimeCommits(runtime);
@@ -18679,7 +18871,7 @@ function App({ shell = null }) {
     }).finally(releaseUi);
     pageStructureTailRef.current = run.then(() => undefined, () => undefined);
     return run;
-  }, []);
+  }, [waitForDocumentSession]); // berg:work: from Fernwork.
 
   const publishLivePageSceneInspection = useCallback((runtime, doc, page, inspection) => {
     if (!runtime || !doc?.id || !page?.id || !inspection) return null;
@@ -19393,16 +19585,22 @@ function App({ shell = null }) {
   // app, native host) switch to an identical document that is already open
   // instead of opening it twice; the Open button still opens a second copy.
   const openFiles = useCallback(async (files, { showOpenCopy = false } = {}) => {
-    const incoming = fileList(files).filter(file => acceptsPdf(file) || acceptsProject(file));
-    if (!incoming.length) return;
+    // berg:work: from Fernwork, images open as one document.
+    const { entries: incoming, unsupported } = await sortFilesToOpen(fileList(files));
+    if (!incoming.length) {
+      if (unsupported.length) reportOpenError(unsupportedFilesMessage(unsupported, 'a PDF, image or project'));
+      return;
+    }
     setOpenError('');
+    if (unsupported.length) showToast(unsupportedFilesMessage(unsupported, 'a PDF, image or project'), 'warning'); // berg:work: from Fernwork.
     const requestId = documentLoadRequestRef.current + 1;
     documentLoadRequestRef.current = requestId;
     try {
       const loaded = [];
       const alreadyOpen = [];
       let projectActiveDocId = null;
-      for (const [fileIndex, file] of incoming.entries()) {
+      for (const [fileIndex, entry] of incoming.entries()) { // berg:work: from Fernwork.
+        const file = entry.images ? entry.images[0] : entry;
         const reportFileProgress = progress => {
           if (documentLoadRequestRef.current !== requestId) return;
           setDocumentLoadProgress({
@@ -19413,7 +19611,12 @@ function App({ shell = null }) {
             value: (fileIndex + clamp(Number(progress?.value) || 0, 0, 1)) / incoming.length,
           });
         };
-        if (acceptsProject(file)) {
+        // berg:work: from Fernwork.
+        if (entry.images) {
+          const { doc, unreadable } = await loadImagesAsPdf(entry.images, reportFileProgress);
+          loaded.push(doc);
+          if (unreadable.length) showToast(`Could not read ${unreadable.map(item => item.name).join(', ')}.`, 'warning');
+        } else if (acceptsProject(file)) {
           reportFileProgress({ phase: 'project', value: 0.08, label: 'Restoring PDF project' });
           const project = await loadFernworkPdfProjectFile(file);
           loaded.push(...project.docs);
@@ -19537,7 +19740,9 @@ function App({ shell = null }) {
     const unregister = registerFilePasteTarget({
       root,
       input: fileInputRef.current,
-      accept: [...ACCEPT_PDF, ...ACCEPT_PROJECT],
+      // berg:work: with nothing open every pasted file comes here, so one this tool cannot open gets a message. With a
+      // document open a pasted image goes on the page (the shell's paste handler), so it must not also open.
+      accept: documentOpen ? [...ACCEPT_PDF, ...ACCEPT_PROJECT] : [],
       multiple: true,
       priority: 30,
       onFiles: openFiles,
@@ -19557,7 +19762,7 @@ function App({ shell = null }) {
       unregister?.();
       document.removeEventListener('oo-open-file-pdf', onOpenFile);
     };
-  }, [openFiles]);
+  }, [documentOpen, openFiles]); // berg:work: from Fernwork.
 
   useEffect(() => {
     const syncFullscreen = () => {
@@ -20374,7 +20579,7 @@ function App({ shell = null }) {
   const handleImageInput = useCallback(async (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || !acceptsImage(file)) return;
+    if (!file || !await isImageFile(file)) return; // berg:work: from Fernwork.
     try {
       const image = await normalizeImageFile(file);
       setImageToPlace({ ...image, name: file.name || 'image' });
@@ -20387,8 +20592,16 @@ function App({ shell = null }) {
 
   // berg:work: `at` inserts the pages there (a drop between thumbnails, Add pages before/after the current page);
   // without it they are appended. Several files are merged first, so they arrive as one step (one Undo).
-  const appendFiles = useCallback(async (files, { at } = {}) => {
-    const incoming = fileList(files).filter(file => acceptsPdf(file) || acceptsImage(file));
+  // berg:work: from Fernwork's appendFilesInTurn, with the insertion point `at`.
+  const appendFilesInTurn = useCallback(async (files, { at } = {}) => {
+    const incoming = [];
+    const unsupported = [];
+    for (const file of fileList(files)) (acceptsPdf(file) || await isImageFile(file) ? incoming : unsupported).push(file);
+    if (unsupported.length) {
+      const message = unsupportedFilesMessage(unsupported, 'a PDF or image');
+      if (incoming.length) showToast(message, 'warning');
+      else reportOpenError(message);
+    }
     if (!incoming.length) return;
     const requestId = documentLoadRequestRef.current + 1;
     documentLoadRequestRef.current = requestId;
@@ -20521,6 +20734,16 @@ function App({ shell = null }) {
       if (documentLoadRequestRef.current === requestId) setDocumentLoadProgress(null);
     }
   }, [activeDoc, enqueuePageStructureChange, executeNativePageTopology, reportOpenError, updateDoc]);
+
+  // berg:work: from Fernwork.
+  // One after the other, so the pages land in the order they were asked for, also while the first waits for the
+  // editing session; a later request must not cancel an earlier one.
+  // berg:work: the options carry the insertion point of a drop between thumbnails.
+  const appendFiles = useCallback((files, options) => {
+    const turn = appendTailRef.current.then(() => appendFilesInTurn(files, options));
+    appendTailRef.current = turn.catch(() => {});
+    return turn;
+  }, [appendFilesInTurn]);
 
   const openProtectedPdf = useCallback(async (password) => {
     const pending = protectedPdfPrompt;
@@ -20690,7 +20913,7 @@ function App({ shell = null }) {
   const handleSignatureInput = useCallback(async (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || !acceptsImage(file)) return;
+    if (!file || !await isImageFile(file)) return; // berg:work: from Fernwork.
     try {
       const image = await normalizeImageFile(file);
       setSignature(current => ({
@@ -29128,6 +29351,8 @@ function App({ shell = null }) {
       }
     })();
   };
+  // berg:work: from Fernwork, the page change's wait for the session shows in the same overlay.
+  const visibleLoadProgress = sessionWaitProgress || documentLoadProgress;
   const externalFileDrag = event => Array.from(event.dataTransfer?.types || []).includes('Files');
   // berg:work: images dropped on a page are placed there (Canva, PowerPoint, Figma); the page under the pointer is
   // outlined instead of the "open" overlay. PDFs, projects and drops beside the pages still open as documents.
@@ -29135,7 +29360,8 @@ function App({ shell = null }) {
     const runtime = livePdfRuntimeRef.current;
     if (!activeDoc || !runtime?.ready || runtime.readOnly) return null;
     const items = Array.from(event.dataTransfer?.items || []).filter(item => item.kind === 'file');
-    if (!items.length || !items.every(item => /^image\//u.test(item.type))) return null;
+    // berg:work: Linux reports no type for a HEIC; the drop itself sorts out what is not an image.
+    if (!items.length || !items.every(item => !item.type || /^image\//u.test(item.type))) return null;
     return document.elementsFromPoint(event.clientX, event.clientY)
       .map(node => node.closest?.('.oo-pdf-sheet[data-page-id]')).find(Boolean) || null;
   };
@@ -29274,6 +29500,7 @@ function App({ shell = null }) {
     setDocumentDropActive(false);
     const files = fileList(event.dataTransfer?.files);
     const page = sheet && activeDoc.pages.find(item => item.id === sheet.dataset.pageId);
+    // berg:work: by the file's name or type, see acceptsImage; an unnamed HEIC opens as a document.
     if (page && files.length && files.every(acceptsImage)) {
       const replaceTarget = files.length === 1 ? imageReplaceTargetAt(event.clientX, event.clientY) : null;
       if (replaceTarget) {
@@ -30112,9 +30339,11 @@ function App({ shell = null }) {
 
   return (
     <div
-      className={`oo-pdf-shell ${inspectorOpen && activeDoc ? 'has-inspector' : ''} ${inspectorOpen && activeDoc && inspectorKeepsPagePlace ? 'inspector-keeps-page-place' : ''} ${drawerOpen ? 'has-drawer' : ''} ${searchOpen ? 'is-searching' : ''} ${applyingEdits || normalizingRotation ? 'is-applying-edits' : ''} ${nativeMutationPending ? 'is-live-committing' : ''} ${documentLoadProgress ? 'is-document-loading' : ''} ${pdfFullscreen ? 'is-pdf-fullscreen' : ''} ${linksVisible ? 'links-visible' : ''} ${linkFollowArmed ? 'is-link-follow-armed' : ''} ${hostTitleBar ? 'has-host-titlebar' : ''} has-floating-toolbar ${phoneLayout ? 'is-phone-layout' : ''} ${panelClearance.drawer ? 'drawer-clears-toolbar' : ''} ${panelClearance.inspector ? 'inspector-clears-toolbar' : ''} ${chromeMenu === 'doc' || chromeMenu === 'tools' || chromeMenu === 'save' || chromeMenu === 'more' ? 'has-topbar-menu' : chromeMenu ? 'has-toolbar-menu' : ''}`}
+      // berg:work: visibleLoadProgress, from Fernwork.
+      className={`oo-pdf-shell ${inspectorOpen && activeDoc ? 'has-inspector' : ''} ${inspectorOpen && activeDoc && inspectorKeepsPagePlace ? 'inspector-keeps-page-place' : ''} ${drawerOpen ? 'has-drawer' : ''} ${searchOpen ? 'is-searching' : ''} ${applyingEdits || normalizingRotation ? 'is-applying-edits' : ''} ${nativeMutationPending ? 'is-live-committing' : ''} ${visibleLoadProgress ? 'is-document-loading' : ''} ${pdfFullscreen ? 'is-pdf-fullscreen' : ''} ${linksVisible ? 'links-visible' : ''} ${linkFollowArmed ? 'is-link-follow-armed' : ''} ${hostTitleBar ? 'has-host-titlebar' : ''} has-floating-toolbar ${phoneLayout ? 'is-phone-layout' : ''} ${panelClearance.drawer ? 'drawer-clears-toolbar' : ''} ${panelClearance.inspector ? 'inspector-clears-toolbar' : ''} ${chromeMenu === 'doc' || chromeMenu === 'tools' || chromeMenu === 'save' || chromeMenu === 'more' ? 'has-topbar-menu' : chromeMenu ? 'has-toolbar-menu' : ''}`}
       ref={rootRef}
-      aria-busy={Boolean(documentLoadProgress || applyingEdits || normalizingRotation || pageStructureBusy || nativeMutationPending)}
+      // berg:work: visibleLoadProgress, from Fernwork.
+      aria-busy={Boolean(visibleLoadProgress || applyingEdits || normalizingRotation || pageStructureBusy || nativeMutationPending)}
       data-page-structure-busy={pageStructureBusy}
       data-live-commit-count={liveCommitCount}
       data-pdf-undo-state={historyBlocked?.documentId === activeDocId ? 'blocked' : 'ready'}
@@ -30125,7 +30354,8 @@ function App({ shell = null }) {
       <ZoomCommitSnapshot zoom={zoom} onBeforeZoomCommit={beforeZoomCommit} />
       <BodyClass name="oo-pdf-overlay-open" active={drawerOpen || Boolean(inspectorOpen && activeDoc)} />
       {activeDoc && documentDropActive && (
-        <div className="oo-pdf-document-drop-overlay" role="status">Drop to open PDF or project</div>
+        // berg:work: from Fernwork, short and true for images too.
+        <div className="oo-pdf-document-drop-overlay" role="status">Drop to open</div>
       )}
       {miniToolbar && <MiniToolbarHost toolbar={miniToolbar} onHost={setMiniToolbarHost} />}
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
@@ -30202,7 +30432,8 @@ function App({ shell = null }) {
           ] : []),
         ]} />
       )}
-      <input ref={fileInputRef} className="sr-only" tabIndex={-1} type="file" disabled={Boolean(documentLoadProgress)} accept={[...ACCEPT_PDF, ...ACCEPT_PROJECT].join(',')} multiple onChange={(event) => {
+      {/* berg:work: from Fernwork, the open dialog takes images. */}
+      <input ref={fileInputRef} className="sr-only" tabIndex={-1} type="file" disabled={Boolean(documentLoadProgress)} accept={[...ACCEPT_PDF, ...ACCEPT_PROJECT, ...ACCEPT_IMAGE].join(',')} multiple onChange={(event) => {
         const files = fileList(event.target.files);
         event.target.value = '';
         void openFiles(files);
@@ -30463,6 +30694,8 @@ function App({ shell = null }) {
         onRotateAll={rotateAllPages}
         rotationBusy={activeSessionOpening || normalizingRotation || liveCommitCount > 0}
         structureBusy={applyingEdits || normalizingRotation || pageStructureBusy || activeSessionOpening || activeSafety.mutationBlocked || liveCommitCount > 0}
+        // berg:work: from Fernwork, adding pages stays possible while the session opens; it waits in the queue.
+        appendBusy={applyingEdits || normalizingRotation || pageStructureBusy || (activeSafety.mutationBlocked && !activeSafety.opening) || liveCommitCount > 0}
         // berg:work: the page actions act on the pages selected in the panel (deleteActivePage and reorderPageById
         // are superseded by these).
         selectedPages={selectedPageIndices}
@@ -30643,26 +30876,27 @@ function App({ shell = null }) {
         onImportTextFont={importTextFontFromPdf}
         onSaveSignature={saveAnnotationSignature}
       />
-      {documentLoadProgress && (
+      {/* berg:work: from Fernwork, the card also shows the wait for the session. */}
+      {visibleLoadProgress && (
         <div className="oo-pdf-load-overlay" role="dialog" aria-modal="true" aria-label="Opening PDF">
           <section className="oo-pdf-load-card">
             <Icon name="file-text" />
             <div className="oo-pdf-load-copy">
-              <strong>{documentLoadProgress.label || 'Opening PDF'}</strong>
+              <strong>{visibleLoadProgress.label || 'Opening PDF'}</strong>
               <span>
-                {documentLoadProgress.fileName}
-                {documentLoadProgress.fileCount > 1
-                  ? ` (${documentLoadProgress.fileIndex + 1} of ${documentLoadProgress.fileCount})`
+                {visibleLoadProgress.fileName}
+                {visibleLoadProgress.fileCount > 1
+                  ? ` (${visibleLoadProgress.fileIndex + 1} of ${visibleLoadProgress.fileCount})`
                   : ''}
               </span>
             </div>
             <progress
               aria-label="PDF loading progress"
               max="1"
-              value={clamp(Number(documentLoadProgress.value) || 0, 0, 1)}
+              value={clamp(Number(visibleLoadProgress.value) || 0, 0, 1)}
             />
             <span className="oo-pdf-load-percent">
-              {Math.round(clamp(Number(documentLoadProgress.value) || 0, 0, 1) * 100)}%
+              {Math.round(clamp(Number(visibleLoadProgress.value) || 0, 0, 1) * 100)}%
             </span>
           </section>
         </div>
@@ -30706,6 +30940,8 @@ function EmptyDropzone({ onFiles, error = '', onDismissError, sample = null }) {
       onDragLeave={() => setDrag(false)}
       onDrop={(e) => {
         e.preventDefault();
+        // berg:work: from Fernwork, the shell's own drop handler must not open the files a second time.
+        e.stopPropagation();
         setDrag(false);
         onFiles(e.dataTransfer.files);
       }}
@@ -30714,14 +30950,14 @@ function EmptyDropzone({ onFiles, error = '', onDismissError, sample = null }) {
       <h1>Open a PDF</h1>
       {/* berg:work: the host may offer a sample document next to the file picker (shell.sample). */}
       <div className="oo-pdf-empty-actions">
-        <button type="button" className="oo-pdf-primary" onClick={() => document.querySelector('.oo-pdf-shell input[type="file"]')?.click()}>
-          Choose PDF or project
+        {/* berg:work: from Fernwork, images open too; what the visible hint said is the tooltip now. */}
+        <button type="button" className="oo-pdf-primary" title="PDFs, images and berg:work PDF projects (.bwpdf). You can also drop them here." onClick={() => document.querySelector('.oo-pdf-shell input[type="file"]')?.click()}>
+          Choose PDF, image or project
         </button>
         {sample && (
           <button type="button" className="oo-pdf-ghost-button" onClick={sample.open}>{sample.label}</button>
         )}
       </div>
-      <p>Drop PDFs or berg:work PDF projects (.bwpdf) here.</p>
       {error && (
         <div className="oo-pdf-warning oo-pdf-choice-card oo-pdf-open-error" role="alert" aria-label="PDF could not be opened">
           <strong>The file could not be opened</strong>
@@ -30978,10 +31214,11 @@ function PdfViewport(props) {
   const protectionNotice = pdfProtectionRemovedNotice(doc.protectionRemoved);
   const effectiveTool = pdfiumSession.status === 'open' && !props.pageStructureBusy && !viewportSafety.mutationBlocked ? tool : 'pan';
   useEffect(() => {
-    onPdfiumRuntimeChange?.(pdfiumSession.runtime, pdfiumSession.status);
+    onPdfiumRuntimeChange?.(pdfiumSession.runtime, pdfiumSession.status, pdfiumSession.progress); // berg:work: from Fernwork.
   }, [
     onPdfiumRuntimeChange,
     pdfiumSession.inspectionVersion,
+    pdfiumSession.progress, // berg:work: from Fernwork.
     pdfiumSession.revision,
     pdfiumSession.status,
     pdfiumSession.runtime,
@@ -43466,6 +43703,7 @@ function ToolDrawer(props) {
     onRotateAll,
     rotationBusy,
     structureBusy,
+    appendBusy, // berg:work: from Fernwork.
     onDeletePage,
     onDuplicatePage,
     onMovePage,
@@ -43822,7 +44060,7 @@ function ToolDrawer(props) {
   const handleWatermarkImageInput = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (!file || !acceptsImage(file)) return;
+    if (!file || !await isImageFile(file)) return; // berg:work: from Fernwork.
     try {
       const image = await normalizeImageFile(file);
       setWatermarkImage({ ...image, name: file.name || 'watermark-image' });
@@ -44027,6 +44265,8 @@ function ToolDrawer(props) {
               onReorderPage={onReorderPage}
               onAppend={onAppend}
               structureBusy={structureBusy}
+              // berg:work: from Fernwork, see appendBusy in App.
+              appendBusy={appendBusy}
               onInsertFilesAt={onInsertFilesAt}
               pageMenuItems={(index) => {
                 // berg:work: right-click on a thumbnail. The page actions act on the selection when the page is
@@ -44036,9 +44276,10 @@ function ToolDrawer(props) {
                 const indices = inSelection ? selectedPages : [index];
                 const pages = count > 1 ? `${count} pages` : 'page';
                 return [
-                  { label: 'Insert blank page before', icon: 'file-plus', disabled: structureBusy, run: () => onInsertBlankAt?.(index, index) },
-                  { label: 'Insert blank page after', icon: 'file-plus', disabled: structureBusy, run: () => onInsertBlankAt?.(index + 1, index) },
-                  { label: 'Insert pages from file…', icon: 'folder-open', disabled: structureBusy, run: () => onInsertPages?.('after', index) },
+                  // berg:work: these wait for the session in the page queue, like Add pages.
+                  { label: 'Insert blank page before', icon: 'file-plus', disabled: appendBusy, run: () => onInsertBlankAt?.(index, index) },
+                  { label: 'Insert blank page after', icon: 'file-plus', disabled: appendBusy, run: () => onInsertBlankAt?.(index + 1, index) },
+                  { label: 'Insert pages from file…', icon: 'folder-open', disabled: appendBusy, run: () => onInsertPages?.('after', index) },
                   'separator',
                   { label: `Crop or resize ${pages}…`, icon: 'crop', run: () => { setBoxScope(count > 1 ? 'selected' : 'current'); onPanel?.('pageBoxes'); } },
                   { label: `Export ${pages}`, icon: 'download', disabled: structureBusy, run: () => onExportPageIndices?.(indices) },
@@ -44369,7 +44610,8 @@ function ToolDrawer(props) {
           <>
             <button type="button" className="oo-pdf-file-drop" aria-label="Choose image" onClick={() => watermarkImageInputRef.current?.click()}>
               <span className="oo-pdf-file-drop-icon"><Icon name={watermarkImage ? 'check' : 'image'} /></span>
-              <span className="oo-pdf-file-drop-text"><b>{watermarkImage?.name || 'Choose image'}</b><small>{watermarkImage ? 'Click to choose another image' : 'PNG, JPEG or WebP'}</small></span>
+              {/* berg:work: from Fernwork, HEIC named. */}
+              <span className="oo-pdf-file-drop-text"><b>{watermarkImage?.name || 'Choose image'}</b><small>{watermarkImage ? 'Click to choose another image' : 'PNG, JPEG, WebP or HEIC'}</small></span>
             </button>
             <PanelSwitch label="Single color tint" checked={watermarkTintEnabled} onChange={setWatermarkTintEnabled} />
             {watermarkTintEnabled && (
@@ -45245,6 +45487,8 @@ function VirtualPageThumbGrid({
   onReorderPage,
   onAppend,
   structureBusy = false,
+  // berg:work: from Fernwork, see appendBusy in App.
+  appendBusy = false,
   // berg:work: multi-selection and touch reordering.
   selectedPages = [activePage],
   onSelectPage = null,
@@ -45330,14 +45574,15 @@ function VirtualPageThumbGrid({
       {...touchDrag.handlers}
       // berg:work: files dropped beside the thumbnails go to the end (a drop on a thumbnail is handled there).
       onDragOver={(event) => {
-        if (!onInsertFilesAt || !fileDrag(event) || structureBusy) return;
+        // berg:work: appendBusy, a file may land while the session opens (it waits in the queue).
+        if (!onInsertFilesAt || !fileDrag(event) || appendBusy) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = 'copy';
       }}
       onDrop={(event) => {
         if (!onInsertFilesAt || !fileDrag(event) || event.defaultPrevented) return;
         event.preventDefault();
-        if (!structureBusy) onInsertFilesAt(fileList(event.dataTransfer.files), doc.pages.length);
+        if (!appendBusy) onInsertFilesAt(fileList(event.dataTransfer.files), doc.pages.length); // berg:work: see appendBusy in App.
       }}
       onScroll={(event) => {
         const node = event.currentTarget;
@@ -45356,7 +45601,8 @@ function VirtualPageThumbGrid({
             const page = doc.pages[itemIndex];
             if (!page) {
               return (
-                <button key="append" type="button" className="oo-pdf-thumb-append" disabled={structureBusy}
+                // berg:work: see appendBusy in App.
+                <button key="append" type="button" className="oo-pdf-thumb-append" disabled={appendBusy}
                   onClick={onAppend} aria-label="Append PDF or image" title="Append a PDF or an image as new pages (or drop files here)">
                   <span className="oo-pdf-thumb-preview"><Icon name="plus" /><span>Add pages</span></span>
                 </button>
@@ -45374,6 +45620,8 @@ function VirtualPageThumbGrid({
                 onGo={() => onGoToPage(itemIndex)}
                 onReorder={onReorderPage}
                 structureBusy={structureBusy}
+                // berg:work: see appendBusy in App.
+                appendBusy={appendBusy}
                 selected={selectedSet.has(itemIndex)}
                 selectedPageIds={selectedPages.map(index => doc.pages[index]?.id).filter(Boolean)}
                 onSelect={event => selectThumb(itemIndex, event)}
@@ -45410,6 +45658,8 @@ function PageThumbnail({
   onGo,
   onReorder,
   structureBusy = false,
+  // berg:work: see appendBusy in App.
+  appendBusy = false,
   // berg:work: multi-selection, drops at a gap (insertion line), touch drag state from the grid.
   selected = active,
   selectedPageIds = [],
@@ -45565,14 +45815,15 @@ function PageThumbnail({
       }}
       onContextMenu={onContextMenu || undefined}
       onDragOver={(event) => {
-        if (structureBusy) return;
-        // berg:work: PDFs and images from outside are inserted where the insertion line shows.
-        if (externalFileDrag(event)) {
+        // berg:work: PDFs and images from outside are inserted where the insertion line shows; they may land while
+        // the session opens, page moves may not.
+        if (externalFileDrag(event) && !appendBusy) {
           event.preventDefault();
           event.dataTransfer.dropEffect = 'copy';
           setDragOver(dropSideAt(event));
           return;
         }
+        if (structureBusy) return; // berg:work: moved below the file drag.
         // berg:work: only a page from this grid; files from outside go on to the document drop.
         if (onMoveToGap && !draggedThumbPageId) return;
         event.preventDefault();
@@ -45592,7 +45843,8 @@ function PageThumbnail({
         if (externalFileDrag(event)) {
           event.preventDefault();
           setDragOver('');
-          if (!structureBusy) onFilesDropped(fileList(event.dataTransfer.files), index + (dropSideAt(event) === 'after' ? 1 : 0));
+          // berg:work: appendBusy, a file may land while the session opens (it waits in the queue).
+          if (!appendBusy) onFilesDropped(fileList(event.dataTransfer.files), index + (dropSideAt(event) === 'after' ? 1 : 0));
           return;
         }
         if (onMoveToGap && !draggedThumbPageId) return;

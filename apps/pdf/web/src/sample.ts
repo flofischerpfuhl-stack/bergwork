@@ -1,5 +1,5 @@
 /**
- * The sample document of the web app: offered in the editor's empty state next to "Choose PDF or project" and opened
+ * The sample document of the web app: offered in the editor's empty state next to the file picker and opened
  * right away for `?sample` (bergwork.app links to /app/pdf/?sample). It is the four-page fixture of the web smoke
  * test (scripts/fixtures/smoke.pdf), emitted by Vite into the built assets.
  */

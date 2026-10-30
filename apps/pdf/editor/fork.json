@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "upstream": "fernwork-pdf",
   "description": "Fernwork PDF editor sources forked into berg:work; paths as in Fernwork. See apps/pdf/scripts/editor-fork.mjs.",
-  "commit": "9c70a1ae9dc97cff9d197646f1d24083c15559f8",
+  "commit": "e06e33b0f55c147e623ffb0030318ca9cf2c2b5f",
   "entries": [
     "vendor/build/src/pdf-tools-shell.jsx"
   ],
@@ -15,6 +15,7 @@
     "assets/icons.js",
     "assets/toast.js",
     "assets/utils.js",
+    "tools/js/converters/heic-decoder.js",
     "vendor/build/src/pdf-digital-signature.js",
     "vendor/build/src/pdf-editor/engine/annotation-preview.js",
     "vendor/build/src/pdf-editor/engine/empty-acroform-export.js",

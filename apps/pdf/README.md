@@ -6,7 +6,7 @@ Tauri 2 app around the Fernwork PDF editor. Internal builds only; there is no pu
 
 | Path | Owns |
 | --- | --- |
-| `upstream/` | Pinned editor build (not committed): the files listed for `fernwork-pdf` in `../../upstream.lock.json`, laid out as in Fernwork (`tools/vendor/pdf-tools`, `pdf-runtime`, `tesseract-5.0.4`). Recreate it with `npm run sync:install`. Never edited here. |
+| `upstream/` | Pinned editor build (not committed): the files listed for `fernwork-pdf` in `../../upstream.lock.json`, laid out as in Fernwork (`tools/vendor/pdf-tools`, `pdf-runtime`, `tesseract-5.0.4`, `libheif-js-1.23.5`, `tools/js/converters/heic-decode-worker.js`). Recreate it with `npm run sync:install`. Never edited here. |
 | `editor/` | Source fork of the editor's UI (the PDF Tools shell and every file it imports), committed, with Fernwork's paths (`assets/`, `vendor/build/src/`). `fork.json` names the Fernwork commit and the files. `scripts/editor-fork.mjs` creates, reports on and ports it (`npm run fork:status`, `fork:port`, `fork:check`); `scripts/build-editor.mjs` bundles it into `editor-dist/` (not committed). |
 | `web/` | Host page owned by berg:work, built with Vite (`vite.config.ts`, root `web/`): `src/shell.tsx` (the design base's title bar from `@bergwork/ui` — mark, wordmark, document, about menu with version and licences, appearance menu, window buttons in the app — above the editor), `src/editor.ts` (loads the PDF.js and pdf-lib runtimes, the editor CSS and bundle from `tools/vendor/` and mounts it), `src/desktopWindow.ts` (Tauri window: drag, maximise, rounded corners on Linux), `src/bergwork-pdf.css` (the editor's `--pdf-*` tokens from the design base's `--bw-*` tokens, buttons, corners, licences dialog), `src/native-files.js` (native open/save), `src/licenses-view.js`, `public/` (pre-paint appearance script, icons). |
 | `scripts/build-frontend.mjs` | Assembles `dist/` (not committed): the Vite build of `web/` at the root, the pinned build under `dist/tools/vendor/` with the fork's bundle, chunks and CSS in place of the pinned ones in `pdf-tools/`, and `licenses.json`. The bundle finds `tools/vendor/` next to the page (`globalThis.__bergworkVendor`, set by `src/editor.ts`), so the same `dist/` runs in the app and at `/app/pdf/` on bergwork.app. |
@@ -110,10 +110,23 @@ with Mixed (`bergwork-shared-fields.jsx`; the page applies them as one transacti
 
 In the web app (outside Tauri) the mark and wordmark link back to https://bergwork.app/ (`web/src/homeLink.tsx`, a
 link laid over the design base's title bar), and the host passes `shell.sample` (`{ label, open }`, a berg:work
-addition to the fork's `normalizeShellHost`): the empty state then offers "Try a sample PDF" next to "Choose PDF or
-project". The sample is `scripts/fixtures/smoke.pdf`, emitted by Vite into `assets/` (`web/src/sample.ts`);
+addition to the fork's `normalizeShellHost`): the empty state then offers "Try a sample PDF" next to the file
+picker. The sample is `scripts/fixtures/smoke.pdf`, emitted by Vite into `assets/` (`web/src/sample.ts`);
 `/app/pdf/?sample` opens it once the editor has restored its workspace and drops the parameter. The desktop app keeps
 a plain logo and offers no sample.
+
+Images are input like PDFs: the open dialog, a drop on the empty state, a paste there and `oo-open-file-pdf` make one
+new document with a page per image, in the chosen order, named after the first image; a file that is neither PDF, image
+nor project gets a message. HEIC and HEIF work on every way in (append, drop on a page, paste, Insert › Image, replacing
+an image, signature, watermark) through Fernwork's decoder: `normalizeImageFile` calls
+`tools/js/converters/heic-decoder.js`, which is part of the fork. Its worker and libheif (LGPL-3.0, a separate,
+replaceable file) come from the pin and load with the first HEIC photo. Fernwork addresses both from the root of its
+site, so `build-editor.mjs` points the worker at the host's vendor root and `build-frontend.mjs` writes the worker to
+`dist/tools/js/converters/` with libheif addressed relative to it.
+
+A page change that arrives before the document's editing session is ready waits in the page queue
+(`waitForDocumentSession`), with the progress in the load overlay, instead of being refused. Appends and drops between
+thumbnails run one after the other.
 
 Page tools (fork, `pdf-editor/model/bergwork-page-tools.js`, preview in `pdf-editor/interaction/bergwork-page-box-preview.jsx`,
 tests in `tests/page-tools.test.mjs`): a right-click on a thumbnail in Pages inserts a blank page (the size of that

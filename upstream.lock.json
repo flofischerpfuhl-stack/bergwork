@@ -18,6 +18,14 @@
         {
           "from": "tools/vendor/tesseract-5.0.4",
           "to": "tools/vendor/tesseract-5.0.4"
+        },
+        {
+          "from": "tools/vendor/libheif-js-1.23.5",
+          "to": "tools/vendor/libheif-js-1.23.5"
+        },
+        {
+          "from": "tools/js/converters/heic-decode-worker.js",
+          "to": "tools/js/converters/heic-decode-worker.js"
         }
       ],
       "watch": [
@@ -25,16 +33,18 @@
         "vendor/pdfium",
         "tools/vendor/pdf-tools",
         "tools/vendor/pdf-runtime",
-        "tools/vendor/tesseract-5.0.4"
+        "tools/vendor/tesseract-5.0.4",
+        "tools/vendor/libheif-js-1.23.5",
+        "tools/js/converters/heic-decode-worker.js"
       ],
       "target": "apps/pdf/upstream",
       "mirror": {
         "url": "https://github.com/flofischerpfuhl-stack/bergwork.git",
         "tagPrefix": "upstream/fernwork-pdf/"
       },
-      "commit": "9c70a1ae9dc97cff9d197646f1d24083c15559f8",
-      "digest": "7f1f2d78aa4db4fbef07b041cd9525aa71dd9e6ec70acb8e897e09d383e3485d",
-      "fileCount": 473
+      "commit": "e06e33b0f55c147e623ffb0030318ca9cf2c2b5f",
+      "digest": "efad345f1a4e0789f932339d33ab5dba996a19e7125825ff723abc2f3a9c5aad",
+      "fileCount": 476
     }
   }
 }

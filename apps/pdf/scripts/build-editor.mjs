@@ -50,16 +50,19 @@ await esbuild.build({
 });
 // The editor addresses its workers, WebAssembly, fonts and runtimes as "/tools/vendor/…", the root of fernwork.net.
 // berg:work runs it at other paths (/app/pdf/ on bergwork.app), so each such literal starts at the host's vendor root
-// (web/src/editor.ts sets globalThis.__bergworkVendor) instead; without it, the path stays as it was.
+// (web/src/editor.ts sets globalThis.__bergworkVendor) instead; without it, the path stays as it was. The HEIC decoder's
+// worker sits at tools/js/converters/, next to tools/vendor/ (scripts/build-frontend.mjs).
 const FALLBACK = '(globalThis.__bergworkVendor??"/tools/vendor/")+"';
+const HEIC_WORKER = '"/tools/js/converters/heic-decode-worker.js"';
 let rewritten = 0;
 for (const entry of await fs.readdir(outDir, { recursive: true })) {
   if (!entry.endsWith('.js')) continue;
   const file = path.join(outDir, entry);
   const code = await fs.readFile(file, 'utf8');
-  const next = code.replaceAll('"/tools/vendor/', () => { rewritten += 1; return FALLBACK; });
-  if (/["'`]\/tools\/vendor\//.test(next.replaceAll('??"/tools/vendor/")', ''))) {
-    throw new Error(`build-editor: ${entry} has a /tools/vendor/ path that is not a double-quoted literal; extend the rewrite.`);
+  const next = code.replaceAll('"/tools/vendor/', () => { rewritten += 1; return FALLBACK; })
+    .replaceAll(HEIC_WORKER, () => { rewritten += 1; return `${FALLBACK}../js/converters/heic-decode-worker.js"`; });
+  if (/["'`]\/tools\/(vendor|js)\//.test(next.replaceAll('??"/tools/vendor/")', ''))) {
+    throw new Error(`build-editor: ${entry} has a /tools/ path that is not a known double-quoted literal; extend the rewrite.`);
   }
   if (next !== code) await fs.writeFile(file, next);
 }

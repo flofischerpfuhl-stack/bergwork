@@ -109,7 +109,9 @@ async function openPaths(documents) {
     try {
       const buffer = await invoke('read_file', { path });
       const name = basename(path);
-      const type = extensionOf(name) === 'pdf' ? 'application/pdf' : PROJECT_TYPE;
+      const extension = extensionOf(name);
+      // Images have no type here: the editor knows them by name and content.
+      const type = extension === 'pdf' ? 'application/pdf' : extension === 'bwpdf' ? PROJECT_TYPE : '';
       const file = new File([buffer], name, { type });
       document.dispatchEvent(new CustomEvent('oo-open-file-pdf', { detail: { file, page } }));
     } catch (error) {

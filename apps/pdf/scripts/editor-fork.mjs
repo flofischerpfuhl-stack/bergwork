@@ -126,6 +126,13 @@ async function port(ref) {
       .filter((match) => match[1]).map((match) => `${match[1]} (${match[2]} rejected)`);
     if (applied.status !== 0 && !rejected.length) throw new Error(`git apply failed:\n${applied.stderr}`);
   }
+  // A file that is newly imported but unchanged since the base is not in the diff.
+  for (const file of files) {
+    const local = path.join(forkDir, file);
+    if (existsSync(local)) continue;
+    await fs.mkdir(path.dirname(local), { recursive: true });
+    await fs.writeFile(local, git(repo, ['show', `${target}:${file}`]).stdout);
+  }
   const dropped = fork.files.filter((file) => !files.includes(file));
   await writeFork(target, files);
   console.log(git(repo, ['log', '--oneline', `${fork.commit}..${target}`, '--', ...paths]).stdout.trim() || '(no commits)');

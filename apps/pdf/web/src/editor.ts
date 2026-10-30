@@ -7,7 +7,7 @@
 export interface EditorShell {
   /** The active document for the window title; empty when none is open. */
   readonly setTitle: (title: string, options?: { readonly dirty?: boolean }) => void;
-  /** A sample document the empty state offers next to "Choose PDF or project" (the web app only). */
+  /** A sample document the empty state offers next to the file picker (the web app only). */
   readonly sample?: { readonly label: string; readonly open: () => void };
 }
 
