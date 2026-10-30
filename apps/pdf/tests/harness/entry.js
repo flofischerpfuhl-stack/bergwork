@@ -150,13 +150,15 @@ const editablePageCount = (state) => Math.min(state.session.pageIds.length, INSP
 async function insertFrame(state, rng, page, words = 7) {
   const { session, model } = state;
   const box = pageBox(page.inspection);
-  if (box.width < 180 || box.height < 120) return null;
   const parts = Array.from({ length: words }, () => marker(rng));
   const fontSize = pick(rng, [9, 11]);
   const width = Math.min(box.width * 0.5, fontSize * 24);
   const height = fontSize * 8;
+  // Line height, overflow and a narrower frame make the text taller than the frame; it stays on the page.
+  const margin = height * 1.5;
+  if (box.width < 180 || box.height < height + margin * 2) return null;
   const left = box.left + (box.width - width) * (0.1 + 0.8 * rng());
-  const bottom = box.bottom + (box.height - height) * (0.1 + 0.8 * rng());
+  const bottom = box.bottom + margin + (box.height - height - margin * 2) * rng();
   const bounds = { left, bottom, right: left + width, top: bottom + height };
   const id = uid('frame');
   const prefix = uid('addframe');
@@ -188,6 +190,14 @@ async function replaceFrame(state, page, frame, { text = frame.text, block = fra
   frame.text = text;
   frame.block = block;
   touch(state, page.id);
+}
+
+// A frame that grew or turned over the page edge has glyphs outside the page, and readers drop those.
+function softenOffPageFrame(state, frame, object) {
+  const bounds = object?.pageBounds || object?.bounds;
+  const { box } = frame;
+  if (bounds && bounds.left >= box.left && bounds.bottom >= box.bottom && bounds.right <= box.right && bounds.top <= box.top) return;
+  for (const item of state.model.markers) if (item.words === frame.parts) item.soft = true;
 }
 
 const frameOf = (inspection, id) => (inspection?.objects || []).find((object) => object.stableId === id);
@@ -410,6 +420,7 @@ const OPS = {
       const object = frameOf(await session.inspect(page.index), frame.id);
       seen.push(`${align}:${object?.block?.align ?? '?'}`);
       if (object?.block?.align && object.block.align !== align) throw new Error(`alignment ${align} read back as ${object.block.align}`);
+      softenOffPageFrame(state, frame, object);
     }
     return { status: 'ok', detail: { page: page.index, aligned: seen } };
   },
@@ -423,6 +434,7 @@ const OPS = {
     await replaceFrame(state, page, frame, { block: { ...frame.block, width: narrow }, label: 'Narrow frame' });
     const lines = frame.text.split(' ').length;
     await replaceFrame(state, page, frame, { block: { ...frame.block, height: frame.block.height * 1.5 }, label: 'Taller frame' });
+    softenOffPageFrame(state, frame, frameOf(await state.session.inspect(page.index), frame.id));
     return { status: 'ok', detail: { page: page.index, width: Math.round(narrow), words: lines } };
   },
 
@@ -448,6 +460,7 @@ const OPS = {
     await replaceFrame(state, page, frame, {
       label: 'Colour', extra: { color: '#336699', colorOverride: true },
     });
+    softenOffPageFrame(state, frame, frameOf(await state.session.inspect(page.index), frame.id));
     return { status: 'ok', detail: { page: page.index } };
   },
 
@@ -482,13 +495,8 @@ const OPS = {
     const retyped = frameOf(await session.inspect(page.index), frame.id);
     const after = angleOf(retyped?.matrix);
     if (Math.abs(after - turned) > 0.5) throw new Error(`a turned frame went from ${turned.toFixed(1)}° to ${after.toFixed(1)}° when retyped`);
-    // Turned over the page edge, some of its glyphs lie outside the page, and readers drop those.
-    const bounds = retyped?.pageBounds || retyped?.bounds;
-    const { box } = frame;
-    if (!bounds || bounds.left < box.left || bounds.bottom < box.bottom || bounds.right > box.right || bounds.top > box.top) {
-      for (const item of model.markers) if (item.words === frame.parts) item.soft = true;
-    }
-    model.turned.push({ pageId: page.id, stableAngle: after, words: frame.parts });
+    softenOffPageFrame(state, frame, retyped);
+    model.turned.push({ pageId: page.id, stableAngle: after, stableId: frame.id });
     return { status: 'ok', detail: { page: page.index, degrees, shaped, angle: Math.round(after) } };
   },
 
@@ -507,7 +515,7 @@ const OPS = {
     const prefix = uid('turn');
     await session.execute('Turn object', [command(prefix, CommandType.OBJECT_TRANSFORM, object.stableId, { pageIndex: page.index, matrix })],
       [command(`${prefix}:inv`, CommandType.OBJECT_TRANSFORM, object.stableId, { pageIndex: page.index, matrix: [m.a, m.b, m.c, m.d, m.e, m.f].map(Number) })]);
-    model.turned.push({ pageId: page.id, stableAngle: Math.atan2(matrix[1], matrix[0]) * 180 / Math.PI });
+    model.turned.push({ pageId: page.id, stableAngle: Math.atan2(matrix[1], matrix[0]) * 180 / Math.PI, stableId: object.stableId });
     touch(state, page.id);
     return { status: 'ok', detail: { page: page.index, type: object.typeName, degrees } };
   },
@@ -586,6 +594,7 @@ const OPS = {
     const before = await session.snapshot({ retain: true });
     await session.execute('Delete object', [command(prefix, CommandType.OBJECT_DELETE, object.stableId, { pageIndex: page.index })],
       [session.restoreCommand(prefix, before)]);
+    state.model.turned = state.model.turned.filter((item) => item.stableId !== object.stableId);
     const deletedText = normText(object.text || '');
     state.model.markers = state.model.markers.filter((item) => !(item.pageId === page.id && (
       (deletedText && deletedText.includes(item.text)) || (item.bounds && rectsIntersect(item.bounds, object.bounds)))));
