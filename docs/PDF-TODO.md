@@ -599,3 +599,49 @@ Deliberately not matched (reasons in `PDF-PDFGEAR-PARITY.md`, section 7):
 - **Calling conversion "lossless".** It is not, at PDFgear either.
 - **Browser extension.** The PWA covers it.
 - **Own Windows printer driver.** Already rejected above.
+
+## PDFCraft gaps
+
+Gaps that no other section here lists. Evidence, table and sources: `PDF-PDFCRAFT-COMPARE.md`. "PDFCraft" is two products: the
+**Toolkit** (`PDFCraftTool/pdfcraft`, browser, AGPL-3.0) and **ArtCraft** (`storytold/pdfcraft`, Rust, MIT or Apache-2.0).
+Neither was run, so these rest on their code and documents. About 45–75 PD together, top to bottom in the proposed order.
+
+**No code from either without Florian's decision.** The Toolkit's AGPL excludes it for a BUSL-1.1 product: build from the PDF
+specification and our own code, not from its source. Owners as under *PDFgear parity*; new panels need Florian's OK and follow
+the no-help-text rule. AI stays in Step 4, desktop work stays in berg:work.
+
+- [ ] **Find and replace in the app.** One or all, case, whole word, regex; the CLI's `text.replace` path, runs the engine
+  refuses are listed, not skipped silently. The Toolkit has it, ArtCraft plans it. Benefit high. 2–3 PD. berg:work fork.
+- [ ] **PDF layers (optional content).** A panel to show and hide layers, view only, with their state kept on save. Both have
+  it, and CAD plans depend on it. Benefit high. 3–5 PD. Fernwork for the render option, berg:work fork for the panel.
+- [ ] **Multi-page TIFF as input.** New document and Add pages; 1-bit scans stay 1-bit. Both have it, our image list stops short
+  of it. Benefit medium to high. 1–2 PD. berg:work fork.
+- [ ] **Justified text when editing.** Today it becomes left-aligned, because the pinned worker has no justified layout. Both
+  keep it. Benefit medium to high. 2–4 PD. Fernwork.
+- [ ] **Remove hidden information.** One step for metadata, attachments, comments, hidden text and layers, scripts. Both have
+  it. Goes with redaction. Benefit medium to high. 2–3 PD. berg:work fork.
+- [ ] **Redaction presets.** Word lists and patterns (e-mail, phone, IBAN) in the dialog, and a check that finds black boxes
+  with text still under them. ArtCraft has them; regex is CLI-only here. Benefit medium. 2–3 PD. berg:work fork.
+- [ ] **Extract embedded images.** Originals as files, JPEG unchanged, one zip. Both have it. Benefit medium. 1 PD. berg:work
+  fork.
+- [ ] **Bookmarks from headings, contents page.** From tags or text styles; optional contents page with links. Both have it.
+  Benefit medium. 2–3 PD. berg:work fork.
+- [ ] **Measure snapping** to midpoints and intersections, inside Form XObjects too. ArtCraft has it, plans need it. Benefit
+  medium. 1 PD. berg:work fork.
+- [ ] **Fonts on the web.** Load a font file, and installed fonts through `queryLocalFonts` in Chromium, respecting embedding
+  permissions. The *System fonts* entry above covers the desktop app only. Both have it. Benefit medium. 2–3 PD. Fernwork for
+  embedding, berg:work fork for the UI.
+- [ ] **More page tools.** Reverse, interleave two PDFs (duplex scans), remove blank pages, divide pages, page labels, booklet
+  and poster on top of the N-up entry. One or both have them. Benefit medium. 3–5 PD. berg:work fork.
+- [ ] **Accessibility check and alt text.** Checks with a report and jumps to the page, alt text for figures, title and
+  language. ArtCraft has 32 rules. Demand grows with the EU accessibility rules. Benefit medium to high. 4–7 PD. berg:work fork,
+  Fernwork for keeping tags through edits.
+- [ ] **Form calculations and formats.** Acrobat's number, date and sum functions first, written directly: our CSP has no
+  `unsafe-eval`, so general scripts would need a WASM interpreter. ArtCraft has both. Benefit medium. 5–8 PD. Fernwork.
+- [ ] **Saved batch recipes.** Named step lists, reusable. ArtCraft's Action Wizard, the Toolkit's workflows. Extends the *Batch*
+  entry. Benefit medium. 3–5 PD. berg:work fork.
+- [ ] **Right-to-left text editing.** Arabic and Hebrew paragraphs, refused today. The Toolkit has it, ArtCraft in part. Benefit
+  low to medium in Germany. 8–15 PD. Fernwork.
+- [ ] **[Privacy] Remote signing over the CSC API.** Qualified signatures through a trust service without a smartcard; only the
+  hash leaves. Needs a `connect-src` for the provider, so it changes the promise and `CLAIMS.md`. The Toolkit has it. Benefit
+  medium for professionals. 5–8 PD. berg:work host, **needs Florian's decision.**
