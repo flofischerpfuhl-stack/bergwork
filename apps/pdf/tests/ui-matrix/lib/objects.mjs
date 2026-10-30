@@ -136,6 +136,19 @@ export async function rotateSelection(session, { key }) {
   }
   await page.mouse.up();
   await session.settled();
+  if ((await session.historyDepth()) > depth) return true;
+  // A corner over the page edge or under a toolbar: the handle above the frame does the same.
+  const handle = page.locator('.oo-pdf-rotate-handle').first();
+  const box = (await handle.count()) ? await handle.boundingBox() : null;
+  if (!box) return false;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  for (let step = 1; step <= 10; step += 1) {
+    await page.mouse.move(box.x + box.width / 2 + step * 9, box.y + box.height / 2 + step * 7);
+    await page.waitForTimeout(12);
+  }
+  await page.mouse.up();
+  await session.settled();
   return (await session.historyDepth()) > depth;
 }
 

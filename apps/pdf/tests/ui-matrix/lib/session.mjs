@@ -92,6 +92,20 @@ export class MatrixSession {
     if (await tab.count()) await tab.click({ timeout: 3000 }).catch(() => {});
   }
 
+  /** The mini toolbar shows with Properties closed, so each surface gets its own pass over the selected object. */
+  async enterSurface(surface, key) {
+    const open = (await this.page.locator('.oo-pdf-inspector:not(.is-headless)').count()) > 0;
+    if ((surface === 'inspector') !== open) {
+      await this.page.getByRole('button', { name: 'Properties' }).first().click();
+      await this.settled();
+    }
+    await this.page.evaluate(selectionKey => {
+      [...document.querySelectorAll('[data-selection-key]')].find(item => item.dataset.selectionKey === selectionKey)?.focus();
+    }, key);
+    await this.settled();
+    if (surface === 'inspector') await this.propertiesTab();
+  }
+
   /** Waits until no native commit runs and the panel is enabled again; returns the time that took. */
   async settled(limit = 30_000) {
     const started = Date.now();

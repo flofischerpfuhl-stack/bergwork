@@ -22894,6 +22894,9 @@ function App({ shell = null }) {
       ];
       const previousObjectProperties = { ...(currentObject || {}), ...(previous || {}) };
       previousObjectProperties.pathSegments = previous.pathSegments || currentObject?.path?.sampledSegments;
+      // berg:work: the descriptor has these as its draw mode; without them Undo of the Fill and Stroke toggles sent nothing.
+      previousObjectProperties.fillEnabled ??= currentObject?.drawMode ? Number(currentObject.drawMode.fillMode || 0) !== 0 : undefined;
+      previousObjectProperties.strokeEnabled ??= currentObject?.drawMode ? currentObject.drawMode.stroke !== false : undefined;
       const changedObjectPropertyKeys = kind === 'object'
         ? objectPropertyKeys.filter(key => (
             nextEdit[key] != null &&

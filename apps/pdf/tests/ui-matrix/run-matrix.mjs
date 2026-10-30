@@ -97,7 +97,8 @@ const record = (cell, entry) => {
   return item;
 };
 
-const browser = await loadPlaywright().chromium.launch({ headless: true });
+const launch = () => loadPlaywright().chromium.launch({ headless: true });
+let browser = await launch();
 const distDir = process.env.BERGWORK_PDF_DIST || path.join(appDir, 'dist');
 const server = await startServer({ distDir, harnessDir: path.join(testsDir, '.build'), corpusRoot, outDir: path.join(outDir, 'upload') });
 const session = new MatrixSession(browser, server.url);
@@ -109,6 +110,7 @@ async function keepEvidence(cell, control, shots) {
   for (const [label, png] of Object.entries(shots)) await fs.writeFile(path.join(outDir, 'pdf', `${name}.${label}.png`), png);
 }
 
+const SURFACES = ['inspector', 'mini'];
 const statusFor = ms => (ms > HARD_MS ? 'fail' : ms > BUDGET_MS ? 'slow' : 'ok');
 
 async function prepare(cell) {
@@ -240,20 +242,18 @@ async function runCell(cell) {
   let object = await prepare(cell);
   if (!object) return record(cell, { check: 'object', status: 'n/a', detail: 'no such object or state on this file' });
   await checkChromeStaysOnObject(cell, object);
-  await session.propertiesTab();
+  await session.enterSurface('inspector', object.key);
   let baseDepth = await session.historyDepth();
   let baseShot = await session.pageShot();
   const seen = new Set();
   let reselect = false;
-  for (let pass = 0; pass < 200; pass += 1) {
+  for (const surface of SURFACES) for (let pass = 0; object && pass < 200; pass += 1) {
     if (Date.now() > deadline) break;
-    if (reselect) {
-      await focusObject(object.key);
-      await session.settled();
-      await session.propertiesTab();
+    if (reselect || !pass) {
+      await session.enterSurface(surface, object.key);
       reselect = false;
     }
-    const control = (await discoverControls(session.page)).find(item => !seen.has(item.key));
+    const control = (await discoverControls(session.page)).find(item => item.surface === surface && !seen.has(item.key));
     if (!control) break;
     seen.add(control.key);
     const reason = skipReason(control);
@@ -298,7 +298,7 @@ async function runCell(cell) {
         // One broken control must not hide the others: the rest run on a fresh copy.
         object = await prepare(cell);
         if (!object) break;
-        await session.propertiesTab();
+        await session.enterSurface(surface, object.key);
         baseDepth = await session.historyDepth();
         baseShot = await session.pageShot();
       } else {
@@ -313,8 +313,9 @@ async function runCell(cell) {
     record(cell, { control: control.key, status: problems.length ? 'fail' : statusFor(ms), ms, detail: `${action}${changedHistory ? '' : ', no history step'}${undoStatus === 'fail' ? ', Undo failed' : ''}` });
   }
   let marker = null;
+  if (!object) return null;
   await session.undoTo(baseDepth);
-  if (cell.type === 'text' && object) {
+  if (cell.type === 'text') {
     await focusObject(object.key);
     await session.settled();
     marker = await checkEditor(cell, object);
@@ -332,6 +333,11 @@ for (const cell of cells) {
     await runCell(cell);
   } catch (error) {
     record(cell, { check: 'cell', status: 'fail', detail: String(error.message).split('\n')[0].slice(0, 200) });
+    // A crash of the page can take the browser along; the next cell starts on a new one.
+    if (!browser.isConnected()) {
+      browser = await launch();
+      session.browser = browser;
+    }
   }
   console.log(`${cell.file.profile}/${cell.type}/${cell.state}: ${((Date.now() - cellStart) / 1000).toFixed(0)} s, ${results.length} results`);
   await writeReport(outDir, { results, tier: tierName, seed, files, startedAt, budget: { dropped } });

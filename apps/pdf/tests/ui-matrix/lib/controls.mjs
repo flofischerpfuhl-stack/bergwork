@@ -8,7 +8,7 @@ const NAVIGATION = /^(close (layers|properties)|properties|layers|position units
 const NOT_DRIVABLE = /upload font file|pick from the screen|pick a colour from the page/iu;
 
 const SURFACES = Object.freeze([
-  { id: 'inspector', root: '.oo-pdf-inspector' },
+  { id: 'inspector', root: '.oo-pdf-inspector:not(.is-headless)' },
   { id: 'mini', root: '.oo-pdf-mini-toolbar' },
 ]);
 
