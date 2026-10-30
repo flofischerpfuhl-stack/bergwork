@@ -6,7 +6,7 @@ export function render() {
     current: 'privacy',
     path: '/privacy/',
     title: 'Privacy',
-    description: 'Privacy information for berg:work: no cookies, no analytics, files edited on your device, server logs, local storage of the web apps and the optional model download.',
+    description: 'Privacy information for berg:work: no cookies, no analytics, files edited on your device, server logs, local storage of the web apps and the optional model and language downloads.',
     body: `<header class="page-band"><div><p class="kicker">Information</p><h1>Privacy.</h1><p>No cookies, no analytics, no third-party scripts. The editors work on your computer; your files are not uploaded.</p></div></header>
     <article class="prose-card">
       <h2>Controller</h2>
@@ -28,6 +28,7 @@ export function render() {
 
       <h2>Optional model downloads</h2>
       <p>berg:work Image removes backgrounds with a small model that ships with the app. Some optional features need a larger model: the more accurate background removal, object selection, AI fill and upscaling. The app downloads such a model from Hugging Face (Hugging Face, Inc., USA; huggingface.co) only after you start one of these features. Hugging Face then receives the technical data of that request – your IP address, the requested file and your browser's user agent – but not your images: the model runs on your device and is cached there afterwards. The legal basis is Article 6(1)(b) and (f) GDPR: you asked for the download, and the app cannot provide the feature otherwise.</p>
+      <p>berg:work PDF recognises text (OCR) in English, German, French, Spanish, Italian and Portuguese with data that ships with the app. When you choose another language for the first time, the app downloads that language's data file from the public jsDelivr CDN (cdn.jsdelivr.net). jsDelivr then receives the technical data of that request – your IP address, the requested file and your browser's user agent – but not your documents: recognition runs on your device, and the file is checked and kept there for later use. The legal basis is the same as above.</p>
 
       <h2>Offline storage</h2>
       <p>A service worker stores copies of this site's pages and static files in your browser's Cache Storage so the site can open offline. This cache contains site files, not personal data. You can remove it through your browser's site-data controls.</p>
