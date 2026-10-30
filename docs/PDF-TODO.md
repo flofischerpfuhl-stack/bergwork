@@ -315,20 +315,56 @@ in a headless page. That is the basis.
   `launchQueue`) and a `share_target` (Android "Share → berg:work PDF": the service worker keeps the files and the
   app opens them from `?shared`); the app page on the site links the manifest and registers the service worker.
   Share flow checked headless. Open: check "Open with" and Share on a real Android phone and desktop Chrome/Edge.
-- [ ] **Android app for Googlebooks** (as planned in `docs/ARCHITECTURE.md`).
-  - The Android WebView has no cross-origin isolation, so no SharedArrayBuffer or WASM threads: PDFium and Tesseract
-    need single-thread builds, or native builds through Rust.
+
+Mobile research with sources, comparison of the technology paths and order: `docs/PDF-MOBILE-VORTEILE.md`. In short: a
+real iOS/iPadOS app on Tauri, iPad first; Android stays a TWA until that app exists; no native PDFium for now. No store
+submission before the legal review in `docs/ARCHITECTURE.md`.
+
+Web first, useful on every platform:
+- [ ] **Ask for persistent storage.** Nothing calls `navigator.storage.persist()`, so drafts and the journal are
+  best-effort in every browser. WebKit grants it by heuristics such as a Home Screen install. Host page. 0.5 PD.
+- [ ] **Pen input.** The editor treats a pen as a mouse: no `pressure`, tilt or coalesced and predicted events, all
+  available in Chrome and Safari 18.2+. Pen draws, finger scrolls; filled pressure strokes. Judge the result on an iPad
+  before starting native ink. 3–5 PD.
+- [ ] **Save on an iOS Home Screen app.** Standalone blob downloads are reported to fail silently and `window.print`
+  to be unreliable. Use `navigator.share` with the file, which the editor does not call yet. Check on a device. 1 PD.
+- [ ] **Add a page from the camera.** `<input capture>` into Add pages; perspective correction is open under OCR.
+  0.5–1 PD.
+- [ ] **Device checks.** Android Chrome: `showSaveFilePicker` (Chrome 132 and MDN say yes, caniuse says no), and
+  `file_handlers` launches in a WebAPK or TWA. iOS: `persist()`, Scribble in the editor's `textarea`. Test PDFgear on
+  both as the free benchmark. 1 PD.
+
+Apps:
+- [ ] **Android: Trusted Web Activity on Play** (Bubblewrap). The PWA runs in Chrome with the unchanged engine. Bubblewrap
+  has `shareTarget` and `fileHandlers` fields; check them on a device, also with Samsung Internet as default browser.
+  New personal Play accounts need a closed test first (12 testers, 14 days). 3–5 PD.
+- [ ] **iOS and iPadOS app on Tauri.** Start with a 3 PD spike (open in place, save, print, a 100-page session in
+  WKWebView); if it fails, use Capacitor with the same web bundle. No SharedArrayBuffer needed. Real limit:
+  WebContent is killed near 2 GB. 25–40 PD in all:
+  - Document types, open in place, security scope and file coordination behind the `showSaveFilePicker` shim, share
+    extension, "Always Open With" (iOS 26).
+  - AirPrint through `PrintHost`, lifecycle flush, keyboard commands, iPadOS menu bar.
+  - Drop Liberation Sans Narrow (GPL-2.0 with font exception) from the iOS bundle or clear it in the legal review.
+- [ ] **Scanner on iOS.** VisionKit camera, `RecognizeDocumentsRequest` for OCR with tables, Tesseract as fallback.
+  3–5 PD.
+- [ ] **Native ink on iPad.** PencilKit overlay during a stroke, then `/Ink` through the engine; double tap, squeeze,
+  hover. Only if web ink falls short. 10–15 PD.
+- [ ] **Android app on Tauri for Googlebooks** (as planned in `docs/ARCHITECTURE.md`), replacing the TWA with the same
+  package name and key.
+  - PDFium, qpdf, HarfBuzz and Tesseract are already single-threaded, so the WebView needs neither cross-origin
+    isolation nor new builds. If that changes: WebView 156 and androidx.webkit 1.18.0 offer
+    `Profile#setCrossOriginIsolatedAllowlist` with `Document-Isolation-Policy`.
   - Intent filters for `application/pdf` with `content://` URIs; save back only with write access, otherwise
     `ACTION_CREATE_DOCUMENT`.
+  - ML Kit document scanner, Jetpack Ink, `PrintManager`, Google's desktop quality list.
   - Play: target API 36, 16 KB page size for the native libraries.
 
-  10–20 PD, plus the touch work in the Fernwork TODO.
-- [ ] **Store presence on phones.** Free mobile apps view and annotate. Editing existing content is paywalled
-  (Adobe, Xodo, Foxit, PDF Expert) or limited (PDFgear: text and images, free status unclear). Editing vector paths
-  is offered nowhere we know of. The store listing is what makes that lead visible.
-  - **Android: Trusted Web Activity** (Bubblewrap). The PWA runs in Chrome, not in the WebView, so it keeps
-    cross-origin isolation and WASM threads, and it can be listed on Play. 3–5 PD.
-  - **iOS: WKWebView wrapper.** Check SharedArrayBuffer and memory (WebContent is killed at about 2 GB) on a device
-    first. 10–20 PD.
+  22–39 PD, plus the touch work in the Fernwork TODO.
+- [ ] **Native PDFium: decide by measurement.** It would not fix commit latency (snapshot round trip, not WASM speed).
+  It would help with files WASM cannot hold (2 GB cap, whole file in memory). Measure on devices after the iOS app,
+  2 PD; a port costs 40–80 PD.
+- [ ] **Store presence on phones.** Free mobile apps view and annotate. Editing existing content is paywalled (Adobe,
+  Xodo, Foxit, PDF Expert). PDFgear is the exception: reported free with text and image editing on mobile, to be tested.
+  Editing vector paths is offered nowhere we know of. The store listing is what makes that lead visible.
   - **Order:** ship only after the touch pass in the Fernwork TODO (taps hit the page background, results lag after
     release). Otherwise store reviews judge the rough edges, not the lead.
