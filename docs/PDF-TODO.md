@@ -192,6 +192,35 @@ Forms:
   - [ ] Open: perspective correction, straightening the page image itself, other scripts (Arabic, CJK, Devanagari
     need their fonts in the text layer), several languages in one run.
 
+## PowerPoint parity (Florian, 2026-10-30; not started)
+
+Goal: a presentation can be created directly in the editor, with everything that belongs to it and makes sense in a
+PDF. No animations or transitions. Compare with PowerPoint, Canva and Keynote before scoping; estimates are still open.
+
+- [ ] **Basic image editing:** crop, rotate, flip, brightness, contrast, saturation, corners, border, shadow, remove
+  background, on placed images and on images in the PDF.
+- [ ] **Tables:** insert, edit cells, add and remove rows and columns, merge cells, styles; also edit existing tables.
+- [ ] **Shape library:** many more shapes (arrows, callouts, stars, flowchart, brackets), connectors that stay attached,
+  text inside shapes, fill and line styles.
+- [ ] **Slides from scratch:** new presentation with page size (16:9, 4:3, A4), slide layouts and templates, master
+  page, placeholders, themes (colours, fonts) applied to all slides, slide numbers, reorder and duplicate.
+- [ ] **Text for slides:** bullet and numbered lists, levels, columns, text fit, styles.
+- [ ] **Layout:** align and distribute, group, snapping to a slide grid, consistent spacing.
+- [ ] **Charts and media that make sense in a PDF:** charts from a small data table, icons, picture placeholders.
+- [ ] **Present mode:** full screen, next and previous, presenter notes, pointer and drawing, second screen (desktop).
+- [ ] **Import and export:** open PPTX as editable slides where possible, export to PDF stays the native format.
+
+## Best-in-class 3D PDF (Florian, 2026-10-30; not started)
+
+Goal: full 3D PDF support, best in class. Compare with Adobe Acrobat first. The engine part belongs in Fernwork.
+
+- [ ] **View:** U3D and PRC in 3D annotations and page-embedded models, with views, orbit, pan, zoom, section planes,
+  render modes, lighting, product structure tree, measure in 3D, cross sections, performance on big models.
+- [ ] **Create and edit:** insert 3D models (STEP, IFC, glTF, OBJ, STL) as 3D annotations, define views, poster images,
+  activation settings; keep existing 3D data intact through every edit and save.
+- [ ] **Compatibility and safety:** round trip with Acrobat, JavaScript in 3D annotations stays off or sandboxed,
+  printing and export use a correct poster, CLI and MCP access to models and views.
+
 ## Measuring and comments compared with PDF-XChange (Fernwork TODO part B, items 1 and 2)
 
 Branch `feat/pdf-measure-comments`. Everything is in the fork's own files (`pdf-editor/model/pdf-measure.js`,
