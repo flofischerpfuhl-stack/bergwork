@@ -7395,6 +7395,12 @@ function requireValidPdfPropertyInputs(root) {
   throw new Error('Finish or cancel the invalid property value before saving.');
 }
 
+// berg:work: a font program that cannot be reused (Type 1 in a LaTeX PDF) is an answer, not a failure of the button.
+function reportFontImportFailure(error) {
+  const refused = error?.code === 'unsupported-operation' || /reusable/iu.test(String(error?.message || ''));
+  showToast(userFacingError(error, 'PDF font import failed.'), refused ? 'warning' : 'error');
+}
+
 function reportLivePdfEditFailure(runtime, error, fallback) {
   // A persistent read-only notice already explains this exact rejection.
   // Queued successors must not stack identical transient messages over it.
@@ -7411,7 +7417,7 @@ function explicitFontChoiceFailure(error) {
   const missingList = missing.map(character => `\u201c${character}\u201d`).join(', ');
   const reason = missing.length
     ? `The embedded ${fontName} font has no glyph for ${missingList}.`
-    : `Fernwork could not use ${fontName} for this change.`;
+    : `This font cannot be used for this change: ${fontName}.`; // berg:work: no product name in the message.
   return {
     code: String(details.code || 'text-exact-font-required'),
     fontName,
@@ -47677,7 +47683,7 @@ function Inspector({
             {layer.item.embeddedFontFamily && !layer.item.fontResourceHashes?.length &&
               nativeTextFrameDescriptor?.fontEmbedded !== false &&
               <button type="button" className="oo-pdf-font-action" onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item)
-                .catch(error => showToast(userFacingError(error, 'PDF font import failed.'), 'error'))}>Import embedded PDF font for reuse</button>}
+                .catch(error => reportFontImportFailure(error))}>Import embedded PDF font for reuse</button>}
             {layer.item.usedFontResourceHashes?.length > 0 &&
               <div className="oo-pdf-mini-stat">Actual rendered font: {layer.item.usedFontResourceHashes.map((hash, resourceIndex) => {
                 const resource = layer.item.richTextFontResources?.find(item => item.resourceId === hash);
@@ -47688,7 +47694,7 @@ function Inspector({
               <div className="oo-pdf-mini-stat oo-pdf-caption">This exact font file is available to other rich text in this PDF.</div>}
             {layer.item.fontResourceHashes?.length > 0 && !fontCatalogHasHash(doc.fontCatalog || [], layer.item.fontResourceHashes[0]) &&
               <button type="button" className="oo-pdf-font-action" onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item)
-                .catch(error => showToast(userFacingError(error, 'PDF font import failed.'), 'error'))}>Import embedded frame font for reuse</button>}
+                .catch(error => reportFontImportFailure(error))}>Import embedded frame font for reuse</button>}
           </> : null;
           // berg:work: the same editor twice — in the Properties row and, compact, in the mini toolbar next to the
           // object — so both format through this row's commit path and undo gestures.
@@ -48224,7 +48230,7 @@ function Inspector({
                         nativeTextFrameDescriptor?.fontEmbedded !== false && (
                         <button type="button" className="oo-pdf-font-action"
                           title="Existing glyphs are preserved where safe; subset and Type 3 fonts cannot be reused for arbitrary new characters. Upload the licensed font file to use it elsewhere."
-                          onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item).catch(error => showToast(userFacingError(error, 'PDF font import failed.'), 'error'))}>Import embedded PDF font for reuse</button>
+                          onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item).catch(error => reportFontImportFailure(error))}>Import embedded PDF font for reuse</button>
                       )}
                       {layer.item.usedFontResourceHashes?.length > 0 && (
                         <div className="oo-pdf-mini-stat">Actual rendered font: {layer.item.usedFontResourceHashes.map((hash, index) => {
@@ -48235,7 +48241,7 @@ function Inspector({
                       )}
                       {layer.item.fontResourceHashes?.length > 0 &&
                         !fontCatalogHasHash(doc.fontCatalog || [], layer.item.fontResourceHashes[0]) && (
-                        <button type="button" onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item).catch(error => showToast(userFacingError(error, 'PDF font import failed.'), 'error'))}>Import embedded frame font for reuse</button>
+                        <button type="button" onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item).catch(error => reportFontImportFailure(error))}>Import embedded frame font for reuse</button>
                       )}
                       </PropSection>}
                       <PropSection sectionKey="appearance" title="Appearance"

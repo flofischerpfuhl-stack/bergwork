@@ -193,7 +193,8 @@ export class MatrixSession {
         return { width: bitmap.width, height: bitmap.height, data: context.getImageData(0, 0, bitmap.width, bitmap.height).data };
       };
       const [first, second] = await Promise.all([decode(a), decode(b)]);
-      if (first.width !== second.width || first.height !== second.height) {
+      // The sheet's box lands on a fraction of a pixel: one row more or less is the screenshot, not the page.
+      if (Math.abs(first.width - second.width) > 1 || Math.abs(first.height - second.height) > 1) {
         return { count: first.width * first.height, total: first.width * first.height, box: null, sizeChanged: true };
       }
       const inside = (x, y, quad) => {
@@ -209,11 +210,14 @@ export class MatrixSession {
       };
       let count = 0;
       let box = null;
-      for (let y = 0; y < first.height; y += 1) {
-        for (let x = 0; x < first.width; x += 1) {
+      const width = Math.min(first.width, second.width);
+      const height = Math.min(first.height, second.height);
+      for (let y = 0; y < height; y += 1) {
+        for (let x = 0; x < width; x += 1) {
           const offset = (y * first.width + x) * 4;
-          const delta = Math.abs(first.data[offset] - second.data[offset]) + Math.abs(first.data[offset + 1] - second.data[offset + 1]) +
-            Math.abs(first.data[offset + 2] - second.data[offset + 2]);
+          const other = (y * second.width + x) * 4;
+          const delta = Math.abs(first.data[offset] - second.data[other]) + Math.abs(first.data[offset + 1] - second.data[other + 1]) +
+            Math.abs(first.data[offset + 2] - second.data[other + 2]);
           if (delta <= threshold || exclude.some(quad => inside(x, y, quad))) continue;
           count += 1;
           box = box ? { l: Math.min(box.l, x), t: Math.min(box.t, y), r: Math.max(box.r, x), b: Math.max(box.b, y) }

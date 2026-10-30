@@ -190,7 +190,14 @@ export async function typeAndCommit(session, suffix) {
   await page.keyboard.press('End');
   await page.keyboard.type(suffix, { delay: 8 });
   await page.keyboard.press('Escape');
-  return session.settled();
+  const settled = await session.settled();
+  // A subset font without the typed letters asks for another font; the person takes the one offered.
+  const offered = page.getByRole('button', { name: /^Use / }).first();
+  if (await offered.isVisible().catch(() => false)) {
+    await offered.click();
+    return session.settled();
+  }
+  return settled;
 }
 
 /** Every text line in view, top to bottom. */
