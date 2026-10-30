@@ -32,6 +32,31 @@ export function dragPageDelta(anchor, pointer, surfaceRect) {
   };
 }
 
+// What stays on the page of a placed object, in page units: 24 px to grab it
+// again, half of a smaller object, at least 4 px. Large objects keep 10 % of
+// their shorter side, and an object under 4 px stays wholly on the page.
+export function grabAreaLength(length, otherLength, pageLength, scale) {
+  const grab = Math.max(4, Math.min(24, length * scale / 2)) / scale;
+  return Math.min(length, pageLength, Math.max(grab, Math.min(length, otherLength) * 0.1));
+}
+
+export function positionWithinGrabArea(position, length, otherLength, pageLength, scale) {
+  const overlap = grabAreaLength(length, otherLength, pageLength, scale);
+  return Math.max(overlap - length, Math.min(pageLength - overlap, position));
+}
+
+// A relative move stops at the grab area. An object already past it, such as
+// one from the file, may still move back but does not jump.
+export function limitMoveToGrabArea(rect, dx, dy, pageSize, scale) {
+  const limit = (position, delta, length, otherLength, pageLength) => {
+    const overlap = grabAreaLength(length, otherLength, pageLength, scale);
+    const low = Math.min(position, overlap - length), high = Math.max(position, pageLength - overlap);
+    return Math.max(low, Math.min(high, position + delta)) - position;
+  };
+  return { dx: limit(rect.x, dx, rect.w, rect.h, pageSize.width),
+    dy: limit(rect.y, dy, rect.h, rect.w, pageSize.height) };
+}
+
 export function pointerMovedBeyondSlop(start, current, slop) {
   return Number.isFinite(start?.clientX) && Number.isFinite(start?.clientY) &&
     Number.isFinite(current?.clientX) && Number.isFinite(current?.clientY) &&

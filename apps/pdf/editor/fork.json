@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "upstream": "fernwork-pdf",
   "description": "Fernwork PDF editor sources forked into berg:work; paths as in Fernwork. See apps/pdf/scripts/editor-fork.mjs.",
-  "commit": "082fd77a98718c69122819d0233293ee21a06eea",
+  "commit": "06de9e52b7ac643ec3713761809f51af17db4d80",
   "entries": [
     "vendor/build/src/pdf-tools-shell.jsx"
   ],
@@ -21,6 +21,7 @@
     "vendor/build/src/pdf-editor/engine/empty-acroform-export.js",
     "vendor/build/src/pdf-editor/engine/protocol.js",
     "vendor/build/src/pdf-editor/engine/redaction-export.js",
+    "vendor/build/src/pdf-editor/engine/render-helpers.js",
     "vendor/build/src/pdf-editor/engine/session-orchestrator.js",
     "vendor/build/src/pdf-editor/engine/source-commit-entry.js",
     "vendor/build/src/pdf-editor/engine/worker-transport.js",
@@ -97,6 +98,7 @@
     "vendor/build/src/pdf-editor/model/text-frame-marked-content-ownership.js",
     "vendor/build/src/pdf-editor/model/text-layout.js",
     "vendor/build/src/pdf-editor/model/text-markup-binding.js",
+    "vendor/build/src/pdf-editor/model/text-past-page.js",
     "vendor/build/src/pdf-editor/model/text-preview-paint-order.js",
     "vendor/build/src/pdf-editor/model/text-reflow-preview-queue.js",
     "vendor/build/src/pdf-editor/model/typed-signature-frame.js",

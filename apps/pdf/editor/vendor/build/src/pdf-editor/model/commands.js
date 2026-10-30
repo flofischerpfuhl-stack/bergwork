@@ -403,5 +403,78 @@ export function createPdfTransaction({
  * @returns {string}
  */
 export function canonicalSerialize(value) {
-  return JSON.stringify(cloneSerializable(value));
+  return serializeCanonicalAt(value, { parent: null, key: 'payload' });
+}
+
+// The direct form of JSON.stringify(cloneSerializable(value)), byte for byte:
+// the same key order, the same refusals, undefined dropped from objects and null
+// in arrays. Page inspection and every commit fingerprint thousands of path
+// points; cloning each object with its sorted entries took half of inspection.
+// An object shape recurs for every point, so its key order is computed once.
+const canonicalKeyOrders = new Map();
+const CANONICAL_KEY_ORDER_LIMIT = 4096;
+
+function canonicalKeyOrder(keys) {
+  let shapes = canonicalKeyOrders.get(keys[0]);
+  if (shapes) {
+    for (const shape of shapes) {
+      if (shape.keys.length === keys.length && shape.keys.every((key, index) => key === keys[index])) return shape.order;
+    }
+  }
+  const sorted = [...keys].sort(serializableKeyCollator.compare);
+  // An object lists integer-like keys first, ascending, whatever their
+  // insertion order was, so the clone serialized them that way.
+  const isArrayIndex = key => {
+    const number = Number(key);
+    return Number.isInteger(number) && number >= 0 && number < 4294967295 && String(number) === key;
+  };
+  const indexes = sorted.filter(isArrayIndex).sort((left, right) => Number(left) - Number(right));
+  const order = [...indexes, ...sorted.filter(key => !isArrayIndex(key))]
+    .map(key => ({ key, quoted: `${JSON.stringify(key)}:` }));
+  if (canonicalKeyOrders.size >= CANONICAL_KEY_ORDER_LIMIT) {
+    canonicalKeyOrders.clear();
+    shapes = undefined;
+  }
+  if (!shapes) canonicalKeyOrders.set(keys[0], shapes = []);
+  shapes.push({ keys, order });
+  return order;
+}
+
+function serializeCanonicalScalar(value, parentTrail, key) {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) cloneSerializableScalar(value, parentTrail, key);
+    return String(value);
+  }
+  if (typeof value === 'string') return JSON.stringify(value);
+  cloneSerializableScalar(value, parentTrail, key);
+  return value === undefined ? undefined : String(value);
+}
+
+function serializeCanonicalAt(value, trail) {
+  if (Array.isArray(value)) {
+    let text = '[';
+    for (let index = 0; index < value.length; index += 1) {
+      const item = value[index];
+      const serialized = item !== null && typeof item === 'object'
+        ? serializeCanonicalAt(item, { parent: trail, key: index })
+        : serializeCanonicalScalar(item, trail, index);
+      text += `${index ? ',' : ''}${serialized === undefined ? 'null' : serialized}`;
+    }
+    return `${text}]`;
+  }
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(/** @type {Record<string, unknown>} */ (value));
+    const order = keys.length ? canonicalKeyOrder(keys) : [];
+    let text = '{';
+    for (let index = 0; index < order.length; index += 1) {
+      const { key, quoted } = order[index];
+      const item = /** @type {Record<string, unknown>} */ (value)[key];
+      const serialized = item !== null && typeof item === 'object'
+        ? serializeCanonicalAt(item, { parent: trail, key })
+        : serializeCanonicalScalar(item, trail, key);
+      if (serialized !== undefined) text += `${text.length > 1 ? ',' : ''}${quoted}${serialized}`;
+    }
+    return `${text}}`;
+  }
+  return serializeCanonicalScalar(value, trail.parent, trail.key);
 }

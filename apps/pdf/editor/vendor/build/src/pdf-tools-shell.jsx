@@ -31,6 +31,7 @@ import { registerFilePasteTarget } from '../../../assets/file-paste.js';
 // berg:work: from Fernwork. The decoder's worker path follows the host (scripts/build-editor.mjs).
 import { isHeicFile, normalizeHeicFile } from '../../../tools/js/converters/heic-decoder.js';
 import { PdfEngineSessionOrchestrator } from './pdf-editor/engine/session-orchestrator.js';
+import { RenderHelperPool, renderHelperCount } from './pdf-editor/engine/render-helpers.js';
 import { AtomicGenerationController } from './pdf-editor/interaction/atomic-generation-controller.js';
 import { PdfEngineWorkerTransport } from './pdf-editor/engine/worker-transport.js';
 import { assertPdfProjectFileReadable, pdfProjectJsonText } from './pdf-editor/persistence/project-json.js';
@@ -73,9 +74,10 @@ import {
 import { interactionDraftRuntime } from './pdf-editor/interaction/draft-runtime.js';
 import { CreatedNativePaintHandoff } from './pdf-editor/interaction/created-native-paint-handoff.js';
 import { dependsOnUnconfirmedPdfWork, shouldCancelDependentPdfDrag } from './pdf-editor/interaction/dependent-drag-policy.js';
-import { captureDragPageAnchor, dragPageDelta, logicalDragDimension,
+import { limitMoveToGrabArea, positionWithinGrabArea, captureDragPageAnchor, dragPageDelta, logicalDragDimension,
   pointerMovedBeyondSlop } from './pdf-editor/interaction/drag-page-geometry.js';
 import { moveSnapRuntime } from './pdf-editor/interaction/move-snap-runtime.js';
+import { textItemsWithPastPageText } from './pdf-editor/model/text-past-page.js';
 // berg:work: Ctrl/⌘ moves without snapping (Figma); Alt-drag duplicates instead.
 moveSnapRuntime.freeMoveKey = event => event.ctrlKey === true || event.metaKey === true;
 import { ZoomCommitSnapshot } from './pdf-editor/interaction/zoom-commit-snapshot.js';
@@ -1825,9 +1827,14 @@ function pageSurfacesForDrop() {
     .filter(entry => entry.pageId && entry.rect.width > 1 && entry.rect.height > 1);
 }
 
-function bestPageDropTarget(box, fallbackPageId = '') {
+function bestPageDropTarget(box, fallbackPageId = '', pointer = null) {
   const targets = pageSurfacesForDrop();
   if (!targets.length) return null;
+  // The page under the pointer wins, so a drop lands where it is released.
+  const underPointer = pointer && targets.find(({ rect }) =>
+    pointer.clientX >= rect.left && pointer.clientX < rect.right &&
+    pointer.clientY >= rect.top && pointer.clientY < rect.bottom);
+  if (underPointer) return underPointer;
   let bestOverlap = null;
   let bestArea = -1;
   for (const target of targets) {
@@ -1850,8 +1857,8 @@ function bestPageDropTarget(box, fallbackPageId = '') {
   }, null);
 }
 
-function snapViewportBoxToPage(box, zoom, fallbackPageId = '') {
-  const target = bestPageDropTarget(box, fallbackPageId);
+function snapViewportBoxToPage(box, zoom, fallbackPageId = '', pointer = null) {
+  const target = bestPageDropTarget(box, fallbackPageId, pointer);
   if (!target) return null;
   const scaleX = Math.max(0.001, target.scaleX || zoom);
   const scaleY = Math.max(0.001, target.scaleY || zoom);
@@ -1859,25 +1866,9 @@ function snapViewportBoxToPage(box, zoom, fallbackPageId = '') {
   const height = box.height / scaleY;
   const pageWidth = target.width / scaleX;
   const pageHeight = target.height / scaleY;
-  // Moving an oversized scan must remain useful. Clamp only far enough to keep
-  // a deliberate grab area on the page instead of forcing it back to an edge.
-  // The grab area is a screen affordance: 24 PDF points become only 6 pixels
-  // at 25% zoom. Smaller objects stay wholly visible instead of being pushed
-  // past the opposite edge by an overlap larger than their own dimensions.
-  const overlapX = Math.min(width, pageWidth,
-    Math.max(24 / scaleX, Math.min(width, height) * 0.1));
-  const overlapY = Math.min(height, pageHeight,
-    Math.max(24 / scaleY, Math.min(width, height) * 0.1));
-  const x = clamp(
-    (box.left - target.rect.left) / scaleX,
-    -width + overlapX,
-    pageWidth - overlapX,
-  );
-  const y = clamp(
-    (box.top - target.rect.top) / scaleY,
-    -height + overlapY,
-    pageHeight - overlapY,
-  );
+  // Objects may lie partly past the page; only a grab area has to stay on it.
+  const x = positionWithinGrabArea((box.left - target.rect.left) / scaleX, width, height, pageWidth, scaleX);
+  const y = positionWithinGrabArea((box.top - target.rect.top) / scaleY, height, width, pageHeight, scaleY);
   return { pageId: target.pageId, x, y, w: width, h: height };
 }
 
@@ -1896,10 +1887,29 @@ function viewportBoxForPageItem(pageId, item, zoom) {
   };
 }
 
-function snapPageItemToBestPage(item, zoom, fallbackPageId = item?.pageId) {
+function snapPageItemToBestPage(item, zoom, fallbackPageId = item?.pageId, pointer = null) {
   const box = viewportBoxForPageItem(fallbackPageId, item, zoom);
   if (!box) return null;
-  return snapViewportBoxToPage(box, zoom, fallbackPageId);
+  return snapViewportBoxToPage(box, zoom, fallbackPageId, pointer);
+}
+
+// A move follows the pointer freely. Past its page the drop decides: a box with
+// nothing on the page, or one the drop would give to another page, cannot be
+// shown by this page's preview. Boxes inside their page read no layout here.
+function trackDropPage(drag, rect, zoom) {
+  const pageWidth = Number(drag.pageAnchor?.pageWidth), pageHeight = Number(drag.pageAnchor?.pageHeight);
+  const x = Number(rect?.x), y = Number(rect?.y);
+  const w = Math.max(1, Number(rect?.w) || 1), h = Math.max(1, Number(rect?.h) || 1);
+  let offPage = false;
+  if (pageWidth > 0 && pageHeight > 0 && !(x >= 0 && y >= 0 && x + w <= pageWidth && y + h <= pageHeight)) {
+    const pageId = dragOriginPageId(drag);
+    const snap = snapPageItemToBestPage({ x, y, w, h }, zoom, pageId, drag.lastPointer);
+    offPage = x + w <= 0 || y + h <= 0 || x >= pageWidth || y >= pageHeight ||
+      Boolean(snap && snap.pageId !== pageId);
+  }
+  if (offPage === Boolean(drag.destinationOffPage)) return;
+  drag.destinationOffPage = offPage;
+  if (drag.sheet?.pdfCrossDragFits) drag.sheet.classList.toggle('is-cross-drag-source', offPage);
 }
 
 function beginCrossPageElementDrag(event, enabled = true) {
@@ -1915,15 +1925,16 @@ function beginCrossPageElementDrag(event, enabled = true) {
     draggedRect.top >= surfaceRect.top - tolerance &&
     draggedRect.right <= surfaceRect.right + tolerance &&
     draggedRect.bottom <= surfaceRect.bottom + tolerance);
-  // Normal objects keep the useful cross-page preview. Oversized scan objects
-  // stay clipped to the PDF page so their hidden source extent cannot suddenly
-  // cover the editor while being moved.
-  if (fullyInsidePage) sheet?.classList.add('is-cross-drag-source');
+  // The page clips a move until the object leaves it for another page, which
+  // trackDropPage turns on. Oversized scan objects stay clipped even then, so
+  // their hidden source extent cannot suddenly cover the editor.
+  if (sheet) sheet.pdfCrossDragFits = fullyInsidePage;
   document.body.classList.add('oo-pdf-cross-dragging');
   return sheet || null;
 }
 
 function endCrossPageElementDrag(sheet) {
+  if (sheet) sheet.pdfCrossDragFits = false;
   sheet?.classList.remove('is-cross-drag-source');
   document.body.classList.remove('oo-pdf-cross-dragging');
 }
@@ -5522,12 +5533,20 @@ function updateNativeDragComposition(drag, nextEdit) {
   const prepared = drag.compositionOverlay.update(
     Number(nextEdit.x) - drag.compositionOrigin.x,
     Number(nextEdit.y) - drag.compositionOrigin.y,
+    drag.destinationOffPage === true,
   );
   if (prepared) {
     drag.compositionFallbackOutline?.destroy();
     drag.compositionFallbackOutline = null;
   } else updateDragDestinationOutline(drag, nextEdit);
   return setNativeDragCompositionPrepared(drag, prepared);
+}
+
+// The drop may have moved the box back to the grab area: hold the real result.
+function holdDroppedComposition(drag, patch) {
+  if (dragCrossesPage(drag, patch)) return;
+  drag.destinationOffPage = false;
+  updateNativeDragComposition(drag, patch);
 }
 
 function cancelNativeDragComposition(drag) {
@@ -7299,6 +7318,20 @@ function flushPendingLiveObjectEdits(runtime, exceptKey = '') {
     if (key !== exceptKey) entry.flush?.({ force: true });
   }
   return pending.filter(([key]) => key !== exceptKey).map(([, entry]) => entry.promise);
+}
+
+// Steps of a key held on an Inspector slider belong to one gesture and one Undo
+// step. The gap between them follows the machine, not the user: a long task on
+// the main thread alone reaches several hundred milliseconds.
+const PROPERTY_GESTURE_IDLE_MS = 600;
+const PROPERTY_GESTURE_LATE_MS = 40;
+const PROPERTY_GESTURE_STALL_GRACE_MS = 200;
+const propertyGestureFlushers = new Set();
+
+// Save and Undo are reachable from the keyboard without leaving the slider, so
+// no blur commits what is still waiting for the idle time.
+function flushPropertyGestures() {
+  for (const flush of propertyGestureFlushers) flush();
 }
 
 function isLatestLiveEditCommit(runtime, key, generation) {
@@ -9453,7 +9486,15 @@ function usePdfiumSessionRuntime(doc, initialPageIndex = 0, getLatestDocument = 
     // third mount race the original writer.
     const priorRetirement = retiringPdfRuntimeClosures.get(doc.id) || null;
     const transport = new PdfEngineWorkerTransport();
-    const engine = new PdfEngineSessionOrchestrator({ transport });
+    const renderScheduler = new RenderScheduler({ maxConcurrent: 1, maxQueued: 64 });
+    const helperCount = renderHelperCount(typeof navigator === 'undefined' ? undefined : navigator);
+    const renderHelpers = helperCount ? new RenderHelperPool({
+      createTransport: () => new PdfEngineWorkerTransport(),
+      size: helperCount,
+    }) : null;
+    renderHelpers?.onCapacityChanged(capacity => renderScheduler.setMaxConcurrent(capacity));
+    if (globalThis.__fernworkPdfDebug) globalThis.__fernworkPdfRenderHelpers = renderHelpers;
+    const engine = new PdfEngineSessionOrchestrator({ transport, renderHelpers });
     const journalStore = new IndexedDbCommandJournalStore();
     const writerLease = new PdfDraftWriterLease({ documentKey: doc.id });
     let resolveRuntimeReady;
@@ -9462,7 +9503,7 @@ function usePdfiumSessionRuntime(doc, initialPageIndex = 0, getLatestDocument = 
       engine,
       transport,
       cache: new RasterCache({ byteLimit: pdfRasterCacheBudget(doc.pages?.length || 1) }),
-      scheduler: new RenderScheduler({ maxConcurrent: 1, maxQueued: 64 }),
+      scheduler: renderScheduler,
       lastShownRevision: new Map(),
       pageOrder: doc.pages.map(page => page.id),
       pageInspections: new Map(),
@@ -12443,6 +12484,7 @@ async function waitForLiveRuntimeCommits(runtime, options = {}) {
   // its UI); the caller continues from the committed state instead of failing
   // with, and being blamed for, that unrelated error.
   let rejectedError = null;
+  flushPropertyGestures();
   flushPendingLiveObjectEdits(runtime);
   while (runtime?.pendingObjectEdits?.size || runtime?.gestureCommits?.size || runtime?.pendingCommits?.size) {
     const results = await Promise.allSettled([
@@ -15833,6 +15875,36 @@ function nativeTextFrameIsNotDeleted(doc, page, object = {}) {
 
 // PDF.js indexes the immutable input PDF. Explicitly recorded native text
 // insertions need handles from the live scene, without guessing by proximity.
+function textObjectOwnedElsewhere(doc, page, objects) {
+  const annotationOwned = new Set([...createdPageContentBindings(doc.annotations || [], objects, page.id).values()]
+    .map(object => object.stableId));
+  const edited = new Set(Object.values(doc.textEdits || {}).filter(edit => edit?.pageId === page.id)
+    .map(edit => normalizedNativeLayerText(edit.currentText ?? edit.text ?? edit.sourceText)));
+  return object => object.textFrame === true || annotationOwned.has(object.stableId) ||
+    Boolean(doc.nativeObjectDuplications?.[object.stableId]) ||
+    edited.has(normalizedNativeLayerText(object.text));
+}
+
+// A line PDF.js dropped because its baseline lies past the page.
+function pastPageTextItemFromObject(page, object) {
+  const source = object.sourceBBox || object.bbox;
+  const display = displayRectForSourceRect(page, source);
+  const matrix = object.pageMatrix || object.matrix;
+  const sourceAngle = matrix ? -Math.atan2(Number(matrix.b), Number(matrix.a)) : 0;
+  // Slanted text keeps its PDF.js row: only that row knows its oriented box.
+  if (Math.abs(sourceAngle) > 0.01) return null;
+  const baseline = matrix ? pdfPointToSourceTopLeft(page, { x: matrix.e, y: matrix.f }) : null;
+  const fontSize = firstFinite(object.fontSize, 12);
+  return { id: `native:${object.stableId}`, str: String(object.text || ''),
+    stableId: object.stableId, objectId: object.objectId, objectIndex: object.objectIndex,
+    x: display.x, y: display.y, w: display.w, h: display.h,
+    sourceX: source.x, sourceY: source.y, sourceW: source.w, sourceH: source.h,
+    sourceBaselineX: baseline?.x, sourceBaselineY: baseline?.y, sourceFontSize: fontSize, sourceAngle,
+    angle: sourceAngle + normalizedDelta(page.rotation || 0) * Math.PI / 180, fontSize,
+    inlineSize: display.w, blockSize: display.h, sourceInlineSize: source.w, sourceBlockSize: source.h,
+    fontKey: 'helvetica', fontWeight: '400', fontStyle: 'normal' };
+}
+
 function insertedNativeTextItems(doc, page, objects = []) {
   const annotationOwnedIds = new Set([...createdPageContentBindings(
     doc.annotations || [], objects, page.id,
@@ -19155,10 +19227,15 @@ function App({ shell = null }) {
     return () => window.clearTimeout(timer);
   }, [bindSemanticTextTarget, selected?.pageId, selected?.sourceId, selected?.type]);
 
+  // `batch` turns several page moves, deletions or duplications into one
+  // transaction (one snapshot, one source refresh, one Undo step): it receives
+  // the latest document and returns [{ type, targetId, payload }]. Without it,
+  // type/targetId/payload describe a single command.
   const executeNativePageTopology = useCallback((docId, {
     type,
     targetId,
     payload = {},
+    batch = null,
     project,
     label,
     resources = [],
@@ -19236,13 +19313,16 @@ function App({ shell = null }) {
       for (const resource of resources) await runtime.kernel.registerResource(resource);
       await persistLiveUiBaseline(runtime, latestDoc);
       const prefix = `page-topology-${uid()}`;
+      const forwardCommands = batch
+        ? batch(latestDoc)
+        : [{ type, targetId, payload: transactionPayload }];
       const result = await runtime.kernel.execute({
-        commands: [createPdfCommand({
-          commandId: `${prefix}:forward`,
-          type,
-          targetId,
-          payload: { ...transactionPayload, rollbackResourceHash: beforeResource.hash },
-        })],
+        commands: forwardCommands.map((command, index) => createPdfCommand({
+          commandId: index ? `${prefix}:forward:${index}` : `${prefix}:forward`,
+          type: command.type,
+          targetId: command.targetId,
+          payload: { ...command.payload, rollbackResourceHash: beforeResource.hash },
+        })),
         inverseCommands: [createPdfCommand({
           commandId: `${prefix}:undo`,
           type: CommandType.DOCUMENT_RESTORE_SNAPSHOT,
@@ -19348,6 +19428,7 @@ function App({ shell = null }) {
     log.info('pdf.history', { direction, documentId: docId });
     setHistoryBlocked(null);
     const initialRuntime = livePdfRuntimeRef.current;
+    flushPropertyGestures();
     flushPendingLiveObjectEdits(initialRuntime);
     const initialDoc = workspaceSnapshotRef.current.docs.find(doc => doc.id === docId);
     if (
@@ -23062,7 +23143,12 @@ function App({ shell = null }) {
           opacityMode: NATIVE_IMAGE_OPACITY_MODE,
         } : {}),
         ...(kind === 'text' ? {
-          opacity: projectedNativeTextOpacity(null, object),
+          // A text block keeps its opacity in its characters' colour, so the
+          // object's graphics state reads 1 and only the request knows the value.
+          opacity: nextEdit.textBlock === true && options.gestureKind === GestureKind.STYLE &&
+              typeof nextEdit.opacity === 'number'
+            ? nextEdit.opacity
+            : projectedNativeTextOpacity(null, object),
           currentText: semanticNextText,
           dataUrl: '',
           sourceCoverDataUrl: '',
@@ -23255,8 +23341,10 @@ function App({ shell = null }) {
         const currentEdit = historyDoc[collectionName]?.[sourceId];
         if (!currentEdit) return historyDoc;
         // A later gesture may already have updated this object while the
-        // PDFium inspection for this commit was still in flight.
-        if (!isLatestLiveEditCommit(runtime, gestureKey, commitGeneration)) {
+        // PDFium inspection for this commit was still in flight. A draft on the
+        // Inspector counts too: it gets its generation only when it commits.
+        if (!isLatestLiveEditCommit(runtime, gestureKey, commitGeneration) ||
+            runtime.uiDraftTargets?.has(gestureKey)) {
           return {
             ...historyDoc,
             [collectionName]: {
@@ -26119,6 +26207,33 @@ function App({ shell = null }) {
     }).catch(error => showToast(userFacingError(error, 'Could not delete the page.'), 'error'));
   }, [activeDoc, activePage, enqueuePageStructureChange, executeNativePageTopology, updateDoc]);
 
+  // Deletes several pages as one transaction and one Undo step. Not reachable
+  // from the single-selection Pages panel yet; hosts with page multi-selection
+  // and the worker gate use it.
+  const deletePagesById = useCallback(async (pageIds) => {
+    if (!activeDoc) return false;
+    const ids = new Set(pageIds);
+    if (!ids.size || ids.size >= activeDoc.pages.length) return false;
+    const documentId = activeDoc.id;
+    return executeNativePageTopology(documentId, {
+      batch: doc => doc.pages.filter(page => ids.has(page.id))
+        .map(page => ({ type: CommandType.PAGE_DELETE, targetId: page.id, payload: {} })),
+      label: ids.size === 1 ? 'Delete page' : 'Delete pages',
+      project: doc => {
+        let next = doc;
+        for (const pageId of ids) next = withoutPageOwnedState(next, pageId);
+        const pages = doc.pages.filter(page => !ids.has(page.id));
+        return { ...next, pages,
+          ...(Array.isArray(doc.bookmarks) ? { bookmarks: normalizeBookmarks(doc.bookmarks, pages) } : {}) };
+      },
+    });
+  }, [activeDoc, executeNativePageTopology]);
+  useEffect(() => {
+    // Test and host hook: the Pages panel itself has no page multi-selection.
+    window.__fernworkPdfDeletePages = deletePagesById;
+    return () => { delete window.__fernworkPdfDeletePages; };
+  }, [deletePagesById]);
+
   const moveActivePage = useCallback((dir) => {
     if (!activeDoc) return;
     const documentId = activeDoc.id;
@@ -26618,21 +26733,12 @@ function App({ shell = null }) {
     const documentId = activeDoc.id;
     const pageIds = selectedPageIndices.map(index => activeDoc.pages[index].id);
     const firstIndex = selectedPageIndices[0];
-    const steps = pageIds.map(pageId => ({
-      type: CommandType.PAGE_DELETE,
-      targetId: pageId,
-      label: 'Delete page',
-      project: doc => {
-        const withoutPage = withoutPageOwnedState(doc, pageId);
-        const pages = doc.pages.filter(page => page.id !== pageId);
-        return { ...withoutPage, pages,
-          ...(Array.isArray(doc.bookmarks) ? { bookmarks: normalizeBookmarks(doc.bookmarks, pages) } : {}) };
-      },
-    }));
     const message = pageIds.length === 1 ? `Page ${firstIndex + 1} deleted.` : `${pageIds.length} pages deleted.`;
     const remaining = activeDoc.pages.filter(page => !pageIds.includes(page.id));
     const nextCurrentId = remaining[Math.min(remaining.length - 1, Math.max(0, firstIndex - 1))]?.id;
-    void runPageTopologySteps(documentId, steps).then(() => {
+    // berg:work: all selected pages go in one transaction and one Undo step.
+    void deletePagesById(pageIds).then(deleted => {
+      if (deleted === false) return;
       setSelected(null);
       setPageSelectionIds([]);
       setActivePage(Math.max(0, firstIndex - 1));
@@ -26648,8 +26754,8 @@ function App({ shell = null }) {
           showToast('Other changes came after. Use Undo in the toolbar to step back.', 'info');
           return;
         }
-        for (let step = 0; step < steps.length; step += 1) runDocHistoryActionRef.current('undo');
-        // Select the restored pages once the queued Undo steps have brought them back.
+        runDocHistoryActionRef.current('undo');
+        // Select the restored pages once Undo has brought them back.
         const reselect = (frames = 0) => {
           const restored = workspaceSnapshotRef.current.docs.find(item => item.id === documentId);
           if (restored && pageIds.every(id => restored.pages.some(page => page.id === id))) {
@@ -26659,7 +26765,7 @@ function App({ shell = null }) {
         reselect();
       } } });
     }).catch(error => showToast(userFacingError(error, 'Could not delete the page.'), 'error'));
-  }, [activeDoc, runPageTopologySteps, selectedPageIndices, showPagesAfterChange]);
+  }, [activeDoc, deletePagesById, selectedPageIndices, showPagesAfterChange]);
 
   const performPdfExport = useCallback(async (options = {}) => {
     if (!activeDoc) return;
@@ -30889,6 +30995,7 @@ function App({ shell = null }) {
       />
 
       <Inspector
+        zoom={zoom}
         open={inspectorOpen || Boolean(miniToolbar && miniToolbarHost)}
         headless={!inspectorOpen}
         miniToolbar={miniToolbar && miniToolbarHost
@@ -34067,8 +34174,10 @@ function PdfPageContent({
         }
         const bitmapStartedAt = performance.now();
         const decoded = await Promise.allSettled([
-          result.belowPixels, result.spritePixels, result.upperPixels,
-        ].map(pixels => rgbaPreviewImageBitmap(pixels, result.width, result.height)));
+          rgbaPreviewImageBitmap(result.belowPixels, result.width, result.height),
+          rgbaPreviewImageBitmap(result.spritePixels, result.spriteWidth, result.spriteHeight),
+          rgbaPreviewImageBitmap(result.upperPixels, result.width, result.height),
+        ]);
         if (decoded.some(value => value.status !== 'fulfilled')) {
           decoded.forEach(value => { if (value.status === 'fulfilled') value.value.close(); });
           return { ...metadata, previewKind: 'outline', reason: 'native-layer-bitmap-failed' };
@@ -34095,7 +34204,8 @@ function PdfPageContent({
         return {
           ...metadata, targetKind: result.targetKind, bounds: result.bounds,
           sourceBounds: result.sourceBounds, width: result.width, height: result.height,
-          scale: result.scale,
+          spriteBounds: result.spriteBounds, spriteWidth: result.spriteWidth,
+          spriteHeight: result.spriteHeight, scale: result.scale,
           belowBitmap: bitmaps[0], spriteBitmap: bitmaps[1], upperBitmap: bitmaps[2],
         };
       }).catch(error => {
@@ -35029,12 +35139,17 @@ function PdfPageContent({
       // matching font at once instead of the browser default first.
       prewarmLibraryPreviewFaces(weightedItems);
       const normalizedItems = normalizePdfTextItems(weightedItems);
-      const semanticText = detectSemanticTextBlocks(normalizedItems);
+      const wholeItems = textItemsWithPastPageText(normalizedItems, currentNativeObjects, page, {
+        displayRect: rect => displayRectForSourceRect(page, rect),
+        itemFromObject: object => pastPageTextItemFromObject(page, object),
+        ownedElsewhere: textObjectOwnedElsewhere(doc, page, currentNativeObjects),
+      });
+      const semanticText = detectSemanticTextBlocks(wholeItems);
       const semanticBlockByItemId = new Map(
         semanticText.blocks.flatMap(block =>
           block.itemIds.map(itemId => [String(itemId), block])),
       );
-      const hydratedItems = normalizedItems.map(item => {
+      const hydratedItems = wholeItems.map(item => {
         const semanticBlock = semanticBlockByItemId.get(String(item.id));
         return semanticBlock
           ? {
@@ -36011,11 +36126,16 @@ function PdfPageContent({
     };
   }, [page]);
 
+  const limitSelectionMove = useCallback((items, dx, dy) => {
+    const bounds = selectionBounds(items);
+    return bounds ? limitMoveToGrabArea(bounds, dx, dy, pageDimensions(page), zoom) : { dx, dy };
+  }, [page, zoom]);
   const moveSelectionItems = useCallback((items, dx, dy, options = {}) => {
     // berg:work: `perItemTransforms` (selection key → { kind, scaleX, scaleY | degrees }) scales or turns each object
     // about its own frame, all in one transaction: the multi-selection's shared Width, Height and Angle fields.
     const perItemTransforms = options.perItemTransforms?.size ? options.perItemTransforms : null;
     const sharedTransform = perItemTransforms ? null : options.groupTransform || null;
+    if (!sharedTransform && !perItemTransforms && !options.offsets && items?.length) ({ dx, dy } = limitSelectionMove(items, dx, dy));
     if (!doc || !items?.length || (!dx && !dy && !options.offsets?.size && !sharedTransform && !perItemTransforms)) return;
     const sharedBounds = sharedTransform ? selectionBounds(items) : null;
     if ((sharedTransform || perItemTransforms) && ((sharedTransform && !sharedBounds) || items.some(entry =>
@@ -36151,7 +36271,7 @@ function PdfPageContent({
       mergeKey: `selection:${page.id}`,
       label: labelKind === 'resize' ? 'Resize' : labelKind === 'rotate' ? 'Rotate' : 'Move',
     });
-  }, [doc, imageEditForSelectionMove, nativeObjectEditForSelectionMove, onMoveSelectionItems, page.id, textEditForSelectionMove]);
+  }, [doc, imageEditForSelectionMove, limitSelectionMove, nativeObjectEditForSelectionMove, onMoveSelectionItems, page.id, textEditForSelectionMove]);
   // berg:work: the shared fields of a multi-selection (Properties) change every selected object of this page in one
   // transaction: per-object offsets for X/Y, per-object scales or turns for Width/Height/Angle. Keys are layer keys.
   const sharedFieldsRef = useRef(null);
@@ -36232,8 +36352,9 @@ function PdfPageContent({
           : [readSelectableItems().find(item => selectionItemKey(item) === selectionItemKey(selected))].filter(Boolean);
     if (!items.length) return;
     const step = event.shiftKey ? 10 : 1;
-    const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
-    const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;
+    const { dx, dy } = limitSelectionMove(items,
+      event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0,
+      event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0);
     event.preventDefault();
     event.stopPropagation();
     const lockedSelection = items.some(item => layerPresentationFor(
@@ -36964,6 +37085,7 @@ function PdfPageContent({
               zoom={zoom}
               zIndex={9997}
               onMove={moveSelectionItems}
+              limitMove={limitSelectionMove}
               onAdditiveClickAtPoint={event => {
                 const selectableByKey = new Map(pageSelectableItemsRef.current()
                   .map(item => [selectionItemKey(item), item]));
@@ -39255,6 +39377,7 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
     });
     drag.latest = nextEdit;
     interactionDraftRuntime.updateRect(event.pointerId, nextEdit, layoutZoom);
+    if (!drag.handle) trackDropPage(drag, nextEdit, layoutZoom);
     updateNativeDragComposition(drag, nextEdit);
     publishTextDragPreview(drag);
     positionNativeRasterPreview(nextEdit, layoutZoom);
@@ -39297,7 +39420,7 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
     let pendingCommit = null;
     if (!drag.handle && drag.latest) {
       const latest = drag.latest;
-      const snap = snapPageItemToBestPage(latest, zoom, latest.pageId || drag.pageId || page.id);
+      const snap = snapPageItemToBestPage(latest, zoom, latest.pageId || drag.pageId || page.id, drag.lastPointer);
       if (snap) {
         const targetPage = pages.find(candidate => candidate.id === snap.pageId) || page;
         const nextSourceRect = textTargetSourceRectForPatch(targetPage, latest, { x: snap.x, y: snap.y });
@@ -39315,6 +39438,7 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
           targetSourceBaselineY: nextSourceBaseline.y,
         };
         drag.latest = patch;
+        holdDroppedComposition(drag, patch);
         drag.affectedPageIds = [drag.pageId || page.id, patch.pageId];
         if (patch.pageId !== drag.pageId) {
           drag.previewStatus = 'Text crossing pages is shown as an outline while moving.';
@@ -39789,6 +39913,7 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
     };
     drag.latest = nextEdit;
     interactionDraftRuntime.updateRect(event.pointerId, nextEdit, layoutZoom);
+    if (!drag.handle) trackDropPage(drag, nextEdit, layoutZoom);
     updateNativeDragComposition(drag, nextEdit);
     event.preventDefault();
   };
@@ -39820,7 +39945,7 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
     let pendingCommit = null;
     if (!drag.handle && drag.latest) {
       const latest = drag.latest;
-      const snap = snapPageItemToBestPage(latest, zoom, latest.pageId || edit.pageId);
+      const snap = snapPageItemToBestPage(latest, zoom, latest.pageId || edit.pageId, drag.lastPointer);
       if (snap) {
         const targetPage = pages.find(candidate => candidate.id === snap.pageId) || page;
         const nextSourceRect = textTargetSourceRectForPatch(targetPage, latest, { x: snap.x, y: snap.y });
@@ -39838,6 +39963,7 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
           targetSourceBaselineY: nextSourceBaseline.y,
         };
         drag.latest = patch;
+        holdDroppedComposition(drag, patch);
         drag.affectedPageIds = [drag.pageId || page.id, patch.pageId];
         pendingCommit = onMove(sourceId, patch, { commitGesture: true, gestureReason: 'text-drop', gestureKind: GestureKind.MOVE, previousForCommit: drag.edit });
         if (snap.pageId !== drag.pageId) onSelect(selectionPayload(snap.pageId, patch));
@@ -40186,6 +40312,7 @@ function ImageRegion({ page, pages = [page], item, itemId, edit, preferences, zo
     nextEdit.targetSourceH = nextSourceRect.h;
     drag.latest = nextEdit;
     interactionDraftRuntime.updateRect(drag.id, nextEdit, layoutZoom);
+    if (!drag.handle) trackDropPage(drag, nextEdit, layoutZoom);
     updateNativeDragComposition(drag, nextEdit);
     if (hasQuadHit || (needsImageAffine && drag.handle)) setDraftEdit(nextEdit);
     event.preventDefault();
@@ -40210,7 +40337,7 @@ function ImageRegion({ page, pages = [page], item, itemId, edit, preferences, zo
     let pendingCommit = null;
     if (!drag.handle && drag.latest) {
       const latest = drag.latest;
-      const snap = snapPageItemToBestPage(latest, zoom, latest.pageId || page.id);
+      const snap = snapPageItemToBestPage(latest, zoom, latest.pageId || page.id, drag.lastPointer);
       if (snap) {
         const targetPage = pages.find(candidate => candidate.id === snap.pageId) || page;
         const nextSourceRect = retargetPatchToPage(page, targetPage, latest, snap);
@@ -40225,6 +40352,7 @@ function ImageRegion({ page, pages = [page], item, itemId, edit, preferences, zo
           targetSourceH: nextSourceRect.h,
         };
         drag.latest = patch;
+        holdDroppedComposition(drag, patch);
         drag.affectedPageIds = [drag.pageId || page.id, patch.pageId];
         committedPatch = patch;
         pendingCommit = onMove(itemId, patch, { commitGesture: true, gestureReason: 'image-drop', gestureKind: GestureKind.MOVE, previousForCommit: drag.edit });
@@ -40461,6 +40589,7 @@ function ImageEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, s
     nextEdit.targetSourceH = nextSourceRect.h;
     drag.latest = nextEdit;
     interactionDraftRuntime.updateRect(drag.id, nextEdit, layoutZoom);
+    if (!drag.handle) trackDropPage(drag, nextEdit, layoutZoom);
     updateNativeDragComposition(drag, nextEdit);
     if (hasQuadHit || (needsImageAffine && drag.handle)) setDraftEdit(nextEdit);
     event.preventDefault();
@@ -40480,7 +40609,7 @@ function ImageEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, s
     let pendingCommit = null;
     if (!drag.handle && drag.latest) {
       const latest = drag.latest;
-      const snap = snapPageItemToBestPage(latest, zoom, latest.pageId || current.pageId);
+      const snap = snapPageItemToBestPage(latest, zoom, latest.pageId || current.pageId, drag.lastPointer);
       if (snap) {
         const targetPage = pages.find(candidate => candidate.id === snap.pageId) || page;
         const nextSourceRect = retargetPatchToPage(page, targetPage, latest, snap);
@@ -40495,6 +40624,7 @@ function ImageEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, s
           targetSourceH: nextSourceRect.h,
         };
         drag.latest = patch;
+        holdDroppedComposition(drag, patch);
         drag.affectedPageIds = [drag.pageId || page.id, patch.pageId];
         committedPatch = patch;
         pendingCommit = onMove(sourceId, patch, { commitGesture: true, gestureReason: 'image-drop', gestureKind: GestureKind.MOVE, previousForCommit: drag.edit });
@@ -40906,6 +41036,7 @@ function NativePdfObject({
     }, drag.edit);
     drag.latest = nextEdit;
     interactionDraftRuntime.updateRect(event.pointerId, nextEdit, layoutZoom);
+    if (!drag.handle) trackDropPage(drag, nextEdit, layoutZoom);
     updateNativeDragComposition(drag, nextEdit);
     event.preventDefault();
   };
@@ -40924,7 +41055,7 @@ function NativePdfObject({
     let pendingCommit = null;
     if (!drag.handle && drag.latest) {
       const latest = drag.latest;
-      const snap = snapPageItemToBestPage(latest, zoom, latest.pageId || base.pageId || page.id);
+      const snap = snapPageItemToBestPage(latest, zoom, latest.pageId || base.pageId || page.id, drag.lastPointer);
       if (snap) {
         const targetPage = pages.find(candidate => candidate.id === snap.pageId) || page;
         const target = retargetPatchToPage(page, targetPage, latest, snap);
@@ -40940,6 +41071,7 @@ function NativePdfObject({
           action: latest.action || 'transform',
         };
         drag.latest = patch;
+        holdDroppedComposition(drag, patch);
         drag.affectedPageIds = [drag.pageId || page.id, patch.pageId];
         setDraftEdit(patch);
         pendingCommit = onMove(sourceId, patch, { commitGesture: true, gestureReason: 'native-object-drop', gestureKind: GestureKind.MOVE, previousForCommit: drag.edit });
@@ -41878,6 +42010,7 @@ function AnnotationObject({ page, ann, zoom, zIndex, selected, editing, pageCont
       }
       drag.latest = { ...drag.ann, ...patch };
       interactionDraftRuntime.updateRect(event.pointerId, drag.latest, layoutZoom);
+      trackDropPage(drag, drag.latest, layoutZoom);
       event.preventDefault();
       return;
     }
@@ -41921,7 +42054,7 @@ function AnnotationObject({ page, ann, zoom, zIndex, selected, editing, pageCont
     let pendingCommit = null;
     if (!drag.handle && drag.latest) {
       const latest = drag.latest;
-      const snap = snapPageItemToBestPage(latest, zoom, latest.pageId || ann.pageId);
+      const snap = snapPageItemToBestPage(latest, zoom, latest.pageId || ann.pageId, drag.lastPointer);
       if (snap) {
         const patch = {
           pageId: snap.pageId,
@@ -42217,7 +42350,7 @@ const ARRANGE_SECTIONS = [
   ] },
 ];
 
-function MultiSelectionBox({ items, zoom, zIndex, locked = false, onMove, onGroup, onArrange,
+function MultiSelectionBox({ items, zoom, zIndex, locked = false, onMove, limitMove, onGroup, onArrange,
   onAdditiveClickAtPoint, onSelectMember = null, affordanceHost, externalDragRef = null }) {
   const dragRef = useRef(null);
   useCancelPdfDragOnUnmount(dragRef);
@@ -42477,6 +42610,9 @@ function MultiSelectionBox({ items, zoom, zIndex, locked = false, onMove, onGrou
       // narrows the selection) after the group was dragged.
       if (drag.mode === 'move' && !drag.armed &&
         Math.hypot(event.clientX - drag.x, event.clientY - drag.y) >= drag.slop) move(event);
+      if (drag.mode === 'move' && drag.armed && drag.latest) {
+        drag.latest = limitMove(drag.items, drag.latest.dx, drag.latest.dy);
+      }
       const transform = drag.latest?.groupTransform;
       const meaningfulTransform = !transform || (transform.kind === 'resize'
         ? Math.abs(Number(transform.scaleX || 1) - 1) > 0.0005 || Math.abs(Number(transform.scaleY || 1) - 1) > 0.0005
@@ -46348,6 +46484,7 @@ function CustomFreeTextConversion({ onReplace, disabled = false }) {
   );
 }
 function Inspector({
+  zoom = 1,
   open,
   // berg:work: mounted only to fill the mini toolbar (Properties itself closed): hidden and inert.
   headless = false,
@@ -46468,6 +46605,16 @@ function Inspector({
   }, []);
 
   useEffect(() => () => cancelPropertyGestures(), [doc?.id, open]);
+
+  useEffect(() => {
+    const flush = () => {
+      for (const [key, entry] of [...propertyGestureRef.current.entries()]) {
+        if (entry.pendingCommit) finishPropertyGesture(key, entry.pendingCommit);
+      }
+    };
+    propertyGestureFlushers.add(flush);
+    return () => propertyGestureFlushers.delete(flush);
+  }, []);
 
   useEffect(() => {
     if (!selectedKey) return undefined;
@@ -46917,6 +47064,7 @@ function Inspector({
       if (pointer) {
         if (existing.timer) window.clearTimeout(existing.timer);
         existing.timer = 0;
+        existing.pendingCommit = null;
         existing.pointerActive = true;
       }
     } else {
@@ -46944,7 +47092,17 @@ function Inspector({
     if (!entry) return;
     if (entry.timer) window.clearTimeout(entry.timer);
     if (entry.pointerActive) return;
-    entry.timer = window.setTimeout(() => finishPropertyGesture(key, commit), 180);
+    entry.pendingCommit = commit;
+    const armIdle = delay => {
+      const dueAt = performance.now() + delay;
+      entry.timer = window.setTimeout(() => {
+        // A late timer means the main thread was stalled, and the next step may
+        // be waiting right behind that task: this was not the user pausing.
+        if (performance.now() - dueAt > PROPERTY_GESTURE_LATE_MS) armIdle(PROPERTY_GESTURE_STALL_GRACE_MS);
+        else finishPropertyGesture(key, commit);
+      }, delay);
+    };
+    armIdle(PROPERTY_GESTURE_IDLE_MS);
   };
   const ownPropertyDraftCancellation = (key, cancellation) => {
     if (typeof cancellation !== 'function') return;
@@ -47008,6 +47166,12 @@ function Inspector({
     // be silently ignored here or rounded up in the canonical source rectangle.
     if (resizing && value <= 0) return;
     let patch = { [field]: value };
+    if (!resizing) {
+      const pageSize = pageDimensions(page);
+      const horizontal = field === 'x';
+      patch[field] = positionWithinGrabArea(value, Number(current[horizontal ? 'w' : 'h']),
+        Number(current[horizontal ? 'h' : 'w']), pageSize[horizontal ? 'width' : 'height'], zoom);
+    }
     if (resizing && textFrameLayer) {
       patch = textLocalDimensionPatch(current, field, value);
     }

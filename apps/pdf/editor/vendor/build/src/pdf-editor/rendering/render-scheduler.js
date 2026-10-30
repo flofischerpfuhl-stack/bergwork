@@ -22,6 +22,18 @@ export class RenderScheduler {
   /**
    * @param {{ maxConcurrent?: number, maxQueued?: number }} [options]
    */
+  /**
+   * Helper engines raise and drop the parallelism while the document is open.
+   * @param {number} maxConcurrent
+   */
+  setMaxConcurrent(maxConcurrent) {
+    if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1) {
+      throw new TypeError('maxConcurrent must be a positive safe integer.');
+    }
+    this.#maxConcurrent = maxConcurrent;
+    this.#drain();
+  }
+
   constructor({ maxConcurrent = 1, maxQueued = 64 } = {}) {
     if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1) {
       throw new TypeError('maxConcurrent must be a positive safe integer.');

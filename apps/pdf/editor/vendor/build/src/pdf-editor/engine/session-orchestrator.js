@@ -42,6 +42,9 @@ export class PdfEngineError extends Error {
  * are serialized here even though the worker independently enforces its own
  * single-writer queue.
  */
+const SLOW_TILE_MS = 150;
+const SLOW_TILES_BEFORE_HELPERS = 2;
+
 export class PdfEngineSessionOrchestrator {
   #transport;
   #requestSequence = 0;
@@ -58,12 +61,16 @@ export class PdfEngineSessionOrchestrator {
   #workCompletedListeners = new Set();
   #completedWorkSequence = 0;
   #lastFailedTransaction = null;
+  /** @type {import('./render-helpers.js').RenderHelperPool | null} */
+  #renderHelpers = null;
+  #slowTiles = 0;
 
   /**
    * @param {object} input
    * @param {EngineTransport} input.transport
    */
-  constructor({ transport }) {
+  constructor({ transport, renderHelpers = null }) {
+    this.#renderHelpers = renderHelpers;
     if (!transport || typeof transport.request !== 'function') {
       throw new TypeError('A PDF engine transport is required.');
     }
@@ -547,15 +554,65 @@ export class PdfEngineSessionOrchestrator {
       void this.cancelRender(jobId);
     };
     signal?.addEventListener('abort', cancellation, { once: true });
+    const startedAt = performance.now();
+    const expectedRevision = this.#revision;
+    const helperResult = tile && !hiddenNativeStableIds?.length && !hiddenAnnotationObjectNumbers?.length
+      ? this.#renderHelpers?.render({ payload: request.payload, jobId, revision: expectedRevision })
+      : null;
+    if (helperResult) {
+      this.#renderJobs.set(jobId, helperResult);
+      try {
+        const result = await helperResult;
+        // The tile belongs to the revision it was asked for, like a primary reply.
+        if (this.#revision !== expectedRevision) {
+          throw new PdfEngineError(EngineErrorCode.REVISION_CONFLICT, 'The document changed while a tile rendered.');
+        }
+        this.#noteRenderHelperWork();
+        return { ...result, revision: expectedRevision, pageEpoch: this.pageEpoch(pageId), pageId };
+      } catch (error) {
+        if (error?.code === EngineErrorCode.RENDER_CANCELLED || error instanceof PdfEngineError) throw error;
+        // A helper that fails costs the tile nothing: the primary renders it.
+      } finally {
+        this.#renderJobs.delete(jobId);
+        signal?.removeEventListener('abort', cancellation);
+      }
+      signal?.addEventListener('abort', cancellation, { once: true });
+    }
     const promise = this.#send(request);
     this.#renderJobs.set(jobId, promise);
     try {
       const response = await promise;
+      if (tile) {
+        this.#noteTileCost(Number(response.result?.timing?.wallMs ?? performance.now() - startedAt), expectedRevision);
+      }
       return response.result;
     } finally {
       this.#renderJobs.delete(jobId);
       signal?.removeEventListener('abort', cancellation);
     }
+  }
+
+  #noteRenderHelperWork() {
+    this.#completedWorkSequence += 1;
+    for (const listener of this.#workCompletedListeners) {
+      try { listener(this.#completedWorkSequence); }
+      catch { /* A UI retry observer cannot compromise the session. */ }
+    }
+  }
+
+  /**
+   * Two slow tiles of one revision open the helpers; cheap pages never pay for
+   * them. They need the committed bytes, which only exist for a verified revision.
+   * @param {number} elapsedMs
+   * @param {number} revision
+   */
+  #noteTileCost(elapsedMs, revision) {
+    const pool = this.#renderHelpers;
+    if (!pool || pool.opening || pool.readyFor(revision) || revision !== this.#revision) return;
+    this.#slowTiles = elapsedMs >= SLOW_TILE_MS ? this.#slowTiles + 1 : this.#slowTiles;
+    if (this.#slowTiles < SLOW_TILES_BEFORE_HELPERS) return;
+    this.#slowTiles = 0;
+    void pool.open(() => this.recoverySnapshot(), () => this.#revision).catch(() => {});
   }
 
   /**
@@ -731,9 +788,12 @@ export class PdfEngineSessionOrchestrator {
       }
       if (result.previewKind === 'outline') return result;
       const size = Number(result.width) * Number(result.height) * 4;
-      if (result.previewKind !== 'raster' || !Number.isSafeInteger(size) || size < 4 || size > 48 * 1024 * 1024 ||
-          ![result.belowPixels, result.spritePixels, result.upperPixels].every(value =>
-            (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) && value.byteLength === size)) {
+      const spriteSize = Number(result.spriteWidth) * Number(result.spriteHeight) * 4;
+      if (result.previewKind !== 'raster' || ![size, spriteSize].every(value =>
+        Number.isSafeInteger(value) && value >= 4 && value <= 48 * 1024 * 1024) ||
+          ![[result.belowPixels, size], [result.spritePixels, spriteSize], [result.upperPixels, size]]
+            .every(([value, expected]) => (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) &&
+              value.byteLength === expected)) {
         throw new PdfEngineError(EngineErrorCode.INVALID_REQUEST, 'Drag composition buffers are invalid.');
       }
       return result;
@@ -837,6 +897,7 @@ export class PdfEngineSessionOrchestrator {
    */
   async cancelRender(jobId) {
     if (!this.#sessionId || this.#state === EngineSessionState.CLOSED) return false;
+    if (this.#renderHelpers?.hasJob(jobId)) return this.#renderHelpers.cancel(jobId);
     const request = createEngineRequest({
       requestId: this.#nextRequestId(),
       type: EngineRequestType.CANCEL_RENDER,
@@ -922,6 +983,7 @@ export class PdfEngineSessionOrchestrator {
         await this.#send(request);
       }
     } finally {
+      await this.#renderHelpers?.close().catch(() => {});
       await this.#transport.close?.();
       this.#state = EngineSessionState.CLOSED;
       this.#sessionId = null;
@@ -1014,6 +1076,8 @@ export class PdfEngineSessionOrchestrator {
   }
 
   #notifyRevision(details) {
+    if (details?.reason !== 'open') this.#renderHelpers?.invalidate();
+    this.#slowTiles = 0;
     for (const listener of this.#revisionListeners) {
       try {
         listener(this.#revision, Object.freeze({ ...details }));
