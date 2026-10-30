@@ -11,6 +11,7 @@ interface TauriWindow {
   isMaximized(): Promise<boolean>;
   onResized(handler: () => void): Promise<() => void>;
   setTitle(title: string): Promise<void>;
+  setFullscreen(fullscreen: boolean): Promise<void>;
 }
 
 interface TauriGlobal {
@@ -34,6 +35,12 @@ export function setWindowTitle(title: string): void {
   document.title = title;
   if (desktopWindow) desktopWindow.setTitle(title).catch(() => {});
 }
+
+/** Window fullscreen for the editor's toggle; the title bar goes with it (bergwork-pdf.css). */
+export const setWindowFullscreen = desktopWindow ? async (fullscreen: boolean): Promise<void> => {
+  await desktopWindow.setFullscreen(fullscreen);
+  document.documentElement.classList.toggle('bw-window-fullscreen', fullscreen);
+} : undefined;
 
 export function appVersion(): Promise<string | undefined> {
   return Promise.resolve().then(() => tauri?.app?.getVersion?.()).catch(() => undefined);

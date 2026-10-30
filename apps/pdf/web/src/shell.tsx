@@ -7,7 +7,8 @@ import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Info, ScrollText } from 'lucide-react';
 import { MenuButton, TITLE_BAR_DE, TITLE_BAR_EN, TitleBar, TooltipLayer, resolvedTheme, useAppearance } from '@bergwork/ui';
-import { appVersion, desktopWindow, setWindowTitle, windowCall, wireDesktopWindow } from './desktopWindow';
+import { DesktopOverlays, desktop, installDesktopDocuments, openDialogDescription, reopenWindows, shouldClaimOrphans } from './desktopDocuments';
+import { appVersion, desktopWindow, setWindowFullscreen, setWindowTitle, windowCall, wireDesktopWindow } from './desktopWindow';
 import { mountEditor } from './editor';
 import { HomeLink } from './homeLink';
 import { SAMPLE_LABEL, openSample, takeSampleRequest } from './sample';
@@ -36,12 +37,17 @@ function Shell() {
     // The editor has no unmount, so it mounts once per page; StrictMode's second effect run finds it mounted.
     if (mounted.current) return;
     mounted.current = true;
-    installNativeFiles();
+    installNativeFiles({ openDialogDescription });
     void appVersion().then(setVersion);
     const sample = inDesktopApp ? undefined : { label: SAMPLE_LABEL, open: () => void openSample() };
-    void mountEditor(stage.current!, { setTitle: (title, { dirty = false } = {}) => setDocument({ title, dirty }), sample })
-      .then(() => {
-        openDocumentsFromSystem();
+    void mountEditor(stage.current!, {
+      setTitle: (title, { dirty = false } = {}) => setDocument({ title, dirty }), sample, desktop,
+      claimOrphans: shouldClaimOrphans, setFullscreen: setWindowFullscreen,
+    })
+      .then((orphans) => {
+        installDesktopDocuments();
+        void openDocumentsFromSystem();
+        void reopenWindows(orphans);
         // bergwork.app links to /app/pdf/?sample: the sample opens once the editor has restored its workspace.
         if (sample && takeSampleRequest()) void editorReady().then(openSample);
         // The installed web app: "Open with" and "Share" (see launch-files.ts).
@@ -78,6 +84,7 @@ function Shell() {
         } : undefined} />
       {inDesktopApp ? null : <HomeLink root={window} />}
       <div ref={stage} id="pdf-workbench-root" className="bw-stage" />
+      {inDesktopApp ? <DesktopOverlays /> : null}
       <TooltipLayer />
     </div>
   );

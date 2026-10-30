@@ -265,18 +265,19 @@ the chip over a selected measurement, the Comments panel); screenshots in
 
 ## Desktop apps (`apps/pdf/src-tauri`, `packages/host-tauri`)
 
-Today: the Linux release build works (5:50 min, 72 MB binary with embedded assets), opens a PDF passed on the command
-line and has file associations (`pdf`, `bwpdf`, `fwdoc`), single instance and native save. The Rust side is 207
-lines of file I/O. `packages/host-tauri` is still empty.
+Today: the Linux release build works (5:50 min, 72 MB binary with embedded assets) and has file associations (`pdf`,
+`bwpdf`, `fwdoc`), single instance, several windows and native file handling (`src-tauri/src/lib.rs`, `windows.rs`).
+`packages/host-tauri` is still empty. What a desktop app can do that a web page cannot, with order and effort:
+`PDF-DESKTOP-VORTEILE.md`.
 
 - [ ] **Windows build.** Build `nsis`/`msi`, test WebView2 (cross-origin isolation, WASM threads, memory), paths and
   CRLF. 3–5 PD.
 - [ ] **macOS build.** Universal binary, hardened runtime, Developer ID signing and notarisation (99 $/year). 3–5 PD.
 - [ ] **Windows code signing.** An OV certificate (150–300 $/year) or Azure Artifact Signing (about 10 $/month; in
   the EU only for organisations). SmartScreen reputation builds up over time; EV no longer skips it. 2–3 PD.
-- [ ] **Updates.** Tauri updater with signed manifests: NSIS/MSI, macOS, and on Linux AppImage only. Plus winget and
-  AUR; Flatpak later (check Flathub's current rules on AI-written code first, unverified). Use a current
-  updater-plugin version. 3–5 PD.
+- [ ] **Updates.** Tauri updater with signed manifests: NSIS/MSI, macOS, AppImage; the changelog says deb and rpm too since
+  2.1 and 2.10, the guide still names AppImage only, so test them. Plus winget and AUR; Flatpak later and by hand: Flathub
+  wants AI material disclosed, no AI content in manifests, no agent-opened submissions, and builds from source. 3–5 PD.
 - [ ] **Release CI.** All platforms, signing, artefacts, update manifest. 8–15 PD.
 - [ ] **Default PDF app, per OS.** 5–8 PD for the three desktops.
   - **Windows:** apps cannot make themselves the default (UCPD protection). Register a ProgID and
@@ -302,6 +303,83 @@ lines of file I/O. `packages/host-tauri` is still empty.
   smartcards; timestamp and LTV through the host contract. 15–30 PD.
 - [ ] **Office conversion, desktop only** (later). PDF↔Word/Excel and Office→PDF through LibreOffice headless,
   if it is installed. It is not feasible in the browser.
+
+### Feel of a desktop app (audit 2026-10-30)
+
+Measured on Linux/WebKitGTK 2.54 only, in the real app under Xvfb with a window manager; Windows (WebView2) and macOS
+(WKWebView) have not been run. Compared with Acrobat, PDF-XChange, Okular, Figma Desktop and VS Code. What a desktop app
+could do beyond this, with order and effort, is in `PDF-DESKTOP-VORTEILE.md`.
+
+Measured on the release build at `nice 19` on a busy PC, so upper bounds: 0.7 s to the empty window, 2.6 s to a document's
+title, about 590 MB (Pss, all processes) with two small documents, and about 220 MB more for a second window.
+
+Done on `feat/pdf-desktop-windows`:
+
+- [x] **Several windows.** Document menu › Open in new window (and the command palette) moves a document with its
+  unsaved changes, undo history, page and zoom to a window of its own; Ctrl+Shift+N opens an empty one. Each window has
+  its own workspace record (`doc-<id>`, the main window keeps `default`). A window that loses its last document stays
+  empty, as in VS Code.
+- [x] **Second launch and file association.** A file that is open is shown in its window, a new one opens in the
+  window used last; events go to that window only.
+- [x] **Crash recovery per window.** After a crash every window comes back with its unsaved changes; an empty main
+  window takes over the first one.
+- [x] **Close question per window** (Save, Don't save, Cancel), Ctrl+Q for the whole app. Rust decides, so a window whose
+  page hangs still closes after 3 s; its workspace is restored on the next start.
+- [x] **Window position and size** per window, with the check that the place is still on a monitor. Own small
+  implementation in `windows.rs` (the window-state plugin writes on exit only, so a crash would lose the position, and it
+  keeps dynamic labels forever).
+- [x] **Save writes to the original file** without a dialog, atomically (fsync, rename, permissions kept). Not for
+  documents whose opening repaired damage or removed protection: those ask.
+- [x] **Changes from outside.** Polling every 3 s and on focus, also on network drives. Clean documents reload at their
+  page, documents with unsaved changes ask, Save over a changed file asks, a vanished file shows a notice.
+- [x] **Recent files** in the document menu, stored by the app. Paths of the last run stay usable after a restart.
+- [x] **Native open dialog** (paths known; a file open in another window is shown there), dialogs parented to their
+  window.
+- [x] **Drops from other programs.** The native drop arrives with paths and is replayed as a DOM drop at the same place.
+  Before, nothing listened for it: Tauri takes file drops away from the DOM.
+- [x] **Keys:** Ctrl+W (document, then window), Ctrl+Shift+W, Ctrl+Q, Ctrl+Tab, Ctrl+Shift+N, F11; F5 and Ctrl+R do
+  nothing. **WebView menu** gone outside text fields and selections. Appearance follows into the other windows.
+- [x] **Several files on the command line.** Only the last one opened: each load cancelled the one before.
+
+Open:
+
+- [ ] **Move a document into an existing window, drag between windows.** Today the move only makes a new window, and
+  closing a detached window does not bring the document back. Foxit and VS Code drag tabs out and between windows; Figma has a
+  cross-window tab menu. Needs a live "adopt" in the target window (the record move exists) and a real tab strip for
+  dragging; the islands chrome has only the dropdown. 3–5 PD, with a tab strip 6–10 PD.
+- [ ] **Open in new window for a document that is not shown** opens at page 1: the editor keeps one page and zoom per
+  window, not per document. Per-document view state fixes this and tab switches too. Editor core, Fernwork. 1–2 PD.
+- [ ] **IPC speed for large files.** `read_file` moves about 15 MB/s under WebKitGTK (157 MB took 10 s, measured at
+  `nice 19` on a busy PC, so an upper bound); a plain asset fetch over the app protocol is no faster. Opening large files is
+  dominated by this. Measure on an idle machine and under WebView2; a file input or a dedicated URI scheme with streaming may
+  beat it. 1–3 PD.
+- [ ] **Undo across a reload from disk** is gone: the reload replaces the document. It only happens to clean documents or
+  after asking. 2–3 PD if a restore point of the old file is wanted.
+- [ ] **WebView2 browser keys.** Windows has what WebKitGTK does not: F5, Ctrl+R, Ctrl+G/H/J/L/U, F12, Print, zoom. Set
+  `AreBrowserAcceleratorKeysEnabled=false` (through `tauri-plugin-prevent-default` or the webview handle), keep our own
+  handlers. Not testable here. 0.5–1 PD with the Windows build.
+- [ ] **macOS file associations.** Files arrive as `RunEvent::Opened`, not in argv; nothing handles it yet, so "Open with"
+  would do nothing. Also Cmd+Q ends the app without a close request. 1–2 PD with the macOS build.
+- [ ] **Quit on logout or shutdown** is not handled: windows just end, and the workspaces come back on the next start
+  without a question. Check on Windows (`WM_QUERYENDSESSION`) and macOS. 1 PD.
+- [ ] **Tear down a dead WebView.** A crashed web process leaves a blank window; offer a reload (wry has no hook in
+  Tauri yet, check `WebProcessTerminated` on GTK and `ProcessFailed` on WebView2). Unsaved work is safe. 1–2 PD.
+- [ ] **Drag out** (page or selection as a file into Explorer or a mail): `tauri-plugin-drag` 2.1 with a temporary file;
+  promises only on macOS. 2–4 PD.
+- [ ] **Drop feedback.** A native drag sends no DOM `dragover`, so the "Drop to open" overlay and the page highlight stay
+  dark. Drive them from Tauri's enter/over/leave events. 0.5 PD.
+- [ ] **Native menu bar** deliberately not on Windows and Linux (own title bar, palette). macOS needs a menu anyway
+  (Edit for Cmd+C/V, Window, Quit). 1–2 PD with the macOS build.
+- [ ] **Screen reader names of the title bar buttons** stay English/German by locale, the editor English only; see German
+  user interface.
+- [ ] **Shared native file watcher.** Polling is simple and works on SMB. `notify` would make local changes instant (with a
+  stamp check on top, because of atomic saves). Only if 3 s turns out too slow. 1 PD.
+- [ ] **Saving does not keep hard links or a file's owner:** it replaces the file. Fine for almost everything; Word and
+  VS Code offer both ways. Fall back to writing in place for hard links. 0.5 PD.
+- [ ] **WASM threads.** `crossOriginIsolated` is true, but WebKitGTK has no `SharedArrayBuffer`: the same in every window
+  and before this work. The worker runs without; check whether `JSC_useSharedArrayBuffer=1` is safe if threads are wanted.
+- [ ] **Web tabs still share one workspace record.** Two tabs of the web app overwrite each other's `default` record (the
+  writer lease protects the journal, not the list). Give each tab an id too; but a tab has no stable label. 1–2 PD.
 
 ## Agent interface
 
