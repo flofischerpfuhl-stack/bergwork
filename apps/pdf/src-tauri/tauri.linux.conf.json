@@ -24,6 +24,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "berg:work PDF",
         "width": 1440,
         "height": 900,

@@ -8,13 +8,13 @@ Tauri 2 app around the Fernwork PDF editor. Internal builds only; there is no pu
 | --- | --- |
 | `upstream/` | Pinned editor build (not committed): the files listed for `fernwork-pdf` in `../../upstream.lock.json`, laid out as in Fernwork (`tools/vendor/pdf-tools`, `pdf-runtime`, `tesseract-5.0.4`, `libheif-js-1.23.5`, `tools/js/converters/heic-decode-worker.js`). Recreate it with `npm run sync:install`. Never edited here. |
 | `editor/` | Source fork of the editor's UI (the PDF Tools shell and every file it imports), committed, with Fernwork's paths (`assets/`, `vendor/build/src/`). `fork.json` names the Fernwork commit and the files. `scripts/editor-fork.mjs` creates, reports on and ports it (`npm run fork:status`, `fork:port`, `fork:check`); `scripts/build-editor.mjs` bundles it into `editor-dist/` (not committed). |
-| `web/` | Host page owned by berg:work, built with Vite (`vite.config.ts`, root `web/`): `src/shell.tsx` (the design base's title bar from `@bergwork/ui` — mark, wordmark, document, about menu with version and licences, appearance menu, window buttons in the app — above the editor), `src/editor.ts` (loads the PDF.js and pdf-lib runtimes, the editor CSS and bundle from `tools/vendor/` and mounts it), `src/desktopWindow.ts` (Tauri window: drag, maximise, rounded corners on Linux), `src/bergwork-pdf.css` (the editor's `--pdf-*` tokens from the design base's `--bw-*` tokens, buttons, corners, licences dialog), `src/native-files.js` (native open/save), `src/licenses-view.js`, `public/` (pre-paint appearance script, icons). |
+| `web/` | Host page owned by berg:work, built with Vite (`vite.config.ts`, root `web/`): `src/shell.tsx` (the design base's title bar from `@bergwork/ui` — mark, wordmark, document, about menu with version and licences, appearance menu, window buttons in the app — above the editor), `src/editor.ts` (loads the PDF.js and pdf-lib runtimes, the editor CSS and bundle from `tools/vendor/` and mounts it), `src/desktopWindow.ts` (Tauri window: drag, maximise, rounded corners on Linux), `src/desktopDocuments.tsx` (the editor's `desktop` capability, close question, changes from outside, the keys of a desktop app), `src/bergwork-pdf.css` (the editor's `--pdf-*` tokens from the design base's `--bw-*` tokens, buttons, corners, licences dialog), `src/native-files.js` (native open, save and drops), `src/licenses-view.js`, `public/` (pre-paint appearance script, icons). |
 | `scripts/build-frontend.mjs` | Assembles `dist/` (not committed): the Vite build of `web/` at the root, the pinned build under `dist/tools/vendor/` with the fork's bundle, chunks and CSS in place of the pinned ones in `pdf-tools/`, and `licenses.json`. The bundle finds `tools/vendor/` next to the page (`globalThis.__bergworkVendor`, set by `src/editor.ts`), so the same `dist/` runs in the app and at `/app/pdf/` on bergwork.app. |
 | `cli/` | Agent CLI `bergwork-pdf-cli` and MCP server (`npm run cli -w @bergwork/pdf -- …`): the editor's engine headless, see `cli/README.md`. |
 | `headless/` | Headless engine page shared by the CLI and the corpus suite (`tests/`): engine session, bundler, server, browser host. |
 | `scripts/collect-licenses.mjs` | Licence data for the app and `THIRD_PARTY_NOTICES.md` (see Licences). |
 | `scripts/tauri*.sh`, `scripts/tauri.mjs` | Tauri CLI entry points; on Linux they point the build at a rootless WebKitGTK prefix (see below). |
-| `src-tauri/` | Rust app, `tauri.conf.json` (window, CSP, bundles, file associations), capabilities, icons (copied from `branding/logos/generated/bergwork-pdf/tauri/`), Linux desktop template and MIME definition. |
+| `src-tauri/` | Rust app (`src/windows.rs`: the windows, document routing, state between runs), `tauri.conf.json` (window, CSP, bundles, file associations), capabilities, icons (copied from `branding/logos/generated/bergwork-pdf/tauri/`), Linux desktop template and MIME definition. |
 
 ## Build and run
 
@@ -88,9 +88,26 @@ would lay the words out without gaps). A non-embedded font gets the same bundled
 frame does not reproduce the paragraph's line count, the join is undone and the user is told why. Tests:
 `node --test apps/pdf/scripts/paragraph-merge.test.mjs`.
 
-The host supplies `shell.setTitle` (the window title,
-`• name — berg:work PDF` for unsaved changes, and the document in the title bar); the editor shows no fullscreen toggle
-because the shell offers no `setFullscreen`. The editor's `titleBar` slots are not used.
+The host supplies `shell.setTitle` (the window title, `• name — berg:work PDF` for unsaved changes, and the document in
+the title bar), in the desktop app `shell.setFullscreen` (window fullscreen, F11) and `shell.desktop`. The editor's
+`titleBar` slots are not used.
+
+**Windows.** Every window is built from the one window of `tauri.conf.json` (`create: false`) and differs in its label:
+`main` and `doc-<uuid>`. The label is the key of the window's record in the IndexedDB `oo-pdf-workbench` (`main` uses the
+old key `default`); journals and writer leases were keyed by document already. Document menu › Open in new window moves
+the record in one transaction (`moveWorkspaceDocument`) and opens the window, which restores the document as it would
+after a crash: unsaved changes, undo, page and zoom come along. `desktop-state.json` in the app data directory
+keeps the recent files, each window's geometry and the paths the page may keep using after a restart. After a start the
+main page reopens the windows whose records still hold documents; an empty main window takes the first one over. Closing
+a window closes its documents; closing the last one (or Ctrl+Q) keeps them for the next start. Rust handles the close
+request and waits 3 s for the page's answer, so a dead page cannot keep a window open.
+
+**Files.** A document opened from a file saves back to it (`nativeFile: { path, stamp }` on the document, a temporary file
+with fsync and rename), except when opening repaired damage or removed protection. The page polls the stamps every 3 s
+and on focus: clean documents reload at their page, others ask. It never sees a file system watcher, so this also
+works on network drives. `read_file`, `write_file` and `file_stamp` run off the main thread. Rust keeps the list of paths
+the page may use (`Files`, for all windows); a path the page reports is only accepted if it is on that list.
+Native drops arrive with paths and are replayed as a DOM `drop`, because Tauri keeps file drops from the DOM.
 
 Measuring and comments are berg:work's own files next to the shell: Markup › Measure (distance, perimeter, area,
 calibrate) and Markup › Comment (text box, typewriter, callout, line, polyline, polygon, cloud, stamp) draw on
@@ -117,7 +134,8 @@ a plain logo and offers no sample.
 
 Images are input like PDFs: the open dialog, a drop on the empty state, a paste there and `oo-open-file-pdf` make one
 new document with a page per image, in the chosen order, named after the first image; a file that is neither PDF, image
-nor project gets a message. HEIC and HEIF work on every way in (append, drop on a page, paste, Insert › Image, replacing
+nor project gets a message. In the desktop app the native open dialog lists them (`OPEN_EXTENSIONS` in `windows.rs`) and
+`openPaths` hands all images of one request over in one event (`files`). HEIC and HEIF work on every way in (append, drop on a page, paste, Insert › Image, replacing
 an image, signature, watermark) through Fernwork's decoder: `normalizeImageFile` calls
 `tools/js/converters/heic-decoder.js`, which is part of the fork. Its worker and libheif (LGPL-3.0, a separate,
 replaceable file) come from the pin and load with the first HEIC photo. Fernwork addresses both from the root of its

@@ -120,12 +120,17 @@ export function ChromeMenuItem({ label, iconName, pressed, onClick, disabled = f
  * are listed below it. Rows keep the former tab classes (`oo-pdf-doc-tab`)
  * and stay in the DOM while collapsed, so the document count stays readable.
  */
-export function DocumentMenu({ docs, activeDocId, onSelect, onClose, onOpenAnother, isUnsaved, open, onOpenChange, disabled = false }) {
+// berg:work: `onDetach`, `recent`, `onOpenRecent` and `onRefreshRecent` come from the desktop app.
+export function DocumentMenu({ docs, activeDocId, onSelect, onClose, onOpenAnother, isUnsaved, open, onOpenChange, disabled = false,
+  onDetach = null, recent = [], onOpenRecent = null, onRefreshRecent = null }) {
   const host = useRef(null);
   const close = React.useCallback(() => onOpenChange(false), [onOpenChange]);
   const refs = React.useMemo(() => [host], []);
   useDismiss(open, close, refs);
   const active = docs.find(doc => doc.id === activeDocId) || null;
+  useEffect(() => { if (open) onRefreshRecent?.(); }, [open]);
+  const openPaths = new Set(docs.map(doc => doc.nativeFile?.path));
+  const recentFiles = recent.filter(file => !openPaths.has(file.path)).slice(0, 6);
   return (
     <div ref={host} className={`oo-pdf-doc-menu ${open ? 'is-open' : ''}`}>
       <button
@@ -152,6 +157,12 @@ export function DocumentMenu({ docs, activeDocId, onSelect, onClose, onOpenAnoth
               <span>{doc.name}</span>
               {isUnsaved(doc) && <span className="oo-pdf-unsaved" aria-label="Unsaved changes" title="Changes not yet saved">●</span>}
             </button>
+            {onDetach && (
+              <button className="oo-pdf-doc-close oo-pdf-doc-detach" type="button" aria-label={`Open ${doc.name} in a new window`} title="Open in new window"
+                onClick={() => { onOpenChange(false); onDetach(doc.id); }}>
+                <ChromeIcon name="open-in-window" />
+              </button>
+            )}
             <button className="oo-pdf-doc-close" type="button" aria-label={`Close ${doc.name}`} title={`Close ${doc.name}`} onClick={() => onClose(doc.id)}>
               <ChromeIcon name="x" />
             </button>
@@ -162,6 +173,17 @@ export function DocumentMenu({ docs, activeDocId, onSelect, onClose, onOpenAnoth
             <ChromeIcon name="folder-open" />
             <span>{docs.length ? 'Open another PDF…' : 'Open PDF…'}</span>
           </button>
+        )}
+        {onOpenRecent && recentFiles.length > 0 && (
+          <div className="oo-pdf-doc-menu-recent" role="group" aria-label="Recent files">
+            {recentFiles.map(file => (
+              <button key={file.path} type="button" className="oo-pdf-chrome-menu-item" title={file.path}
+                onClick={() => { onOpenChange(false); onOpenRecent(file.path); }}>
+                <ChromeIcon name="file-text" />
+                <span>{file.name}</span>
+              </button>
+            ))}
+          </div>
         )}
       </div>
     </div>

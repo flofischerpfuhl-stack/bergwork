@@ -9,10 +9,16 @@ export interface EditorShell {
   readonly setTitle: (title: string, options?: { readonly dirty?: boolean }) => void;
   /** A sample document the empty state offers next to the file picker (the web app only). */
   readonly sample?: { readonly label: string; readonly open: () => void };
+  /** The desktop app's windows and files; see desktopDocuments.tsx. */
+  readonly desktop?: object;
+  /** Whether the first page of a run should look for the windows of the last run. */
+  readonly claimOrphans?: () => Promise<boolean>;
+  readonly setFullscreen?: (fullscreen: boolean) => Promise<void>;
 }
 
 interface EditorBundle {
   mount(element: HTMLElement, options: { host: { capabilities: Record<string, unknown> } }): unknown;
+  claimDesktopWorkspaces(): Promise<string[]>;
 }
 
 declare global {
@@ -32,7 +38,8 @@ function loadStylesheet(href: string): Promise<void> {
   });
 }
 
-export async function mountEditor(element: HTMLElement, shell: EditorShell): Promise<void> {
+/** Mounts the editor; resolves to the windows of the last run that are still to be opened. */
+export async function mountEditor(element: HTMLElement, shell: EditorShell): Promise<readonly string[]> {
   const vendor = new URL('./tools/vendor/', document.baseURI).href;
   globalThis.__bergworkVendor = vendor;
   const [pdfLib, pdfjs] = await Promise.all([
@@ -43,9 +50,12 @@ export async function mountEditor(element: HTMLElement, shell: EditorShell): Pro
   Object.assign(globalThis, { PDFLib: pdfLib, pdfjsLib: pdfjs });
   pdfjs.GlobalWorkerOptions.workerSrc = `${vendor}pdf-runtime/pdf.worker.min.mjs`;
   const bundle = await import(/* @vite-ignore */ `${vendor}pdf-tools/oo-pdf-tools.js`) as EditorBundle;
+  const orphans = await shell.claimOrphans?.() ? await bundle.claimDesktopWorkspaces() : [];
   // 'islands': the chrome laid out as berg:work Image's (top: document and tools | file and panels; bottom: status).
   // 'manual': Properties opens on request only; formatting is in the mini toolbar at the object.
   bundle.mount(element, { host: { capabilities: { shell: {
-    version: 1, chrome: 'islands', inspector: 'manual', setTitle: shell.setTitle, sample: shell.sample,
+    version: 1, chrome: 'islands', inspector: 'manual', setTitle: shell.setTitle, sample: shell.sample, desktop: shell.desktop,
+    setFullscreen: shell.setFullscreen,
   } } } });
+  return orphans;
 }

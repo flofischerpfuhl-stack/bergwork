@@ -1065,3 +1065,49 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
 .oo-pdf-shell .oo-pdf-info-bubble p { margin: 0; }
 .oo-pdf-shell .oo-pdf-info-bubble p + p, .oo-pdf-shell .oo-pdf-info-text + .oo-pdf-info-notes > p:first-child { margin-top: 6px; }
 .oo-pdf-shell .oo-pdf-info-notes { display: block; }
+
+/* Desktop app: file notices above the editor, the question text in dialogs, fullscreen without the title bar, the
+   document menu's window button and recent files. */
+.bw-file-notices {
+  position: fixed;
+  top: 104px;
+  left: 50%;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transform: translateX(-50%);
+}
+
+.bw-file-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 14px;
+  border: 1px solid var(--bw-border);
+  border-radius: var(--bw-radius-panel, 8px);
+  background: var(--bw-surface-raised, var(--bw-bg));
+  box-shadow: var(--bw-shadow-popover, 0 6px 20px rgb(0 0 0 / 18%));
+  color: var(--bw-fg);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.bw-dialog-text {
+  max-width: 380px;
+  margin: 0;
+  padding: 0 4px;
+  color: var(--bw-fg);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+html.bw-window-fullscreen .bw-titlebar {
+  display: none;
+}
+
+.oo-pdf-doc-menu-recent {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--pdf-border);
+}

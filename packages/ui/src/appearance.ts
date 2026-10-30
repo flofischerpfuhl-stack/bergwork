@@ -47,6 +47,12 @@ export function useAppearance(): readonly [Appearance, (change: Partial<Appearan
     media.addEventListener('change', change);
     return () => media.removeEventListener('change', change);
   }, [appearance]);
+  // Another window or tab of the app changed it.
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => { if (event.key === KEY) setAppearance(read()); };
+    addEventListener('storage', onStorage);
+    return () => removeEventListener('storage', onStorage);
+  }, []);
   const update = useCallback((change: Partial<Appearance>) => {
     setAppearance((current) => {
       const next = { ...current, ...change };

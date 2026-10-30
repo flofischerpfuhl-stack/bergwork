@@ -12,10 +12,20 @@ Fernwork browser tool.
 | Member | Editor behaviour |
 | --- | --- |
 | `setTitle(title, { dirty })` | Called with the active document's name and its unsaved state instead of setting `document.title`. |
-| `setFullscreen?(fullscreen)` | With a shell but without this method the editor shows no fullscreen toggle. |
+| `setFullscreen?(fullscreen)` | With a shell but without this method the editor shows no fullscreen toggle. berg:work's desktop app passes it (window fullscreen, F11); the web app does not. |
 | `titleBar?.leading`, `titleBar?.trailing` | DOM nodes the editor places first and last in its top row (app icon, window controls). The host keeps ownership; unmounting only detaches them. |
 | `titleBar?.startDrag()`, `titleBar?.toggleMaximize()` | Called on a primary-button press (a second press of a double-click toggles maximise) on the empty space of the floating top bar. |
+| `desktop?` | berg:work fork only: the desktop app's windows and files. See below. |
 | `sample?: { label, open() }` | berg:work fork only (`// berg:work:` hunks): the empty state shows a second button with `label` next to “Choose PDF or project”; pressing it calls `open()`. The web build passes the site's sample PDF; the desktop build passes nothing. |
+
+`desktop` (`apps/pdf/web/src/desktopDocuments.tsx`, editor side `pdf-editor/persistence/bergwork-windows.js`). The host
+gives: `workspaceId` (this window's workspace record), `connect(editor)`, `detach(id)`, `newWindow()`, `newWindowId()`,
+`openWindow(id)`, `documentsChanged(paths)`, `recentFiles()`, `openRecent(path)`, `saveHandle(nativeFile)`,
+`nativeFileOf(file)`. Through `connect` the editor gives: `documents()`, `detach(id)`, `saveUnsaved()`,
+`closeWindow({ keepSession, discardUnsaved })`, `reload(id, file)`, `show(id, page)`, `closeActive()`, `cycle(delta)`,
+`toggleFullscreen()`. A document keeps `nativeFile: { path, stamp }` in its workspace record; a project file does not. The
+bundle also exports `claimDesktopWorkspaces()`, called once before the first mount of a run. `oo-open-file-pdf` takes
+an `opened()` callback in its detail, because a second open while one is loading would replace it.
 
 Source: `vendor/build/src/pdf-tools-shell.jsx` (`normalizeShellHost`, `HostSlot`), covered by
 `test/e2e/pdf-floating-toolbar.spec.ts` in Fernwork. The editor stylesheet also carries zero-specificity toast
