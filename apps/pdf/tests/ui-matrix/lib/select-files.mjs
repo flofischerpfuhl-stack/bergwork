@@ -1,11 +1,12 @@
 // Which PDFs the matrix drives: one per profile, picked from the corpus manifest by tags and producer, so the matrix has
-// no collection of its own. A profile takes the smallest file that fits and is on disk.
+// no collection of its own. A profile takes the smallest file that fits and is on disk, with a lower limit that leaves
+// out the corpus's minimal test files: a real document has the runs, fonts and tags the editor stumbles over.
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 const usable = file => !file.tags.includes('broken') && !file.tags.includes('encrypted') && !file.tags.includes('xfa') &&
   !file.tags.includes('large-file') && !file.tags.includes('many-pages') && file.pages <= 30 && file.bytes <= 6_000_000 &&
-  !file.expect?.open;
+  !file.expect?.open && file.bytes >= 15_000;
 
 export const PROFILES = Object.freeze([
   { id: 'word-tagged', label: 'Word, tagged, fonts not embedded',
@@ -13,8 +14,8 @@ export const PROFILES = Object.freeze([
       file.tags.includes('font-not-embedded') && file.tags.includes('text') },
   { id: 'chrome-skia', label: 'Chrome/Skia', match: file => /Skia/i.test(file.producer) && file.tags.includes('text') },
   { id: 'latex', label: 'LaTeX', match: file => /pdfTeX|LaTeX/i.test(file.producer) && file.tags.includes('text') },
-  { id: 'scan', label: 'Scan', match: file => file.tags.includes('scanned') },
-  { id: 'form', label: 'AcroForm', match: file => file.tags.includes('acroform') && file.tags.includes('text') },
+  { id: 'scan', label: 'Scan', match: file => file.tags.includes('scanned') && file.bytes >= 100_000 },
+  { id: 'form', label: 'AcroForm', match: file => file.tags.includes('acroform') && file.tags.includes('text') && file.bytes >= 40_000 },
   { id: 'rotated-page', label: 'Rotated page', match: file => file.tags.includes('rotated-pages') && file.tags.includes('text') },
 ]);
 

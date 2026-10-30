@@ -458,6 +458,16 @@ const OPS = {
     const page = await choosePage(state, rng);
     const frame = await insertFrame(state, rng, page, 5);
     if (!frame) return { status: 'n/a', detail: 'page too small' };
+    // Half of them in an embedded font: that frame is shaped, and the worker keeps its appearance between text edits.
+    const shaped = rng() < 0.5;
+    if (shaped) {
+      if (!notoSans) notoSans = new Uint8Array(await (await fetch(`${VENDOR}pdf-tools/fallback-fonts/NotoSans-Regular.ttf`)).arrayBuffer());
+      const hash = await sha256Hex(notoSans);
+      await session.kernel.registerResource({ hash, kind: 'font', format: 'ttf', family: 'Noto Sans', bytes: notoSans });
+      frame.font = { fontOverride: true, fontResourceHash: hash, fontResourceHashes: [hash], complexText: true };
+      await replaceFrame(state, page, frame, { label: 'Frame font', extra: frame.font });
+      frame.font = { fontResourceHash: hash, fontResourceHashes: [hash], complexText: true };
+    }
     const inspection = await session.inspect(page.index);
     const object = frameOf(inspection, frame.id);
     if (!object?.matrix) return { status: 'n/a', detail: 'frame has no matrix' };
@@ -468,11 +478,18 @@ const OPS = {
     await session.execute('Turn frame', [command(prefix, CommandType.OBJECT_TRANSFORM, frame.id, { pageIndex: page.index, matrix, textFrame: true })],
       [command(`${prefix}:inv`, CommandType.OBJECT_TRANSFORM, frame.id, { pageIndex: page.index, matrix: [m.a, m.b, m.c, m.d, m.e, m.f].map(Number), textFrame: true })]);
     const turned = angleOf(frameOf(await session.inspect(page.index), frame.id)?.matrix);
-    await replaceFrame(state, page, frame, { text: `${frame.text} ${frame.parts[0]}`, label: 'Retype turned frame' });
-    const after = angleOf(frameOf(await session.inspect(page.index), frame.id)?.matrix);
+    await replaceFrame(state, page, frame, { text: `${frame.text} ${frame.parts[0]}`, label: 'Retype turned frame', extra: frame.font || {} });
+    const retyped = frameOf(await session.inspect(page.index), frame.id);
+    const after = angleOf(retyped?.matrix);
     if (Math.abs(after - turned) > 0.5) throw new Error(`a turned frame went from ${turned.toFixed(1)}° to ${after.toFixed(1)}° when retyped`);
+    // Turned over the page edge, some of its glyphs lie outside the page, and readers drop those.
+    const bounds = retyped?.pageBounds || retyped?.bounds;
+    const { box } = frame;
+    if (!bounds || bounds.left < box.left || bounds.bottom < box.bottom || bounds.right > box.right || bounds.top > box.top) {
+      for (const item of model.markers) if (item.words === frame.parts) item.soft = true;
+    }
     model.turned.push({ pageId: page.id, stableAngle: after, words: frame.parts });
-    return { status: 'ok', detail: { page: page.index, degrees, angle: Math.round(after) } };
+    return { status: 'ok', detail: { page: page.index, degrees, shaped, angle: Math.round(after) } };
   },
 
   async 'object.rotate'(state, rng) {

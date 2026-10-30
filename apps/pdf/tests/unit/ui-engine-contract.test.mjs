@@ -44,6 +44,21 @@ test('a text-align value set anywhere in the shell is one the layout accepts', (
   for (const value of new Set(set)) assert.ok(controls.TEXT_ENGINE_VALUES.alignments.includes(value), value);
 });
 
+// The worker is a pinned bundle: where it is on disk (npm run sync:install) its own lists are the reference.
+const pinnedWorker = await readFile(path.resolve(src, '../../../../upstream/tools/vendor/pdf-tools/pdfium-worker.js'), 'utf8').catch(() => null);
+
+test('every arrow tip the picker offers is one the worker accepts', { skip: !pinnedWorker }, () => {
+  const picker = shell.slice(shell.indexOf('function ArrowTipPicker('), shell.indexOf('function CustomFreeTextConversion('));
+  const offered = [...picker.matchAll(/\{ value: '([a-z]+)', name:/gu)].map(match => match[1]);
+  assert.ok(offered.length >= 3);
+  const accepted = /\["filled","open","circle","none"\]/u.test(pinnedWorker) ? ['filled', 'open', 'circle', 'none'] : [];
+  for (const value of offered) assert.ok(accepted.includes(value), value);
+});
+
+test('a worker that reports justified text blocks has the layout for them', { skip: !pinnedWorker }, () => {
+  if (pinnedWorker.includes('justifiedTextBlocks')) assert.match(pinnedWorker, /"left","center","right","justify"/u);
+});
+
 test('justified lines fill the frame through their word spaces, paragraph ends keep natural width', () => {
   const measureText = value => value.length * 6;
   const { lines } = layoutTextBlock({

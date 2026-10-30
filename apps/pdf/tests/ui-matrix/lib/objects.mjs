@@ -125,18 +125,18 @@ export async function rotateSelection(session, { key }) {
   const { page } = session;
   const state = await describe(page, key);
   if (!state) return false;
-  const handle = page.locator('[data-selection-key].is-selected .oo-pdf-rotate-handle, .oo-pdf-rotate-handle').first();
-  const zone = (await handle.count()) ? await handle.boundingBox() : null;
-  const from = zone ? { x: zone.x + zone.width / 2, y: zone.y + zone.height / 2 } : { x: state.x + state.w + 8, y: state.y + state.h + 8 };
+  const depth = await session.historyDepth();
+  // The zone just outside a corner, on the side where the page has room to drag.
+  const from = { x: state.x + state.w + 8, y: state.y + state.h + 8 };
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
   for (let step = 1; step <= 10; step += 1) {
-    await page.mouse.move(from.x + step * 7, from.y + step * 11);
+    await page.mouse.move(from.x - step * 7, from.y + step * 11);
     await page.waitForTimeout(12);
   }
   await page.mouse.up();
   await session.settled();
-  return true;
+  return (await session.historyDepth()) > depth;
 }
 
 export async function dragSelection(session, { key }, dx = 36, dy = 24) {

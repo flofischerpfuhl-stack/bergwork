@@ -31,11 +31,23 @@ const flag = name => argv.includes(name);
 const list = (name, fallback) => arg(name)?.split(',') || fallback;
 
 const TIERS = {
-  // The cells most likely to break, in order, until the minutes run out: all controls on the word profile in each
-  // state, then the other profiles. Controls in a non-normal state are sampled by the seed, so successive merges with
-  // different seeds cover all of them; the normal state always works them all.
-  quick: { minutes: 13, profiles: ['word-tagged', 'chrome-skia', 'rotated-page'], types: OBJECT_TYPES, states: STATES, sample: 0.34 },
-  full: { minutes: 600, profiles: null, types: OBJECT_TYPES, states: STATES, sample: 1 },
+  // First the cells that broke before, in this order, then the others in an order drawn from the seed until the minutes
+  // run out. Controls in a non-normal state are sampled by the seed too, so successive merges with different seeds cover
+  // all of them; the normal state always works them all.
+  quick: {
+    minutes: 13,
+    profiles: ['word-tagged', 'chrome-skia', 'rotated-page'],
+    types: OBJECT_TYPES,
+    states: STATES,
+    sample: 0.34,
+    first: [
+      'word-tagged/text/normal', 'word-tagged/image/normal', 'word-tagged/path/normal', 'word-tagged/shape/normal',
+      'word-tagged/annotation/normal', 'word-tagged/text/rotated', 'word-tagged/text/wrapped', 'word-tagged/text/edited',
+      'word-tagged/text/rotated-page', 'word-tagged/image/rotated', 'word-tagged/path/rotated', 'chrome-skia/text/normal',
+      'rotated-page/text/normal',
+    ],
+  },
+  full: { minutes: 600, profiles: null, types: OBJECT_TYPES, states: STATES, sample: 1, first: [] },
 };
 
 const tierName = arg('--tier', 'quick');
@@ -67,7 +79,15 @@ for (const state of states) {
   }
 }
 // Normal first, so that with little time every control has run once before the states are sampled.
-cells.sort((left, right) => (left.state === 'normal' ? 0 : 1) - (right.state === 'normal' ? 0 : 1));
+for (let index = cells.length - 1; index > 0; index -= 1) {
+  const other = Math.floor(random() * (index + 1));
+  [cells[index], cells[other]] = [cells[other], cells[index]];
+}
+const cellRank = cell => {
+  const named = tier.first.indexOf(`${cell.file.profile}/${cell.type}/${cell.state}`);
+  return named >= 0 ? named : tier.first.length + (cell.state === 'normal' ? 0 : 1);
+};
+cells.sort((left, right) => cellRank(left) - cellRank(right));
 
 const results = [];
 const record = (cell, entry) => {
@@ -97,7 +117,10 @@ async function prepare(cell) {
   const object = await findObject(session, cell.type);
   if (!object) return null;
   const applied = await applyState(session, object, cell.state);
-  if (!applied) return null;
+  if (!applied) {
+    record(cell, { check: 'state', status: cell.state === 'wrapped' ? 'n/a' : 'fail', detail: `the ${cell.state} gesture changed nothing` });
+    return null;
+  }
   await session.blur();
   await session.settled();
   const problems = await session.takeProblems();
@@ -123,17 +146,15 @@ async function checkChromeStaysOnObject(cell, object) {
   const halfH = Math.abs((current.h * c - current.w * s) / determinant) / 2 + 26;
   const corner = (x, y) => ({ x: cx + x * Math.cos(angle) - y * Math.sin(angle), y: cy + x * Math.sin(angle) + y * Math.cos(angle) });
   const quad = [corner(-halfW, -halfH), corner(halfW, -halfH), corner(halfW, halfH), corner(-halfW, halfH)];
-  const toolbars = await session.page.evaluate(sheetLeftTop => [...document.querySelectorAll('.oo-pdf-mini-toolbar, .toast-container > *')].map(node => {
-    const box = node.getBoundingClientRect();
-    const l = box.left - sheetLeftTop.x - 4;
-    const t = box.top - sheetLeftTop.y - 4;
-    const r = box.right - sheetLeftTop.x + 4;
-    const b = box.bottom - sheetLeftTop.y + 4;
-    return [{ x: l, y: t }, { x: r, y: t }, { x: r, y: b }, { x: l, y: b }];
-  }), { x: sheet.x, y: sheet.y });
   const selectedShot = await session.pageShot({ chrome: true });
-  const clean = await session.pageShot();
-  const difference = await session.diff(selectedShot, clean, { exclude: [quad, ...toolbars], threshold: 24 });
+  // The same sheet without the selection: a click beside the page, then the object is selected again.
+  const after = await session.page.locator('.oo-pdf-sheet').first().boundingBox();
+  await session.page.mouse.click(Math.max(8, after.x - 40), after.y + 200);
+  await session.settled();
+  const clean = await session.pageShot({ chrome: true });
+  await focusObject(current.key);
+  await session.settled();
+  const difference = await session.diff(selectedShot, clean, { exclude: [quad], threshold: 24 });
   record(cell, {
     check: 'selection-frame',
     status: difference.count > 6 ? 'fail' : 'ok',
@@ -159,9 +180,13 @@ async function checkEditor(cell, object) {
     if (!/matrix/.test(editor.matrix || '')) record(cell, { check: 'editor-rotation', status: 'fail', detail: 'editor is not turned with the text' });
     if (editor.outer && editor.outer !== 'none') record(cell, { check: 'editor-rotation', status: 'fail', detail: 'a frame is drawn on the bounding box' });
   }
-  const family = (editor.fontFamily || '').split(',')[0].replaceAll('"', '').trim();
-  const loaded = await session.page.evaluate(name => document.fonts.check(`12px "${name}"`), family);
-  if (!loaded) record(cell, { check: 'editor-font', status: 'fail', detail: `editor font ${family} is not loaded` });
+  // A family the browser does not know falls through to the generic: the widths then follow it.
+  const known = await session.page.evaluate(families => {
+    const context = document.createElement('canvas').getContext('2d');
+    const width = generic => { context.font = `40px ${families}, ${generic}`; return context.measureText('Bezüge Reserve mwMW').width; };
+    return width('serif') === width('monospace');
+  }, editor.fontFamily);
+  if (!known) record(cell, { check: 'editor-font', status: 'fail', detail: `editor font ${editor.fontFamily} is not loaded` });
   const marker = ` zq${Math.floor(random() * 900 + 100)}`;
   const commit = await typeAndCommit(session, marker);
   const after = await currentObject(session, before.key);
@@ -186,7 +211,8 @@ async function checkSave(cell, marker) {
   const qpdf = await qpdfCheck(target);
   if (qpdf.status === 'errors') record(cell, { check: 'save', status: 'fail', detail: `qpdf: ${qpdf.message}` });
   if (marker) {
-    const { stdout } = await execFile('pdftotext', [target, '-'], { maxBuffer: 2 ** 26 }).catch(() => ({ stdout: null }));
+    // -raw keeps content order: turned text does not fall apart into columns.
+    const { stdout } = await execFile('pdftotext', ['-raw', target, '-'], { maxBuffer: 2 ** 26 }).catch(() => ({ stdout: null }));
     if (stdout !== null && !stdout.replace(/\s+/gu, '').includes(marker)) {
       record(cell, { check: 'save', status: 'fail', detail: `saved text has no ${marker}` });
     }

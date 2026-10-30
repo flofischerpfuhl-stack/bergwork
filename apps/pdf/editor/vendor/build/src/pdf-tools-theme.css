@@ -9927,7 +9927,8 @@ body.oo-pdf-workbench-route .oo-consent-notice {
 
 /* berg:work: the inline editor of rotated text sits on the text and turns with it. Nothing is drawn on the AABB: the
    editor itself is opaque, so it hides the raster text below it without hiding the neighbours in the AABB. */
-.oo-pdf-textbox.is-oriented-editing {
+.oo-pdf-textbox.is-oriented-editing,
+.oo-pdf-textbox.is-selected.is-oriented-editing {
   --fw-frame-border: 0px;
   overflow: visible;
   pointer-events: none;

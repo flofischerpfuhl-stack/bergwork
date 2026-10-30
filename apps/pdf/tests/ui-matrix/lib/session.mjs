@@ -8,6 +8,10 @@ const VIEWPORT = { width: 1440, height: 900 };
 // Hides everything that is not the page itself, for raster comparisons.
 const HIDE_CHROME = `body * { visibility: hidden !important; }
   .oo-pdf-sheet, .oo-pdf-sheet canvas { visibility: visible !important; }`;
+// Keeps what is drawn on the sheet, selection included, without the floating bars above it.
+const HIDE_BARS = `body * { visibility: hidden !important; }
+  .oo-pdf-sheet, .oo-pdf-sheet * { visibility: visible !important; }
+  .oo-pdf-sheet .oo-pdf-mini-toolbar, .oo-pdf-sheet .oo-pdf-mini-toolbar * { visibility: hidden !important; }`;
 // Noise of the page itself, not of the editor.
 const IGNORED_CONSOLE = [/favicon/i, /Slow network is detected/i, /Failed to load resource.*\b404\b/i];
 
@@ -48,9 +52,11 @@ export class MatrixSession {
       new MutationObserver(records => {
         for (const record of records) for (const node of record.addedNodes) {
           if (node.nodeType !== 1) continue;
-          const toast = node.matches?.('.toast-error, .oo-pdf-operation-notice.is-error')
-            ? node : node.querySelector?.('.toast-error, .oo-pdf-operation-notice.is-error');
-          if (toast) window.__errorToasts.push(toast.innerText.split('\n')[0].slice(0, 200));
+          const toast = node.matches?.('.toast-error, .toast-warning, .oo-pdf-operation-notice.is-error')
+            ? node : node.querySelector?.('.toast-error, .toast-warning, .oo-pdf-operation-notice.is-error');
+          const text = toast?.innerText.split('\n')[0].slice(0, 200);
+          // A warning that informs is fine ("runs past the page edge"); one that stops the work is not.
+          if (text && (!toast.classList.contains('toast-warning') || /paused|failed|could not/iu.test(text))) window.__errorToasts.push(text);
         }
       }).observe(document, { childList: true, subtree: true });
     });
@@ -108,7 +114,11 @@ export class MatrixSession {
 
   /** New errors since the last call: toasts, page errors, console errors. */
   async takeProblems() {
-    const toasts = await this.page.evaluate(() => window.__errorToasts.splice(0)).catch(() => []);
+    const toasts = await this.page.evaluate(() => {
+      const stopped = window.__fernworkLastLivePdfUiTransitionError;
+      window.__fernworkLastLivePdfUiTransitionError = undefined;
+      return [...window.__errorToasts.splice(0), ...(stopped ? [`editing paused: ${stopped.message}`] : [])];
+    }).catch(() => []);
     const problems = [...toasts.map(text => ({ type: 'toast', text })), ...this.events.splice(0)];
     return problems;
   }
@@ -139,10 +149,14 @@ export class MatrixSession {
   /** The sheet of the active page as PNG, without selection, handles or toolbars. */
   async pageShot({ chrome = false } = {}) {
     const sheet = this.page.locator('.oo-pdf-sheet').first();
-    const style = chrome ? null : await this.page.addStyleTag({ content: HIDE_CHROME });
-    await this.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const style = await this.page.addStyleTag({ content: chrome ? HIDE_BARS : HIDE_CHROME });
+    // Selecting and undoing scroll to the object; a comparison needs the page where it was.
+    await this.page.evaluate(() => {
+      document.querySelector('.oo-pdf-sheet')?.scrollIntoView({ block: 'start', inline: 'nearest' });
+      return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    });
     const png = await sheet.screenshot({ animations: 'disabled' });
-    await style?.evaluate(node => node.remove());
+    await style.evaluate(node => node.remove());
     return png;
   }
 

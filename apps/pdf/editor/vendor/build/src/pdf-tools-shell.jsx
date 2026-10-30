@@ -1370,6 +1370,12 @@ function fontFamilyForText(textLike = {}) {
   // `fontFamily`; only a family that differs from that fallback is an explicit
   // choice (uploaded/bundled/user-picked) and wins over the preview twin.
   const explicitFamily = textLike.fontFamily && textLike.fontFamily !== fallbackFamily ? textLike.fontFamily : '';
+  // berg:work: after Bold or Italic the family is a bundled face's name ("Liberation Sans Bold Italic"), which the browser
+  // does not know: the on-page editor fell back to a serif. The library's own preview face stands behind it.
+  const libraryTwin = explicitFamily && !explicitFamily.includes(',') && typeof libraryPreviewFamilyFor === 'function'
+    ? libraryPreviewFamilyFor({ pdfFontName: explicitFamily, fontWeight: textLike.fontWeight, fontStyle: textLike.fontStyle })
+    : '';
+  if (libraryTwin && libraryTwin !== explicitFamily) return `"${explicitFamily}", ${libraryTwin}`;
   return explicitFamily ||
     (textLike.fontOverride !== true && typeof libraryPreviewFamilyFor === 'function' ? libraryPreviewFamilyFor(textLike) : '') ||
     textLike.fontFamily ||
@@ -7393,6 +7399,7 @@ function reportLivePdfEditFailure(runtime, error, fallback) {
   // A persistent read-only notice already explains this exact rejection.
   // Queued successors must not stack identical transient messages over it.
   if (runtime?.readOnly && error?.message === runtime.mutationBlockedReason) return;
+  if (error?.noNativeChange) return;
   showToast(userFacingError(error, fallback), 'error');
 }
 
@@ -22599,9 +22606,13 @@ function App({ shell = null }) {
           currentObject?.textFrame !== true &&
           currentObject?.complexText !== true &&
           currentObject?.nativeTypeName !== 'form';
+        // berg:work: the semantic inverse of a frame edit rebuilt the frame from its page rectangle: a line that overflows
+        // its frame came back one line lower, over the next one. The document state is exact, and costs a few ms.
+        const replacesTextFrameText = textCommandType === CommandType.TEXT_BLOCK_REPLACE &&
+          currentObject?.textFrame === true && semanticNextText !== uiPreviousText;
         const needsExactAppearanceInverse = changesFontFamily || changesFontSize ||
           changesTextFrameColor || firstNativeTextFramePromotion || changesRichText ||
-          replacesNativeTextRun || rotatedRichTextFrameResize;
+          replacesNativeTextRun || rotatedRichTextFrameResize || replacesTextFrameText;
         if (needsExactAppearanceInverse) {
           // Replacing a text object can discard its embedded font dictionary,
           // subset program, widths, encoding, ToUnicode CMap and spacing.
@@ -23013,6 +23024,8 @@ function App({ shell = null }) {
       log.warn('pdf.edit-no-commands', { kind, stableId, pageId: page?.id, gestureReason: options.gestureReason });
       const error = new Error(`The ${kind} edit did not produce a native PDF change.`);
       error.code = 'transaction-rejected';
+      // berg:work: the last step of a slider often lands on the value the file already has. Nothing went wrong.
+      error.noNativeChange = true;
       throw error;
     }
     let confirmedStateProjection = null;
@@ -46628,6 +46641,11 @@ function Inspector({
     ? layers.map((layer, index) => ({ layer, index }))
       .filter(({ layer }) => selectedKeys.has(layer.key) || layer.key === editingLayerKey)
     : visibleLayers;
+  // berg:work: with nothing selected and no commit under way, the pin has done its job: the last object's fields stayed
+  // in the panel below "Nothing selected".
+  useEffect(() => {
+    if (!selectedKeys.size && !nativeBusy) setEditingLayerKey('');
+  }, [selectedKeys.size, nativeBusy]);
   const labelCounts = useMemo(() => {
     const counts = new Map();
     for (const layer of layers) counts.set(layer.label, (counts.get(layer.label) || 0) + 1);
@@ -47510,6 +47528,10 @@ function Inspector({
               'text-font-style',
             );
           };
+          // berg:work: a path with neither fill nor stroke paints nothing, and PDFium drops it on the next write: the
+          // object left the page under its own stable binding and editing paused for good.
+          const pathFilled = layer.item.fillEnabled ?? (Number(layer.item.drawMode?.fillMode || 0) !== 0);
+          const pathStroked = layer.item.strokeEnabled ?? layer.item.drawMode?.stroke !== false;
           const geometrySourceId = layer.type === 'annotation' ? layer.item.id : layer.item.sourceId;
           const canResizeGeometry = !(layer.type === 'annotation' && layer.item.imported &&
             layer.item.sourceSubtype === 'freetext' && layer.item.appearanceReconstructible === false);
@@ -48414,12 +48436,16 @@ function Inspector({
                           <div className="oo-pdf-prop-row two">
                             <label className="oo-pdf-check"><input
                               type="checkbox"
-                              checked={layer.item.fillEnabled ?? (Number(layer.item.drawMode?.fillMode || 0) !== 0)}
+                              checked={pathFilled}
+                              disabled={pathFilled && !pathStroked}
+                              title={pathFilled && !pathStroked ? 'A shape keeps its fill or its stroke.' : undefined}
                               onChange={(event) => commitObjectProperty(layer, { fillEnabled: event.target.checked }, 'native-object-fill-toggle')}
                             /> Fill shape</label>
                             <label className="oo-pdf-check"><input
                               type="checkbox"
-                              checked={layer.item.strokeEnabled ?? layer.item.drawMode?.stroke !== false}
+                              checked={pathStroked}
+                              disabled={pathStroked && !pathFilled}
+                              title={pathStroked && !pathFilled ? 'A shape keeps its fill or its stroke.' : undefined}
                               onChange={(event) => commitObjectProperty(layer, { strokeEnabled: event.target.checked }, 'native-object-stroke-toggle')}
                             /> Stroke shape</label>
                           </div>

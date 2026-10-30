@@ -3,7 +3,8 @@
 Seeded combinations of the editor's editing operations, run over a public PDF corpus of about 1,000 files. Each
 result is checked with independent readers. The suite drives the editor's own engine and model code directly,
 without clicking through the UI, so a typical small PDF takes 1–5 s for a complete edit/undo/redo/save/verify cycle.
-A thin UI smoke test (`ui-smoke.mjs`) covers the wiring in between.
+A thin UI smoke test (`ui-smoke.mjs`) covers the wiring in between, and the UI matrix (`ui-matrix/`, below) works every
+control of the real page.
 
 | Path | What it is |
 | --- | --- |
@@ -18,6 +19,9 @@ A thin UI smoke test (`ui-smoke.mjs`) covers the wiring in between.
 | `lib/report.mjs` | `report.json`, `summary.md`, `coverage.csv`. |
 | `../headless/` | Shared with the agent CLI (`../cli/`): `engine.js` (the in-page engine session, shared PDFium worker, upload), `bundle.mjs` (the esbuild bundling with the shell's internals), `server.mjs` (static server: `dist/` at `/`, the bundle, the corpus, the upload endpoint for outputs), `host.mjs` (Playwright, headless Chromium, page loading). |
 | `ui-smoke.mjs` | Opens PDFs in the real page, rotates, undoes, redoes and saves them, then checks the download. |
+| `ui-matrix/` | Works every control of the Inspector and the mini toolbar in the real page, for each object type and state. |
+| `unit/ui-engine-contract.test.mjs` | Every value a text control offers is one the layout accepts; the lists in the shell come from `bergwork-text-controls.js`. |
+| `unit/hook-order.test.mjs` | No component of the fork calls a hook behind an early return. |
 
 ## Prerequisites
 
@@ -114,6 +118,11 @@ The runner then checks every output with qpdf (`--check`, page count, encryption
 | `text.font` | Changes a line to a standard font |
 | `image.add`, `shape.add` | Insert an RGBA image, a rectangle or an ellipse path |
 | `object.move`, `object.delete` | Act on an existing top-level object |
+| `object.rotate` | Turns a top-level text or image object; it has to be at that angle in the saved file |
+| `text.align` | Every alignment the Inspector offers on a wrapping frame, each its own step |
+| `text.wrap` | Narrows and heightens a frame |
+| `text.style` | The vertical alignments and overflow policies offered, line heights, font size and colour of a frame |
+| `text.rotate` | Turns a frame, standard or shaped in an embedded font, and retypes it; it stays at its angle, also in the saved file |
 | `annot.markup` | Highlight, underline or strike-out over a text line |
 | `annot.shape` | Square, circle, line/arrow or ink annotation |
 | `annot.comment` | Sticky note |
@@ -137,6 +146,40 @@ Each runs on the saved bytes.
 | `doc.compress` / `doc.compressImages` / `doc.rasterize` | `compressEditedPdf` with the lossless / images / small raster profiles |
 | `doc.encrypt` | `restrictPdfBytes`. A wrong password must fail and the user password must open the file. |
 | `doc.formFill` | AcroForm text fields and checkboxes filled, flattened in 40 % of runs. The values must read back. |
+
+## UI matrix
+
+The corpus suite drives the engine and therefore cannot see a button that sends a value the engine refuses, a hook that
+crashes the page, or an editor drawn in the wrong place. The matrix drives the real page with mouse and keyboard:
+
+```sh
+npm run test:ui-matrix -w @bergwork/pdf        # before a merge: ≈13 min, ends when its time is up
+npm run test:ui-matrix:full -w @bergwork/pdf   # all profiles, states and controls
+```
+
+Every PDF comes from the corpus, by the tags and producers in `ui-matrix/lib/select-files.mjs`: Word (tagged, fonts not
+embedded), Chrome/Skia, LaTeX, scan, AcroForm, rotated page. `--extra file.pdf` adds a file that is not in the corpus.
+
+For each file × object type (text, image, path, shape, annotation) × state (normal, rotated, moved, wrapped, edited, on a
+rotated page) the runner prepares the state with real gestures and then works every control it finds:
+
+- **The controls are found, not listed** (`lib/controls.mjs`): everything operable in `.oo-pdf-inspector` and
+  `.oo-pdf-mini-toolbar`, keyed by surface, kind and label. An element of an unknown kind fails the run. The only ones
+  left out are navigation of the panel and what needs the operating system; they appear as `skip`, with the reason.
+- **After each control:** no error toast, no toast that says work stopped, no page or console error, the commit finishes
+  within `--hard-ms`, and `--budget-ms` (3 s) marks it `slow`. If it made a history step, Undo must restore the page
+  pixel for pixel; the pixels of the failing pair land in `pdf/`, and the remaining controls run on a fresh copy.
+- **For each cell:** the selection of a turned object draws nothing outside the object; the on-page editor opens on a
+  double click, turned with its text, in a loaded font; the typed text arrives and the object keeps its angle; the saved
+  file passes qpdf, holds the text (pdftotext) and shows the same page when reopened.
+
+The quick tier takes the Word, Skia and rotated-page profiles. The normal state works all controls; the other states work
+a third of them, drawn by `--seed`, which defaults to the date, so successive merges cover all of them. Cells run until
+`--minutes` is up and the report says how many were left. Use `--profile`, `--type` and `--state` to narrow a run.
+
+Against a Fernwork worker, overlay its `pdfium-worker.js` on `dist/tools/vendor/pdf-tools/`, or point `BERGWORK_PDF_DIST`
+at a dist that has it: Justify only appears on a worker that reports it. The report is `summary.md` (the table),
+`results.jsonl`, `matrix.csv` and `pdf/` in `--out`. Run it as its own unit, with `nice`, `--out` on a disk with room.
 
 ## Statuses and failures
 
