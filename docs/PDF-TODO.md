@@ -53,6 +53,8 @@ Open:
   the queue. 2 PD.
 - [ ] **Undo of an angle on a moved image** leaves the anti-aliased edge pixels of the image different (a one-pixel
   perimeter, the image itself is identical). Partial repaint against full render. 0.5 PD.
+- [ ] **The mini toolbar stays away after Properties closes.** It returns with the next selection, not with the panel
+  closing over a selected object. 0.5 PD.
 - [ ] **UI matrix: more surfaces.** Context menu, multi-selection and the left tool panels are not driven yet. 2 PD.
 
 

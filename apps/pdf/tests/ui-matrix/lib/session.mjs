@@ -99,6 +99,12 @@ export class MatrixSession {
       await this.page.getByRole('button', { name: 'Properties' }).first().click();
       await this.settled();
     }
+    if (surface === 'mini') {
+      // The toolbar comes with a new selection, not with the closing of Properties.
+      const sheet = await this.page.locator('.oo-pdf-sheet').first().boundingBox();
+      await this.page.mouse.click(Math.max(8, sheet.x - 40), Math.max(120, sheet.y + 200));
+      await this.settled();
+    }
     await this.page.evaluate(selectionKey => {
       [...document.querySelectorAll('[data-selection-key]')].find(item => item.dataset.selectionKey === selectionKey)?.focus();
     }, key);
