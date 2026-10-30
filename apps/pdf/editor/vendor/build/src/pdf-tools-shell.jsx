@@ -215,6 +215,8 @@ import { createReleaseOutline, discardFallbackOutlineOnPageChange } from './pdf-
 import { createTextReflowPreviewQueue } from './pdf-editor/model/text-reflow-preview-queue.js';
 import { isLegacyTextAutofitFrame, legacyTextAutofitPropertyPatch, legacyTextAutofitRichInspectorCommit, materializeLegacyTextAutofitForResize } from './pdf-editor/model/text-autofit-materialization.js';
 import { fittedTextFrameHeight } from './pdf-editor/model/text-frame-fit-height.js';
+import { TEXT_OVERFLOW_OFFERS, TEXT_VERTICAL_OFFERS, textBlockAlignmentChoices } from './pdf-editor/model/bergwork-text-controls.js';
+import { companionMatrix, findUnderlineCompanion } from './pdf-editor/model/bergwork-underline-companion.js';
 
 const pdfjsLib = window.pdfjsLib;
 const PDFLib = window.PDFLib;
@@ -9800,6 +9802,8 @@ function usePdfiumSessionRuntime(doc, initialPageIndex = 0, getLatestDocument = 
         return;
       }
       runtime.sourceIdentityRevision = Number(opened.revision || 0);
+      // berg:work: what this worker build can do; the editor's controls offer nothing it would refuse.
+      runtime.engineFeatures = opened.features || {};
       runtime.sourceIdentityPageEpochs = new Map(
         recoveryDoc.pages.map(page => [page.id, Number(engine.pageEpoch(page.id) || 0)]),
       );
@@ -22932,6 +22936,43 @@ function App({ shell = null }) {
           imageOpacityChange.payload,
           imageOpacityChange.inversePayload,
         );
+      }
+    }
+    // berg:work: the separate line a Word PDF draws under this text moves and turns with it, in one undo step.
+    if (kind === 'text' && !crossesPages && !nextEdit.deleted && currentObject?.matrix &&
+        [GestureKind.MOVE, GestureKind.ROTATE].includes(options.gestureKind)) {
+      const transform = commands.find(command => command.type === CommandType.OBJECT_TRANSFORM);
+      const before = ['a', 'b', 'c', 'd', 'e', 'f'].map(key => Number(currentObject.matrix[key]));
+      const bounds = topLeftEditToPdfBounds(sourcePage, {
+        targetSourceX: liveBeforeSemanticLocator.sourceX,
+        targetSourceY: liveBeforeSemanticLocator.sourceY,
+        targetSourceW: liveBeforeSemanticLocator.sourceW,
+        targetSourceH: liveBeforeSemanticLocator.sourceH,
+      });
+      const axis = textAxisMetrics(nextEdit);
+      const companion = transform && bounds && findUnderlineCompanion({
+        textMatrix: [before[0], before[1], before[2], before[3]],
+        center: { x: (bounds.left + bounds.right) / 2, y: (bounds.bottom + bounds.top) / 2 },
+        inlineSize: axis.inlineSize,
+        blockSize: axis.blockSize,
+        fontSize: firstFinite(nextEdit.fontSize, currentObject.fontSize, 12),
+        objects: sourceInspection?.objects,
+      });
+      const companionBefore = companion?.matrix && ['a', 'b', 'c', 'd', 'e', 'f'].map(key => Number(companion.matrix[key]));
+      const companionAfter = companionBefore && companionMatrix(companionBefore, before, transform.payload.matrix);
+      if (companionAfter) {
+        commands.push(createPdfCommand({
+          commandId: `${prefix}:underline`,
+          type: CommandType.OBJECT_TRANSFORM,
+          targetId: companion.stableId,
+          payload: { matrix: companionAfter },
+        }));
+        inverseCommands.unshift(createPdfCommand({
+          commandId: `${prefix}:underline-inverse`,
+          type: CommandType.OBJECT_TRANSFORM,
+          targetId: companion.stableId,
+          payload: { matrix: companionBefore },
+        }));
       }
     }
     // Marks on this run that the gesture carried along (move, resize,
@@ -38916,6 +38957,8 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
   };
   const textAngle = textDisplayAngleRadians(current);
   const hasOrientedHit = !editing && Math.abs(textAngle) >= 0.01;
+  // berg:work: rotated text edits in place, without a frame or source cover on its page-aligned AABB.
+  const orientedEditing = editing && Math.abs(textAngle) >= 0.01;
   const overflowHitQuad = !editing ? textFrameOverflowHitQuad(page, item, current) : null;
   const previewFamily = uploadedPreviewFamilies?.get?.(current.fontResourceHash || current.fontResourceHashes?.[0]) ||
     (current.embeddedFontFamily ? uploadedPreviewFamilies?.get?.(`source:${current.embeddedFontFamily}`) : undefined);
@@ -39045,11 +39088,8 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
       event.stopPropagation();
       onSelect(selectionPayload(current.pageId || page.id));
       if (locked) return;
-      if (richTextFrameDocument) {
-        onStartEdit(null);
-        onOpenInspector?.();
-        return;
-      }
+      // berg:work: rich frames edit on the page like any text (a change of the plain text keeps the character styles,
+      // see richTextDocumentForSourceCommit). A double click that only opened Properties looked like a dead object.
       window.dispatchEvent(new CustomEvent('fernwork:pdf-text-edit-start', { detail: { documentId: page?.documentId || '', sourceId: itemId, seed: current } }));
       onStartEdit({ type: 'sourceText', sourceId: itemId, pageId: page.id }, current);
       return;
@@ -39441,7 +39481,7 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
 
   return (
     <>
-      {(dragAppearance || editing || (edit && !current.liveCommitted)) && !previewBacked &&
+      {(dragAppearance || editing || (edit && !current.liveCommitted)) && !previewBacked && !orientedEditing &&
         !(nativeDragPreview && !nativeRasterDragPreview) && sourceCoverNode}
       {nativeRasterDragPreview && previewDataUrl && (
         <img ref={node => {
@@ -39453,7 +39493,7 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
           alt="" draggable="false" style={nativeRasterPreviewStyle} />
       )}
       <div
-        className={`oo-pdf-textbox ${selected ? 'is-selected' : ''} ${coversMostOfPage(current, page) ? 'is-full-page-object' : ''} ${edit ? 'is-edited' : ''} ${preservePreview ? 'is-preserved' : ''} ${previewBacked && edit ? 'is-preview-backed' : ''} ${hasOrientedHit ? 'has-oriented-hit-surface' : ''} ${!editing && overflowHitQuad ? 'has-painted-overflow-hit' : ''} ${item?.renderMode === 3 ? 'is-invisible-text' : ''} ${!hasOrientedHit && Number(displayedDragGeometry.h || 0) * zoom < TEXT_HANDLE_FLAT_FRAME_PX ? 'is-flat-frame' : ''}`}
+        className={`oo-pdf-textbox ${selected ? 'is-selected' : ''} ${coversMostOfPage(current, page) ? 'is-full-page-object' : ''} ${edit ? 'is-edited' : ''} ${preservePreview ? 'is-preserved' : ''} ${previewBacked && edit ? 'is-preview-backed' : ''} ${hasOrientedHit ? 'has-oriented-hit-surface' : ''} ${orientedEditing ? 'is-oriented-editing' : ''} ${!editing && overflowHitQuad ? 'has-painted-overflow-hit' : ''} ${item?.renderMode === 3 ? 'is-invisible-text' : ''} ${!hasOrientedHit && !orientedEditing && Number(displayedDragGeometry.h || 0) * zoom < TEXT_HANDLE_FLAT_FRAME_PX ? 'is-flat-frame' : ''}`}
         data-source-id={itemId}
         data-selection-key={selectionItemKey({ type: 'text', sourceId: itemId })}
         data-source-text={sourceText}
@@ -39484,11 +39524,6 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
           event.stopPropagation();
           onSelect(selectionPayload(current.pageId || page.id));
           if (locked) return;
-          if (richTextFrameDocument) {
-            onStartEdit(null);
-            onOpenInspector?.();
-            return;
-          }
           window.dispatchEvent(new CustomEvent('fernwork:pdf-text-edit-start', { detail: { documentId: page?.documentId || '', sourceId: itemId, seed: current } }));
           caretPointRef.current = caretPointFromDoubleClick(event.nativeEvent || event);
           positionedCaretPointRef.current = caretPointRef.current;
@@ -39503,7 +39538,7 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
             <polygon points={svgQuadPoints(overflowHitQuad)} />
           </svg>
         )}
-        {editing && !richTextFrameDocument ? (
+        {editing ? (
           <>
           <textarea
             ref={node => { textareaRef.current = node; focusInlineEditorOnce(node); }}
@@ -39651,6 +39686,8 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
   const previewStatus = editing ? uploadedFontPreviewStatus(edit, uploadedPreviewStatuses, uploadedPreviewFamilies) : '';
   const editStyle = orientedTextContentStyle(previewFamily ? { ...edit, fontFamily: previewFamily } : edit, zoom);
   const hasOrientedHit = !editing && Math.abs(textDisplayAngleRadians(edit)) >= 0.01;
+  // berg:work: see TextItem.
+  const orientedEditing = editing && Math.abs(textDisplayAngleRadians(edit)) >= 0.01;
   const richStyle = uniformRichTextStyle(edit);
   const style = {
     left: (edit.x || 0) * zoom,
@@ -39925,7 +39962,7 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
 
   return (
     <div
-      className={`oo-pdf-textbox is-edited ${selected ? 'is-selected' : ''} ${coversMostOfPage(edit, page) ? 'is-full-page-object' : ''} ${preservePreview ? 'is-preserved' : ''} ${previewBacked ? 'is-preview-backed' : ''} ${hasOrientedHit ? 'has-oriented-hit-surface' : ''} ${!hasOrientedHit && Number(style?.height || 0) < TEXT_HANDLE_FLAT_FRAME_PX ? 'is-flat-frame' : ''}`}
+      className={`oo-pdf-textbox is-edited ${selected ? 'is-selected' : ''} ${coversMostOfPage(edit, page) ? 'is-full-page-object' : ''} ${preservePreview ? 'is-preserved' : ''} ${previewBacked ? 'is-preview-backed' : ''} ${hasOrientedHit ? 'has-oriented-hit-surface' : ''} ${orientedEditing ? 'is-oriented-editing' : ''} ${!hasOrientedHit && !orientedEditing && Number(style?.height || 0) < TEXT_HANDLE_FLAT_FRAME_PX ? 'is-flat-frame' : ''}`}
       data-source-id={sourceId}
       data-selection-key={selectionItemKey({ type: 'text', sourceId })}
       data-source-text={sourceText}
@@ -47498,7 +47535,7 @@ function Inspector({
           const textAlignButtons = (className = 'oo-pdf-text-align') => layer.type === 'text' && !legacyAutofitInvalid &&
               (layer.item.textBlock === true || layer.item.textFrame !== true)
             ? <span className={className} role="group" aria-label="Text alignment">
-              {[['left', 'align-left', 'Align text left'], ['center', 'align-center', 'Center text'], ['right', 'align-right', 'Align text right'], ['justify', 'align-justify', 'Justify text']].map(([value, icon, label]) => (
+              {textBlockAlignmentChoices(pdfiumRuntime?.engineFeatures).map(([value, icon, label]) => (
                 <button key={value} type="button" className="oo-pdf-icon-button" aria-label={label} title={label}
                   aria-pressed={layer.item.textBlock === true && (layer.item.textAlign || 'left') === value}
                   onMouseDown={event => event.preventDefault()}
@@ -47527,9 +47564,7 @@ function Inspector({
             {layer.item.textBlock === true && <>
               <div className="oo-pdf-prop-row two">
                 <label>Vertical <SimpleInspectorSelect label="Vertical" disabled={legacyAutofitInvalid}
-                  value={layer.item.verticalAlign || 'top'} options={[
-                    { value: 'top', label: 'Top' }, { value: 'middle', label: 'Middle' }, { value: 'bottom', label: 'Bottom' },
-                  ]} onChange={value => {
+                  value={layer.item.verticalAlign || 'top'} options={TEXT_VERTICAL_OFFERS} onChange={value => {
                     const patch = legacyPropertyPatch({ verticalAlign:value });
                     if (patch) updateTextLayer(layer, patch, { commitGesture:true,
                       gestureReason:'text-block-vertical-align', gestureKind:GestureKind.STYLE,
@@ -47539,12 +47574,12 @@ function Inspector({
               <div className="oo-pdf-prop-row two">
                 <label>Overflow <SimpleInspectorSelect label="Overflow" disabled={legacyAutofitInvalid}
                   value={layer.item.textOverflow || 'visible'} options={[
-                    { value: 'visible', label: 'Show overflow' },
+                    TEXT_OVERFLOW_OFFERS[0],
                     ...((layer.item.textOverflow || layer.item.block?.overflow) === 'shrink'
                       ? [{ value: 'shrink', label: 'Legacy AutoFit (fixed on resize)', disabled: true,
                           disabledReason: 'Legacy AutoFit is fixed when the frame is resized.' }]
                       : []),
-                    { value: 'clip', label: 'Clip frame (keep text)' },
+                    TEXT_OVERFLOW_OFFERS[1],
                   ]} onChange={value => {
                     const patch = legacyPropertyPatch({ textOverflow:value });
                     if (patch) updateTextLayer(layer, patch, { commitGesture:true,

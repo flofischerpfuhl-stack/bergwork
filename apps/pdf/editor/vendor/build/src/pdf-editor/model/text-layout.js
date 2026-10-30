@@ -8,6 +8,12 @@ function layoutValidationError(message, ErrorType = TypeError) {
 }
 export function isTextLayoutValidationError(error) { return validationErrors.has(error); }
 
+/** Every horizontal alignment a text block accepts; the editor's controls may offer only these. */
+export const TEXT_BLOCK_ALIGNMENTS = Object.freeze(['left', 'center', 'right', 'justify']);
+/** Every vertical alignment and overflow policy a text block accepts. */
+export const TEXT_BLOCK_VERTICAL_ALIGNMENTS = Object.freeze(['top', 'middle', 'bottom']);
+export const TEXT_BLOCK_OVERFLOW_POLICIES = Object.freeze(['visible', 'clip', 'shrink']);
+
 function graphemes(text) {
   if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
     return [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)]
@@ -94,9 +100,9 @@ export function layoutTextBlock({
   if (maxLines !== Infinity && (!Number.isSafeInteger(maxLines) || maxLines < 1)) {
     throw layoutValidationError('Text block line limit must be a positive integer.');
   }
-  if (!['left', 'center', 'right'].includes(align)) throw layoutValidationError('Invalid horizontal alignment.');
-  if (!['top', 'middle', 'bottom'].includes(verticalAlign)) throw layoutValidationError('Invalid vertical alignment.');
-  if (!['visible', 'clip', 'shrink'].includes(overflow)) throw layoutValidationError('Invalid overflow policy.');
+  if (!TEXT_BLOCK_ALIGNMENTS.includes(align)) throw layoutValidationError('Invalid horizontal alignment.');
+  if (!TEXT_BLOCK_VERTICAL_ALIGNMENTS.includes(verticalAlign)) throw layoutValidationError('Invalid vertical alignment.');
+  if (!TEXT_BLOCK_OVERFLOW_POLICIES.includes(overflow)) throw layoutValidationError('Invalid overflow policy.');
 
   const canonicalText = String(text ?? '').replace(/\r\n?/g, '\n');
   const sourceParagraphs = [];
@@ -129,7 +135,10 @@ export function layoutTextBlock({
       if (metrics.size > 64) metrics.delete(metrics.keys().next().value);
       return result;
     };
-    const lines = sourceParagraphs.flatMap(paragraph => wrapParagraph(paragraph.text, paragraph.start, width, measure));
+    const lines = sourceParagraphs.flatMap(paragraph => {
+      const wrapped = wrapParagraph(paragraph.text, paragraph.start, width, measure);
+      return wrapped.map((line, index) => ({ ...line, endsParagraph: index === wrapped.length - 1 }));
+    });
     // Validate every final line, even when height overflow already determines
     // the fit result. Positioning must reuse these validated metric values.
     const widths = lines.map(line => measure(line.text, line.start, line.end));
@@ -188,6 +197,10 @@ export function layoutTextBlock({
       throw layoutValidationError('Text glyph width exceeds finite PDF coordinates.', RangeError);
     }
     const lineWidth = Math.min(width, measuredWidth);
+    // Justified: every line but a paragraph's last fills the frame through its word spaces. A line without a space,
+    // or wider than the frame, keeps its natural width at the left edge.
+    const spaces = align === 'justify' && !line.endsParagraph ? line.text.split(' ').length - 1 : 0;
+    const wordSpacing = spaces > 0 && measuredWidth < width ? (width - measuredWidth) / spaces : 0;
     const x = align === 'center'
       ? (width - lineWidth) / 2
       : align === 'right'
@@ -204,7 +217,8 @@ export function layoutTextBlock({
       sourceEnd: line.end,
       x,
       baselineY,
-      width: lineWidth,
+      width: wordSpacing > 0 ? width : lineWidth,
+      ...(wordSpacing > 0 ? { wordSpacing } : {}),
     });
   });
   return Object.freeze({
