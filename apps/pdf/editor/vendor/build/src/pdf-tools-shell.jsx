@@ -13,6 +13,7 @@ import React, {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
@@ -217,6 +218,8 @@ import { createReleaseOutline, discardFallbackOutlineOnPageChange } from './pdf-
 import { createTextReflowPreviewQueue } from './pdf-editor/model/text-reflow-preview-queue.js';
 import { isLegacyTextAutofitFrame, legacyTextAutofitPropertyPatch, legacyTextAutofitRichInspectorCommit, materializeLegacyTextAutofitForResize } from './pdf-editor/model/text-autofit-materialization.js';
 import { fittedTextFrameHeight } from './pdf-editor/model/text-frame-fit-height.js';
+import { TEXT_OVERFLOW_OFFERS, TEXT_VERTICAL_OFFERS, textBlockAlignmentChoices } from './pdf-editor/model/bergwork-text-controls.js';
+import { companionMatrix, findUnderlineCompanion } from './pdf-editor/model/bergwork-underline-companion.js';
 
 const pdfjsLib = window.pdfjsLib;
 const PDFLib = window.PDFLib;
@@ -1369,6 +1372,12 @@ function fontFamilyForText(textLike = {}) {
   // `fontFamily`; only a family that differs from that fallback is an explicit
   // choice (uploaded/bundled/user-picked) and wins over the preview twin.
   const explicitFamily = textLike.fontFamily && textLike.fontFamily !== fallbackFamily ? textLike.fontFamily : '';
+  // berg:work: after Bold or Italic the family is a bundled face's name ("Liberation Sans Bold Italic"), which the browser
+  // does not know: the on-page editor fell back to a serif. The library's own preview face stands behind it.
+  const libraryTwin = explicitFamily && !explicitFamily.includes(',') && typeof libraryPreviewFamilyFor === 'function'
+    ? libraryPreviewFamilyFor({ pdfFontName: explicitFamily, fontWeight: textLike.fontWeight, fontStyle: textLike.fontStyle })
+    : '';
+  if (libraryTwin && libraryTwin !== explicitFamily) return `"${explicitFamily}", ${libraryTwin}`;
   return explicitFamily ||
     (textLike.fontOverride !== true && typeof libraryPreviewFamilyFor === 'function' ? libraryPreviewFamilyFor(textLike) : '') ||
     textLike.fontFamily ||
@@ -1664,9 +1673,10 @@ function bundledLibraryStyleFace(fontCatalog = [], textLike = {}, patch = {}) {
 
 async function registerBundledLibrarySiblingFaces(onUploadTextFont, sourceId, entry, selectedFace, sourceSeed = {}) {
   if (typeof onUploadTextFont !== 'function' || !entry?.faces?.length) return;
-  for (const face of entry.faces) {
-    if (face.weight === selectedFace?.weight && face.style === selectedFace?.style) continue;
-    const file = await fetchLibraryFontFile(entry, face);
+  // berg:work: the faces load side by side; one after the other made a first Underline wait for four round trips.
+  const faces = entry.faces.filter(face => face.weight !== selectedFace?.weight || face.style !== selectedFace?.style);
+  const files = await Promise.all(faces.map(face => fetchLibraryFontFile(entry, face)));
+  for (const file of files) {
     await onUploadTextFont(sourceId, file, {
       ...sourceSeed,
       richTextUploadOnly:true,
@@ -7418,10 +7428,17 @@ function requireValidPdfPropertyInputs(root) {
   throw new Error('Finish or cancel the invalid property value before saving.');
 }
 
+// berg:work: a font program that cannot be reused (Type 1 in a LaTeX PDF) is an answer, not a failure of the button.
+function reportFontImportFailure(error) {
+  const refused = error?.code === 'unsupported-operation' || /reusable/iu.test(String(error?.message || ''));
+  showToast(userFacingError(error, 'PDF font import failed.'), refused ? 'warning' : 'error');
+}
+
 function reportLivePdfEditFailure(runtime, error, fallback) {
   // A persistent read-only notice already explains this exact rejection.
   // Queued successors must not stack identical transient messages over it.
   if (runtime?.readOnly && error?.message === runtime.mutationBlockedReason) return;
+  if (error?.noNativeChange) return;
   showToast(userFacingError(error, fallback), 'error');
 }
 
@@ -7433,7 +7450,7 @@ function explicitFontChoiceFailure(error) {
   const missingList = missing.map(character => `\u201c${character}\u201d`).join(', ');
   const reason = missing.length
     ? `The embedded ${fontName} font has no glyph for ${missingList}.`
-    : `Fernwork could not use ${fontName} for this change.`;
+    : `This font cannot be used for this change: ${fontName}.`; // berg:work: no product name in the message.
   return {
     code: String(details.code || 'text-exact-font-required'),
     fontName,
@@ -8679,6 +8696,10 @@ function rangeFormattedRichDocument(document, range, patch = {}, faces = []) {
     fontResources: formatted.fontResources.filter(item => used.has(item.resourceId)) }) };
 }
 
+function isBase14FontName(name = '') {
+  return /^(?:[A-Z]{6}\+)?(?:Helvetica|Courier|Times-(?:Roman|Bold|Italic|BoldItalic))(?:-|$)/u.test(String(name));
+}
+
 function exactLegacyTextRichSeed(previous = {}, fontCatalog = []) {
   const base14Resource = base14RichResourceForTextLike(previous);
   const resourceId = String(previous.fontResourceHash || previous.fontResourceHashes?.[0] || '');
@@ -9841,6 +9862,8 @@ function usePdfiumSessionRuntime(doc, initialPageIndex = 0, getLatestDocument = 
         return;
       }
       runtime.sourceIdentityRevision = Number(opened.revision || 0);
+      // berg:work: what this worker build can do; the editor's controls offer nothing it would refuse.
+      runtime.engineFeatures = opened.features || {};
       runtime.sourceIdentityPageEpochs = new Map(
         recoveryDoc.pages.map(page => [page.id, Number(engine.pageEpoch(page.id) || 0)]),
       );
@@ -21729,7 +21752,10 @@ function App({ shell = null }) {
       const modifier = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
       const target = event.target;
-      if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      // berg:work: a checkbox, slider or colour field has no text to undo, so Ctrl+Z there is the document's.
+      const undoFromControl = modifier && (key === 'z' || key === 'y') &&
+        target?.matches?.('input[type=checkbox], input[type=radio], input[type=range], input[type=color]');
+      if (!undoFromControl && target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
       if (modifier && key === 'f') {
         event.preventDefault();
         setSearchOpen(true);
@@ -22671,9 +22697,12 @@ function App({ shell = null }) {
           currentObject?.textFrame !== true &&
           currentObject?.complexText !== true &&
           currentObject?.nativeTypeName !== 'form';
+        // berg:work: the semantic inverse of a frame edit rebuilt the frame from its page rectangle: a line that overflows
+        // its frame came back one line lower, over the next one. The document state is exact, and costs a few ms.
+        const replacesTextFrameText = textCommandType === CommandType.TEXT_BLOCK_REPLACE && currentObject?.textFrame === true;
         const needsExactAppearanceInverse = changesFontFamily || changesFontSize ||
           changesTextFrameColor || firstNativeTextFramePromotion || changesRichText ||
-          replacesNativeTextRun || rotatedRichTextFrameResize;
+          replacesNativeTextRun || rotatedRichTextFrameResize || replacesTextFrameText;
         if (needsExactAppearanceInverse) {
           // Replacing a text object can discard its embedded font dictionary,
           // subset program, widths, encoding, ToUnicode CMap and spacing.
@@ -22955,6 +22984,9 @@ function App({ shell = null }) {
       ];
       const previousObjectProperties = { ...(currentObject || {}), ...(previous || {}) };
       previousObjectProperties.pathSegments = previous.pathSegments || currentObject?.path?.sampledSegments;
+      // berg:work: the descriptor has these as its draw mode; without them Undo of the Fill and Stroke toggles sent nothing.
+      previousObjectProperties.fillEnabled ??= currentObject?.drawMode ? Number(currentObject.drawMode.fillMode || 0) !== 0 : undefined;
+      previousObjectProperties.strokeEnabled ??= currentObject?.drawMode ? currentObject.drawMode.stroke !== false : undefined;
       const changedObjectPropertyKeys = kind === 'object'
         ? objectPropertyKeys.filter(key => (
             nextEdit[key] != null &&
@@ -23015,6 +23047,43 @@ function App({ shell = null }) {
         );
       }
     }
+    // berg:work: the separate line a Word PDF draws under this text moves and turns with it, in one undo step.
+    if (kind === 'text' && !crossesPages && !nextEdit.deleted && currentObject?.matrix &&
+        [GestureKind.MOVE, GestureKind.ROTATE].includes(options.gestureKind)) {
+      const transform = commands.find(command => command.type === CommandType.OBJECT_TRANSFORM);
+      const before = ['a', 'b', 'c', 'd', 'e', 'f'].map(key => Number(currentObject.matrix[key]));
+      const bounds = topLeftEditToPdfBounds(sourcePage, {
+        targetSourceX: liveBeforeSemanticLocator.sourceX,
+        targetSourceY: liveBeforeSemanticLocator.sourceY,
+        targetSourceW: liveBeforeSemanticLocator.sourceW,
+        targetSourceH: liveBeforeSemanticLocator.sourceH,
+      });
+      const axis = textAxisMetrics(nextEdit);
+      const companion = transform && bounds && findUnderlineCompanion({
+        textMatrix: [before[0], before[1], before[2], before[3]],
+        center: { x: (bounds.left + bounds.right) / 2, y: (bounds.bottom + bounds.top) / 2 },
+        inlineSize: axis.inlineSize,
+        blockSize: axis.blockSize,
+        fontSize: firstFinite(nextEdit.fontSize, currentObject.fontSize, 12),
+        objects: sourceInspection?.objects,
+      });
+      const companionBefore = companion?.matrix && ['a', 'b', 'c', 'd', 'e', 'f'].map(key => Number(companion.matrix[key]));
+      const companionAfter = companionBefore && companionMatrix(companionBefore, before, transform.payload.matrix);
+      if (companionAfter) {
+        commands.push(createPdfCommand({
+          commandId: `${prefix}:underline`,
+          type: CommandType.OBJECT_TRANSFORM,
+          targetId: companion.stableId,
+          payload: { matrix: companionAfter },
+        }));
+        inverseCommands.unshift(createPdfCommand({
+          commandId: `${prefix}:underline-inverse`,
+          type: CommandType.OBJECT_TRANSFORM,
+          targetId: companion.stableId,
+          payload: { matrix: companionBefore },
+        }));
+      }
+    }
     // Marks on this run that the gesture carried along (move, resize,
     // rotation, retyping, deletion) commit in the same transaction. Their
     // geometry comes from the UI transition that already shows them; the
@@ -23048,6 +23117,8 @@ function App({ shell = null }) {
       log.warn('pdf.edit-no-commands', { kind, stableId, pageId: page?.id, gestureReason: options.gestureReason });
       const error = new Error(`The ${kind} edit did not produce a native PDF change.`);
       error.code = 'transaction-rejected';
+      // berg:work: the last step of a slider often lands on the value the file already has. Nothing went wrong.
+      error.noNativeChange = true;
       throw error;
     }
     let confirmedStateProjection = null;
@@ -24057,7 +24128,8 @@ function App({ shell = null }) {
       // The line's derived formatting document describes only that line; the frame gets its own on commit.
       richTextDocument: undefined,
       textBlock: true,
-      textAlign: block.align,
+      // berg:work: a justified paragraph stays justified on a worker that can lay it out.
+      textAlign: block.justified && runtime.engineFeatures?.justifiedTextBlocks ? 'justify' : block.align,
       verticalAlign: 'top',
       textOverflow: 'visible',
       lineHeight: block.lineHeight,
@@ -30527,6 +30599,7 @@ function App({ shell = null }) {
       aria-busy={Boolean(visibleLoadProgress || applyingEdits || normalizingRotation || pageStructureBusy || nativeMutationPending)}
       data-page-structure-busy={pageStructureBusy}
       data-live-commit-count={liveCommitCount}
+      data-history-depth={activeDoc?.historyPast?.length || 0}
       data-pdf-undo-state={historyBlocked?.documentId === activeDocId ? 'blocked' : 'ready'}
       onDragOver={handleDocumentDragOver}
       onDragLeave={handleDocumentDragLeave}
@@ -39038,6 +39111,8 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
   };
   const textAngle = textDisplayAngleRadians(current);
   const hasOrientedHit = !editing && Math.abs(textAngle) >= 0.01;
+  // berg:work: rotated text edits in place, without a frame or source cover on its page-aligned AABB.
+  const orientedEditing = editing && Math.abs(textAngle) >= 0.01;
   const overflowHitQuad = !editing ? textFrameOverflowHitQuad(page, item, current) : null;
   const previewFamily = uploadedPreviewFamilies?.get?.(current.fontResourceHash || current.fontResourceHashes?.[0]) ||
     (current.embeddedFontFamily ? uploadedPreviewFamilies?.get?.(`source:${current.embeddedFontFamily}`) : undefined);
@@ -39167,11 +39242,8 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
       event.stopPropagation();
       onSelect(selectionPayload(current.pageId || page.id));
       if (locked) return;
-      if (richTextFrameDocument) {
-        onStartEdit(null);
-        onOpenInspector?.();
-        return;
-      }
+      // berg:work: rich frames edit on the page like any text (a change of the plain text keeps the character styles,
+      // see richTextDocumentForSourceCommit). A double click that only opened Properties looked like a dead object.
       window.dispatchEvent(new CustomEvent('fernwork:pdf-text-edit-start', { detail: { documentId: page?.documentId || '', sourceId: itemId, seed: current } }));
       onStartEdit({ type: 'sourceText', sourceId: itemId, pageId: page.id }, current);
       return;
@@ -39565,7 +39637,7 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
 
   return (
     <>
-      {(dragAppearance || editing || (edit && !current.liveCommitted)) && !previewBacked &&
+      {(dragAppearance || editing || (edit && !current.liveCommitted)) && !previewBacked && !orientedEditing &&
         !(nativeDragPreview && !nativeRasterDragPreview) && sourceCoverNode}
       {nativeRasterDragPreview && previewDataUrl && (
         <img ref={node => {
@@ -39577,7 +39649,7 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
           alt="" draggable="false" style={nativeRasterPreviewStyle} />
       )}
       <div
-        className={`oo-pdf-textbox ${selected ? 'is-selected' : ''} ${coversMostOfPage(current, page) ? 'is-full-page-object' : ''} ${edit ? 'is-edited' : ''} ${preservePreview ? 'is-preserved' : ''} ${previewBacked && edit ? 'is-preview-backed' : ''} ${hasOrientedHit ? 'has-oriented-hit-surface' : ''} ${!editing && overflowHitQuad ? 'has-painted-overflow-hit' : ''} ${item?.renderMode === 3 ? 'is-invisible-text' : ''} ${!hasOrientedHit && Number(displayedDragGeometry.h || 0) * zoom < TEXT_HANDLE_FLAT_FRAME_PX ? 'is-flat-frame' : ''}`}
+        className={`oo-pdf-textbox ${selected ? 'is-selected' : ''} ${coversMostOfPage(current, page) ? 'is-full-page-object' : ''} ${edit ? 'is-edited' : ''} ${preservePreview ? 'is-preserved' : ''} ${previewBacked && edit ? 'is-preview-backed' : ''} ${hasOrientedHit ? 'has-oriented-hit-surface' : ''} ${orientedEditing ? 'is-oriented-editing' : ''} ${!editing && overflowHitQuad ? 'has-painted-overflow-hit' : ''} ${item?.renderMode === 3 ? 'is-invisible-text' : ''} ${!hasOrientedHit && !orientedEditing && Number(displayedDragGeometry.h || 0) * zoom < TEXT_HANDLE_FLAT_FRAME_PX ? 'is-flat-frame' : ''}`}
         data-source-id={itemId}
         data-selection-key={selectionItemKey({ type: 'text', sourceId: itemId })}
         data-source-text={sourceText}
@@ -39608,11 +39680,6 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
           event.stopPropagation();
           onSelect(selectionPayload(current.pageId || page.id));
           if (locked) return;
-          if (richTextFrameDocument) {
-            onStartEdit(null);
-            onOpenInspector?.();
-            return;
-          }
           window.dispatchEvent(new CustomEvent('fernwork:pdf-text-edit-start', { detail: { documentId: page?.documentId || '', sourceId: itemId, seed: current } }));
           caretPointRef.current = caretPointFromDoubleClick(event.nativeEvent || event);
           positionedCaretPointRef.current = caretPointRef.current;
@@ -39627,7 +39694,7 @@ function TextItem({ page, pages = [page], item, itemId, edit, zoom, zIndex, sele
             <polygon points={svgQuadPoints(overflowHitQuad)} />
           </svg>
         )}
-        {editing && !richTextFrameDocument ? (
+        {editing ? (
           <>
           <textarea
             ref={node => { textareaRef.current = node; focusInlineEditorOnce(node); }}
@@ -39775,6 +39842,8 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
   const previewStatus = editing ? uploadedFontPreviewStatus(edit, uploadedPreviewStatuses, uploadedPreviewFamilies) : '';
   const editStyle = orientedTextContentStyle(previewFamily ? { ...edit, fontFamily: previewFamily } : edit, zoom);
   const hasOrientedHit = !editing && Math.abs(textDisplayAngleRadians(edit)) >= 0.01;
+  // berg:work: see TextItem.
+  const orientedEditing = editing && Math.abs(textDisplayAngleRadians(edit)) >= 0.01;
   const richStyle = uniformRichTextStyle(edit);
   const style = {
     left: (edit.x || 0) * zoom,
@@ -40051,7 +40120,7 @@ function TextEditObject({ page, pages = [page], sourceId, edit, zoom, zIndex, se
 
   return (
     <div
-      className={`oo-pdf-textbox is-edited ${selected ? 'is-selected' : ''} ${coversMostOfPage(edit, page) ? 'is-full-page-object' : ''} ${preservePreview ? 'is-preserved' : ''} ${previewBacked ? 'is-preview-backed' : ''} ${hasOrientedHit ? 'has-oriented-hit-surface' : ''} ${!hasOrientedHit && Number(style?.height || 0) < TEXT_HANDLE_FLAT_FRAME_PX ? 'is-flat-frame' : ''}`}
+      className={`oo-pdf-textbox is-edited ${selected ? 'is-selected' : ''} ${coversMostOfPage(edit, page) ? 'is-full-page-object' : ''} ${preservePreview ? 'is-preserved' : ''} ${previewBacked ? 'is-preview-backed' : ''} ${hasOrientedHit ? 'has-oriented-hit-surface' : ''} ${orientedEditing ? 'is-oriented-editing' : ''} ${!hasOrientedHit && !orientedEditing && Number(style?.height || 0) < TEXT_HANDLE_FLAT_FRAME_PX ? 'is-flat-frame' : ''}`}
       data-source-id={sourceId}
       data-selection-key={selectionItemKey({ type: 'text', sourceId })}
       data-source-text={sourceText}
@@ -40210,6 +40279,18 @@ function ImageRegion({ page, pages = [page], item, itemId, edit, preferences, zo
       }
       return pending;
     });
+  // berg:work: a pasted or duplicated image selects itself once it is drawn (the paste only knows its object id).
+  // These hooks stay above the return for a deleted image: behind it, deleting an image took the whole editor down.
+  const selectSelfRef = useRef(null);
+  useEffect(() => {
+    const objectId = current.objectId;
+    if (!objectId) return undefined;
+    const claim = event => {
+      if (event.detail?.pageId === page.id && event.detail?.objectId === objectId) selectSelfRef.current?.();
+    };
+    window.addEventListener(SELECT_IMAGE_OBJECT_EVENT, claim);
+    return () => window.removeEventListener(SELECT_IMAGE_OBJECT_EVENT, claim);
+  }, [current.objectId, page.id]);
   if (edit?.deleted || (edit && current.pageId !== page.id)) {
     return null;
   }
@@ -40222,18 +40303,7 @@ function ImageRegion({ page, pages = [page], item, itemId, edit, preferences, zo
     item: { ...item, sourcePageId: page.id },
     edit: edit ? { ...current, ...itemPatch } : undefined,
   });
-  // berg:work: a pasted or duplicated image selects itself once it is drawn (the paste only knows its PDF object).
-  const selectSelfRef = useRef(null);
   selectSelfRef.current = () => onSelect(selectionPayload());
-  useEffect(() => {
-    const objectId = current.objectId;
-    if (!objectId) return undefined;
-    const claim = event => {
-      if (event.detail?.pageId === page.id && event.detail?.objectId === objectId) selectSelfRef.current?.();
-    };
-    window.addEventListener(SELECT_IMAGE_OBJECT_EVENT, claim);
-    return () => window.removeEventListener(SELECT_IMAGE_OBJECT_EVENT, claim);
-  }, [current.objectId, page.id]);
 
   const start = (event, handle = null) => {
     if (event.pointerType === 'touch' && !event.isPrimary) return;
@@ -42469,6 +42539,17 @@ function MultiSelectionBox({ items, zoom, zIndex, locked = false, onMove, limitM
     };
   }, [bounds?.x, bounds?.y, bounds?.w, bounds?.h, zoom, items.length, affordanceHost,
     rotateHandleCorrection?.translate, rotateHandleCorrection?.rotate]);
+  // The page surface routes a drag that begins on a selected member object to
+  // this frame (PowerPoint behaviour: dragging any selected object moves the
+  // whole selection). Published through a ref so no forwardRef reshuffle.
+  // berg:work: above the return for an empty selection, as hooks must be.
+  const externalDragHandlersRef = useRef(null);
+  useEffect(() => {
+    const handlers = externalDragHandlersRef.current;
+    if (!externalDragRef || !handlers) return undefined;
+    externalDragRef.current = handlers;
+    return () => { if (externalDragRef.current === handlers) externalDragRef.current = null; };
+  });
   if (!bounds) return null;
   const canMaterializeGroup = items.length > 1 && items.every(item =>
     ['nativeObject', 'text', 'imageRegion'].includes(item.type) &&
@@ -42649,14 +42730,7 @@ function MultiSelectionBox({ items, zoom, zIndex, locked = false, onMove, limitM
     height: Math.max(8, bounds.h * zoom),
     zIndex,
   };
-  // The page surface routes a drag that begins on a selected member object to
-  // this frame (PowerPoint behaviour: dragging any selected object moves the
-  // whole selection). Published through a ref so no forwardRef reshuffle.
-  useEffect(() => {
-    if (!externalDragRef) return undefined;
-    externalDragRef.current = { start, move, stop, cancel };
-    return () => { if (externalDragRef.current?.start === start) externalDragRef.current = null; };
-  });
+  externalDragHandlersRef.current = { start, move, stop, cancel };
   return (
     <div
       ref={selectionRef}
@@ -46483,6 +46557,21 @@ function CustomFreeTextConversion({ onReplace, disabled = false }) {
     </div>
   );
 }
+const styleConversions = { count: 0, listeners: new Set() };
+function trackStyleConversion(task) {
+  const change = delta => {
+    styleConversions.count += delta;
+    for (const listener of styleConversions.listeners) listener();
+  };
+  change(1);
+  return Promise.resolve().then(task).finally(() => change(-1));
+}
+function subscribeStyleConversions(listener) {
+  styleConversions.listeners.add(listener);
+  return () => styleConversions.listeners.delete(listener);
+}
+const useStyleConversionBusy = () => useSyncExternalStore(subscribeStyleConversions, () => styleConversions.count > 0);
+
 function Inspector({
   zoom = 1,
   open,
@@ -46505,7 +46594,7 @@ function Inspector({
   onGuideUnitChange,
   onUpdatePageGuides,
   readOnly = false,
-  nativeBusy = false,
+  nativeBusy: nativeCommitBusy = false,
   freeTextCapabilityProbePending = '',
   pdfiumRuntime = null,
   pdfiumInspectionVersion = 0,
@@ -46536,6 +46625,24 @@ function Inspector({
   onImportTextFont,
   onSaveSignature,
 }) {
+  // berg:work: a first style change loads fonts before its commit starts. The panel waits as for a commit, or a click in
+  // that second went to the old text and the conversion then overwrote it.
+  const nativeBusy = useStyleConversionBusy() || nativeCommitBusy;
+  // berg:work: the panel waits while a commit lands, about a second. A button or checkbox pressed in that time (it is
+  // disabled, so no click arrives) is pressed once the panel is free again, instead of being lost.
+  const pressedWhileBusyRef = useRef(null);
+  const rememberPressWhileBusy = event => {
+    if (!nativeBusy) return;
+    const target = event.target;
+    pressedWhileBusyRef.current = target?.closest?.('button:disabled, input[type=checkbox]:disabled') ||
+      target?.closest?.('label')?.querySelector?.('input[type=checkbox]:disabled') || null;
+  };
+  useEffect(() => {
+    if (nativeBusy) return;
+    const control = pressedWhileBusyRef.current;
+    pressedWhileBusyRef.current = null;
+    if (control?.isConnected && !control.disabled) control.click();
+  }, [nativeBusy]);
   const [expandedKey, setExpandedKey] = useState('');
   const [renamingKey, setRenamingKey] = useState('');
   const coarsePointer = useCoarsePointer();
@@ -46693,6 +46800,11 @@ function Inspector({
     ? layers.map((layer, index) => ({ layer, index }))
       .filter(({ layer }) => selectedKeys.has(layer.key) || layer.key === editingLayerKey)
     : visibleLayers;
+  // berg:work: with nothing selected and no commit under way, the pin has done its job: the last object's fields stayed
+  // in the panel below "Nothing selected".
+  useEffect(() => {
+    if (!selectedKeys.size && !nativeBusy) setEditingLayerKey('');
+  }, [selectedKeys.size, nativeBusy]);
   const labelCounts = useMemo(() => {
     const counts = new Map();
     for (const layer of layers) counts.set(layer.label, (counts.get(layer.label) || 0) + 1);
@@ -47345,7 +47457,7 @@ function Inspector({
     setDropTargetKey('');
   };
   return (
-    <aside className={`oo-pdf-inspector ${sheet ? `is-sheet is-sheet-${sheet}` : ''} is-tab-${tab} ${headless ? 'is-headless' : ''}`} aria-label="Layers and properties"
+    <aside className={`oo-pdf-inspector ${sheet ? `is-sheet is-sheet-${sheet}` : ''} is-tab-${tab} ${headless ? 'is-headless' : ''}`} data-native-busy={nativeBusy ? 'true' : undefined} onPointerDownCapture={rememberPressWhileBusy} aria-label="Layers and properties"
       aria-hidden={headless || undefined} inert={headless || undefined} onKeyDown={event => {
       if (event.key === 'Escape' && pressRef.current) {
         event.preventDefault();
@@ -47489,8 +47601,12 @@ function Inspector({
           const nestedDecorationBlocked = Boolean(layer.item.nestedEditBlockedReason);
           const createdAnnotationRichTextDocument = layer.type === 'annotation'
             ? createdTextRichInspectorDocument(layer.item, doc.fontCatalog || []) : null;
-          const legacyDecorationSeed = layer.type === 'text' && !richTextDocument
+          // berg:work: Times New Roman or Arial without an embedded font is not a Base-14 font, though it maps to one for
+          // display. The worker refuses the Base-14 conversion, so such text takes the library face like any other.
+          const legacyRichSeed = layer.type === 'text' && !richTextDocument
             ? exactLegacyTextRichSeed(legacySourceItem, doc.fontCatalog || []) : null;
+          const legacyDecorationSeed = legacyRichSeed?.defaultCharacterStyle?.resourceId?.startsWith?.('base14:') &&
+            !isBase14FontName(legacySourceItem.pdfFontName || legacySourceItem.sourceFontName) ? null : legacyRichSeed;
           const legacyDecorationSubstitute = layer.type === 'text' && !richTextDocument && !legacyDecorationSeed
             ? legacyTextLibrarySubstitution(legacySourceItem) : null;
           const canToggleLegacyFontVariant = patch =>
@@ -47526,7 +47642,7 @@ function Inspector({
               return;
             }
             if (!legacyDecorationSubstitute) return;
-            void (async () => {
+            void trackStyleConversion(async () => {
               await registerBundledLibrarySiblingFaces(onUploadTextFont, layer.item.sourceId,
                 legacyDecorationSubstitute.entry, legacyDecorationSubstitute.face, layer.item);
               const file = await fetchLibraryFontFile(legacyDecorationSubstitute.entry, legacyDecorationSubstitute.face);
@@ -47546,7 +47662,7 @@ function Inspector({
                   sourceLabel:legacyDecorationSubstitute.sourceLabel,
                 },
               });
-            })()
+            })
               .catch(error => showToast(error.message || 'Text decoration conversion failed.', 'error'));
           };
           const commitLegacyFontStyle = patch => {
@@ -47560,7 +47676,7 @@ function Inspector({
             if (libraryVariant || substituteVariant) {
               if (typeof onUploadTextFont !== 'function') return;
               const variant = libraryVariant || substituteVariant;
-              void (async () => {
+              void trackStyleConversion(async () => {
                 await registerBundledLibrarySiblingFaces(onUploadTextFont, layer.item.sourceId,
                   variant.entry, variant.face, layer.item);
                 const file = await fetchLibraryFontFile(variant.entry, variant.face);
@@ -47578,7 +47694,7 @@ function Inspector({
                     sourceLabel:substituteVariant.sourceLabel,
                   },
                 } : {});
-              })()
+              })
                 .catch(error => showToast(userFacingError(error, 'Font embedding failed.'), 'error'));
               return;
             }
@@ -47592,6 +47708,10 @@ function Inspector({
               'text-font-style',
             );
           };
+          // berg:work: a path with neither fill nor stroke paints nothing, and PDFium drops it on the next write: the
+          // object left the page under its own stable binding and editing paused for good.
+          const pathFilled = layer.item.fillEnabled ?? (Number(layer.item.drawMode?.fillMode || 0) !== 0);
+          const pathStroked = layer.item.strokeEnabled ?? layer.item.drawMode?.stroke !== false;
           const geometrySourceId = layer.type === 'annotation' ? layer.item.id : layer.item.sourceId;
           const canResizeGeometry = !(layer.type === 'annotation' && layer.item.imported &&
             layer.item.sourceSubtype === 'freetext' && layer.item.appearanceReconstructible === false);
@@ -47662,7 +47782,7 @@ function Inspector({
           const textAlignButtons = (className = 'oo-pdf-text-align') => layer.type === 'text' && !legacyAutofitInvalid &&
               (layer.item.textBlock === true || layer.item.textFrame !== true)
             ? <span className={className} role="group" aria-label="Text alignment">
-              {[['left', 'align-left', 'Align text left'], ['center', 'align-center', 'Center text'], ['right', 'align-right', 'Align text right'], ['justify', 'align-justify', 'Justify text']].map(([value, icon, label]) => (
+              {textBlockAlignmentChoices(pdfiumRuntime?.engineFeatures).map(([value, icon, label]) => (
                 <button key={value} type="button" className="oo-pdf-icon-button" aria-label={label} title={label}
                   aria-pressed={layer.item.textBlock === true && (layer.item.textAlign || 'left') === value}
                   onMouseDown={event => event.preventDefault()}
@@ -47691,9 +47811,7 @@ function Inspector({
             {layer.item.textBlock === true && <>
               <div className="oo-pdf-prop-row two">
                 <label>Vertical <SimpleInspectorSelect label="Vertical" disabled={legacyAutofitInvalid}
-                  value={layer.item.verticalAlign || 'top'} options={[
-                    { value: 'top', label: 'Top' }, { value: 'middle', label: 'Middle' }, { value: 'bottom', label: 'Bottom' },
-                  ]} onChange={value => {
+                  value={layer.item.verticalAlign || 'top'} options={TEXT_VERTICAL_OFFERS} onChange={value => {
                     const patch = legacyPropertyPatch({ verticalAlign:value });
                     if (patch) updateTextLayer(layer, patch, { commitGesture:true,
                       gestureReason:'text-block-vertical-align', gestureKind:GestureKind.STYLE,
@@ -47703,12 +47821,12 @@ function Inspector({
               <div className="oo-pdf-prop-row two">
                 <label>Overflow <SimpleInspectorSelect label="Overflow" disabled={legacyAutofitInvalid}
                   value={layer.item.textOverflow || 'visible'} options={[
-                    { value: 'visible', label: 'Show overflow' },
+                    TEXT_OVERFLOW_OFFERS[0],
                     ...((layer.item.textOverflow || layer.item.block?.overflow) === 'shrink'
                       ? [{ value: 'shrink', label: 'Legacy AutoFit (fixed on resize)', disabled: true,
                           disabledReason: 'Legacy AutoFit is fixed when the frame is resized.' }]
                       : []),
-                    { value: 'clip', label: 'Clip frame (keep text)' },
+                    TEXT_OVERFLOW_OFFERS[1],
                   ]} onChange={value => {
                     const patch = legacyPropertyPatch({ textOverflow:value });
                     if (patch) updateTextLayer(layer, patch, { commitGesture:true,
@@ -47727,8 +47845,9 @@ function Inspector({
           </> : null;
           const richFontFacts = layer.type === 'text' && richTextDocument && !base14RichEditor ? <>
             {layer.item.embeddedFontFamily && !layer.item.fontResourceHashes?.length &&
+              nativeTextFrameDescriptor?.fontEmbedded !== false &&
               <button type="button" className="oo-pdf-font-action" onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item)
-                .catch(error => showToast(userFacingError(error, 'PDF font import failed.'), 'error'))}>Import embedded PDF font for reuse</button>}
+                .catch(error => reportFontImportFailure(error))}>Import embedded PDF font for reuse</button>}
             {layer.item.usedFontResourceHashes?.length > 0 &&
               <div className="oo-pdf-mini-stat">Actual rendered font: {layer.item.usedFontResourceHashes.map((hash, resourceIndex) => {
                 const resource = layer.item.richTextFontResources?.find(item => item.resourceId === hash);
@@ -47739,7 +47858,7 @@ function Inspector({
               <div className="oo-pdf-mini-stat oo-pdf-caption">This exact font file is available to other rich text in this PDF.</div>}
             {layer.item.fontResourceHashes?.length > 0 && !fontCatalogHasHash(doc.fontCatalog || [], layer.item.fontResourceHashes[0]) &&
               <button type="button" className="oo-pdf-font-action" onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item)
-                .catch(error => showToast(userFacingError(error, 'PDF font import failed.'), 'error'))}>Import embedded frame font for reuse</button>}
+                .catch(error => reportFontImportFailure(error))}>Import embedded frame font for reuse</button>}
           </> : null;
           // berg:work: the same editor twice — in the Properties row and, compact, in the mini toolbar next to the
           // object — so both format through this row's commit path and undo gestures.
@@ -47924,12 +48043,12 @@ function Inspector({
                             const entry = libraryFontById(libraryId);
                             if (!entry) return;
                             const selectedFace = libraryFace(entry, layer.item.fontWeight, layer.item.fontStyle);
-                            void (async () => {
+                            void trackStyleConversion(async () => {
                                 await registerBundledLibrarySiblingFaces(onUploadTextFont, layer.item.sourceId,
                                   entry, selectedFace, layer.item);
                                 const file = await fetchLibraryFontFile(entry, selectedFace);
                                 await onUploadTextFont?.(layer.item.sourceId, file, layer.item);
-                              })()
+                              })
                               .catch(error => showToast(userFacingError(error, 'Font embedding failed.'), 'error'));
                             return;
                           }
@@ -48270,10 +48389,12 @@ function Inspector({
                         )} /></label>
                       </div>
                       {/* berg:work: the font picker already names the PDF's font; the explanation moved to this button. */}
-                      {layer.item.embeddedFontFamily && !layer.item.fontResourceHashes?.length && (
+                      {/* berg:work: a font the PDF does not embed has nothing to import. */}
+                      {layer.item.embeddedFontFamily && !layer.item.fontResourceHashes?.length &&
+                        nativeTextFrameDescriptor?.fontEmbedded !== false && (
                         <button type="button" className="oo-pdf-font-action"
                           title="Existing glyphs are preserved where safe; subset and Type 3 fonts cannot be reused for arbitrary new characters. Upload the licensed font file to use it elsewhere."
-                          onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item).catch(error => showToast(userFacingError(error, 'PDF font import failed.'), 'error'))}>Import embedded PDF font for reuse</button>
+                          onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item).catch(error => reportFontImportFailure(error))}>Import embedded PDF font for reuse</button>
                       )}
                       {layer.item.usedFontResourceHashes?.length > 0 && (
                         <div className="oo-pdf-mini-stat">Actual rendered font: {layer.item.usedFontResourceHashes.map((hash, index) => {
@@ -48284,7 +48405,7 @@ function Inspector({
                       )}
                       {layer.item.fontResourceHashes?.length > 0 &&
                         !fontCatalogHasHash(doc.fontCatalog || [], layer.item.fontResourceHashes[0]) && (
-                        <button type="button" onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item).catch(error => showToast(userFacingError(error, 'PDF font import failed.'), 'error'))}>Import embedded frame font for reuse</button>
+                        <button type="button" onClick={() => void onImportTextFont?.(layer.item.sourceId, layer.item).catch(error => reportFontImportFailure(error))}>Import embedded frame font for reuse</button>
                       )}
                       </PropSection>}
                       <PropSection sectionKey="appearance" title="Appearance"
@@ -48495,12 +48616,16 @@ function Inspector({
                           <div className="oo-pdf-prop-row two">
                             <label className="oo-pdf-check"><input
                               type="checkbox"
-                              checked={layer.item.fillEnabled ?? (Number(layer.item.drawMode?.fillMode || 0) !== 0)}
+                              checked={pathFilled}
+                              disabled={pathFilled && !pathStroked}
+                              title={pathFilled && !pathStroked ? 'A shape keeps its fill or its stroke.' : undefined}
                               onChange={(event) => commitObjectProperty(layer, { fillEnabled: event.target.checked }, 'native-object-fill-toggle')}
                             /> Fill shape</label>
                             <label className="oo-pdf-check"><input
                               type="checkbox"
-                              checked={layer.item.strokeEnabled ?? layer.item.drawMode?.stroke !== false}
+                              checked={pathStroked}
+                              disabled={pathStroked && !pathFilled}
+                              title={pathStroked && !pathFilled ? 'A shape keeps its fill or its stroke.' : undefined}
                               onChange={(event) => commitObjectProperty(layer, { strokeEnabled: event.target.checked }, 'native-object-stroke-toggle')}
                             /> Stroke shape</label>
                           </div>

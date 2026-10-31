@@ -3,7 +3,8 @@
 
 export const EDIT_OPS = [
   'page.rotate', 'page.move', 'page.delete', 'page.insertBlank', 'page.duplicate', 'page.import',
-  'text.add', 'text.edit', 'text.font', 'image.add', 'shape.add', 'object.move', 'object.delete',
+  'text.add', 'text.edit', 'text.font', 'text.align', 'text.rotate', 'text.wrap', 'text.style', 'image.add', 'shape.add',
+  'object.move', 'object.rotate', 'object.delete',
   'annot.markup', 'annot.shape', 'annot.comment', 'annot.freetext',
   'redact.area', 'redact.find', 'stamp.watermark', 'stamp.pageNumbers', 'ocr.layer', 'ocr.tesseract',
 ];

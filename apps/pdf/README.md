@@ -80,9 +80,9 @@ spacing, width and alignment, in one transaction and one undo step: `TEXT_BLOCK_
 whole text, `OBJECT_DELETE` for the other lines, a whole-document snapshot as the inverse (`editTextAsParagraph`,
 `updateTextEdit` option `paragraphLines`, `commitLiveSourceEdit`). `pdf-editor/model/paragraph-merge.js` (berg:work's
 own file) plans it: it limits the paragraph to the lines in the selected line's font and line pitch (the detector keeps
-Word paragraphs without space between them together), joins hyphenated line ends, reads the alignment (justified text
-becomes left-aligned with natural word spacing, the pinned worker has no justified layout; an indented first line
-loses its indent) and refuses what a single-font frame would damage: bold or italic words, superscripts, rotated,
+Word paragraphs without space between them together), joins hyphenated line ends, reads the alignment (justified text stays
+justified on a worker that reports `features.justifiedTextBlocks`, else it becomes left-aligned; either way with natural
+word spacing, and an indented first line loses its indent) and refuses what a single-font frame would damage: bold or italic words, superscripts, rotated,
 vertical or right-to-left text, Form XObject text, and TeX output, whose fonts have no space glyph (the pinned worker
 would lay the words out without gaps). A non-embedded font gets the same bundled substitute as a typed edit. If the
 frame does not reproduce the paragraph's line count, the join is undone and the user is told why. Tests:

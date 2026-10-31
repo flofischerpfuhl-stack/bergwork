@@ -13,6 +13,7 @@ import { findGlyphTextMatches } from '@editor/pdf-editor/model/redaction-geometr
 import { createAdvanceMeasurer, subsetTrueTypeFont } from '@editor/pdf-editor/ocr/truetype-subset.js';
 import * as OcrRuntime from '@editor/pdf-editor/ocr/runtime.js';
 import { ocrTextLayerWords } from '@editor/pdf-editor/ocr/text-layer.js';
+import { TEXT_OVERFLOW_OFFERS, TEXT_VERTICAL_OFFERS, textBlockAlignmentChoices } from '@editor/pdf-editor/model/bergwork-text-controls.js';
 import {
   VENDOR, config, configure, resetWorker, uid, asBytes, sha256Hex, fnv, errorInfo, withTimeout, upload, Session,
   command, pageBox,
@@ -143,6 +144,64 @@ function topLevelObjects(inspection) {
     ['text', 'image', 'path'].includes(object.typeName));
 }
 const editablePageCount = (state) => Math.min(state.session.pageIds.length, INSPECT_ALL_LIMIT);
+
+// A text frame of several words, wide enough for the words and narrower than the whole text, so that it wraps. The
+// frame is what the Inspector's alignment, wrap and line-height controls work on.
+async function insertFrame(state, rng, page, words = 7) {
+  const { session, model } = state;
+  const box = pageBox(page.inspection);
+  const parts = Array.from({ length: words }, () => marker(rng));
+  const fontSize = pick(rng, [9, 11]);
+  const width = Math.min(box.width * 0.5, fontSize * 24);
+  const height = fontSize * 8;
+  // Line height, overflow and a narrower frame make the text taller than the frame; it stays on the page.
+  const margin = height * 1.5;
+  if (box.width < 180 || box.height < height + margin * 2) return null;
+  const left = box.left + (box.width - width) * (0.1 + 0.8 * rng());
+  const bottom = box.bottom + margin + (box.height - height - margin * 2) * rng();
+  const bounds = { left, bottom, right: left + width, top: bottom + height };
+  const id = uid('frame');
+  const prefix = uid('addframe');
+  const text = parts.join(' ');
+  const block = { width, height, fontSize, lineHeight: 1.2, align: 'left', verticalAlign: 'top', overflow: 'visible' };
+  await session.execute('Add frame', [command(prefix, CommandType.OBJECT_INSERT, id, {
+    pageIndex: page.index, bounds, kind: 'text', text, fontName: 'Helvetica', fontSize,
+    fillColor: Shell.pdfiumColorWithOpacity('#111111', 1), textBlock: true, block,
+  })], [command(`${prefix}:inv`, CommandType.OBJECT_DELETE, id, {})]);
+  model.markers.push({ pageId: page.id, text, words: parts, kind: 'text.frame', bounds });
+  model.frames.add(id);
+  touch(state, page.id);
+  return { id, bounds, text, block, parts, fontSize, box };
+}
+
+// The command the shell sends for a change of a frame's text or layout (commitLiveSourceEdit, TEXT_BLOCK_REPLACE).
+async function replaceFrame(state, page, frame, { text = frame.text, block = frame.block, label = 'Change frame', extra = {} }) {
+  const { session } = state;
+  const prefix = uid('frameedit');
+  const before = await session.snapshot({ retain: true });
+  const { box, bounds } = frame;
+  const sx = bounds.left - box.left; const sy = box.top - bounds.top;
+  const sw = bounds.right - bounds.left; const sh = bounds.top - bounds.bottom;
+  await session.execute(label, [command(prefix, CommandType.TEXT_BLOCK_REPLACE, frame.id, {
+    pageIndex: page.index, text, sourceText: frame.text, block, textBlock: true, textFrame: true, fontSize: frame.fontSize,
+    semanticText: true, sourceX: sx, sourceY: sy, sourceW: sw, sourceH: sh,
+    targetSourceX: sx, targetSourceY: sy, targetSourceW: sw, targetSourceH: sh, allowNaturalWidth: false, ...extra,
+  })], [session.restoreCommand(prefix, before)]);
+  frame.text = text;
+  frame.block = block;
+  touch(state, page.id);
+}
+
+// A frame that grew or turned over the page edge has glyphs outside the page, and readers drop those.
+function softenOffPageFrame(state, frame, object) {
+  const bounds = object?.pageBounds || object?.bounds;
+  const { box } = frame;
+  if (bounds && bounds.left >= box.left && bounds.bottom >= box.bottom && bounds.right <= box.right && bounds.top <= box.top) return;
+  for (const item of state.model.markers) if (item.words === frame.parts) item.soft = true;
+}
+
+const frameOf = (inspection, id) => (inspection?.objects || []).find((object) => object.stableId === id);
+const angleOf = (matrix) => (matrix ? Math.atan2(Number(matrix.b), Number(matrix.a)) * 180 / Math.PI : 0);
 async function choosePage(state, rng) {
   const index = Math.floor(rng() * editablePageCount(state));
   return { index, id: state.session.pageIds[index], inspection: await state.session.inspect(index) };
@@ -348,6 +407,119 @@ const OPS = {
     return { status: 'ok', detail: { page: page.index, font: pdfFontName } };
   },
 
+  // Every alignment the Inspector offers, on a wrapping frame. Each is its own undo step, like a click on the button.
+  async 'text.align'(state, rng) {
+    const { session } = state;
+    const page = await choosePage(state, rng);
+    const frame = await insertFrame(state, rng, page);
+    if (!frame) return { status: 'n/a', detail: 'page too small' };
+    const values = textBlockAlignmentChoices(session.opened.features).map(([value]) => value);
+    const seen = [];
+    for (const align of [...values.slice(1), values[0]]) {
+      await replaceFrame(state, page, frame, { block: { ...frame.block, align }, label: `Align ${align}` });
+      const object = frameOf(await session.inspect(page.index), frame.id);
+      seen.push(`${align}:${object?.block?.align ?? '?'}`);
+      if (object?.block?.align && object.block.align !== align) throw new Error(`alignment ${align} read back as ${object.block.align}`);
+      softenOffPageFrame(state, frame, object);
+    }
+    return { status: 'ok', detail: { page: page.index, aligned: seen } };
+  },
+
+  // A frame wraps on another width, and what a wrapped frame has of its own: vertical alignment, overflow, line height.
+  async 'text.wrap'(state, rng) {
+    const page = await choosePage(state, rng);
+    const frame = await insertFrame(state, rng, page);
+    if (!frame) return { status: 'n/a', detail: 'page too small' };
+    const narrow = frame.block.width * 0.6;
+    await replaceFrame(state, page, frame, { block: { ...frame.block, width: narrow }, label: 'Narrow frame' });
+    const lines = frame.text.split(' ').length;
+    await replaceFrame(state, page, frame, { block: { ...frame.block, height: frame.block.height * 1.5 }, label: 'Taller frame' });
+    softenOffPageFrame(state, frame, frameOf(await state.session.inspect(page.index), frame.id));
+    return { status: 'ok', detail: { page: page.index, width: Math.round(narrow), words: lines } };
+  },
+
+  async 'text.style'(state, rng) {
+    const page = await choosePage(state, rng);
+    const frame = await insertFrame(state, rng, page);
+    if (!frame) return { status: 'n/a', detail: 'page too small' };
+    for (const { value } of TEXT_VERTICAL_OFFERS.slice(1)) {
+      await replaceFrame(state, page, frame, { block: { ...frame.block, verticalAlign: value }, label: `Vertical ${value}` });
+    }
+    for (const { value } of TEXT_OVERFLOW_OFFERS.slice(1)) {
+      await replaceFrame(state, page, frame, { block: { ...frame.block, overflow: value }, label: `Overflow ${value}` });
+    }
+    await replaceFrame(state, page, frame, { block: { ...frame.block, overflow: 'visible' }, label: 'Show overflow' });
+    for (const lineHeight of [0.8, 2]) {
+      await replaceFrame(state, page, frame, { block: { ...frame.block, lineHeight }, label: `Line height ${lineHeight}` });
+    }
+    const size = frame.fontSize + 2;
+    await replaceFrame(state, page, frame, {
+      block: { ...frame.block, fontSize: size }, label: 'Font size', extra: { fontSize: size, fontSizeOverride: true },
+    });
+    frame.fontSize = size;
+    await replaceFrame(state, page, frame, {
+      label: 'Colour', extra: { color: '#336699', colorOverride: true },
+    });
+    softenOffPageFrame(state, frame, frameOf(await state.session.inspect(page.index), frame.id));
+    return { status: 'ok', detail: { page: page.index } };
+  },
+
+  // A turned frame stays turned when its text or layout changes: the Form's matrix is the current one, not the one of
+  // its last text edit.
+  async 'text.rotate'(state, rng) {
+    const { session, model } = state;
+    const page = await choosePage(state, rng);
+    const frame = await insertFrame(state, rng, page, 5);
+    if (!frame) return { status: 'n/a', detail: 'page too small' };
+    // Half of them in an embedded font: that frame is shaped, and the worker keeps its appearance between text edits.
+    const shaped = rng() < 0.5;
+    if (shaped) {
+      if (!notoSans) notoSans = new Uint8Array(await (await fetch(`${VENDOR}pdf-tools/fallback-fonts/NotoSans-Regular.ttf`)).arrayBuffer());
+      const hash = await sha256Hex(notoSans);
+      await session.kernel.registerResource({ hash, kind: 'font', format: 'ttf', family: 'Noto Sans', bytes: notoSans });
+      frame.font = { fontOverride: true, fontResourceHash: hash, fontResourceHashes: [hash], complexText: true };
+      await replaceFrame(state, page, frame, { label: 'Frame font', extra: frame.font });
+      frame.font = { fontResourceHash: hash, fontResourceHashes: [hash], complexText: true };
+    }
+    const inspection = await session.inspect(page.index);
+    const object = frameOf(inspection, frame.id);
+    if (!object?.matrix) return { status: 'n/a', detail: 'frame has no matrix' };
+    const degrees = pick(rng, [-90, -30, 28, 45, 90]);
+    const matrix = Shell.rotatedPdfObjectMatrix(object, degrees);
+    const prefix = uid('turnframe');
+    const m = object.matrix;
+    await session.execute('Turn frame', [command(prefix, CommandType.OBJECT_TRANSFORM, frame.id, { pageIndex: page.index, matrix, textFrame: true })],
+      [command(`${prefix}:inv`, CommandType.OBJECT_TRANSFORM, frame.id, { pageIndex: page.index, matrix: [m.a, m.b, m.c, m.d, m.e, m.f].map(Number), textFrame: true })]);
+    const turned = angleOf(frameOf(await session.inspect(page.index), frame.id)?.matrix);
+    await replaceFrame(state, page, frame, { text: `${frame.text} ${frame.parts[0]}`, label: 'Retype turned frame', extra: frame.font || {} });
+    const retyped = frameOf(await session.inspect(page.index), frame.id);
+    const after = angleOf(retyped?.matrix);
+    if (Math.abs(after - turned) > 0.5) throw new Error(`a turned frame went from ${turned.toFixed(1)}° to ${after.toFixed(1)}° when retyped`);
+    softenOffPageFrame(state, frame, retyped);
+    model.turned.push({ pageId: page.id, stableAngle: after, stableId: frame.id });
+    return { status: 'ok', detail: { page: page.index, degrees, shaped, angle: Math.round(after) } };
+  },
+
+  async 'object.rotate'(state, rng) {
+    const { session, model } = state;
+    // Not a path: the saved file bakes its turn into the coordinates, so nothing could be read back. Not a frame of
+    // another operation: that one checks its own angle.
+    const page = await choosePageWith(state, rng, (inspection) => topLevelObjects(inspection)
+      .filter((object) => object.typeName !== 'path' && !model.frames.has(object.stableId)));
+    if (!page) return { status: 'n/a', detail: 'no top-level object' };
+    const object = pick(rng, page.value);
+    const degrees = pick(rng, [-90, -30, 15, 45, 90]);
+    const matrix = Shell.rotatedPdfObjectMatrix(object, degrees);
+    if (!matrix) return { status: 'n/a', detail: 'no matrix' };
+    const m = object.matrix;
+    const prefix = uid('turn');
+    await session.execute('Turn object', [command(prefix, CommandType.OBJECT_TRANSFORM, object.stableId, { pageIndex: page.index, matrix })],
+      [command(`${prefix}:inv`, CommandType.OBJECT_TRANSFORM, object.stableId, { pageIndex: page.index, matrix: [m.a, m.b, m.c, m.d, m.e, m.f].map(Number) })]);
+    model.turned.push({ pageId: page.id, stableAngle: Math.atan2(matrix[1], matrix[0]) * 180 / Math.PI, stableId: object.stableId });
+    touch(state, page.id);
+    return { status: 'ok', detail: { page: page.index, type: object.typeName, degrees } };
+  },
+
   async 'image.add'(state, rng) {
     const { session } = state;
     const page = await choosePage(state, rng);
@@ -422,6 +594,7 @@ const OPS = {
     const before = await session.snapshot({ retain: true });
     await session.execute('Delete object', [command(prefix, CommandType.OBJECT_DELETE, object.stableId, { pageIndex: page.index })],
       [session.restoreCommand(prefix, before)]);
+    state.model.turned = state.model.turned.filter((item) => item.stableId !== object.stableId);
     const deletedText = normText(object.text || '');
     state.model.markers = state.model.markers.filter((item) => !(item.pageId === page.id && (
       (deletedText && deletedText.includes(item.text)) || (item.bounds && rectsIntersect(item.bounds, object.bounds)))));
@@ -850,7 +1023,7 @@ export async function runFile(job) {
   const check = (name, ok, detail) => { checks.push({ name, ok: Boolean(ok), ...(detail != null ? { detail } : {}) }); return ok; };
 
   INSPECT_ALL_LIMIT = job.inspectPages ?? 40;
-  const state = { model: { pages: [], markers: [], redactions: [], stampTexts: [], annotationContents: [], pageNumbers: false } };
+  const state = { model: { pages: [], markers: [], redactions: [], stampTexts: [], annotationContents: [], pageNumbers: false, turned: [], frames: new Set() } };
   let session = null; let reopened = null; let uiDoc = null;
   try {
     const original = new Uint8Array(await (await fetch(job.url)).arrayBuffer());
@@ -1099,6 +1272,7 @@ async function verifyExport(state, bytes, baseline, { step, check, job }) {
       for (let pageIndex = 0; pageIndex < limit; pageIndex += 1) {
         const page = model.pages[pageIndex];
         const needs = page.rotation != null || page.blank || baseline.has(page.id) || model.markers.some((item) => item.pageId === page.id) ||
+          model.turned.some((item) => item.pageId === page.id) ||
           model.redactions.some((item) => item.pageId === page.id);
         if (!needs) continue;
         const inspection = await back.inspect(pageIndex);
@@ -1119,6 +1293,12 @@ async function verifyExport(state, bytes, baseline, { step, check, job }) {
           const pageText = await textOf(pageIndex);
           if (pageText == null) continue;
           check(`pdfium.text.${item.kind}`, (item.words || [item.text]).every((word) => pageText.includes(word)), `page ${pageIndex + 1}: ${item.text}`);
+        }
+        // What was turned is still turned in the saved file.
+        for (const item of model.turned.filter((entry) => entry.pageId === page.id)) {
+          const objects = inspection?.objects || [];
+          check('pdfium.turnedObject', objects.some((object) => Math.abs(angleOf(object.matrix) - item.stableAngle) < 1),
+            `page ${pageIndex + 1}: no object at ${item.stableAngle.toFixed(1)}°`);
         }
         for (const item of model.redactions.filter((entry) => entry.pageId === page.id)) {
           const glyphs = await back.glyphs(pageIndex);

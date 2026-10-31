@@ -26,7 +26,7 @@ export const SHELL_INTERNALS = [
   'checkpointToPdfSnapshotResource', 'pdfSnapshotResourceFromBytes', 'PDF_OPT_PROFILES', 'serializePdfProjectEntries',
   'loadFernworkPdfProjectFile', 'pdfiumWorkerRequest', 'formWidgetsForDocument', 'documentHasXfaForm',
   'pdfBytesContainCryptographicSignature', 'sourceForLivePdfiumSession', 'materializeDurableNativePdfBytes',
-  'pdfiumColorWithOpacity', 'extractTextForDoc',
+  'pdfiumColorWithOpacity', 'extractTextForDoc', 'rotatedPdfObjectMatrix',
 ];
 
 export async function buildHarness({ quiet = false } = {}) {

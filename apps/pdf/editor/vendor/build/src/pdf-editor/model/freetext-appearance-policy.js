@@ -32,11 +32,10 @@ export function validateCustomFreeTextAppearanceReplacement(edit = {}) {
 
 export function annotationRotationPayload(angle, { gestureReason = '', previousAngle, inverse = false } = {}) {
   if (gestureReason === 'annotation-drop' || !Number.isFinite(angle)) return Object.freeze({});
-  if (inverse && (
-    !Number.isFinite(previousAngle) ||
-    Math.abs(Number(angle) - Number(previousAngle)) <= 0.000001
-  )) return Object.freeze({});
-  const selectedAngle = inverse ? Number(previousAngle) : Number(angle);
+  // An annotation that was never turned has no angle of its own: its Undo turns it back to 0.
+  const before = Number.isFinite(previousAngle) ? Number(previousAngle) : 0;
+  if (inverse && Math.abs(Number(angle) - before) <= 0.000001) return Object.freeze({});
+  const selectedAngle = inverse ? before : Number(angle);
   return Object.freeze({ rotation: selectedAngle * 180 / Math.PI });
 }
 

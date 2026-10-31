@@ -9913,3 +9913,43 @@ body.oo-pdf-workbench-route .oo-consent-notice {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
+
+/* berg:work: the wrapper of a rotated object is only its layout AABB. The later `.is-selected` rules gave that AABB a
+   1 px page-coloured ring, which cut white strips through the page around a turned object. */
+.oo-pdf-textbox.has-oriented-hit-surface.is-selected,
+.oo-pdf-object.has-oriented-hit-surface.is-selected,
+.oo-pdf-imagebox.has-quad-hit-surface.is-selected,
+.oo-pdf-imagebox.has-quad-hit-surface:hover,
+.oo-pdf-native-object.has-quad-hit-surface.is-selected,
+.oo-pdf-native-object.has-quad-hit-surface.is-dragging {
+  box-shadow: none;
+}
+
+/* berg:work: the inline editor of rotated text sits on the text and turns with it. Nothing is drawn on the AABB: the
+   editor itself is opaque, so it hides the raster text below it without hiding the neighbours in the AABB. */
+.oo-pdf-textbox.is-oriented-editing,
+.oo-pdf-textbox.is-selected.is-oriented-editing {
+  --fw-frame-border: 0px;
+  overflow: visible;
+  pointer-events: none;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.oo-pdf-textbox.is-oriented-editing > textarea {
+  background: var(--pdf-page);
+  box-shadow: 0 0 0 2px var(--pdf-accent), 0 0 0 3px color-mix(in srgb, var(--pdf-page) 90%, transparent);
+  pointer-events: auto;
+}
+
+.oo-pdf-textbox.is-oriented-editing > .oo-pdf-resize {
+  pointer-events: auto;
+}
+
+/* berg:work: while a commit lands the controls wait, they are not unavailable: no grey flash through the panel. */
+.oo-pdf-inspector[data-native-busy] :is(button, input, select, textarea, label, [role=combobox]):disabled,
+.oo-pdf-shell:has(.oo-pdf-inspector[data-native-busy]) .oo-pdf-mini-toolbar button:disabled {
+  opacity: 1;
+  cursor: progress;
+}
