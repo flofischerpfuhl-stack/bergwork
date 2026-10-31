@@ -41055,8 +41055,9 @@ function NativePdfObject({
   const style = {
     left: (current.x || 0) * zoom,
     top: (current.y || 0) * zoom,
-    width: Math.max(8, (current.w || 8) * zoom),
-    height: Math.max(8, (current.h || 8) * zoom),
+    // berg:work: a straight line has its own hit zone; its box keeps its true size, so a move reads back no invented 8 px.
+    width: hasLineEnds ? Math.max(0, current.w || 0) * zoom : Math.max(8, (current.w || 8) * zoom),
+    height: hasLineEnds ? Math.max(0, current.h || 0) * zoom : Math.max(8, (current.h || 8) * zoom),
     zIndex,
   };
   // Keep the path editor affordance inside the clipped page surface. This is
