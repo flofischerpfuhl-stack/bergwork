@@ -615,6 +615,17 @@ model, system models on phones) and the cloud-AI question; those entries are dro
 - [ ] **[Privacy] Be exact about the promise.** berg:work uploads nothing, but a harness sends what it reads to the
   user's own model provider. Show that in the panel, start nothing without a user action, and word the privacy page
   accordingly.
+- [ ] **Microsoft Copilot for Windows offices (Florian, 2026-10-31; research only, nothing decided).** The audience has
+  neither a harness nor another subscription. Findings of that day, each to be checked again before building:
+  - Copilot Chat API: needs the paid Microsoft 365 Copilot licence, not the free Copilot Chat; preview on Graph beta; a
+    GA "Work IQ" endpoint is reported by one blog only. Context comes from OneDrive and SharePoint; no action skills.
+    Good for questions about a document, not for edits. Cloud in the customer's tenant, so it needs an exception to the
+    rule above. Try it on a real tenant first (sign-in, admin consent, limits on pasted text).
+  - Windows on-device AI (Phi Silica, being replaced by Aion Instruct): no subscription and local, but Copilot+ PCs or
+    a strong GPU with Developer Mode, experimental SDK, package identity. Small model: summarise and rewrite.
+  - Windows On-device Agent Registry: our MCP server as an agent connector. Preview; no evidence yet that the Copilot
+    app calls third-party connectors. Cheap to try once the desktop app has its MCP endpoint.
+  - Declarative agents reach remote MCP servers only, which would mean uploading the PDF: no.
 - [ ] **Palette with arguments** ("delete page 10", "rotate 3–5"). Rules, not AI, and must not be sold as AI. Benefit
   medium. 2–3 PD. Fork.
 
