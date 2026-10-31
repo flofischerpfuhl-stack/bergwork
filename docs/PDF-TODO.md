@@ -56,6 +56,12 @@ Open:
 - [ ] **The mini toolbar stays away after Properties closes.** It returns with the next selection, not with the panel
   closing over a selected object. 0.5 PD.
 - [ ] **UI matrix: more surfaces.** Context menu, multi-selection and the left tool panels are not driven yet. 2 PD.
+- [ ] **A retyped line that wraps lands on the next line.** A heading stored as separate lines: a word typed at the end
+  of the first wraps inside its own frame and sits on top of the second (`Bezügebeispiele.pdf`, title). The lines of a
+  paragraph are not one block, Acrobat reflows them. Fernwork `text-layout`. 2 PD.
+- [ ] **Edits on a dense page take 6-7 s.** `pdfjs/bug1978317.pdf` (one page, 1.5 MB, below the corpus's page weight)
+  took that per command in the harness; the cause is not measured yet, the UI may differ. `text.rotate` has twice the
+  step limit since, so the corpus no longer shows it. 1 PD to measure.
 
 
 ## Direct manipulation compared with Figma, Canva and PowerPoint (second review, 2026-10-29)
