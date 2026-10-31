@@ -6,7 +6,7 @@
 //
 //   node apps/pdf/tests/run-corpus.mjs --tier quick|sample|full [--jobs 3] [--seed 1] [--limit N]
 //        [--file <id>[,<id>]] [--ops op1,op2] [--tags a,b] [--source s] [--out dir] [--no-build] [--keep-pdfs]
-//        [--shard 1/2]: every second file, to split a run over machines
+//        [--shard 1/2]: every second file, to split a run over machines; [--resume]: go on in the same --out
 import { existsSync, promises as fs, createWriteStream } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,6 +30,7 @@ function parseArgs(argv) {
     if (key === '--tier') args.tier = next();
     else if (key === '--jobs') args.jobs = Math.max(1, Math.min(6, Number(next())));
     else if (key === '--shard') args.shard = next().split('/').map(Number);
+    else if (key === '--resume') args.resume = true;
     else if (key === '--seed') args.seed = Number(next());
     else if (key === '--limit') args.limit = Number(next());
     else if (key === '--file') args.ids = next().split(',');
@@ -83,8 +84,15 @@ const host = await startHost({ distDir, harnessDir, corpusRoot, outDir: pdfDir, 
 
 console.log(`corpus suite: tier ${args.tier}, ${files.length} files, ${args.jobs} pages, seed ${args.seed}, out ${path.relative(process.cwd(), outDir) || outDir}`);
 const started = Date.now();
-const resultsStream = createWriteStream(path.join(outDir, 'results.jsonl'));
-const results = [];
+// --resume: the files of this out directory's results.jsonl stay as they are and are not run again.
+const resultsPath = path.join(outDir, 'results.jsonl');
+const earlier = args.resume && existsSync(resultsPath) ? (await fs.readFile(resultsPath, 'utf8')).split('\n').flatMap((line) => {
+  try { return line ? [JSON.parse(line)] : []; } catch { return []; }
+}) : [];
+const finished = new Set(earlier.map((result) => result.id));
+await fs.writeFile(resultsPath, earlier.map((result) => `${JSON.stringify(result)}\n`).join(''));
+const resultsStream = createWriteStream(resultsPath, { flags: 'a' });
+const results = [...earlier];
 
 const newHarnessPage = () => host.newEnginePage('harness.html');
 
@@ -144,8 +152,8 @@ function classify(file, result) {
   return failures;
 }
 
-const queue = files.map((file, index) => ({ file, index }));
-let done = 0;
+const queue = files.map((file, index) => ({ file, index })).filter(({ file }) => !finished.has(file.id));
+let done = finished.size;
 async function worker(slot) {
   let page = await newHarnessPage();
   let sinceReset = 0;
