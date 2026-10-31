@@ -24,8 +24,15 @@ Status: `[ ]` open · `[~]` in progress · `[x]` done and checked on screen. Eff
   styles require…"; Florian also saw "Rich-text command text must equal…" (not reproduced yet). The full matrix (2 of its
   53 failures) shows the Base-14 message. The other failures: 50 on turned text on a page turned in the editor ("editing
   paused", Undo fails), 1 selection frame 108 px off turned form text.
-- [ ] **Matrix: chains and the sample.** It undoes after each control, so two actions on one object never meet, and the
-  sample PDF is no profile. Add chains of 2-3 actions without Undo and `scripts/fixtures/smoke.pdf` as a profile.
+- [ ] **A test that looks for failures instead of cases (Florian, 2026-10-31: no test fitted to one report).** The matrix
+  undoes after each control, so two actions on one object never meet, and the sample PDF is no profile. Random walks of
+  actions over objects and files, from a seed, steered to ordered pairs of actions not yet run, with oracles that know no
+  scenario: no error toast or console error, Undo and Redo return the same pixels at every step, the model's text stays
+  the text on the page, saved and reopened equals the screen. A failing walk shrinks by itself to the shortest sequence
+  and becomes a seed to replay. Below the UI the same walks run against the command layer, thousands per minute (random
+  rich documents through `createPdfCommand`). A new line in the report: every `throw` in the editor reached and not
+  reached; an internal invariant shown to a user as a toast is a failure of its own. Fix the found family first with this
+  test red, not with a test for "North".
 - [ ] **Edit path bar at the object (Florian, 2026-10-31).** "Edit path" sits below the object and can only be reached by
   zooming out, with Done. It belongs at the object and in the window like the mini toolbar, which itself should go away
   while points are edited.
