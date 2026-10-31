@@ -2,7 +2,8 @@ import { createMoveSnapIndex, resolveMoveSnap } from './move-snapping.js';
 import { constrainMoveDelta } from './drag-constraints.js';
 import { snapGuideDistance, snapDistanceLabel, placeSnapDistanceLabel } from './move-snap-distance.js';
 
-const finiteRect = rect => rect && [rect.x, rect.y, rect.w, rect.h].every(Number.isFinite) && rect.w > 0 && rect.h > 0;
+// berg:work: a horizontal or vertical line has a zero-size side and still snaps.
+const finiteRect = rect => rect && [rect.x, rect.y, rect.w, rect.h].every(Number.isFinite) && rect.w >= 0 && rect.h >= 0;
 const union = rects => {
   let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity;
   for (const rect of rects) {
@@ -30,7 +31,8 @@ export class MoveSnapRuntime {
     };
   }
 
-  begin(pointerId, element) {
+  // berg:work: `rect` snaps that one display-space rect (the end of a line) instead of the selection's own.
+  begin(pointerId, element, { rect: pointRect = null } = {}) {
     this.end(pointerId);
     const surface = element?.closest?.('.oo-pdf-page-surface');
     const readContext = surface && this.#contexts.get(surface);
@@ -41,7 +43,7 @@ export class MoveSnapRuntime {
     const items = state.items();
     const selected = items.filter(item => selectedIds.has(item.id));
     if (selected.length !== selectedIds.size || selected.some(item => item.hidden || item.locked || !finiteRect(item.rect))) return false;
-    const rect = union(selected.map(item => item.rect));
+    const rect = pointRect || union(selected.map(item => item.rect));
     const index = createMoveSnapIndex(state.pageRect, items, [...selectedIds], state.manualGuides);
     // Snapshot only this selection's controls once. During move, translate the
     // snapshot with the same resolved delta as the preview; never remeasure

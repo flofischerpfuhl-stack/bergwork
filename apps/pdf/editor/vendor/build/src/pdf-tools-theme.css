@@ -4586,6 +4586,58 @@ body.oo-pdf-workbench-route .oo-dialog-footer .btn {
   transform: translate(-50%, -50%);
 }
 
+/* berg:work: a straight line has no frame, only its two ends; the stroke itself carries the hit area and the selection. */
+.oo-pdf-sheet:not(.has-multi-selection) .oo-pdf-native-object.is-simple-line {
+  pointer-events: none;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.oo-pdf-sheet:not(.has-multi-selection) .oo-pdf-native-object.is-simple-line .oo-pdf-native-path-hit path {
+  pointer-events: visibleStroke;
+}
+
+/* The hit zone of a line is the stroke, 10 px wide at every zoom, drawn in screen pixels so the line itself never
+   looks thicker; text above it (a higher layer) keeps its clicks. */
+.oo-pdf-line-hit {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.oo-pdf-line-hit line {
+  stroke: transparent;
+  stroke-width: 10px;
+  stroke-linecap: round;
+  pointer-events: stroke;
+}
+
+.oo-pdf-native-object.type-path:hover .oo-pdf-line-hit line,
+.oo-pdf-native-object.type-path.is-selected .oo-pdf-line-hit line {
+  stroke: color-mix(in srgb, var(--pdf-accent) 28%, transparent);
+  stroke-width: 4px;
+}
+
+.oo-pdf-native-object .oo-pdf-line-end {
+  pointer-events: auto;
+}
+
+.oo-pdf-sheet.has-multi-selection .oo-pdf-line-end {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  .oo-pdf-line-end {
+    width: 26px;
+    height: 26px;
+  }
+}
+
 .oo-pdf-arrow-tip-properties {
   display: grid;
   gap: 8px;

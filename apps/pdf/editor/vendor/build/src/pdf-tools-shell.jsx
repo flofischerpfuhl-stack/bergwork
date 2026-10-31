@@ -1012,6 +1012,31 @@ function MiniToolbarHost({ toolbar, onHost }) {
       // berg:work: the toolbar keeps clear of the top bars (islands or Fernwork's bar), not of a fixed 64 px.
       const chromeBottom = Math.max(64, ...[...document.querySelectorAll('.oo-pdf-island, .oo-pdf-topbar, .oo-pdf-toolbar')]
         .map(bar => bar.getBoundingClientRect()).filter(box => box.height && box.top < window.innerHeight / 3).map(box => box.bottom + 6));
+      // berg:work: the path editor's bar takes the first spot that is in the window and clear of the selected point:
+      // above the object, below it, then docked inside the window at its top or bottom edge (large or edge objects).
+      if (toolbar.reason === 'path') {
+        const visualBottom = window.visualViewport
+          ? window.visualViewport.offsetTop + window.visualViewport.height : window.innerHeight;
+        const bottomBars = [...document.querySelectorAll('.oo-pdf-toolbar, .oo-pdf-mobile-actionbar')]
+          .map(bar => bar.getBoundingClientRect()).filter(box => box.height && box.top > window.innerHeight / 2);
+        const minTop = chromeBottom;
+        const maxTop = Math.min(visualBottom, ...bottomBars.map(box => box.top)) - rect.height - 8;
+        const fitLeft = at => Math.min(Math.max(8, at), Math.max(8, window.innerWidth - rect.width - 8));
+        const r = toolbar.pointR || 0;
+        const hitsPoint = (at, x) => toolbar.pointX != null && toolbar.pointX + r > x && toolbar.pointX - r < x + rect.width &&
+          toolbar.pointY + r > at && toolbar.pointY - r < at + rect.height;
+        // Above or below the object first, level with its left edge or beside the selected point; docked in the
+        // window only when neither fits, as for an object larger than the window.
+        const lefts = [fitLeft(toolbar.x), fitLeft(toolbar.pointX + r + 4), fitLeft(toolbar.pointX - r - 4 - rect.width)];
+        const slots = [toolbar.y - rect.height - gap, toolbar.bottom + gap, minTop, maxTop];
+        let spot = null;
+        for (const at of slots) {
+          const x = at >= minTop && at <= maxTop ? lefts.find(candidate => !hitsPoint(at, candidate)) : undefined;
+          if (x !== undefined) { spot = { left: x, top: at }; break; }
+        }
+        setPosition(spot ? { left: spot.left, top: Math.max(8, spot.top) } : { left: lefts[0], top: Math.max(8, minTop) });
+        return;
+      }
       // On a touch screen the system's selection bar sits above the text; the toolbar goes below it.
       if (toolbar.touch && toolbar.bottom) top = toolbar.bottom + 16;
       else if (top < chromeBottom) top = faintFirst ? (toolbar.bottom || toolbar.y) + gap : toolbar.y + gap + 4;
@@ -1042,7 +1067,7 @@ function MiniToolbarHost({ toolbar, onHost }) {
     const observer = new ResizeObserver(place);
     observer.observe(node);
     return () => { cancelAnimationFrame(frame); observer.disconnect(); };
-  }, [toolbar.x, toolbar.y, toolbar.bottom, toolbar.reason, toolbar.touch]);
+  }, [toolbar.x, toolbar.y, toolbar.bottom, toolbar.reason, toolbar.touch, toolbar.pointX, toolbar.pointY, toolbar.pointR]);
   useEffect(() => {
     if (!faintFirst) { setNear(true); return undefined; }
     setNear(false);
@@ -1058,7 +1083,7 @@ function MiniToolbarHost({ toolbar, onHost }) {
   }, [faintFirst, toolbar.externalSelection, toolbar.key]);
   return (
     <div ref={node => { ref.current = node; onHost(node); }}
-      className={`oo-pdf-mini-toolbar ${near ? '' : 'is-faint'}`} role="toolbar" aria-label="Format"
+      className={`oo-pdf-mini-toolbar ${near ? '' : 'is-faint'} ${toolbar.reason === 'path' ? 'oo-pdf-path-bar' : ''}`} role="toolbar" aria-label={toolbar.label || 'Format'}
       data-reason={toolbar.reason} data-touch={toolbar.touch ? 'true' : undefined}
       data-docked={position?.docked ? 'true' : undefined}
       style={position ? { left: position.left, top: position.top } : { left: -10000, top: -10000 }}
@@ -1126,6 +1151,7 @@ function PdfContextMenu({ x, y, items, onClose, label = 'Object actions', scroll
         ? <hr key={`separator-${index}`} />
         : (
           <button key={item.label} type="button" role="menuitem" disabled={item.disabled}
+            title={item.title /* berg:work */}
             className={item.danger ? 'is-danger' : ''}
             onClick={() => { onClose(); item.run(); }}>
             {item.icon ? <Icon name={item.icon} /> : <span className="oo-pdf-icon" aria-hidden="true" />}
@@ -15627,6 +15653,71 @@ function readableImageName(name) {
   return !text || /^(?:im|img|image|x|native-image|pdf-image)[\w-]*\d*$/iu.test(text) ? '' : text;
 }
 
+// berg:work: the one writer of edited path points: the path editor's Done and the end handles of a straight line both
+// come through here, so they share the history step, its name and its undo state.
+function commitNativePathSegments({ page, sourceId, object, existing, originalSegments, segments, onUpdateObjectEdit }) {
+  const sourceBBox = object.sourceBBox || object.bbox || {};
+  const base = existing || {
+    pageId: page.id,
+    sourceId,
+    objectId: object.objectId || '',
+    objectIndex: object.objectIndex || 0,
+    typeName: 'path',
+    sourceX: sourceBBox.x || 0,
+    sourceY: sourceBBox.y || 0,
+    sourceW: sourceBBox.w || 1,
+    sourceH: sourceBBox.h || 1,
+    targetSourceX: sourceBBox.x || 0,
+    targetSourceY: sourceBBox.y || 0,
+    targetSourceW: sourceBBox.w || 1,
+    targetSourceH: sourceBBox.h || 1,
+    x: object.bbox?.x || 0,
+    y: object.bbox?.y || 0,
+    w: object.bbox?.w || 1,
+    h: object.bbox?.h || 1,
+    path: object.path || null,
+    action: 'transform',
+  };
+  return onUpdateObjectEdit(sourceId, {
+    ...base,
+    pathSegments: clonePlain(segments, []),
+  }, {
+    commitGesture: true,
+    gestureReason: 'native-path-segments',
+    gestureKind: GestureKind.STYLE,
+    previousForCommit: {
+      ...base,
+      pathSegments: clonePlain(existing?.pathSegments || originalSegments, []),
+    },
+  });
+}
+
+// berg:work: a path that is one open straight stroke (a move and one line, no curve, no close) is a line: it is
+// edited at its two ends instead of through a frame. The segments are those of the path as the engine reads it.
+function pathStraightLine(segments) {
+  return Array.isArray(segments) && segments.length === 2 && segments[0]?.type === 2 && segments[1]?.type === 0 &&
+    !segments[0].close && !segments[1].close &&
+    segments.every(segment => Number.isFinite(segment.point?.x) && Number.isFinite(segment.point?.y));
+}
+
+// berg:work: a horizontal or vertical stroke has a bounding box of zero (or hairline) width or height; only an object
+// that is tiny both ways is dropped, so rules, table lines and separators stay selectable.
+function nativeObjectHasExtent(object) {
+  const box = object?.bbox;
+  return Number.isFinite(box?.w) && Number.isFinite(box?.h) && (box.w > 1 || box.h > 1) && box.w >= 0 && box.h >= 0;
+}
+
+// berg:work: the same object with each bbox side of under one unit widened about its middle, in display space and in
+// source space alike, so that the display <-> source mapping of a straight horizontal or vertical line keeps a scale of 1.
+function paddedLineObject(object) {
+  const pad = box => {
+    const w = Math.max(1, Number(box?.w) || 0);
+    const h = Math.max(1, Number(box?.h) || 0);
+    return { ...box, x: Number(box?.x || 0) - (w - Number(box?.w || 0)) / 2, y: Number(box?.y || 0) - (h - Number(box?.h || 0)) / 2, w, h };
+  };
+  return { ...object, bbox: pad(object.bbox), sourceBBox: pad(object.sourceBBox || object.bbox) };
+}
+
 function pathPointEditingBlockReason(object = {}) {
   const segments = object?.path?.sampledSegments || [];
   if (object?.nested) return 'Nested Form paths must be detached before point editing.';
@@ -17541,7 +17632,7 @@ function makeOriginalPdfObjectLayers(doc, pageId) {
     };
   });
   const nativeLayers = nativeObjects
-    .filter(object => object?.bbox?.w > 1 && object?.bbox?.h > 1)
+    .filter(nativeObjectHasExtent)
     .filter(object => !['text', 'image'].includes(String(object.typeName || '').toLowerCase()))
     .map(object => {
       const sourceId = nativeObjectItemId(page, object);
@@ -35392,7 +35483,7 @@ function PdfPageContent({
       .filter(object => !['text', 'image'].includes(String(object.typeName || '').toLowerCase()))
       .filter(object => nativeObjectMatchesFilters(object, normalizedObjectHandleFilters))
       .filter(object => !layerPresentationFor(doc.layerPresentation, objectLayerKey(nativeObjectItemId(page, object))).hidden)
-      .filter(object => object?.bbox?.w > 1 && object?.bbox?.h > 1)
+      .filter(nativeObjectHasExtent)
       .filter(object => (
         Number(object.bbox.x || 0) + Number(object.bbox.w || 0) > 0 &&
         Number(object.bbox.y || 0) + Number(object.bbox.h || 0) > 0 &&
@@ -35784,44 +35875,10 @@ function PdfPageContent({
   const commitPathIsolation = useCallback(() => {
     if (!pathIsolation) return;
     const { sourceId, object, originalSegments, segments } = pathIsolation;
-    const sourceBBox = object.sourceBBox || object.bbox || {};
-    const existing = doc.objectEdits?.[sourceId];
-    const base = existing || {
-      pageId: page.id,
-      sourceId,
-      objectId: object.objectId || '',
-      objectIndex: object.objectIndex || 0,
-      typeName: 'path',
-      sourceX: sourceBBox.x || 0,
-      sourceY: sourceBBox.y || 0,
-      sourceW: sourceBBox.w || 1,
-      sourceH: sourceBBox.h || 1,
-      targetSourceX: sourceBBox.x || 0,
-      targetSourceY: sourceBBox.y || 0,
-      targetSourceW: sourceBBox.w || 1,
-      targetSourceH: sourceBBox.h || 1,
-      x: object.bbox?.x || 0,
-      y: object.bbox?.y || 0,
-      w: object.bbox?.w || 1,
-      h: object.bbox?.h || 1,
-      path: object.path || null,
-      action: 'transform',
-    };
-    onUpdateObjectEdit(sourceId, {
-      ...base,
-      pathSegments: clonePlain(segments, []),
-    }, {
-      commitGesture: true,
-      gestureReason: 'native-path-segments',
-      gestureKind: GestureKind.STYLE,
-      previousForCommit: {
-        ...base,
-        pathSegments: clonePlain(existing?.pathSegments || originalSegments, []),
-      },
-    });
+    commitNativePathSegments({ page, sourceId, object, existing: doc.objectEdits?.[sourceId], originalSegments, segments, onUpdateObjectEdit });
     setPathIsolation(null);
     restorePathSourceFocus(sourceId);
-  }, [doc.objectEdits, onUpdateObjectEdit, page.id, pathIsolation, restorePathSourceFocus]);
+  }, [doc.objectEdits, onUpdateObjectEdit, page, pathIsolation, restorePathSourceFocus]);
 
   const detachPathIsolationSubpath = useCallback(async (subpathIndex) => {
     if (!pathIsolation || !onDetachPathSubpath) return false;
@@ -40817,10 +40874,13 @@ function NativePdfObject({
   useCancelPdfDragOnUnmount(dragRef);
   const releasePendingRef = useRef(null);
   useActivePdfRectDraft(dragRef, zoom);
+  const lineDragRef = useRef(null);
   const pathTriggerRef = useRef(null);
   const [pathTriggerPlacement, setPathTriggerPlacement] = useState(null);
   const [draftEdit, setDraftEdit] = useState(null);
   const cancelNativeObjectInteraction = () => {
+    // berg:work: a line's end handle that is being dragged goes back to where it was.
+    if (lineDragRef.current) cancelLineEnd();
     const drag = dragRef.current;
     return cancelActivePdfDrag(dragRef, restoredHold => {
       settlePendingRelease(releasePendingRef, drag, restoredHold);
@@ -40945,6 +41005,19 @@ function NativePdfObject({
       }
     : null;
   const pathEditingBlockReason = pathEditorObject ? pathPointEditingBlockReason(pathEditorObject) : '';
+  // berg:work: a straight line is edited at its two ends, without a frame, rotate handle or "Edit path points". The ends
+  // are read through the path's matrix and the page rotation like the path editor's points; a line the matrix cannot
+  // place, or one too short on screen to have two handles, keeps the frame.
+  const lineSegments = pathEditorObject?.path?.sampledSegments;
+  const lineObject = pathEditorObject && !pathEditingBlockReason && pathStraightLine(lineSegments) && nativePathObjectMatrix(pathEditorObject)
+    ? paddedLineObject(pathEditorObject) : null;
+  // End points in the page's display space (not relative to the element, whose box is the line's own bounds).
+  const lineEnds = lineObject ? lineSegments.map(segment => {
+    const point = nativePathDisplayPoint(page, lineObject, segment.point);
+    return point && { x: lineObject.bbox.x + point.x, y: lineObject.bbox.y + point.y };
+  }) : null;
+  const hasLineEnds = Boolean(lineEnds?.every(end => end && Number.isFinite(end.x) && Number.isFinite(end.y)));
+  const isLine = hasLineEnds && Math.hypot(lineEnds[1].x - lineEnds[0].x, lineEnds[1].y - lineEnds[0].y) * zoom >= 24;
   // Paths included: a path rotated in-app carries a rotated matrix, so its
   // selection outline and handles must follow the quad like images do.
   const nativeDisplayQuad = nativeRotatedDisplayQuad(page, object);
@@ -41077,6 +41150,91 @@ function NativePdfObject({
     if (!handle) startNativeDragComposition(dragRef.current, base.typeName || 'native', predicted, sourceId);
   };
 
+  // berg:work: dragging one end of a straight line. The pointer is followed on the page surface, so scrolling during the
+  // drag cannot shift it; the end snaps like a moved object (Ctrl/Cmd frees it) or, with Shift, turns in 45 degree steps
+  // about the other end. The result goes through commitNativePathSegments: one history step.
+  const pageSurfaceScale = (element) => {
+    const rect = element?.closest?.('.oo-pdf-page-surface')?.getBoundingClientRect?.();
+    return rect?.width ? { rect, scale: rect.width / Math.max(1, pageDimensions(page).width) } : null;
+  };
+  const startLineEnd = (event, index) => {
+    if (event.pointerType === 'touch' && !event.isPrimary) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    event.stopPropagation();
+    event.preventDefault();
+    if (locked) return;
+    const surface = pageSurfaceScale(event.currentTarget);
+    if (!surface) return;
+    const origin = { x: lineObject.bbox.x, y: lineObject.bbox.y };
+    const at = end => ({ x: end.x, y: end.y });
+    const startPoint = at(lineEnds[index]);
+    lineDragRef.current = {
+      id: event.pointerId, index, element: event.currentTarget, armed: false, latest: null,
+      x: event.clientX, y: event.clientY, slop: dragSlopFor(event),
+      pointer: { x: (event.clientX - surface.rect.left) / surface.scale, y: (event.clientY - surface.rect.top) / surface.scale },
+      startPoint, fixed: at(lineEnds[1 - index]), origin, startEdit: current,
+      segments: clonePlain(lineSegments, []), object: lineObject,
+    };
+    try { event.currentTarget.setPointerCapture?.(event.pointerId); } catch {}
+    moveSnapRuntime.begin(event.pointerId, event.currentTarget, { rect: { x: startPoint.x - 0.5, y: startPoint.y - 0.5, w: 1, h: 1 } });
+  };
+  const moveLineEnd = (event) => {
+    const drag = lineDragRef.current;
+    if (!drag || drag.id !== event.pointerId) return;
+    if (!drag.armed) {
+      if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < drag.slop) return;
+      drag.armed = true;
+    }
+    const surface = pageSurfaceScale(drag.element);
+    if (!surface) return;
+    const pointer = { x: (event.clientX - surface.rect.left) / surface.scale, y: (event.clientY - surface.rect.top) / surface.scale };
+    let target = { x: drag.startPoint.x + pointer.x - drag.pointer.x, y: drag.startPoint.y + pointer.y - drag.pointer.y };
+    if (event.shiftKey) {
+      const vx = target.x - drag.fixed.x;
+      const vy = target.y - drag.fixed.y;
+      const step = Math.PI / 4;
+      const angle = Math.round(Math.atan2(vy, vx) / step) * step;
+      const length = Math.hypot(vx, vy);
+      target = { x: drag.fixed.x + length * Math.cos(angle), y: drag.fixed.y + length * Math.sin(angle) };
+    } else {
+      const snapped = moveSnapRuntime.resolve(event.pointerId, target.x - drag.startPoint.x, target.y - drag.startPoint.y,
+        { clientX: event.clientX, clientY: event.clientY, ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: false, altKey: false },
+        surface.scale);
+      target = { x: drag.startPoint.x + snapped.dx, y: drag.startPoint.y + snapped.dy };
+    }
+    const point = nativePathSourcePointThroughObject(page, drag.object, { x: target.x - drag.origin.x, y: target.y - drag.origin.y });
+    if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return;
+    drag.latest = drag.segments.map((segment, at) => (at === drag.index ? { ...segment, point: { ...segment.point, ...point } } : segment));
+    setDraftEdit({ ...drag.startEdit, pathSegments: drag.latest });
+    event.preventDefault();
+  };
+  function cancelLineEnd() {
+    const drag = lineDragRef.current;
+    if (!drag) return;
+    lineDragRef.current = null;
+    moveSnapRuntime.end(drag.id);
+    setDraftEdit(null);
+  }
+  const stopLineEnd = (event) => {
+    const drag = lineDragRef.current;
+    if (!drag || drag.id !== event.pointerId) return;
+    lineDragRef.current = null;
+    moveSnapRuntime.end(drag.id);
+    try { drag.element.releasePointerCapture?.(drag.id); } catch {}
+    event.stopPropagation();
+    if (!drag.armed || !drag.latest) {
+      setDraftEdit(null);
+      return;
+    }
+    event.preventDefault();
+    const pending = commitNativePathSegments({
+      page, sourceId, object: { ...object, bbox: object?.bbox || { x: base.x, y: base.y, w: base.w, h: base.h } },
+      existing: edit, originalSegments: drag.segments, segments: drag.latest, onUpdateObjectEdit: onMove,
+    });
+    // The page shows the old line until the engine has written the new one; the preview stays until then.
+    Promise.resolve(pending).finally(() => requestAnimationFrame(() => setDraftEdit(null)));
+  };
+
   const move = (event) => {
     const drag = dragRef.current;
     if (!drag || drag.id !== event.pointerId) return;
@@ -41175,7 +41333,7 @@ function NativePdfObject({
 
   return (
     <div
-      className={`oo-pdf-native-object type-${base.typeName || 'unknown'} ${pathHasInteriorHit ? 'has-interior-hit' : ''} ${selected ? 'is-selected' : ''} ${coversMostOfPage(current, page) ? 'is-full-page-object' : ''} ${edit ? 'is-edited' : ''} ${draftEdit ? 'is-dragging' : ''} ${pathIsolated ? 'is-path-isolated' : ''} ${hasQuadHit ? 'has-quad-hit-surface' : ''}`}
+      className={`oo-pdf-native-object type-${base.typeName || 'unknown'} ${pathHasInteriorHit ? 'has-interior-hit' : ''} ${selected ? 'is-selected' : ''} ${coversMostOfPage(current, page) ? 'is-full-page-object' : ''} ${edit ? 'is-edited' : ''} ${draftEdit ? 'is-dragging' : ''} ${pathIsolated ? 'is-path-isolated' : ''} ${hasQuadHit ? 'has-quad-hit-surface' : ''} ${isLine ? 'is-simple-line' : ''}`}
       data-source-id={sourceId}
       data-selection-key={selectionItemKey({ type: 'nativeObject', sourceId })}
       data-object-type={base.typeName || 'unknown'}
@@ -41210,12 +41368,18 @@ function NativePdfObject({
         else onOpenInspector?.();
       }}
     >
-      {hasQuadHit && (
+      {hasQuadHit && !isLine && (
         <svg className="oo-pdf-quad-hit-surface" viewBox={`0 0 ${Math.max(1, current.w || 1)} ${Math.max(1, current.h || 1)}`} preserveAspectRatio="none" aria-hidden="true">
           <polygon points={svgQuadPoints(nativeLocalQuad)} />
         </svg>
       )}
-      {pathD && (
+      {hasLineEnds && (
+        <svg className="oo-pdf-line-hit" aria-hidden="true">
+          <line x1={(lineEnds[0].x - (current.x || 0)) * zoom} y1={(lineEnds[0].y - (current.y || 0)) * zoom}
+            x2={(lineEnds[1].x - (current.x || 0)) * zoom} y2={(lineEnds[1].y - (current.y || 0)) * zoom} />
+        </svg>
+      )}
+      {pathD && !hasLineEnds && (
         <svg
           className="oo-pdf-native-path-hit"
           viewBox={`0 0 ${Math.max(1, current.w || 1)} ${Math.max(1, current.h || 1)}`}
@@ -41226,7 +41390,7 @@ function NativePdfObject({
         </svg>
       )}
       <span className="oo-pdf-native-object-label">{PDF_NATIVE_OBJECT_TYPES[base.typeName] || base.typeName || 'Object'}</span>
-      {selected && base.typeName === 'path' && !pathIsolated && affordanceHost && createPortal((
+      {selected && base.typeName === 'path' && !pathIsolated && !isLine && affordanceHost && createPortal((
         <button
           ref={pathTriggerRef}
           className={`oo-pdf-path-edit-trigger ${pathEditingBlockReason || locked ? 'is-locked' : ''}`}
@@ -41244,7 +41408,20 @@ function NativePdfObject({
           {pathEditingBlockReason ? 'Path editing locked' : 'Edit path points'}
         </button>
       ), affordanceHost)}
-      {selected && !pathIsolated && ['nw', 'ne', 'se', 'sw'].map((handle, index) => (
+      {selected && !pathIsolated && isLine && lineEnds.map((end, index) => (
+        <span
+          key={`line-end-${index}`}
+          className="oo-pdf-arrow-endpoint oo-pdf-line-end"
+          style={{ left: (end.x - (current.x || 0)) * zoom, top: (end.y - (current.y || 0)) * zoom }}
+          role="button"
+          aria-label={index === 0 ? 'Move line start' : 'Move line end'}
+          onPointerDown={(event) => startLineEnd(event, index)}
+          onPointerMove={moveLineEnd}
+          onPointerUp={stopLineEnd}
+          onPointerCancel={cancelLineEnd}
+        />
+      ))}
+      {selected && !pathIsolated && !isLine && ['nw', 'ne', 'se', 'sw'].map((handle, index) => (
         <span
           key={handle}
           className={`oo-pdf-resize ${handle}`}
@@ -41252,7 +41429,7 @@ function NativePdfObject({
           onPointerDown={(event) => start(event, handle)}
         />
       ))}
-      {selected && !pathIsolated && base.nested !== true && !(Array.isArray(base.formPath) && base.formPath.length) && (
+      {selected && !pathIsolated && !isLine && base.nested !== true && !(Array.isArray(base.formPath) && base.formPath.length) && (
         <ObjectRotationHandle disabled={locked} label={`Rotate ${nativeObjectLabel(base)}`}
           style={quadRotateHandleStyle(nativeLocalQuad || [], QUAD_CORNER_INDICES, current.w, current.h)}
           onRotate={degrees => onMove(sourceId, {
@@ -41576,20 +41753,103 @@ function PathIsolationEditor({ page, object, segments, zoom, onChange, onCommit,
     return { x: unit.u * width, y: unit.v * height };
   };
 
-  // Registered once so Escape / Ctrl+Enter cannot fall into the gap of a
+  // berg:work: the action bar is the mini toolbar's host: it follows the object (and clears the selected point) at any
+  // zoom and scroll, instead of sitting in the page layout where zoom pushed it out of the window.
+  const [barHost, setBarHost] = useState(null);
+  const [barAnchor, setBarAnchor] = useState(null);
+  const [overflow, setOverflow] = useState(null);
+  const overflowRef = useRef(null);
+  const measureBar = useStableCallback(() => {
+    const node = boundsRef.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const dot = selectedPointIndex == null ? null : node.querySelector(`[data-path-point-index="${selectedPointIndex}"]`)?.getBoundingClientRect();
+    const next = {
+      x: Math.round(rect.left), y: Math.round(rect.top), bottom: Math.round(rect.bottom),
+      pointX: dot ? Math.round(dot.left + dot.width / 2) : null, pointY: dot ? Math.round(dot.top + dot.height / 2) : null,
+      pointR: dot ? Math.round(Math.max(dot.width, dot.height) / 2) + 10 : 0,
+    };
+    setBarAnchor(current => (current && Object.keys(next).every(key => current[key] === next[key]) ? current : next));
+  });
+  // The page surface is transformed, which would make `position: fixed` relative to it; the bar lives in the shell like the mini toolbar.
+  const [barRoot, setBarRoot] = useState(null);
+  useLayoutEffect(() => { setBarRoot(boundsRef.current?.closest('.oo-pdf-shell') || document.body); }, []);
+  useLayoutEffect(() => { measureBar(); });
+  useEffect(() => {
+    let frame = 0;
+    const again = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(measureBar); };
+    window.addEventListener('scroll', again, true);
+    window.addEventListener('resize', again);
+    window.visualViewport?.addEventListener('resize', again);
+    // Zoom and layout shifts that raise no scroll event.
+    const timer = setInterval(measureBar, 200);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearInterval(timer);
+      window.removeEventListener('scroll', again, true);
+      window.removeEventListener('resize', again);
+      window.visualViewport?.removeEventListener('resize', again);
+    };
+  }, [measureBar]);
+  const subpathCount = pathEditorSubpaths(segments).length;
+  const pointNeeded = selectedPointRole === 'anchor' ? 'This point does not allow it.' : 'Select an anchor point first.';
+  const detachTitle = detachBlockReason || `Detach subpath ${selectedSubpathIndex + 1} as a native PDF object`;
+  const splitSelected = () => {
+    const next = splitPathSegmentAtIndex(segments, selectedPointIndex);
+    if (!next) return;
+    onChange(next);
+    setSelectedPointIndex(selectedPointIndex + (segments[selectedPointIndex]?.type === 1 ? 1 : 0));
+  };
+  const convertSelected = () => {
+    const next = convertPathSegmentAtIndex(segments, selectedPointIndex);
+    if (!next) return;
+    onChange(next);
+    setSelectedPointIndex(null);
+  };
+  const deleteSelected = () => {
+    const next = deletePathSegmentAtIndex(segments, selectedPointIndex);
+    if (!next) return;
+    onChange(next);
+    setSelectedPointIndex(null);
+  };
+  const toggleClosed = () => {
+    const next = togglePathSubpathClosed(segments, selectedSubpathIndex);
+    if (next) onChange(next);
+  };
+  const reverseSubpath = () => {
+    const next = reversePathSubpath(segments, selectedSubpathIndex);
+    if (!next) return;
+    onChange(next);
+    setSelectedPointIndex(null);
+  };
+  const detachSubpath = async () => {
+    if (detachBlockReason || selectedSubpathIndex < 0 || !onDetach) return;
+    setDetaching(true);
+    try {
+      await onDetach(selectedSubpathIndex);
+    } finally {
+      setDetaching(false);
+    }
+  };
+
+  // Registered once so Escape / Enter cannot fall into the gap of a
   // listener swap when onCancel/onCommit change during a state update.
   const handleEditorShortcut = useStableCallback((event) => {
-    if (event.key === 'Escape') {
+    // berg:work: an open overflow menu takes Escape itself.
+    if (event.key === 'Escape' && !document.querySelector('.oo-pdf-context-menu')) {
       event.preventDefault();
       event.stopImmediatePropagation();
       onCancel();
       return;
     }
-    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      onCommit();
-    }
+    if (event.key !== 'Enter' || event.isComposing || event.repeat) return;
+    // berg:work: Enter applies like Done; in a field, on a menu or on a bar button it keeps its own meaning (Ctrl+Enter always applies).
+    const target = event.target instanceof Element ? event.target : null;
+    const own = target?.closest('input, textarea, select, [contenteditable], [role="menu"], button:not(.oo-pdf-path-point)');
+    if (own && !(event.ctrlKey || event.metaKey)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    onCommit();
   });
   useEffect(() => {
     window.addEventListener('keydown', handleEditorShortcut, true);
@@ -41694,104 +41954,39 @@ function PathIsolationEditor({ page, object, segments, zoom, onChange, onCommit,
       aria-modal="false"
       aria-label="Path isolation editor"
     >
-      <div className="oo-pdf-path-isolation-toolbar" role="toolbar" aria-label="Path edit actions">
-        <div className="oo-pdf-path-isolation-heading">
-          <strong>Edit path</strong>
-          <span aria-live="polite">{segments.length} points · {pathEditorSubpaths(segments).length} subpaths{selectedSubpathIndex >= 0 ? ` · subpath ${selectedSubpathIndex + 1} selected` : ''}</span>
-        </div>
-        <div className="oo-pdf-path-isolation-actions">
-          <button
-            className="oo-pdf-ghost-button"
-            type="button"
-            title="Split the selected line or Bezier segment and add a point"
-            disabled={!canSplitSelected}
-            onClick={() => {
-              const next = splitPathSegmentAtIndex(segments, selectedPointIndex);
-              if (!next) return;
-              onChange(next);
-              setSelectedPointIndex(selectedPointIndex + (segments[selectedPointIndex]?.type === 1 ? 1 : 0));
-            }}
-          >
-            Split segment
-          </button>
-          <button
-            className="oo-pdf-ghost-button"
-            type="button"
-            disabled={!canConvertSelected}
-            onClick={() => {
-              const next = convertPathSegmentAtIndex(segments, selectedPointIndex);
-              if (!next) return;
-              onChange(next);
-              setSelectedPointIndex(null);
-            }}
-          >
-            Line / Bezier
-          </button>
-          <button
-            className="oo-pdf-ghost-button"
-            type="button"
-            disabled={!canDeleteSelected}
-            onClick={() => {
-              const next = deletePathSegmentAtIndex(segments, selectedPointIndex);
-              if (!next) return;
-              onChange(next);
-              setSelectedPointIndex(null);
-            }}
-          >
-            Delete segment
-          </button>
-          <button
-            className="oo-pdf-ghost-button"
-            type="button"
-            disabled={!selectedSubpath}
-            onClick={() => {
-              const next = togglePathSubpathClosed(segments, selectedSubpathIndex);
-              if (next) onChange(next);
-            }}
-          >
-            {selectedSubpathClosed ? 'Open path' : 'Close path'}
-          </button>
-          <button
-            className="oo-pdf-ghost-button"
-            type="button"
-            disabled={!selectedSubpath}
-            onClick={() => {
-              const next = reversePathSubpath(segments, selectedSubpathIndex);
-              if (!next) return;
-              onChange(next);
-              setSelectedPointIndex(null);
-            }}
-          >
-            Reverse
-          </button>
-          <button
-            className="oo-pdf-ghost-button"
-            type="button"
-            disabled={detaching || Boolean(detachBlockReason)}
-            title={detachBlockReason || `Detach subpath ${selectedSubpathIndex + 1} as a native PDF object`}
-            onClick={async () => {
-              if (detachBlockReason || selectedSubpathIndex < 0 || !onDetach) return;
-              setDetaching(true);
-              try {
-                await onDetach(selectedSubpathIndex);
-              } finally {
-                setDetaching(false);
-              }
-            }}
-          >
-            {detaching ? 'Detaching…' : selectedSubpathIndex >= 0 ? `Detach subpath ${selectedSubpathIndex + 1}` : 'Detach subpath'}
-          </button>
-          <button className="oo-pdf-ghost-button" type="button" onClick={onCancel}>Cancel</button>
-          <button className="oo-pdf-path-apply" type="button" aria-label="Apply path" onClick={onCommit}>Done</button>
-        </div>
-        <p className="oo-pdf-path-isolation-note">
-          {selectedPointIndex == null
-            ? 'Select a point to edit it.'
-            : detachBlockReason
-              ? detachBlockReason
-              : `Subpath ${selectedSubpathIndex + 1} selected.`}
-        </p>
-      </div>
+      <BodyClass name="oo-pdf-path-editing" active />
+      {barAnchor && barRoot && createPortal(<MiniToolbarHost
+        toolbar={{ reason: 'path', key: 'path', label: 'Edit path', ...barAnchor, touch: isCoarsePdfPointer() }}
+        onHost={setBarHost} />, barRoot)}
+      {barHost && createPortal(<>
+        <button type="button" disabled={!canSplitSelected} aria-label="Split segment"
+          title={canSplitSelected ? 'Split the selected line or Bezier segment and add a point' : `Split segment: ${pointNeeded}`}
+          onClick={splitSelected}><Icon name="split" /></button>
+        <button type="button" disabled={!canConvertSelected} aria-label="Line / Bezier"
+          title={canConvertSelected ? 'Switch the selected segment between line and Bezier' : `Line / Bezier: ${pointNeeded}`}
+          onClick={convertSelected}><Icon name="pen-tool" /></button>
+        <button type="button" disabled={!canDeleteSelected} aria-label="Delete segment"
+          title={canDeleteSelected ? 'Delete the selected segment' : `Delete segment: ${pointNeeded}`}
+          onClick={deleteSelected}><Icon name="trash-2" /></button>
+        <button ref={overflowRef} type="button" aria-label="More path actions" aria-haspopup="menu" aria-expanded={Boolean(overflow)}
+          title={`More: ${selectedSubpathClosed ? 'open path' : 'close path'}, reverse, detach subpath · ${segments.length} points, ${subpathCount} subpaths`}
+          onClick={() => {
+            const box = overflowRef.current?.getBoundingClientRect();
+            setOverflow(box ? { x: box.left, y: box.bottom + 4 } : null);
+          }}><Icon name="ellipsis" /></button>
+        <span className="oo-pdf-path-bar-gap" aria-hidden="true" />
+        <button type="button" className="oo-pdf-path-text" onClick={onCancel} title="Discard the changes (Esc)">Cancel</button>
+        <button type="button" className="oo-pdf-path-text oo-pdf-path-apply" aria-label="Apply path" onClick={onCommit}
+          title="Apply the changes (Enter)">Done</button>
+      </>, barHost)}
+      {overflow && <PdfContextMenu x={overflow.x} y={overflow.y} label="More path actions" onClose={() => setOverflow(null)} items={[
+        { label: selectedSubpathClosed ? 'Open path' : 'Close path', icon: 'minus', disabled: !selectedSubpath, run: toggleClosed,
+          title: selectedSubpath ? undefined : 'Select a point of the subpath first.' },
+        { label: 'Reverse', icon: 'arrow-left-right', disabled: !selectedSubpath, run: reverseSubpath,
+          title: selectedSubpath ? 'Reverse the direction of the selected subpath' : 'Select a point of the subpath first.' },
+        { label: detaching ? 'Detaching…' : selectedSubpathIndex >= 0 ? `Detach subpath ${selectedSubpathIndex + 1}` : 'Detach subpath', icon: 'scissors',
+          disabled: detaching || Boolean(detachBlockReason), run: detachSubpath, title: detachTitle },
+      ]} />}
       <div
         ref={boundsRef}
         className="oo-pdf-path-editor-bounds"
