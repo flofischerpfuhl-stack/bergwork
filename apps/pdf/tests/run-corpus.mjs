@@ -6,6 +6,7 @@
 //
 //   node apps/pdf/tests/run-corpus.mjs --tier quick|sample|full [--jobs 3] [--seed 1] [--limit N]
 //        [--file <id>[,<id>]] [--ops op1,op2] [--tags a,b] [--source s] [--out dir] [--no-build] [--keep-pdfs]
+//        [--shard 1/2]: every second file, to split a run over machines
 import { existsSync, promises as fs, createWriteStream } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,6 +29,7 @@ function parseArgs(argv) {
     const next = () => argv[(i += 1)];
     if (key === '--tier') args.tier = next();
     else if (key === '--jobs') args.jobs = Math.max(1, Math.min(6, Number(next())));
+    else if (key === '--shard') args.shard = next().split('/').map(Number);
     else if (key === '--seed') args.seed = Number(next());
     else if (key === '--limit') args.limit = Number(next());
     else if (key === '--file') args.ids = next().split(',');
@@ -66,7 +68,8 @@ if (!existsSync(path.join(distDir, 'index.html')) || !existsSync(path.join(distD
 const filter = (file) => (!args.tags || args.tags.some((tag) => file.tags.includes(tag))) &&
   (!args.source || args.source.includes(file.source));
 const files = selectFiles(manifest, args.tier, { seed: args.seed, limit: args.limit, filter, ids: args.ids })
-  .filter((file) => existsSync(path.join(corpusRoot, file.id)));
+  .filter((file) => existsSync(path.join(corpusRoot, file.id)))
+  .filter((file, index) => !args.shard || index % args.shard[1] === args.shard[0] - 1);
 if (!files.length) {
   console.error(`No corpus files found under ${corpusRoot}. Fetch them with node apps/pdf/tests/corpus/fetch-corpus.mjs.`);
   process.exit(2);
