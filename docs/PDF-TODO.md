@@ -18,6 +18,17 @@ Status: `[ ]` open · `[~]` in progress · `[x]` done and checked on screen. Eff
   2026-10-31: after the Fernwork integration work pauses to save the Claude limit; this comes first when it resumes.
   The quick run on 2026-10-31 passed with 975 results and no failures, but left 43 cells unrun. Run it as its own unit on
   a free machine; fix what it finds before anything else on this list.
+- [ ] **Style chains on Base-14 text fail (Florian, 2026-10-31, sample PDF).** Underline then Italic, Underline then
+  Helvetica, part of a word bold then Underline or Helvetica, Underline then Strikethrough then Bold on "North":
+  "Color-only editing requires…", "Font file registered, but Liberation Sans … could not be applied", "Base-14 character
+  styles require…"; Florian also saw "Rich-text command text must equal…" (not reproduced yet). The full matrix (2 of its
+  53 failures) shows the Base-14 message. The other failures: 50 on turned text on a page turned in the editor ("editing
+  paused", Undo fails), 1 selection frame 108 px off turned form text.
+- [ ] **Matrix: chains and the sample.** It undoes after each control, so two actions on one object never meet, and the
+  sample PDF is no profile. Add chains of 2-3 actions without Undo and `scripts/fixtures/smoke.pdf` as a profile.
+- [ ] **Edit path bar at the object (Florian, 2026-10-31).** "Edit path" sits below the object and can only be reached by
+  zooming out, with Done. It belongs at the object and in the window like the mini toolbar, which itself should go away
+  while points are edited.
 - [ ] **Take the fixes back from Fernwork** (branch `feat/pdf-adopt-bergwork-ui`, `5d592bdd`, on the next PDF sync). The
   OCR panel crashed without a document (`#ocr`); the islands ran out of the window below about 1,100 px; a handle at the
   page edge deselected; touch handles covered the middle of small objects; rotate zones of multi-selection members took
