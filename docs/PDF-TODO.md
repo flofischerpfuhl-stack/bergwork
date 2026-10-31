@@ -12,6 +12,13 @@ in Fernwork's `docs/pdf/TODO-editor-feel-and-features.md`. They are fixed there 
 
 Status: `[ ]` open · `[~]` in progress · `[x]` done and checked on screen. Effort in person-days (PD).
 
+## Next
+
+- [ ] **Top priority: run the full UI matrix** (`npm run test:ui-matrix:full -w @bergwork/pdf`, up to 10 h). Florian,
+  2026-10-31: after the Fernwork integration work pauses to save the Claude limit; this comes first when it resumes.
+  The quick run on 2026-10-31 passed with 975 results and no failures, but left 43 cells unrun. Run it as its own unit on
+  a free machine; fix what it finds before anything else on this list.
+
 ## Fork UI (berg:work additions in `apps/pdf/editor/`)
 
 berg:work's UI is ahead of Fernwork's (islands, mini toolbar, shortcut overview), so interaction and UI work lands in
