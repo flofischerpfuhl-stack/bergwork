@@ -1364,3 +1364,29 @@ function shrink(rect, by) {
 export async function describe() {
   return { missingInternals: Shell.__harnessMissingInternals, ops: Object.keys(OPS), docOps: Object.keys(DOC_OPS), userAgent: navigator.userAgent };
 }
+
+/**
+ * What the engine knows of the first pages, for the reachability check of the random walks (tests/ui-matrix): every
+ * object with its type, size and flags, as `session.inspect` reports it. The bytes come as base64.
+ */
+export async function inspectObjects(job) {
+  const bytes = Uint8Array.from(atob(job.base64), (char) => char.charCodeAt(0));
+  const session = await Session.open(bytes);
+  try {
+    const pages = [];
+    for (let index = 0; index < Math.min(session.pageIds.length, job.maxPages || 2); index += 1) {
+      const inspection = await session.inspect(index);
+      pages.push({
+        index, pageId: session.pageIds[index], rotation: Number(inspection?.rotation || 0), box: pageBox(inspection),
+        objects: (inspection?.objects || []).map((object) => ({
+          stableId: object.stableId, typeName: object.typeName, nested: Boolean(object.nested), bounds: object.bounds || null,
+          pageBounds: object.pageBounds || null, text: typeof object.text === 'string' ? object.text.slice(0, 40) : undefined,
+          flags: Object.fromEntries(['editable', 'locked', 'hidden', 'readOnly'].filter((key) => key in object).map((key) => [key, object[key]])),
+        })),
+      });
+    }
+    return pages;
+  } finally {
+    await session.close?.();
+  }
+}

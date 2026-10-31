@@ -34,6 +34,8 @@ export class MatrixSession {
       const text = message.text();
       if (!IGNORED_CONSOLE.some(pattern => pattern.test(text))) this.events.push({ type: 'console', text: text.slice(0, 300) });
     });
+    // Scripts a caller wants in the page before any editor code runs (the walk records every Error constructed).
+    for (const script of this.initScripts || []) await page.addInitScript(script);
     await page.addInitScript(() => {
       window.__saved = null;
       window.showSaveFilePicker = async options => ({

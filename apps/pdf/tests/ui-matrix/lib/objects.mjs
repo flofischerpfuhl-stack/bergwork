@@ -26,7 +26,7 @@ const describe = (page, key) => page.evaluate(selectionKey => {
 }, key);
 
 /** Candidates in the visible part of the page, largest first, with the type the matrix calls them. */
-function candidates(page) {
+export function candidates(page) {
   return page.evaluate(() => {
     const view = document.querySelector('.oo-pdf-viewport')?.getBoundingClientRect();
     const out = [];
@@ -46,7 +46,7 @@ function candidates(page) {
   });
 }
 
-async function select(session, object) {
+export async function select(session, object) {
   const { page } = session;
   await page.mouse.click(object.x + object.w / 2, object.y + object.h / 2);
   await session.settled();

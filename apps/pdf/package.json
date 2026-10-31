@@ -25,6 +25,9 @@
     "test:corpus:ui": "node tests/ui-smoke.mjs",
     "test:ui-matrix": "node tests/ui-matrix/run-matrix.mjs --tier quick",
     "test:ui-matrix:full": "node tests/ui-matrix/run-matrix.mjs --tier full",
+    "test:walk": "node tests/ui-matrix/run-walk.mjs --minutes 10",
+    "test:walk:long": "node tests/ui-matrix/run-walk.mjs --minutes 120",
+    "test:fuzz": "node tests/fuzz/run-commands.mjs --seconds 60",
     "test:unit": "node --test tests/unit/",
     "cli": "node cli/bin/bergwork-pdf-cli.mjs",
     "test:cli": "node --test --test-concurrency=1 cli/test/"
