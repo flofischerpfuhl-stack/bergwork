@@ -5,7 +5,7 @@ Settings → Licences. Rust crates are listed for `x86_64-unknown-linux-gnu`; ot
 
 ## berg:work PDF and the Fernwork PDF editor
 
-Business Source License 1.1, see [LICENSE](../../LICENSE). Editor build: Fernwork `06de9e5`.
+Business Source License 1.1, see [LICENSE](../../LICENSE). Editor build: Fernwork `26491da`.
 
 ## Components of the host page
 

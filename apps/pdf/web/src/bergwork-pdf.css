@@ -483,6 +483,8 @@ html body .oo-pdf-mini-toolbar .oo-pdf-color-menu button.oo-pdf-color-well {
   border: 1px solid var(--bw-border); border-radius: var(--bw-radius-menu);
   background: var(--bw-surface-raised); box-shadow: var(--bw-shadow-popover);
 }
+.oo-pdf-color-pop.is-above { top: auto; bottom: calc(100% + 8px); }
+.oo-pdf-color-pop.is-end { left: auto; right: 0; }
 html body .oo-pdf-mini-toolbar .oo-pdf-color-menu button.oo-pdf-color-none {
   width: auto; justify-self: start; padding: 0 8px; white-space: nowrap; font: 500 var(--bw-text-small) / 1 var(--bw-font-ui);
 }

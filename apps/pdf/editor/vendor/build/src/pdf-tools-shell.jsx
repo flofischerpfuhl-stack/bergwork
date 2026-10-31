@@ -43812,7 +43812,14 @@ function ColorSwatchField({ label = 'Color', value, onChange, disabled = false, 
 // berg:work: a colour well that opens the quick colours (mini toolbar). An empty value means none (no fill or stroke).
 function ColorMenuButton({ label, value, onChange, disabled = false, allowNone = false }) {
   const [open, setOpen] = useState(false);
+  const [popSide, setPopSide] = useState('');
   const rootRef = useRef(null);
+  const popRef = useRef(null);
+  // The toolbar of a page-sized object sits at the window's edge: the colours open towards the room there is.
+  useLayoutEffect(() => {
+    const box = open ? popRef.current?.getBoundingClientRect() : null;
+    setPopSide(box ? `${box.bottom > window.innerHeight - 8 ? ' is-above' : ''}${box.right > window.innerWidth - 8 ? ' is-end' : ''}` : '');
+  }, [open]);
   useEffect(() => {
     if (!open) return undefined;
     const close = event => { if (!rootRef.current?.contains(event.target)) setOpen(false); };
@@ -43830,7 +43837,7 @@ function ColorMenuButton({ label, value, onChange, disabled = false, allowNone =
         onMouseDown={event => event.preventDefault()} onClick={() => setOpen(current => !current)}>
         <span className="oo-pdf-color-well-dot" /><span className="oo-pdf-color-well-label">{label}</span>
       </button>
-      {open && <span className="oo-pdf-color-pop" role="dialog" aria-label={`${label} colour`}>
+      {open && <span ref={popRef} className={`oo-pdf-color-pop${popSide}`} role="dialog" aria-label={`${label} colour`}>
         <ColorSwatchField compact label={label} value={value} onChange={choose} />
         {allowNone && <button type="button" className="oo-pdf-color-none" aria-pressed={!value} onClick={() => choose('')}>No {label.toLowerCase()}</button>}
       </span>}

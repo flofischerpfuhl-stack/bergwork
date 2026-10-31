@@ -1091,7 +1091,8 @@ export async function runFile(job) {
           if (planned.op === 'object.move') for (const item of state.model.markers) item.bounds = null;
         }
         return outcome;
-      }, { timeoutMs: planned.op === 'ocr.tesseract' ? (limits.ocrMs ?? 30_000) : (limits.editMs ?? 30_000) });
+      // text.rotate is up to four edits of the same page (insert, font, turn, retype), the others one or two.
+      }, { timeoutMs: planned.op === 'ocr.tesseract' ? (limits.ocrMs ?? 30_000) : (limits.editMs ?? 30_000) * (planned.op === 'text.rotate' ? 2 : 1) });
       if (session.engine.state === 'tainted') { check('session.notTainted', false, `after ${planned.op}`); break; }
     }
     const editsCommitted = session.kernel.entries.filter((entry) => entry.status === 'committed').length;

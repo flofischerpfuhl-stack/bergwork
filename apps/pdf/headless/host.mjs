@@ -29,7 +29,7 @@ function cachedHeadlessShell() {
 
 // BERGWORK_PDF_CHROMIUM names a Chromium executable. Without it Playwright's own revision is used, or, when that one
 // was never downloaded (node_modules newer than the browser cache), the newest headless shell that is there.
-async function launchBrowser(playwright, browserName) {
+export async function launchBrowser(playwright, browserName) {
   const executablePath = browserName === 'chromium' ? process.env.BERGWORK_PDF_CHROMIUM : undefined;
   try {
     return await playwright[browserName].launch({ headless: true, ...(executablePath ? { executablePath } : {}) });

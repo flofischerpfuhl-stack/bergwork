@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { startServer } from '../../headless/server.mjs';
-import { loadPlaywright } from '../../headless/host.mjs';
+import { launchBrowser, loadPlaywright } from '../../headless/host.mjs';
 import { qpdfCheck } from '../lib/oracles.mjs';
 import { MatrixSession, sha } from './lib/session.mjs';
 import { selectFiles } from './lib/select-files.mjs';
@@ -98,7 +98,7 @@ const record = (cell, entry) => {
   return item;
 };
 
-const launch = () => loadPlaywright().chromium.launch({ headless: true });
+const launch = () => launchBrowser(loadPlaywright(), 'chromium');
 let browser = await launch();
 const distDir = process.env.BERGWORK_PDF_DIST || path.join(appDir, 'dist');
 const server = await startServer({ distDir, harnessDir: path.join(testsDir, '.build'), corpusRoot, outDir: path.join(outDir, 'upload') });
@@ -290,7 +290,8 @@ async function runCell(cell) {
     try {
       action = await operate(session.page, control);
     } catch (error) {
-      record(cell, { control: control.key, status: 'fail', detail: `not operable: ${String(error.message).split('\n')[0].slice(0, 160)}` });
+      const lines = String(error.message).replace(/\x1b\[\d+m/g, '').split('\n');
+      record(cell, { control: control.key, status: 'fail', detail: `not operable: ${[lines[0], ...lines.filter(line => /intercepts|outside|not visible|not stable|not enabled|detached/.test(line)).slice(-2)].join(' | ').slice(0, 400)}` });
       continue;
     }
     if (!action) continue;
