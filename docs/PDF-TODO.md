@@ -18,6 +18,12 @@ Status: `[ ]` open · `[~]` in progress · `[x]` done and checked on screen. Eff
   2026-10-31: after the Fernwork integration work pauses to save the Claude limit; this comes first when it resumes.
   The quick run on 2026-10-31 passed with 975 results and no failures, but left 43 cells unrun. Run it as its own unit on
   a free machine; fix what it finds before anything else on this list.
+- [ ] **Take the fixes back from Fernwork** (branch `feat/pdf-adopt-bergwork-ui`, `5d592bdd`, on the next PDF sync). The
+  OCR panel crashed without a document (`#ocr`); the islands ran out of the window below about 1,100 px; a handle at the
+  page edge deselected; touch handles covered the middle of small objects; rotate zones of multi-selection members took
+  clicks; Keep proportions stayed live during a commit; Underline stayed locked after an embedded font changed to
+  Helvetica. The port renamed files and the annotation marks (`fernwork-…`, `bergwork-…`): without an adjustment neither
+  product treats the other's measures and stamps as its own.
 
 ## Fork UI (berg:work additions in `apps/pdf/editor/`)
 
