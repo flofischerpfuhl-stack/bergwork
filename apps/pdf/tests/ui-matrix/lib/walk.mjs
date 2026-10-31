@@ -387,6 +387,12 @@ export class Walker {
     if (step.op === 'check') return { applied: true, failures: await this.checkpoint(step.kind), ms: Date.now() - started };
     const pre = step.undoCheck ? { depth: await this.session.historyDepth(), shot: await this.session.pageShot() } : null;
     let outcome;
+    const caret = () => this.page.evaluate(() => {
+      const field = document.querySelector('.oo-pdf-viewport textarea');
+      return field ? { start: field.selectionStart, end: field.selectionEnd } : null;
+    }).catch(() => null);
+    // Characters are selected in the on-page editor: using a control of the bars must leave editor and selection alone.
+    const marked = step.op === 'control' ? await caret() : null;
     const sampler = step.flicker ? await this.startSampling() : null;
     try {
       outcome = await this.executeAction(step);
@@ -399,8 +405,14 @@ export class Walker {
     if (outcome === null || outcome === undefined || outcome === false) { await sampler?.cancel(); return { applied: false, failures: [], ms: Date.now() - started }; }
     const settled = await this.session.settled(this.hardMs);
     const failures = [...this.pending];
+    if (marked && marked.end > marked.start) {
+      const now = await caret();
+      if (!now) failures.push({ sig: 'scope: the text editor closed when a control of the bars was used with characters selected', detail: `${step.key}: ${marked.end - marked.start} character(s) were selected`, scope: true });
+      else if (now.start !== marked.start || now.end !== marked.end) failures.push({ sig: 'scope: the character selection changed when a control of the bars was used', detail: `${step.key}: ${marked.start}-${marked.end} became ${now.start}-${now.end}` });
+    }
     if (sampler) {
       const flicker = await sampler.finish().catch(error => ({ error: String(error.message).slice(0, 100) }));
+      if (flicker?.outside) failures.push({ sig: 'scope: pixels away from the selected object changed', detail: flicker.outside });
       if (flicker?.bad) failures.push({ sig: 'flicker: a frame showed the old state again before the commit was drawn', detail: flicker.bad });
     }
     if (outcome === 'editor did not open') failures.push({ sig: 'editor: a double click opened no editor', detail: `on ${step.where}`, soft: true });
@@ -458,6 +470,7 @@ export class Walker {
         const right = Math.max(boxBefore.x + boxBefore.w, boxAfter.x + boxAfter.w) - 4;
         const bottom = Math.max(boxBefore.y + boxBefore.h, boxAfter.y + boxAfter.h) - 4;
         if (right - left < 6 || bottom - top < 6 || frames.length < 3) return { frames: frames.length };
+        const outside = /duplicate|delete|forward|backward|arrange/iu.test(step.key || '') ? null : await this.outsideChange(before, after, { left, top, right, bottom });
         const verdict = await page.evaluate(analyseFrames, { before: before.toString('base64'), after: after.toString('base64'), frames, box: { left, top, right, bottom } });
         if (verdict.bad) {
           const dir = path.join(this.outDir, 'flicker');
@@ -467,9 +480,40 @@ export class Walker {
           await fs.writeFile(path.join(dir, `${name}.after.png`), after);
           await fs.writeFile(path.join(dir, `${name}.frame.png`), Buffer.from(frames[verdict.frame], 'base64'));
         }
-        return verdict;
+        return { ...verdict, outside };
       },
     };
+  }
+
+  /** Pixels of the sheet away from the touched object (30 px margin for its handles and growth) must stay as they were. */
+  async outsideChange(before, after, box) {
+    const sheet = await this.page.evaluate(() => { const rect = document.querySelector('.oo-pdf-sheet')?.getBoundingClientRect(); return rect && { l: rect.left, t: rect.top, r: rect.right, b: rect.bottom }; });
+    if (!sheet) return null;
+    const result = await this.page.evaluate(async ({ a, b, sheet, hole }) => {
+      const decode = async base64 => {
+        const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${base64}`)).blob());
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        context.drawImage(bitmap, 0, 0);
+        return context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+      };
+      const [first, second] = [await decode(a), await decode(b)];
+      const width = Math.round(Math.min(window.innerWidth, 1440));
+      let count = 0; let total = 0; let box = null;
+      for (let y = Math.max(0, Math.round(sheet.t)); y < Math.min(900, Math.round(sheet.b)); y += 1) {
+        for (let x = Math.max(0, Math.round(sheet.l)); x < Math.min(width - 380, Math.round(sheet.r)); x += 1) {
+          if (x >= hole.l && x <= hole.r && y >= hole.t && y <= hole.b) continue;
+          total += 1;
+          const index = (y * 1440 + x) * 4;
+          if (Math.abs(first[index] - second[index]) + Math.abs(first[index + 1] - second[index + 1]) + Math.abs(first[index + 2] - second[index + 2]) > 60) {
+            count += 1;
+            box = box ? { l: Math.min(box.l, x), t: Math.min(box.t, y), r: Math.max(box.r, x), b: Math.max(box.b, y) } : { l: x, t: y, r: x, b: y };
+          }
+        }
+      }
+      return { count, total, box };
+    }, { a: before.toString('base64'), b: after.toString('base64'), sheet, hole: { l: box.left - 34, t: box.top - 34, r: box.right + 34, b: box.bottom + 34 } });
+    return result.count > 40 ? `${result.count} pixels changed outside the object ${JSON.stringify(result.box)}` : null;
   }
 
   /** Undo of this one step returns the pixels from before it, Redo those from after it. */
