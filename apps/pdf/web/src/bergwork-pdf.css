@@ -307,6 +307,29 @@ body.oo-pdf-workbench-route button { font-family: var(--bw-font-ui); }
 }
 .oo-pdf-mini-toolbar.is-faint { opacity: 0.6; }
 
+/* berg:work: the path editor's action bar is the mini toolbar's host; the ordinary one waits while the path is edited. */
+body.oo-pdf-path-editing .oo-pdf-mini-toolbar:not(.oo-pdf-path-bar) { display: none; }
+.oo-pdf-mini-toolbar.oo-pdf-path-bar { z-index: 10100; }
+.oo-pdf-path-bar .oo-pdf-path-bar-gap { width: 1px; align-self: stretch; margin: 4px 4px; background: var(--bw-border); }
+.oo-pdf-mini-toolbar.oo-pdf-path-bar button.oo-pdf-path-text:not(.oo-pdf-select-trigger):not(.oo-pdf-swatch) {
+  width: auto;
+  padding: 0 12px;
+  white-space: nowrap;
+  border-color: var(--bw-border);
+}
+/* Done is the primary button; the same pair as the other primary buttons keeps it readable in dark mode. */
+.oo-pdf-mini-toolbar.oo-pdf-path-bar button.oo-pdf-path-apply:not(.oo-pdf-select-trigger):not(.oo-pdf-swatch) {
+  border-color: transparent;
+  background: var(--bw-accent);
+  color: var(--bw-accent-on);
+  font-weight: 700;
+}
+.oo-pdf-mini-toolbar.oo-pdf-path-bar button.oo-pdf-path-apply:not(.oo-pdf-select-trigger):not(.oo-pdf-swatch):hover:not(:disabled) {
+  background: var(--bw-accent);
+  color: var(--bw-accent-on);
+  filter: brightness(1.08);
+}
+
 .oo-pdf-mini-toolbar .oo-rich-text-inspector.is-compact,
 .oo-pdf-mini-toolbar .oo-rich-text-toolbar,
 .oo-pdf-mini-toolbar .oo-rich-text-face-toggles,
@@ -783,6 +806,10 @@ html.bw-rounded-window:not(.bw-window-maximized) .bw-window {
 .oo-pdf-shell .oo-pdf-rotate-zone.ne { right: -24px; top: -24px; }
 .oo-pdf-shell .oo-pdf-rotate-zone.se { right: -24px; bottom: -24px; }
 .oo-pdf-shell .oo-pdf-rotate-zone.sw { left: -24px; bottom: -24px; }
+/* The native objects' layer clips to the page, which cut off the rotate zones of a path at the page edge (a header bar, a
+   full-width rule): text and images rotate there, paths did not. The page surface clips the same way. A selected path may reach 28 px past the page. */
+.oo-pdf-shell .oo-pdf-native-object-layer.has-native-selection,
+.oo-pdf-shell .oo-pdf-page-surface:has(> .oo-pdf-native-object-layer.has-native-selection) { overflow-clip-margin: 28px; }
 @media (hover: hover) and (pointer: fine) {
   .oo-pdf-shell .oo-pdf-rotate-handle:not(.is-multi-action):not(:focus-visible) { opacity: 0; pointer-events: none; }
 }
